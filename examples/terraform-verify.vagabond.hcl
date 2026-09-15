@@ -53,7 +53,8 @@ job "terraform-verify" {
 
     constraint {
       attribute = "provider.architecture"
-      operator  = "="n      value     = "amd64"
+      operator  = "="
+      value     = "amd64"
     }
 
     # Prefer providers with plenty of monthly quota remaining so scarce
