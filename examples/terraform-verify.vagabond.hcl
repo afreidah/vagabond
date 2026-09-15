@@ -3,9 +3,9 @@
 #
 # Project: Vagabond / Author: Alex Freidah
 #
-# Runs Terraform validation using any compatible execution provider with
-# available free-tier capacity. The scheduler chooses the execution backend;
-# this job describes the workload requirements and routing policy.
+# Runs Terraform validation using any compatible OCI job provider with available
+# free-tier capacity. Admission determines which providers can currently satisfy
+# the task; the scheduler chooses among those admitted candidates.
 #
 # If no eligible provider has capacity, Vagabond rejects the job. The caller
 # decides whether to fail, retry later, or fall back to another execution path.
@@ -35,9 +35,9 @@ job "terraform-verify" {
   # ---------------------------------------------------------------------------
   # Routing
   #
-  # Free-tier capacity is preferred across all compatible providers. Provider
-  # order is a preference, not a hard failover chain; the scheduler may choose
-  # another provider based on quota, capability, reliability, or availability.
+  # Provider order is a preference, not a hard failover chain. Admission first
+  # removes providers that cannot satisfy the task driver, resource constraints,
+  # cost policy, or current quota. The scheduler scores the remaining candidates.
   # ---------------------------------------------------------------------------
 
   routing {
@@ -45,24 +45,15 @@ job "terraform-verify" {
 
     providers = [
       "ibm-code-engine",
-      "aws-lambda",
-      "cloudflare-workers",
+      "gcp-cloud-run",
     ]
 
     # --- This workload must never intentionally consume paid compute. ---
     max_cost_usd = 0
 
-    # --- Arbitrary container execution is required for this task. ---
-    constraint {
-      attribute = "provider.container"
-      operator  = "="
-      value     = "true"
-    }
-
     constraint {
       attribute = "provider.architecture"
-      operator  = "="
-      value     = "amd64"
+      operator  = "="n      value     = "amd64"
     }
 
     # Prefer providers with plenty of monthly quota remaining so scarce
@@ -77,10 +68,14 @@ job "terraform-verify" {
 
   # ---------------------------------------------------------------------------
   # Task: verify
+  #
+  # The driver declares the execution contract. `oci-job` means Vagabond needs
+  # a provider capable of running an arbitrary OCI image to completion; the
+  # scheduler does not need to understand how that provider implements it.
   # ---------------------------------------------------------------------------
 
   task "verify" {
-    runtime = "container"
+    driver = "oci-job"
 
     # --- Container Configuration ---
     # Image distribution is intentionally outside the POC. Vagabond assumes
@@ -121,7 +116,7 @@ job "terraform-verify" {
     # Resources
     #
     # Workload requirements rather than provider-specific settings. Each
-    # provider adapter translates these to the closest supported configuration.
+    # provider plugin translates these to the closest supported configuration.
     # -------------------------------------------------------------------------
 
     resources {
@@ -152,7 +147,7 @@ job "terraform-verify" {
     # -------------------------------------------------------------------------
     # Retry Policy
     #
-    # Provider/infrastructure failures may be rerouted to another eligible
+    # Provider/infrastructure failures may be rerouted to another admitted
     # backend. Workload failures are returned directly and are not rerouted.
     # -------------------------------------------------------------------------
 
