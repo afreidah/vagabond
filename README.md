@@ -29,6 +29,7 @@ Vagabond should:
 - keep workloads independent of individual cloud-provider APIs;
 - match jobs to providers based on capabilities rather than pretending every
   serverless platform is equivalent;
+- isolate provider-specific behavior behind a common plugin interface;
 - use a familiar declarative HCL job format;
 - support CLI, CI/CD, workflow-engine, and direct API clients equally;
 - maintain execution history, provider health, quota consumption, and routing data;
@@ -36,8 +37,8 @@ Vagabond should:
 
 A guiding principle is:
 
-> Vagabond decides where eligible work can run. The client decides what work
-> should run and what to do if Vagabond cannot run it.
+> The task describes what it needs. Admission decides who can run it. The
+> scheduler decides where it runs. The provider plugin decides how.
 
 ## Initial Use Cases
 
@@ -71,51 +72,231 @@ outside the initial scope.
                          REST / API
                               |
                               v
-                  +-----------------------+
-                  |       Vagabond        |
-                  |-----------------------|
-                  | Job API               |
-                  | HCL Parser/Validator  |
-                  | Scheduler             |
-                  | Capability Matching   |
-                  | Quota Accounting      |
-                  | Execution Tracking    |
-                  +-----------+-----------+
-                              |
-             +----------------+----------------+
-             |                |                |
-             v                v                v
-       IBM Code Engine    AWS Lambda    Cloudflare Workers
-                                             |
-                                      Rust executor shim
-
+                    +-------------------+
+                    | Parse / Validate  |
+                    +---------+---------+
                               |
                               v
-                     +-----------------+
-                     | CockroachDB     |
-                     | Canonical State |
-                     +-----------------+
-
-                              |
-                        Execution Events
-                              |
-                              v
-                         Aiven Kafka
-                              |
-                              v
-                      Aiven OpenSearch
+                    +-------------------+
+                    | Admission Control |
+                    |-------------------|
+                    | Driver support    |
+                    | Capabilities      |
+                    | Free-tier quota   |
+                    | Cost constraints  |
+                    | Provider health   |
+                    +----+---------+----+
+                         |         |
+                      reject    admitted
+                                   |
+                                   v
+                         +------------------+
+                         |    Scheduler     |
+                         |------------------|
+                         | Score eligible   |
+                         | providers        |
+                         +--------+---------+
+                                  |
+                                  v
+                         +------------------+
+                         |    Dispatcher    |
+                         +--------+---------+
+                                  |
+                 common provider plugin interface
+             +--------------------+--------------------+
+             |                    |                    |
+             v                    v                    v
+        IBM / Google         AWS / Oracle       Cloudflare / etc.
+        OCI job plugins      function plugins     worker plugins
 ```
 
-The POC does not need every component above immediately. The first useful
-version should prove that Vagabond can parse a job, determine provider
-eligibility, account for quota, dispatch it, and report the result.
+The scheduler deliberately does not understand IBM, AWS, Cloudflare, Lambda,
+containers, or provider API details. Admission produces a set of eligible
+provider candidates. The scheduler scores those candidates, the dispatcher
+selects the corresponding plugin, and the plugin translates the normalized task
+into whatever that provider actually requires.
 
-## Initial Compute Backends
+## Execution Drivers
 
-- **IBM Code Engine** — general-purpose containerized batch execution.
-- **AWS Lambda** — short-lived function/container execution where compatible.
-- **Cloudflare Workers** — lightweight edge/serverless execution through a small
-  provider-side Worker.
+A task declares a **driver**, which describes its execution contract rather
+than a specific cloud provider. Providers advertise the drivers they can
+satisfy.
+
+Initial driver classes are expected to include:
+
+- **`oci-job`** — arbitrary OCI image plus command, arguments, environment, and
+  resource requirements. The process runs to completion and its exit status is
+  the task result.
+- **`function`** — invocation of a provider-compatible function or reusable
+  Vagabond function executor. Packaging may be a binary, ZIP, source bundle, or
+  provider-compatible container image.
+- **`worker`** — invocation of a predeployed constrained executor, typically an
+  edge/Wasm runtime. Only operations explicitly implemented by that executor are
+  admissible.
+
+A provider may support more than one driver in the future. Driver names are
+part of Vagabond's workload model; provider names are routing destinations.
+
+For example:
+
+```hcl
+task "verify" {
+  driver = "oci-job"
+
+  config {
+    image   = "hashicorp/terraform:latest"
+    command = "terraform"
+    args    = ["validate"]
+  }
+}
+```
+
+The distinction prevents a Lambda-compatible container image, an OCI Functions
+image, and an arbitrary Cloud Run Job container from being treated as equivalent
+simply because all three involve containers internally.
+
+## Admission, Scheduling, and Dispatch
+
+Admission is responsible for determining whether each provider can currently
+accept a task. It combines provider-independent policy with provider-specific
+knowledge supplied by plugins.
+
+Shared admission checks include:
+
+- requested driver support;
+- explicit provider allowlists;
+- architecture and resource requirements;
+- maximum allowed cost;
+- free-tier quota remaining;
+- provider enabled/disabled state;
+- provider health.
+
+Provider plugins may additionally reject tasks for limits that only they
+understand: maximum duration, memory combinations, payload size, unsupported
+operations, runtime restrictions, or other provider-specific constraints.
+
+Once admitted, candidates are normalized for the scheduler. The scheduler only
+needs information such as eligibility, quota headroom, health, reliability,
+latency, and score inputs. It does not need to know how the provider executes
+the task.
+
+The initial routing strategy is `free-first`. A job with:
+
+```hcl
+max_cost_usd = 0
+```
+
+must never intentionally consume paid capacity.
+
+If nothing can satisfy a job, Vagabond returns a structured rejection such as
+`no-capacity`, `quota-exhausted`, or `unsupported`. The caller decides what to
+do next.
+
+## Provider Plugin Model
+
+Each cloud backend is implemented as a provider plugin behind a shared Go
+interface. The exact interface will evolve with the POC, but conceptually each
+plugin is responsible for:
+
+```go
+type Driver interface {
+    Name() string
+    Capabilities(ctx context.Context) (Capabilities, error)
+    Admit(ctx context.Context, task Task) (AdmissionResult, error)
+    Submit(ctx context.Context, task Task) (Execution, error)
+    Status(ctx context.Context, id string) (ExecutionStatus, error)
+    Cancel(ctx context.Context, id string) error
+}
+```
+
+The public plugin boundary should remain a conventional non-generic Go
+interface. Generics, including Go 1.27 generic methods, may be useful inside
+provider implementations for typed provider configuration, API request/response
+translation, quota representations, and reusable adapter machinery without
+leaking provider-specific types into the scheduler.
+
+## Provider Landscape
+
+Providers fall into three broad execution families. The list below is a roadmap,
+not a promise that every provider will ship in the initial implementation.
+
+### OCI / Batch Job Providers
+
+These are the strongest fit for general Vagabond CI workloads because Vagabond
+can submit an arbitrary OCI image with a command and wait for its exit status.
+
+- **IBM Cloud Code Engine Jobs** — OCI container job; image, command, args, env,
+  resources, and timeout are translated into a Code Engine job run.
+- **Google Cloud Run Jobs** — OCI container job; no HTTP server is required and
+  the container runs to completion.
+- **Tencent SCF Job Image Functions** — job-oriented image execution using the
+  image entrypoint/command. Worth investigating as an additional container-job
+  backend if its recurring free allowance is suitable.
+
+### Function Providers
+
+These providers expose a function contract rather than arbitrary batch
+containers. Vagabond may deploy/invoke a reusable executor or translate a
+compatible function task into the provider's packaging model.
+
+- **AWS Lambda** — ZIP/custom-runtime binary or Lambda-compatible container
+  image; container images still obey the Lambda runtime contract.
+- **Oracle OCI Functions** — function packaged as a container image and invoked
+  through OCI Functions; not equivalent to arbitrary container execution.
+- **DigitalOcean Functions** — source/function package built and executed by the
+  DigitalOcean Functions platform.
+- **Azure Functions** — function package, custom handler, or supported
+  containerized function depending on the execution path.
+- **Vercel Functions** — source-oriented serverless HTTP functions; lower
+  priority.
+- **Netlify Functions** — source/function-oriented HTTP/event execution; lower
+  priority.
+
+### Edge / Worker Providers
+
+These are constrained runtimes rather than general compute. They are useful for
+specific operations such as external probes, lightweight transformations, and
+HTTP-oriented tasks.
+
+- **Cloudflare Workers** — predeployed Vagabond executor written in Rust and
+  compiled to Wasm with `workers-rs`. The control plane sends normalized
+  supported operations to it.
+- **Deno Deploy** — Deno application runtime; potentially usable through a
+  predeployed executor, but low priority for Vagabond.
+- **Alibaba ESA Edge Functions** — V8 edge-function environment; potentially a
+  future constrained executor, but low priority.
+
+Alibaba Function Compute is not currently a priority because a temporary trial
+allowance is not useful to Vagabond's goal of aggregating recurring free
+compute.
+
+## Provider Priorities
+
+Current implementation priority is roughly:
+
+```text
+Tier 1
+  IBM Code Engine
+  Google Cloud Run Jobs
+  AWS Lambda
+  Oracle OCI Functions
+  DigitalOcean Functions
+
+Tier 2
+  Azure Functions
+  Cloudflare Workers
+
+Tier 3 / investigate
+  Tencent SCF Job Image
+  Deno Deploy
+  Vercel Functions
+  Netlify Functions
+  Alibaba ESA Edge Functions
+```
+
+The first POC still only needs one provider end-to-end. Additional providers
+should be added after the admission/plugin contracts are stable enough to prove
+that the abstraction works across genuinely different execution models.
 
 Nomad may be used by a client as a fallback, but it is not part of Vagabond's
 core execution model.
@@ -128,6 +309,11 @@ The Cloudflare executor will be a small **Rust** Worker. It should remain a thin
 provider shim: authenticate a normalized request, validate it, perform the
 supported operation, and return a normalized result. Scheduling, accounting,
 provider selection, and retry decisions stay in the Go control plane.
+
+Infrastructure provisioning is deliberately outside the Vagabond repository.
+Users may provision provider resources with Terraform/Terragrunt, another IaC
+tool, or manually; Vagabond should not depend on the user's infrastructure
+implementation.
 
 ## Job Specification
 
@@ -142,37 +328,10 @@ The syntax is Nomad-inspired, not Nomad-compatible. Familiar concepts such as
 `job`, `task`, `config`, `resources`, `constraint`, `affinity`, `env`, and
 `retry` are retained where they make sense for a multi-cloud compute broker.
 
+`driver` expresses the execution contract. `routing.providers` is an optional
+provider allowlist/preference, not a hardcoded failover chain.
+
 See [`examples/terraform-verify.vagabond.hcl`](examples/terraform-verify.vagabond.hcl).
-
-## Scheduling Model
-
-Each provider adapter advertises capabilities such as:
-
-- container support;
-- supported runtimes;
-- architecture;
-- CPU and memory limits;
-- maximum execution duration;
-- public network access;
-- provider-specific execution limits.
-
-Jobs are first filtered against hard requirements. Eligible providers are then
-scored using inputs such as free quota remaining, expected monetary cost,
-historical reliability, latency, and provider health.
-
-The initial routing strategy is `free-first`.
-
-A job with:
-
-```hcl
-max_cost_usd = 0
-```
-
-must never intentionally consume paid capacity.
-
-If nothing can satisfy a job, Vagabond returns a structured rejection such as
-`no-capacity`, `quota-exhausted`, or `unsupported`. The caller decides what to
-do next.
 
 ## State and Events
 
@@ -195,13 +354,14 @@ vagabond job run -meta git_ref=<sha> examples/terraform-verify.vagabond.hcl
 vagabond job status <execution-id>
 ```
 
-`job plan` should explain eligibility and scheduling without executing anything,
+`job plan` should explain admission and scheduling without executing anything,
 for example:
 
 ```text
-IBM Code Engine     eligible       score 91
-AWS Lambda          unsupported    container requirement
-Cloudflare Workers  unsupported    container requirement
+IBM Code Engine       admitted       score 91
+Google Cloud Run      admitted       score 86
+AWS Lambda            rejected       driver oci-job unsupported
+Cloudflare Workers    rejected       driver oci-job unsupported
 
 Selected: ibm-code-engine
 Estimated cost: $0.00
@@ -220,34 +380,40 @@ internal/
   events/                     Kafka/event publishing
   job/                        HCL parsing and validation
   quota/                      provider quota accounting
-  scheduler/                  capability matching and provider scoring
+  scheduler/                  admission, candidate scoring, dispatch policy
   state/                      CockroachDB persistence
   providers/
-    aws/                      AWS Lambda adapter
-    cloudflare/               Cloudflare Workers adapter
-    ibm/                      IBM Code Engine adapter
+    aws/                      AWS Lambda plugin
+    cloudflare/               Cloudflare Workers plugin
+    ibm/                      IBM Code Engine plugin
+    # additional provider packages added as adapters become real
 
 examples/
   terraform-verify.vagabond.hcl
 
 workers/
-  cloudflare-executor/        small Rust Worker used by the Cloudflare adapter
+  cloudflare-executor/        small Rust Worker used by the Cloudflare plugin
 ```
 
 The directory tree is intentionally broader than the first implementation. New
-packages should only gain code as their responsibilities become real.
+provider packages should only be added when implementation work begins rather
+than creating placeholders for the entire roadmap.
 
 ## POC Scope
 
 The first POC should stay deliberately small:
 
-1. HCL parser and schema validation.
+1. HCL parser and schema validation, including the task driver contract.
 2. `vagabond job validate` and `vagabond job plan`.
-3. Provider capability model and scheduler.
-4. CockroachDB execution/quota state.
-5. One real compute adapter, most likely IBM Code Engine.
-6. Submit a real public-image CI task and return its result.
-7. Add the second provider only after the first end-to-end path works.
+3. Admission controller and normalized admission results.
+4. Provider plugin interface and capability model.
+5. Scheduler that operates only on admitted candidates.
+6. CockroachDB execution/quota state.
+7. One real compute plugin, most likely IBM Code Engine.
+8. Submit a real public-image CI task and return its result.
+9. Add a provider with a meaningfully different execution model only after the
+   first end-to-end path works, proving the plugin boundary rather than merely
+   adding another similar API.
 
 Image distribution is explicitly out of scope for the POC. Vagabond assumes the
 image referenced by a task is available to the selected provider. Initial jobs
