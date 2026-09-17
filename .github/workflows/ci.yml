@@ -1,0 +1,113 @@
+# -------------------------------------------------------------------------------
+# CI Workflow - GitHub Actions
+#
+# Author: Alex Freidah
+#
+# Runs on push to main and on pull requests. Formatting, vet, lint, and tests
+# are the same gates `make check` runs locally, so a change that passes locally
+# passes here. The golangci-lint version is pinned to match the Makefile; a
+# mismatch would mean local lint and CI lint disagree.
+# -------------------------------------------------------------------------------
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GOLANGCI_VERSION: v2.13.0
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # FORMATTING AND STATIC ANALYSIS
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version-file: go.mod
+
+      # install-only, then the Make targets below. Letting the action run the
+      # linter would mean CI and `make lint` could drift apart, and the action
+      # prepends `run` to its args, which the fmt subcommand is not.
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+        with:
+          version: v2.13.0
+          install-only: true
+
+      - name: Vet
+        run: make vet
+
+      - name: Lint
+        run: make lint
+
+      - name: Format check
+        run: make fmt-check
+
+  # ---------------------------------------------------------------------------
+  # TESTS
+  # ---------------------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: make test
+
+  # ---------------------------------------------------------------------------
+  # VULNERABILITY SCANNING
+  #
+  # govulncheck is pinned by the tool directive in go.mod, so this runs the
+  # same version a developer gets from `make govulncheck`.
+  # ---------------------------------------------------------------------------
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run govulncheck
+        run: go tool govulncheck ./...
+
+  # ---------------------------------------------------------------------------
+  # GENERATED CODE
+  #
+  # Catches a mock that was not regenerated after its interface changed, which
+  # otherwise surfaces as a confusing compile failure in a later PR.
+  # ---------------------------------------------------------------------------
+  generated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Verify generated code is current
+        run: make generate-check

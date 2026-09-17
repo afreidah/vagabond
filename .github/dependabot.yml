@@ -1,0 +1,24 @@
+# -------------------------------------------------------------------------------
+# Dependabot Configuration
+#
+# Author: Alex Freidah
+#
+# Weekly updates for Go modules and GitHub Actions. Actions are pinned by commit
+# SHA in the workflows, so Dependabot is what keeps those pins current rather
+# than leaving them to rot at whatever revision they were added on.
+# -------------------------------------------------------------------------------
+
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
