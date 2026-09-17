@@ -229,3 +229,72 @@ func TestResult_NilExitCodeIsNotZero(t *testing.T) {
 		t.Error("a worker result carries an exit code")
 	}
 }
+
+// -------------------------------------------------------------------------
+// CAPACITY ACCOUNTING
+// -------------------------------------------------------------------------
+
+// mustTo applies a transition or fails the test, so that building a status in a
+// particular state stays a single expression.
+func mustTo(t *testing.T, s *Status, next State, at time.Time) *Status {
+	t.Helper()
+
+	if err := s.To(next, at); err != nil {
+		t.Fatalf("%q to %q refused: %v", s.State, next, err)
+	}
+
+	return s
+}
+
+// Capacity is charged from running onward, or while lost. This is the rule the
+// quota ledger reads, and it is derivable from the status alone.
+func TestStatus_ConsumedCapacity(t *testing.T) {
+	start := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	end := start.Add(time.Minute)
+
+	tests := []struct {
+		name   string
+		status *Status
+		want   bool
+	}{
+		{
+			name:   "never submitted",
+			status: newStatus(t, StatePending),
+		},
+		{
+			name:   "submitted, outcome unknown",
+			status: newStatus(t, StateSubmitted),
+		},
+		{
+			name:   "accepted but never started",
+			status: newStatus(t, StateAccepted),
+		},
+		{
+			name:   "accepted then dropped before starting",
+			status: mustTo(t, newStatus(t, StateAccepted), StateFailed, start),
+		},
+		{
+			name:   "ran and succeeded",
+			status: mustTo(t, mustTo(t, newStatus(t, StateAccepted), StateRunning, start), StateSucceeded, end),
+			want:   true,
+		},
+		{
+			name:   "ran and failed still burned capacity",
+			status: mustTo(t, mustTo(t, newStatus(t, StateAccepted), StateRunning, start), StateFailed, end),
+			want:   true,
+		},
+		{
+			name:   "lost before starting is charged anyway",
+			status: mustTo(t, newStatus(t, StateAccepted), StateLost, start),
+			want:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.status.ConsumedCapacity(); got != tt.want {
+				t.Errorf("ConsumedCapacity() = %v, want %v (state %q)", got, tt.want, tt.status.State)
+			}
+		})
+	}
+}
