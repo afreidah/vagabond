@@ -12,8 +12,11 @@
 GO             ?= go
 GOBIN          ?= $(shell $(GO) env GOPATH)/bin
 
-GOLANGCI_LINT  := $(GOBIN)/golangci-lint
-MOCKGEN        := $(GOBIN)/mockgen
+# Prefer a golangci-lint already on PATH over installing another copy. CI
+# installs it from a release binary and then runs these same targets, so the
+# linter a pull request is judged by is the one a developer ran locally.
+GOLANGCI_LINT  := $(shell command -v golangci-lint 2>/dev/null || echo $(GOBIN)/golangci-lint)
+MOCKGEN        := $(shell command -v mockgen 2>/dev/null || echo $(GOBIN)/mockgen)
 
 # Pinned so that a lint failure is a code change rather than a tool upgrade.
 GOLANGCI_VERSION ?= v2.13.0
@@ -93,7 +96,18 @@ integration-test: ## Run integration tests (requires Docker)
 		$(GO) test -race -tags=integration ./internal/integration/...; \
 	else echo "$(NO_PKGS_MSG) integration-test"; fi
 
-check: fmt-check vet lint test ## Everything CI runs
+# -------------------------------------------------------------------------
+# SECURITY
+# -------------------------------------------------------------------------
+
+# govulncheck is declared as a tool directive in go.mod, so the version is
+# pinned by the module graph and CI runs the same one as a developer does.
+# Analysis is call-graph based: a vulnerability in a dependency is only
+# reported when a path to the affected symbol actually exists.
+govulncheck: ## Scan Go dependencies for known vulnerabilities
+	@if $(HAVE_GO_PKGS); then $(GO) tool govulncheck ./...; else echo "$(NO_PKGS_MSG) govulncheck"; fi
+
+check: fmt-check vet lint test govulncheck ## Everything CI runs
 
 ##@ Development
 
@@ -139,4 +153,4 @@ clean: ## Remove build and coverage artifacts
 	$(GO) clean
 	rm -f $(COVERPROFILE)
 
-.PHONY: help build fmt fmt-check vet lint test test-fast cover integration-test check generate generate-check tools clean
+.PHONY: help build fmt fmt-check vet lint test test-fast cover integration-test govulncheck check generate generate-check tools clean

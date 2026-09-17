@@ -40,19 +40,23 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # install-only, then the Make targets below. Letting the action run the
+      # linter would mean CI and `make lint` could drift apart, and the action
+      # prepends `run` to its args, which the fmt subcommand is not.
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+        with:
+          version: v2.13.0
+          install-only: true
+
       - name: Vet
         run: make vet
 
       - name: Lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
-        with:
-          version: v2.13.0
+        run: make lint
 
       - name: Format check
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
-        with:
-          version: v2.13.0
-          args: fmt --diff
+        run: make fmt-check
 
   # ---------------------------------------------------------------------------
   # TESTS
@@ -69,6 +73,25 @@ jobs:
 
       - name: Test
         run: make test
+
+  # ---------------------------------------------------------------------------
+  # VULNERABILITY SCANNING
+  #
+  # govulncheck is pinned by the tool directive in go.mod, so this runs the
+  # same version a developer gets from `make govulncheck`.
+  # ---------------------------------------------------------------------------
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run govulncheck
+        run: go tool govulncheck ./...
 
   # ---------------------------------------------------------------------------
   # GENERATED CODE
