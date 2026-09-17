@@ -107,7 +107,7 @@ outside the initial scope.
              |                    |                    |
              v                    v                    v
         IBM / Google         AWS / Oracle       Cloudflare / etc.
-        OCI job plugins      function plugins     worker plugins
+        container plugins    function plugins     worker plugins
 ```
 
 The scheduler deliberately does not understand IBM, AWS, Cloudflare, Lambda,
@@ -124,9 +124,9 @@ satisfy.
 
 Initial driver classes are expected to include:
 
-- **`oci-job`** — arbitrary OCI image plus command, arguments, environment, and
-  resource requirements. The process runs to completion and its exit status is
-  the task result.
+- **`container`** — arbitrary container image plus command, arguments,
+  environment, and resource requirements. The process runs to completion and
+  its exit status is the task result.
 - **`function`** — invocation of a provider-compatible function or reusable
   Vagabond function executor. Packaging may be a binary, ZIP, source bundle, or
   provider-compatible container image.
@@ -141,7 +141,7 @@ For example:
 
 ```hcl
 task "verify" {
-  driver = "oci-job"
+  driver = "container"
 
   config {
     image   = "hashicorp/terraform:latest"
@@ -220,14 +220,15 @@ leaking provider-specific types into the scheduler.
 Providers fall into three broad execution families. The list below is a roadmap,
 not a promise that every provider will ship in the initial implementation.
 
-### OCI / Batch Job Providers
+### Container / Batch Job Providers
 
 These are the strongest fit for general Vagabond CI workloads because Vagabond
-can submit an arbitrary OCI image with a command and wait for its exit status.
+can submit an arbitrary container image with a command and wait for its exit
+status.
 
-- **IBM Cloud Code Engine Jobs** — OCI container job; image, command, args, env,
+- **IBM Cloud Code Engine Jobs** — container job; image, command, args, env,
   resources, and timeout are translated into a Code Engine job run.
-- **Google Cloud Run Jobs** — OCI container job; no HTTP server is required and
+- **Google Cloud Run Jobs** — container job; no HTTP server is required and
   the container runs to completion.
 - **Tencent SCF Job Image Functions** — job-oriented image execution using the
   image entrypoint/command. Worth investigating as an additional container-job
@@ -360,8 +361,8 @@ for example:
 ```text
 IBM Code Engine       admitted       score 91
 Google Cloud Run      admitted       score 86
-AWS Lambda            rejected       driver oci-job unsupported
-Cloudflare Workers    rejected       driver oci-job unsupported
+AWS Lambda            rejected       driver container unsupported
+Cloudflare Workers    rejected       driver container unsupported
 
 Selected: ibm-code-engine
 Estimated cost: $0.00

@@ -3,8 +3,8 @@
 #
 # Project: Vagabond / Author: Alex Freidah
 #
-# Runs Terraform validation using any compatible OCI job provider with available
-# free-tier capacity. Admission determines which providers can currently satisfy
+# Runs Terraform validation using any compatible container job provider with
+# available free-tier capacity. Admission determines which providers can satisfy
 # the task; the scheduler chooses among those admitted candidates.
 #
 # If no eligible provider has capacity, Vagabond rejects the job. The caller
@@ -70,13 +70,13 @@ job "terraform-verify" {
   # ---------------------------------------------------------------------------
   # Task: verify
   #
-  # The driver declares the execution contract. `oci-job` means Vagabond needs
-  # a provider capable of running an arbitrary OCI image to completion; the
-  # scheduler does not need to understand how that provider implements it.
+  # The driver declares the execution contract. `container` means Vagabond needs
+  # a provider capable of running an arbitrary container image to completion;
+  # the scheduler does not need to understand how that provider implements it.
   # ---------------------------------------------------------------------------
 
   task "verify" {
-    driver = "oci-job"
+    driver = "container"
 
     # --- Container Configuration ---
     # Image distribution is intentionally outside the POC. Vagabond assumes
