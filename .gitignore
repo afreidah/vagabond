@@ -1,0 +1,18 @@
+/vagabond
+/vagabond-server
+*.test
+cover.out
+coverage.out
+integration-coverage.out
+dist/
+
+# Editor swap and backup files
+*.swp
+*.swo
+*~
+
+# Local provider credentials. Never committed; see docs/style-guide.md for the
+# rule that the bootstrap agent receives an execution-scoped ingest token and
+# never a provider or database credential.
+.env
+*.local.hcl

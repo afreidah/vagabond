@@ -1,0 +1,152 @@
+# -------------------------------------------------------------------------------
+# golangci-lint Configuration
+#
+# Author: Alex Freidah
+#
+# Static analysis for the Vagabond control plane and CLI. Beyond the usual
+# correctness linters, depguard mechanically enforces the architectural
+# boundaries described in docs/style-guide.md: the scheduler cannot import a
+# provider plugin, cloud SDKs exist only inside provider packages, and database
+# access exists only inside the state package.
+# -------------------------------------------------------------------------------
+
+version: "2"
+
+linters:
+  enable:
+    - bodyclose
+    - copyloopvar
+    - depguard
+    - errcheck
+    - errorlint
+    - gocognit
+    - gocritic
+    - gosec
+    - intrange
+    - misspell
+    - noctx
+    - revive
+    - sloglint
+    - staticcheck
+  settings:
+    gocognit:
+      min-complexity: 15
+    gocritic:
+      disabled-checks:
+        - exitAfterDefer
+      enabled-tags:
+        - diagnostic
+        - performance
+    revive:
+      # Only the two rules that catch documentation drift. revive's default set
+      # is much wider and overlaps what staticcheck and gocritic already report,
+      # so enabling it whole would be noise for no new signal.
+      rules:
+        - name: package-comments
+        - name: exported
+    sloglint:
+      context: "all"
+      key-naming-case: snake
+    depguard:
+      rules:
+        # ---------------------------------------------------------------
+        # The scheduler does not know what a cloud is.
+        #
+        # Admission produces normalized candidates and the scheduler scores
+        # them. If scheduling logic ever needs to know that a candidate is
+        # IBM, the normalization is wrong and the fix belongs in the
+        # capability model rather than in a conditional.
+        # ---------------------------------------------------------------
+        scheduler-boundary:
+          list-mode: lax
+          files:
+            - "**/internal/scheduler/**"
+            - "**/internal/job/**"
+            - "**/internal/quota/**"
+          deny:
+            - pkg: github.com/afreidah/vagabond/internal/providers
+              desc: the scheduler operates on normalized candidates; provider specifics belong behind the Provider interface
+
+        # ---------------------------------------------------------------
+        # Cloud SDKs live in exactly one place.
+        #
+        # A provider plugin translates a normalized task into whatever its
+        # cloud requires, and that translation is the entire reason the
+        # package exists. An SDK import anywhere else means a
+        # provider-specific type has escaped the boundary.
+        # ---------------------------------------------------------------
+        cloud-sdk-boundary:
+          list-mode: lax
+          files:
+            - $all
+            - "!**/internal/providers/**"
+          deny:
+            - pkg: github.com/aws/aws-sdk-go-v2
+              desc: cloud SDKs belong in internal/providers/<provider> only
+            - pkg: cloud.google.com/go
+              desc: cloud SDKs belong in internal/providers/<provider> only
+            - pkg: github.com/IBM/platform-services-go-sdk
+              desc: cloud SDKs belong in internal/providers/<provider> only
+            - pkg: github.com/IBM/code-engine-go-sdk
+              desc: cloud SDKs belong in internal/providers/<provider> only
+            - pkg: github.com/oracle/oci-go-sdk
+              desc: cloud SDKs belong in internal/providers/<provider> only
+            - pkg: github.com/cloudflare/cloudflare-go
+              desc: cloud SDKs belong in internal/providers/<provider> only
+            - pkg: github.com/Azure/azure-sdk-for-go
+              desc: cloud SDKs belong in internal/providers/<provider> only
+            - pkg: github.com/digitalocean/godo
+              desc: cloud SDKs belong in internal/providers/<provider> only
+
+        # ---------------------------------------------------------------
+        # Database access lives in exactly one place.
+        #
+        # Everything else receives a narrow interface, so that swapping the
+        # store does not cascade across the tree.
+        # ---------------------------------------------------------------
+        state-boundary:
+          list-mode: lax
+          files:
+            - $all
+            - "!**/internal/state/**"
+            - "!**_test.go"
+          deny:
+            - pkg: database/sql
+              desc: persistence belongs in internal/state; consumers take a narrow interface
+            - pkg: github.com/jackc/pgx
+              desc: persistence belongs in internal/state; consumers take a narrow interface
+
+  exclusions:
+    generated: lax
+    presets:
+      # Keeps revive to the two things it is here for: package docs that
+      # describe the wrong package, and exported names that stutter. Dropping
+      # this preset would instead demand a doc comment on every exported
+      # symbol, which is a great many new comments and no new signal.
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+
+issues:
+  # Report every finding. The defaults (50 per linter, 3 per message) still
+  # fail the build, but they hide most of the work behind the few they print.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/afreidah/vagabond
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
