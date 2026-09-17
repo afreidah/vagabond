@@ -4,7 +4,7 @@
 // Author: Alex Freidah
 //
 // Wraps time.Duration so that the text form is part of the type. Admission
-// compares a requested duration against provider ceilings on every candidate,
+// compares a requested duration against provider limits on every candidate,
 // and a representation that stayed a string would mean parsing at each
 // comparison site.
 // -------------------------------------------------------------------------------

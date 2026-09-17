@@ -26,7 +26,7 @@ import "github.com/hashicorp/hcl/v2"
 // Task is one unit of work within a job.
 //
 // Timeout is the task's own bound, not a provider's. Admission compares it
-// against each candidate's ceiling, and a task killed by a provider limit below
+// against each candidate's limit, and a task killed by a provider limit below
 // its declared timeout is an admission bug rather than a workload failure.
 type Task struct {
 	Name             string                 `hcl:"name,label"`
