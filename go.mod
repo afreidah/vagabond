@@ -2,7 +2,10 @@ module github.com/afreidah/vagabond
 
 go 1.27.0
 
-require github.com/hashicorp/hcl/v2 v2.25.0
+require (
+	github.com/google/uuid v1.6.0
+	github.com/hashicorp/hcl/v2 v2.25.0
+)
 
 require (
 	github.com/agext/levenshtein v1.2.1 // indirect
