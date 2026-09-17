@@ -28,9 +28,9 @@ make help
 make check
 ```
 
-`make check` is formatting, vet, lint, and tests. If it passes locally it
-passes in CI, because CI runs the same targets with the same pinned
-golangci-lint version.
+`make check` is formatting, vet, lint, tests, and a vulnerability scan. If it
+passes locally it passes in CI, because CI runs the same targets with the same
+pinned tool versions.
 
 ## Testing
 
@@ -54,6 +54,18 @@ make integration-test
 Integration tests are gated behind the `integration` build tag and use
 `testcontainers-go`, so the test process manages container lifecycle itself.
 Docker must be running, but nothing needs starting by hand.
+
+### Vulnerability scanning
+
+```bash
+make govulncheck
+```
+
+`govulncheck` is declared as a tool directive in `go.mod`, so its version is
+pinned by the module graph rather than by whatever a developer happens to have
+installed. The analysis is call-graph based: a vulnerable dependency is only
+reported when a path to the affected symbol actually exists, so a finding is
+always actionable.
 
 ## Code Style
 
