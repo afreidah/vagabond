@@ -47,9 +47,18 @@ type State string
 // The states an execution passes through.
 //
 // StatePending is recorded before Submit is called, so a crash in between is
-// recoverable. StateRunning is skippable: a synchronous invocation goes from
+// recoverable. StateSubmitted means the call was made and its outcome is not
+// yet known; StateAccepted means the provider acknowledged the work and queued
+// it, which is not the same as starting it.
+//
+// That distinction is what makes quota derivable. Capacity is consumed once an
+// execution reaches StateRunning, so a provider that accepts work and then
+// drops it before starting has cost nothing, and the ledger can tell that from
+// the status alone without consulting an error.
+//
+// Both middle states are skippable: a synchronous invocation goes from
 // submitted straight to a terminal state, while a container job passes through
-// it as Status is polled.
+// them as Status is polled.
 //
 // StateLost is an execution that was submitted and then stopped answering. It
 // is not terminal, because reconciliation may still learn what happened, and it
@@ -62,6 +71,7 @@ type State string
 const (
 	StatePending   State = "pending"
 	StateSubmitted State = "submitted"
+	StateAccepted  State = "accepted"
 	StateRunning   State = "running"
 	StateSucceeded State = "succeeded"
 	StateFailed    State = "failed"
@@ -72,6 +82,7 @@ const (
 var stateNames = []State{
 	StatePending,
 	StateSubmitted,
+	StateAccepted,
 	StateRunning,
 	StateSucceeded,
 	StateFailed,
@@ -87,7 +98,8 @@ var terminalStates = []State{StateSucceeded, StateFailed, StateCancelled}
 // legalTransitions is the state machine, written out so it can be read.
 var legalTransitions = map[State][]State{
 	StatePending:   {StateSubmitted, StateFailed, StateCancelled},
-	StateSubmitted: {StateRunning, StateSucceeded, StateFailed, StateCancelled, StateLost},
+	StateSubmitted: {StateAccepted, StateRunning, StateSucceeded, StateFailed, StateCancelled, StateLost},
+	StateAccepted:  {StateRunning, StateSucceeded, StateFailed, StateCancelled, StateLost},
 	StateRunning:   {StateSucceeded, StateFailed, StateCancelled, StateLost},
 	StateLost:      {StateSucceeded, StateFailed, StateCancelled},
 	StateSucceeded: nil,

@@ -73,6 +73,21 @@ func (s *Status) Terminal() bool {
 	return s.State.Terminal()
 }
 
+// ConsumedCapacity reports whether this execution should be charged against the
+// provider's free-tier allowance.
+//
+// True once the execution reached running, which StartedAt records, and true
+// while it is lost. A workload that ran and failed still burned the capacity it
+// used, so the charge does not depend on the outcome. Work the provider
+// accepted and then dropped before starting cost nothing and is not charged.
+//
+// A lost execution is charged because nothing is known about it, and the ledger
+// errs toward over-counting: wasting free capacity is recoverable, and drifting
+// toward paid capacity is the one failure this project exists to prevent.
+func (s *Status) ConsumedCapacity() bool {
+	return !s.StartedAt.IsZero() || s.State == StateLost
+}
+
 // LostExpired reports whether a lost execution has waited out the grace period
 // and should now be recorded as failed.
 //

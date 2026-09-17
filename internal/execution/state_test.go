@@ -274,3 +274,37 @@ func TestState_UnmarshalTextRejectsUnknown(t *testing.T) {
 		t.Errorf("a refused unmarshal left %q behind", s)
 	}
 }
+
+// -------------------------------------------------------------------------
+// ACCEPTED
+// -------------------------------------------------------------------------
+
+// Accepted sits between submitted and running so that work a provider queued
+// and then dropped is distinguishable from work that actually ran. The quota
+// ledger reads that difference.
+func TestState_AcceptedTransitions(t *testing.T) {
+	legal := []State{StateRunning, StateSucceeded, StateFailed, StateCancelled, StateLost}
+	for _, next := range legal {
+		if !StateAccepted.CanTransition(next) {
+			t.Errorf("accepted to %q was refused", next)
+		}
+	}
+
+	if StateAccepted.CanTransition(StatePending) {
+		t.Error("accepted can transition backwards to pending")
+	}
+
+	if StateAccepted.CanTransition(StateSubmitted) {
+		t.Error("accepted can transition backwards to submitted")
+	}
+}
+
+// A synchronous invocation has no separate acceptance step, so submitted must
+// still reach a terminal state directly.
+func TestState_SubmittedMaySkipAccepted(t *testing.T) {
+	for _, next := range []State{StateRunning, StateSucceeded} {
+		if !StateSubmitted.CanTransition(next) {
+			t.Errorf("submitted to %q was refused", next)
+		}
+	}
+}
