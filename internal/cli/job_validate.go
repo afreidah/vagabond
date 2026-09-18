@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hashicorp/hcl/v2"
+
 	"github.com/afreidah/vagabond/internal/jobspec"
 )
 
@@ -70,14 +72,59 @@ func (c *JobValidateCommand) Run(args []string) int {
 		return c.Errorf("This command takes one argument: <path>\n\n%s", c.Help())
 	}
 
-	_, diags := jobspec.ParseFile(paths[0], meta)
+	file, diags := jobspec.ParseFile(paths[0], meta)
+
+	// Only validate what parsed. Rules run against the decoded specification,
+	// so a file that failed to decode would produce a second wave of complaints
+	// about fields that were never populated.
+	if !diags.HasErrors() {
+		diags = append(diags, jobspec.Validate(file)...)
+	}
+
 	if diags.HasErrors() {
-		// Rendered plainly until the diagnostic writer lands, which is what
-		// turns these into a source excerpt with the offending line.
-		return c.Errorf("%s", diags.Error())
+		return c.reportDiagnostics(diags)
 	}
 
 	c.Ui.Output(fmt.Sprintf("Job specification %s is valid.", paths[0]))
 
 	return ExitSuccess
+}
+
+// reportDiagnostics prints every problem found, not just the first.
+//
+// hcl.Diagnostics.Error summarises as "the first one, and N others", which is
+// the opposite of what a validator is for: an author wants the whole list so
+// they can fix a file in one pass.
+//
+// Deliberately plain. The diagnostic writer that renders a source excerpt with
+// the offending line underneath replaces this.
+func (c *JobValidateCommand) reportDiagnostics(diags hcl.Diagnostics) int {
+	for _, d := range diags {
+		c.Ui.Error(formatDiagnostic(d))
+	}
+
+	return ExitFailure
+}
+
+// formatDiagnostic renders one diagnostic, with its position when it has one.
+//
+// Validation rules run against the decoded specification, which carries no
+// source ranges, so those name the job and task in the message instead. Parse
+// diagnostics do have a position, and printing "<nil>" for the ones that do not
+// would be worse than omitting it.
+func formatDiagnostic(d *hcl.Diagnostic) string {
+	var b strings.Builder
+
+	if d.Subject != nil {
+		fmt.Fprintf(&b, "%s: ", d.Subject)
+	}
+
+	b.WriteString(d.Summary)
+
+	if d.Detail != "" {
+		b.WriteString("\n  ")
+		b.WriteString(d.Detail)
+	}
+
+	return b.String()
 }
