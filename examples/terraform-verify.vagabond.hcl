@@ -101,13 +101,18 @@ job "terraform-verify" {
     # Source
     #
     # The executor checks out this exact revision before task execution.
-    # JOB_META_git_ref is supplied by the caller at submission time.
+    #
+    # meta.git_ref is supplied by the caller at submission time and substituted
+    # before dispatch, so the provider receives a literal revision and job
+    # validate can check the reference resolves. Task metadata is also injected
+    # into the running container as JOB_META_git_ref, for commands that want to
+    # read it themselves.
     # -------------------------------------------------------------------------
 
     source {
       type        = "git"
       repository  = "https://github.com/afreidah/munchbox.git"
-      ref         = "${JOB_META_git_ref}"
+      ref         = "${meta.git_ref}"
       destination = "/workspace"
     }
 

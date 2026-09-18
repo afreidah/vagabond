@@ -89,7 +89,7 @@ func exampleJob(t *testing.T) Job {
 			Source: &Source{
 				Type:        "git",
 				Repository:  "https://github.com/afreidah/munchbox.git",
-				Ref:         ptr.Of("${JOB_META_git_ref}"),
+				Ref:         ptr.Of("${meta.git_ref}"),
 				Destination: ptr.Of("/workspace"),
 			},
 			WorkingDirectory: ptr.Of("/workspace/infrastructure/terragrunt"),
