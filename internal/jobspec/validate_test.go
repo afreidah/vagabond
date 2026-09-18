@@ -31,7 +31,7 @@ func validate(t *testing.T, src string, meta map[string]string) []string {
 		t.Fatalf("parsing failed before validation could run: %s", diags.Error())
 	}
 
-	found := Validate(file)
+	found := Validate(file.Spec)
 
 	messages := make([]string, 0, len(found))
 	for _, d := range found {
@@ -75,7 +75,7 @@ func TestValidate_FixtureIsClean(t *testing.T) {
 		t.Fatalf("parsing the fixture failed: %s", diags.Error())
 	}
 
-	if found := Validate(file); found.HasErrors() {
+	if found := Validate(file.Spec); found.HasErrors() {
 		t.Errorf("the fixture does not validate: %s", found.Error())
 	}
 }
@@ -469,7 +469,7 @@ func TestValidate_EmptyFile(t *testing.T) {
 		t.Fatalf("parsing an empty file failed: %s", diags.Error())
 	}
 
-	if found := Validate(file); !found.HasErrors() {
+	if found := Validate(file.Spec); !found.HasErrors() {
 		t.Error("an empty specification validated cleanly")
 	}
 }

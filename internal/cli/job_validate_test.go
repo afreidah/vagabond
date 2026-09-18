@@ -11,6 +11,7 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -242,5 +243,73 @@ func TestFormatDiagnostic_SummaryOnly(t *testing.T) {
 
 	if strings.TrimSpace(rendered) != "Terse" {
 		t.Errorf("rendered = %q, want just the summary", rendered)
+	}
+}
+
+// -------------------------------------------------------------------------
+// STANDARD INPUT
+// -------------------------------------------------------------------------
+
+// runStdin executes the CLI with a specification piped in, matching what
+// "nomad job validate -" accepts.
+func runStdin(src string, args ...string) (code int, stdout, stderr string) {
+	var out, errOut bytes.Buffer
+
+	code = Run(args, strings.NewReader(src), &out, &errOut)
+
+	return code, out.String(), errOut.String()
+}
+
+func TestJobValidate_ReadsStdin(t *testing.T) {
+	code, stdout, stderr := runStdin(validJob, "job", "validate", "-")
+
+	if code != ExitSuccess {
+		t.Errorf("exit code = %d, want %d\n%s", code, ExitSuccess, stderr)
+	}
+
+	if !strings.Contains(stdout, "is valid") {
+		t.Errorf("stdout does not confirm validity:\n%s", stdout)
+	}
+}
+
+// A pipe has no filename, and a diagnostic naming the empty string reads as a
+// bug rather than as standard input.
+func TestJobValidate_StdinDiagnosticsNameTheInput(t *testing.T) {
+	code, _, stderr := runStdin(`job "x" {`, "job", "validate", "-")
+
+	if code != ExitFailure {
+		t.Errorf("exit code = %d, want %d", code, ExitFailure)
+	}
+
+	if !strings.Contains(stderr, "<stdin>") {
+		t.Errorf("stderr does not name the input:\n%s", stderr)
+	}
+}
+
+func TestJobValidate_StdinWithMeta(t *testing.T) {
+	code, _, stderr := runStdin(parameterizedFile,
+		"job", "validate", "-meta", "version=1.4.2", "-")
+
+	if code != ExitSuccess {
+		t.Errorf("exit code = %d, want %d\n%s", code, ExitSuccess, stderr)
+	}
+}
+
+// A syntax error in a file shows the offending line, which is the whole point
+// of carrying source ranges through parsing.
+func TestJobValidate_SyntaxErrorShowsTheLine(t *testing.T) {
+	src := `job "broken" {
+  type = "batch"
+  task "x" {
+`
+
+	_, _, stderr := run("job", "validate", writeJob(t, src))
+
+	if !strings.Contains(stderr, `task "x" {`) {
+		t.Errorf("stderr does not show the offending line:\n%s", stderr)
+	}
+
+	if !strings.Contains(stderr, "line 3") {
+		t.Errorf("stderr does not name the line number:\n%s", stderr)
 	}
 }

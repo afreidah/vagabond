@@ -41,6 +41,29 @@ type Config struct {
 	Meta     map[string]string
 }
 
+// Parsed is a decoded specification together with the source it came from.
+//
+// Source is carried so that diagnostics can be rendered against the original
+// text, with the offending line shown underneath. Without it a caller holds a
+// range naming a file and a line but no way to display either.
+type Parsed struct {
+	Spec     *job.File
+	Filename string
+	Source   *hcl.File
+}
+
+// Files returns the source in the shape hcl's diagnostic writer expects.
+//
+// Safe on a nil receiver and on a parse that produced nothing, because the
+// caller rendering diagnostics is usually the caller whose parse just failed.
+func (p *Parsed) Files() map[string]*hcl.File {
+	if p == nil || p.Source == nil {
+		return nil
+	}
+
+	return map[string]*hcl.File{p.Filename: p.Source}
+}
+
 // -------------------------------------------------------------------------
 // PARSING
 // -------------------------------------------------------------------------
@@ -50,7 +73,7 @@ type Config struct {
 // A read failure is reported as a diagnostic rather than an error so that
 // callers have one kind of failure to render, whether the file was unreadable
 // or merely wrong.
-func ParseFile(path string, meta map[string]string) (*job.File, hcl.Diagnostics) {
+func ParseFile(path string, meta map[string]string) (*Parsed, hcl.Diagnostics) {
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return nil, hcl.Diagnostics{{
@@ -71,45 +94,53 @@ func ParseFile(path string, meta map[string]string) (*job.File, hcl.Diagnostics)
 // Required metadata is checked before decoding rather than after. A job that
 // declares meta_required and was submitted without it fails naming the keys,
 // instead of failing at whichever expression happened to reference one first.
-func Parse(cfg Config) (*job.File, hcl.Diagnostics) {
-	body, diags := parseSource(cfg)
-	if body == nil {
+func Parse(cfg Config) (*Parsed, hcl.Diagnostics) {
+	source, diags := parseSource(cfg)
+	if source == nil {
 		return nil, diags
 	}
 
-	required, requiredDiags := RequiredMeta(body)
+	// Returned even when decoding fails, so that a caller can render the
+	// diagnostics against the text they came from.
+	parsed := &Parsed{Filename: sourceName(cfg), Source: source}
+
+	required, requiredDiags := RequiredMeta(source.Body)
 	diags = append(diags, requiredDiags...)
 
 	// Stop here when metadata is missing. Decoding would go on to fail at every
 	// expression that references one of those keys, burying the one diagnostic
 	// that says what to do under several that repeat it obliquely.
 	if missing := CheckRequiredMeta(required, cfg.Meta); missing.HasErrors() {
-		return nil, append(diags, missing...)
+		return parsed, append(diags, missing...)
 	}
 
 	ctx := EvalContext(cfg.Meta)
 
-	var file job.File
+	var spec job.File
 
-	diags = append(diags, gohcl.DecodeBody(body, ctx, &file)...)
-	diags = append(diags, checkConfigBlocks(&file)...)
+	diags = append(diags, gohcl.DecodeBody(source.Body, ctx, &spec)...)
+	diags = append(diags, checkConfigBlocks(&spec)...)
 
-	return &file, diags
+	parsed.Spec = &spec
+
+	return parsed, diags
 }
 
-// parseSource turns bytes into a body, choosing the parser by file extension.
-func parseSource(cfg Config) (hcl.Body, hcl.Diagnostics) {
-	name := cfg.Filename
-	if name == "" {
-		name = "<input>"
+// parseSource turns bytes into an hcl file.
+func parseSource(cfg Config) (*hcl.File, hcl.Diagnostics) {
+	return hclsyntax.ParseConfig(cfg.Source, sourceName(cfg), hcl.InitialPos)
+}
+
+// sourceName is what diagnostics call the input.
+//
+// Reading from a pipe has no filename, and a range naming the empty string
+// reads as a bug rather than as standard input.
+func sourceName(cfg Config) string {
+	if cfg.Filename == "" {
+		return "<stdin>"
 	}
 
-	f, diags := hclsyntax.ParseConfig(cfg.Source, name, hcl.InitialPos)
-	if f == nil {
-		return nil, diags
-	}
-
-	return f.Body, diags
+	return cfg.Filename
 }
 
 // -------------------------------------------------------------------------

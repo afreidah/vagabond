@@ -13,6 +13,7 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/hashicorp/cli"
@@ -20,11 +21,23 @@ import (
 
 // Meta carries the state shared by every command.
 //
-// Ui is the only member for now. It exists so that commands never print
-// directly: a test injects a buffer and reads what the command said, rather
-// than capturing process streams and hoping nothing else wrote to them.
+// Ui exists so that commands never print directly: a test injects a buffer and
+// reads what the command said, rather than capturing process streams and hoping
+// nothing else wrote to them.
+//
+// Stdin is held separately because a command reading a specification from a
+// pipe needs the reader itself, not the line-oriented prompting a cli.Ui
+// offers. ErrStream is held only to ask whether it is a terminal, which decides
+// colour; nothing writes to it directly.
 type Meta struct {
-	Ui cli.Ui
+	Ui        cli.Ui
+	Stdin     io.Reader
+	ErrStream io.Writer
+}
+
+// color reports whether diagnostics should carry escape sequences.
+func (m *Meta) color() bool {
+	return useColor(m.ErrStream)
 }
 
 // FlagSet returns a flag set that reports errors through the UI rather than

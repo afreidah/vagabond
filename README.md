@@ -1,4 +1,10 @@
-# Vagabond
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-light.png">
+    <img alt="Vagabond" src="docs/assets/logo-light.png" width="420">
+  </picture>
+</p>
 
 Vagabond is a standalone multi-cloud compute broker for running short-lived,
 stateless workloads against available free-tier compute across multiple cloud
