@@ -24,6 +24,15 @@ MOCKGEN_VERSION  ?= v0.6.0
 
 COVERPROFILE   ?= cover.out
 
+# Injected into internal/version at link time, so a built binary reports what it
+# actually is rather than whatever string was last committed.
+VERSION        ?= dev
+COMMIT         ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null)
+VERSION_PKG    := github.com/afreidah/vagabond/internal/version
+GO_LDFLAGS     := -s -w \
+	-X $(VERSION_PKG).Version=$(VERSION) \
+	-X $(VERSION_PKG).Commit=$(COMMIT)
+
 # Go tooling exits non-zero when ./... matches nothing, so every target that
 # operates on packages is guarded. The contract packages do not exist yet and
 # CI runs on every pull request in the meantime; without this the build is red
@@ -52,6 +61,12 @@ help: ## Display available Make targets
 
 build: ## Build the control plane and CLI
 	@if $(HAVE_GO_PKGS); then $(GO) build ./...; else echo "$(NO_PKGS_MSG) build"; fi
+
+# Only this target stamps the version, so `go build ./...` stays usable and a
+# binary produced that way reports itself as a development build rather than
+# claiming a release it is not.
+bin: ## Build the vagabond binary with version information
+	$(GO) build -ldflags "$(GO_LDFLAGS)" -o vagabond ./cmd/vagabond
 
 ##@ Quality
 
@@ -151,6 +166,6 @@ $(MOCKGEN):
 
 clean: ## Remove build and coverage artifacts
 	$(GO) clean
-	rm -f $(COVERPROFILE)
+	rm -f $(COVERPROFILE) vagabond
 
-.PHONY: help build fmt fmt-check vet lint test test-fast cover integration-test govulncheck check generate generate-check tools clean
+.PHONY: help build bin fmt fmt-check vet lint test test-fast cover integration-test govulncheck check generate generate-check tools clean
