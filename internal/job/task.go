@@ -17,7 +17,13 @@
 
 package job
 
-import "github.com/hashicorp/hcl/v2"
+import (
+	"fmt"
+
+	"github.com/hashicorp/hcl/v2"
+	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/convert"
+)
 
 // -------------------------------------------------------------------------
 // TASK
@@ -32,7 +38,7 @@ type Task struct {
 	Name             string                 `hcl:"name,label"`
 	Driver           DriverName             `hcl:"driver"`
 	Config           *RawBlock              `hcl:"config,block"`
-	Env              map[string]string      `hcl:"env,optional"`
+	Env              *RawBlock              `hcl:"env,block"`
 	Source           *Source                `hcl:"source,block"`
 	WorkingDirectory *string                `hcl:"working_directory,optional"`
 	Resources        *Resources             `hcl:"resources,block"`
@@ -46,19 +52,73 @@ type Task struct {
 // UNDECODED CONFIG
 // -------------------------------------------------------------------------
 
-// RawBlock is a block whose schema Vagabond cannot know.
+// RawBlock is a block whose attribute names are not part of Vagabond's schema.
 //
-// Only the task config block qualifies. Its shape depends on the task's driver,
-// so only that driver can decode it, and decoding it here would mean teaching
-// this package every driver's configuration. Nested blocks inside it are
-// permitted and arbitrary, which is why it cannot be a map the way meta and env
-// can.
+// Three blocks qualify, for two different reasons. The task config block is
+// genuinely dynamic: its shape depends on the driver, so only that driver can
+// decode it, and nested blocks inside it are permitted and arbitrary. The meta
+// and env blocks have a known value type, but their keys are chosen by the job
+// author, so no schema can list them either.
 //
-// Keeping the body undecoded preserves HCL source ranges, which is what lets a
-// later decode error point at the line the author wrote rather than at a value
-// that has already lost its origin.
+// All three are bodies rather than maps because gohcl decodes a block into a
+// struct and panics on a map field. Nomad's api package does tag these as
+// map[string]string, but Nomad decodes them with its own decoder rather than
+// gohcl, so the tag reads as advice that does not transfer.
+//
+// The body is the better representation regardless. Keeping it undecoded
+// preserves HCL source ranges, which is what lets an error about an env value
+// point at the line the author wrote rather than at a string that has already
+// lost its origin.
 type RawBlock struct {
 	Body hcl.Body `hcl:",remain"`
+}
+
+// Attributes decodes the block into a string map, evaluating each value against
+// ctx.
+//
+// Returns diagnostics rather than an error so that a bad value is reported
+// against its own source range, and so that several bad values are reported
+// together rather than one per run.
+//
+// A nil receiver yields nothing, because an absent block and an empty one carry
+// the same meaning for metadata and environment.
+func (b *RawBlock) Attributes(ctx *hcl.EvalContext) (map[string]string, hcl.Diagnostics) {
+	if b == nil || b.Body == nil {
+		return nil, nil
+	}
+
+	attrs, diags := b.Body.JustAttributes()
+	if attrs == nil {
+		return nil, diags
+	}
+
+	out := make(map[string]string, len(attrs))
+
+	for name, attr := range attrs {
+		value, valueDiags := attr.Expr.Value(ctx)
+		diags = append(diags, valueDiags...)
+
+		if value.IsNull() || !value.IsKnown() {
+			continue
+		}
+
+		str, err := convert.Convert(value, cty.String)
+		if err != nil {
+			diags = append(diags, &hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Invalid value",
+				Detail: fmt.Sprintf(
+					"The value for %q must be a string: %s.", name, err),
+				Subject: attr.Expr.Range().Ptr(),
+			})
+
+			continue
+		}
+
+		out[name] = str.AsString()
+	}
+
+	return out, diags
 }
 
 // -------------------------------------------------------------------------
