@@ -325,13 +325,13 @@ job "example" {
     source {
       type       = "git"
       repository = "https://example.com/repo.git"
-      ref        = "${meta.git_ref}"
+      ref        = "${meta.version}"
     }
   }
 }
 `
 
-	file := parse(t, src, map[string]string{"git_ref": "abc123"})
+	file := parse(t, src, map[string]string{"version": "abc123"})
 
 	if got := ptr.Deref(file.Jobs[0].Tasks[0].Source.Ref); got != "abc123" {
 		t.Errorf("Ref = %q, want abc123", got)
@@ -411,7 +411,7 @@ func TestParseFile_MissingFile(t *testing.T) {
 // body and a constructed one hold different concrete types and different source
 // ranges, and neither difference means the jobs differ.
 func TestParseFile_MatchesTheHandBuiltJob(t *testing.T) {
-	file, diags := ParseFile(fixturePath, map[string]string{"git_ref": "abc123"})
+	file, diags := ParseFile(fixturePath, map[string]string{"version": "abc123"})
 	if diags.HasErrors() {
 		t.Fatalf("parsing the fixture failed: %s", diags.Error())
 	}
@@ -539,7 +539,7 @@ func blockValues(b *job.RawBlock) (map[string]cty.Value, bool) {
 
 	// The expected value substitutes metadata itself, so both sides evaluate
 	// against the same context the parser used.
-	ctx := EvalContext(map[string]string{"git_ref": "abc123"})
+	ctx := EvalContext(map[string]string{"version": "abc123"})
 	values := make(map[string]cty.Value, len(attrs))
 
 	for name, attr := range attrs {
@@ -555,7 +555,7 @@ func blockValues(b *job.RawBlock) (map[string]cty.Value, bool) {
 }
 
 // expectedFixtureJob mirrors testdata/complete.vagabond.hcl, with
-// git_ref already substituted.
+// version already substituted.
 func expectedFixtureJob() job.Job {
 	return job.Job{
 		Name: "go-test",
@@ -564,19 +564,19 @@ func expectedFixtureJob() job.Job {
 			project = "example"
 			purpose = "ci"
 		`),
-		Parameterized: &job.Parameterized{MetaRequired: []string{"git_ref"}},
+		Parameterized: &job.Parameterized{MetaRequired: []string{"version"}},
 		Routing: &job.Routing{
 			Strategy:  ptr.Of(job.StrategyFreeFirst),
 			Providers: []string{"ibm-code-engine", "gcp-cloud-run"},
 			MaxCost:   ptr.Of(job.Cost(0)),
 			Constraints: []job.Constraint{{
 				Attribute: "provider.architecture",
-				Operator:  "=",
+				Operator:  job.OperatorSetContains,
 				Value:     "amd64",
 			}},
 			Affinities: []job.Affinity{{
 				Attribute: "provider.free_quota_percent",
-				Operator:  ">",
+				Operator:  job.OperatorGreater,
 				Value:     "50",
 				Weight:    ptr.Of(75),
 			}},

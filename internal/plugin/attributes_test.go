@@ -185,3 +185,68 @@ func TestFixtures_EncodeTheFamilyDistinctions(t *testing.T) {
 		t.Error("the worker fixture must offer no architecture")
 	}
 }
+
+// -------------------------------------------------------------------------
+// THE ATTRIBUTE VOCABULARY
+// -------------------------------------------------------------------------
+
+// Every attribute the projection can emit has to be in the known set, or a
+// constraint naming one would be reported as a typo.
+func TestKnownAttributes_CoversTheProjection(t *testing.T) {
+	c := FixtureFunction(time.Now())
+
+	known := make(map[string]bool, len(KnownAttributes()))
+	for _, name := range KnownAttributes() {
+		known[name] = true
+	}
+
+	for name := range c.Attributes() {
+		if !known[name] {
+			t.Errorf("the projection emits %q, which is not in the known set", name)
+		}
+	}
+}
+
+// The quota attribute is emitted by admission rather than by a capability
+// snapshot, so nothing else would catch it going missing.
+func TestKnownAttributes_IncludesTheQuotaAttribute(t *testing.T) {
+	if !Matchable(AttrFreeQuotaPercent) {
+		t.Errorf("%q is not matchable", AttrFreeQuotaPercent)
+	}
+}
+
+func TestKnownAttributes_ReturnsCopy(t *testing.T) {
+	first := KnownAttributes()
+	first[0] = "mutated"
+
+	if KnownAttributes()[0] == "mutated" {
+		t.Error("KnownAttributes() exposed the package-level vocabulary to mutation")
+	}
+}
+
+// The closed set is checkable; the operator's own prefix is not. That split is
+// what lets a typo be caught without forbidding an operator from tagging a
+// provider with whatever they like.
+func TestMatchable(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{name: AttrArchitecture, want: true},
+		{name: AttrFreeQuotaPercent, want: true},
+		{name: MetaPrefix + "region", want: true},
+		{name: MetaPrefix + "anything at all", want: true},
+		{name: "provider.architekture", want: false},
+		{name: "provider.meta", want: false},
+		{name: "node.class", want: false},
+		{name: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Matchable(tt.name); got != tt.want {
+				t.Errorf("Matchable(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}

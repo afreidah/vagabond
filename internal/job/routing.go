@@ -40,13 +40,12 @@ type Routing struct {
 // rather than matching nothing silently, so that a typo does not read like a
 // capacity problem.
 //
-// Operator is a plain string for now. It becomes a closed vocabulary when
-// matching is implemented and the set of comparisons is settled, rather than
-// being guessed at here.
+// Value is empty for the presence operators, which ask only whether the
+// provider published the attribute at all.
 type Constraint struct {
-	Attribute string `hcl:"attribute"`
-	Operator  string `hcl:"operator"`
-	Value     string `hcl:"value"`
+	Attribute string   `hcl:"attribute"`
+	Operator  Operator `hcl:"operator"`
+	Value     string   `hcl:"value,optional"`
 }
 
 // Affinity is a soft preference that raises a provider's score without
@@ -56,8 +55,8 @@ type Constraint struct {
 // unsatisfied affinity never removes a candidate, which is the whole difference
 // between this and Constraint.
 type Affinity struct {
-	Attribute string `hcl:"attribute"`
-	Operator  string `hcl:"operator"`
-	Value     string `hcl:"value"`
-	Weight    *int   `hcl:"weight,optional"`
+	Attribute string   `hcl:"attribute"`
+	Operator  Operator `hcl:"operator"`
+	Value     string   `hcl:"value,optional"`
+	Weight    *int     `hcl:"weight,optional"`
 }

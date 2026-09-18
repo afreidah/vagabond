@@ -138,7 +138,7 @@ func unknownType(name string) error {
 // Parameterized declares the metadata a caller must supply at submission.
 //
 // MetaRequired is what turns one job definition into a template usable across
-// every commit a CI system wants verified: the definition names git_ref as
+// every input a caller wants it run against: the definition names a key as
 // required, and the caller supplies the value per submission. A missing
 // required key is a submission error, caught before any provider is contacted
 // and any free-tier capacity is spent.

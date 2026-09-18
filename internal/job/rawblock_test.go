@@ -89,12 +89,12 @@ func TestRawBlock_AttributesRejectsNonScalar(t *testing.T) {
 // before values are supplied, and a job that interpolates metadata is not
 // wrong for doing so.
 func TestRawBlock_AttributesSkipsUnknownValues(t *testing.T) {
-	block := rawBlock(t, `ref = meta.git_ref`)
+	block := rawBlock(t, `ref = meta.version`)
 
 	ctx := &hcl.EvalContext{
 		Variables: map[string]cty.Value{
 			"meta": cty.ObjectVal(map[string]cty.Value{
-				"git_ref": cty.UnknownVal(cty.String),
+				"version": cty.UnknownVal(cty.String),
 			}),
 		},
 	}

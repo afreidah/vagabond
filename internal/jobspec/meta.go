@@ -31,7 +31,7 @@ import (
 // -------------------------------------------------------------------------
 
 // MetaNamespace is the accessor a job file uses to reach submission metadata,
-// as in meta.git_ref.
+// as in meta.version.
 //
 // Nomad namespaces its own accessors the same way, with var and local. The name
 // matches parameterized.meta_required naming the same keys, so a reader does

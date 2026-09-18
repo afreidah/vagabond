@@ -35,7 +35,7 @@ job "go-test" {
   # ---------------------------------------------------------------------------
 
   parameterized {
-    meta_required = ["git_ref"]
+    meta_required = ["version"]
   }
 
   # ---------------------------------------------------------------------------
@@ -57,9 +57,12 @@ job "go-test" {
     # --- This workload must never intentionally consume paid compute. ---
     max_cost_usd = 0
 
+    # A provider may offer several architectures, so the attribute holds a set
+    # and membership is the question. Equality would ask whether amd64 is the
+    # only one it offers.
     constraint {
       attribute = "provider.architecture"
-      operator  = "="
+      operator  = "set_contains"
       value     = "amd64"
     }
 
@@ -108,16 +111,16 @@ job "go-test" {
     #
     # The executor checks out this exact revision before the task runs.
     #
-    # meta.git_ref is supplied by the caller at submission time and substituted
+    # meta.version is supplied by the caller at submission time and substituted
     # before dispatch, so the provider receives a literal revision. Task
-    # metadata is also injected into the running container as JOB_META_git_ref,
+    # metadata is also injected into the running container as JOB_META_version,
     # for commands that want to read it themselves.
     # -------------------------------------------------------------------------
 
     source {
       type        = "git"
       repository  = "https://git.example.com/example/service.git"
-      ref         = "${meta.git_ref}"
+      ref         = "${meta.version}"
       destination = "/workspace"
     }
 

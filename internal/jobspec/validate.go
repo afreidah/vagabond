@@ -130,14 +130,19 @@ func validateRouting(j *job.Job) hcl.Diagnostics {
 	}
 
 	for i := range j.Routing.Constraints {
-		diags = append(diags, validateAttribute(j.Name,
-			"constraint", j.Routing.Constraints[i].Attribute)...)
+		constraint := &j.Routing.Constraints[i]
+
+		diags = append(diags, validateAttribute(j.Name, "constraint", constraint.Attribute)...)
+		diags = append(diags, validateOperator(j.Name, "constraint",
+			constraint.Operator, constraint.Value)...)
 	}
 
 	for i := range j.Routing.Affinities {
 		affinity := &j.Routing.Affinities[i]
 
 		diags = append(diags, validateAttribute(j.Name, "affinity", affinity.Attribute)...)
+		diags = append(diags, validateOperator(j.Name, "affinity",
+			affinity.Operator, affinity.Value)...)
 
 		if affinity.Weight != nil && ptr.Deref(affinity.Weight) <= 0 {
 			diags = append(diags, simple(
@@ -151,20 +156,58 @@ func validateRouting(j *job.Job) hcl.Diagnostics {
 	return diags
 }
 
-// validateAttribute checks that a matched attribute is one Vagabond publishes.
+// validateAttribute checks that a matched attribute is one a provider can
+// actually have.
 //
-// An attribute outside the reserved prefix matches nothing, so a job
-// constraining on it would silently exclude every provider. Saying so is better
-// than reporting that nothing had capacity.
+// Two things pass: a name Vagabond publishes from a capability snapshot, and
+// anything under the operator's own prefix, which is deliberately unchecked.
+// Anything else matches nothing, so a job constraining on it would silently
+// exclude every provider and report as having no capacity. Nomad cannot make
+// this check because its node attributes are extensible by fingerprinters;
+// ours are a closed set, so it costs nothing to catch the typo.
 func validateAttribute(jobName, kind, attribute string) hcl.Diagnostics {
-	if plugin.Reserved(attribute) {
+	if plugin.Matchable(attribute) {
 		return nil
 	}
 
+	detail := fmt.Sprintf("Attribute %q is not one Vagabond publishes about a "+
+		"provider. Known attributes are %s. Anything under %q is an operator's "+
+		"own and is not checked.",
+		attribute, strings.Join(plugin.KnownAttributes(), ", "), plugin.MetaPrefix)
+
 	return hcl.Diagnostics{simple(
-		fmt.Sprintf("Unknown %s attribute in %q", kind, jobName),
-		fmt.Sprintf("Attribute %q is not one Vagabond publishes about a provider. "+
-			"Provider attributes begin with %q.", attribute, plugin.Prefix))}
+		fmt.Sprintf("Unknown %s attribute in %q", kind, jobName), detail)}
+}
+
+// validateOperator checks the comparison, and that it carries a value when it
+// needs one.
+//
+// The presence operators are the exception: is_set and is_not_set ask only
+// whether a provider published the attribute, so a value alongside one is a
+// misunderstanding worth reporting rather than something to ignore.
+func validateOperator(jobName, kind string, op job.Operator, value string) hcl.Diagnostics {
+	if !op.Valid() {
+		return hcl.Diagnostics{simple(
+			fmt.Sprintf("Unknown %s operator in %q", kind, jobName),
+			fmt.Sprintf("Operator %q is not one Vagabond implements. "+
+				"Valid operators are %s.", op, joinOperators()))}
+	}
+
+	if op.Presence() && value != "" {
+		return hcl.Diagnostics{simple(
+			fmt.Sprintf("Unexpected %s value in %q", kind, jobName),
+			fmt.Sprintf("Operator %q asks only whether the attribute is published, "+
+				"so the value %q is not used. Remove it, or use a comparison.",
+				op, value))}
+	}
+
+	if !op.Presence() && value == "" {
+		return hcl.Diagnostics{simple(
+			fmt.Sprintf("Missing %s value in %q", kind, jobName),
+			fmt.Sprintf("Operator %q compares against a value, and none was given.", op))}
+	}
+
+	return nil
 }
 
 // -------------------------------------------------------------------------
@@ -474,6 +517,15 @@ func joinStrategies() string {
 	names := make([]string, 0, len(job.Strategies()))
 	for _, s := range job.Strategies() {
 		names = append(names, s.String())
+	}
+
+	return strings.Join(names, ", ")
+}
+
+func joinOperators() string {
+	names := make([]string, 0, len(job.Operators()))
+	for _, o := range job.Operators() {
+		names = append(names, o.String())
 	}
 
 	return strings.Join(names, ", ")
