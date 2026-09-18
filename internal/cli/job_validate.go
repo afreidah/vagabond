@@ -15,7 +15,10 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
+
+	"github.com/afreidah/vagabond/internal/jobspec"
 )
 
 // JobValidateCommand implements `vagabond job validate`.
@@ -67,5 +70,14 @@ func (c *JobValidateCommand) Run(args []string) int {
 		return c.Errorf("This command takes one argument: <path>\n\n%s", c.Help())
 	}
 
-	return c.Errorf("job validate is not implemented yet")
+	_, diags := jobspec.ParseFile(paths[0], meta)
+	if diags.HasErrors() {
+		// Rendered plainly until the diagnostic writer lands, which is what
+		// turns these into a source excerpt with the offending line.
+		return c.Errorf("%s", diags.Error())
+	}
+
+	c.Ui.Output(fmt.Sprintf("Job specification %s is valid.", paths[0]))
+
+	return ExitSuccess
 }

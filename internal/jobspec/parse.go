@@ -67,10 +67,24 @@ func ParseFile(path string, meta map[string]string) (*job.File, hcl.Diagnostics)
 //
 // Returns whatever it managed to decode alongside its diagnostics, because a
 // file with one bad attribute is still worth reporting the rest of.
+//
+// Required metadata is checked before decoding rather than after. A job that
+// declares meta_required and was submitted without it fails naming the keys,
+// instead of failing at whichever expression happened to reference one first.
 func Parse(cfg Config) (*job.File, hcl.Diagnostics) {
 	body, diags := parseSource(cfg)
 	if body == nil {
 		return nil, diags
+	}
+
+	required, requiredDiags := RequiredMeta(body)
+	diags = append(diags, requiredDiags...)
+
+	// Stop here when metadata is missing. Decoding would go on to fail at every
+	// expression that references one of those keys, burying the one diagnostic
+	// that says what to do under several that repeat it obliquely.
+	if missing := CheckRequiredMeta(required, cfg.Meta); missing.HasErrors() {
+		return nil, append(diags, missing...)
 	}
 
 	ctx := EvalContext(cfg.Meta)

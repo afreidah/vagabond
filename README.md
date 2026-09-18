@@ -33,7 +33,7 @@ Vagabond should:
 - use a familiar declarative HCL job format;
 - support CLI, CI/CD, workflow-engine, and direct API clients equally;
 - maintain execution history, provider health, quota consumption, and routing data;
-- remain useful without Nomad, Temporal, or any other Munchbox-specific service.
+- remain useful standalone, without Nomad, Temporal, or any other orchestrator.
 
 A guiding principle is:
 
@@ -140,13 +140,13 @@ part of Vagabond's workload model; provider names are routing destinations.
 For example:
 
 ```hcl
-task "verify" {
+task "test" {
   driver = "container"
 
   config {
-    image   = "hashicorp/terraform:latest"
-    command = "terraform"
-    args    = ["validate"]
+    image   = "golang:1.27"
+    command = "go"
+    args    = ["test", "./..."]
   }
 }
 ```
@@ -332,7 +332,7 @@ The syntax is Nomad-inspired, not Nomad-compatible. Familiar concepts such as
 `driver` expresses the execution contract. `routing.providers` is an optional
 provider allowlist/preference, not a hardcoded failover chain.
 
-See [`examples/terraform-verify.vagabond.hcl`](examples/terraform-verify.vagabond.hcl).
+See [`examples/go-test.vagabond.hcl`](examples/go-test.vagabond.hcl).
 
 ## State and Events
 
@@ -349,9 +349,9 @@ search and analysis without turning it into another log store.
 The command surface should feel familiar to Nomad users:
 
 ```bash
-vagabond job validate examples/terraform-verify.vagabond.hcl
-vagabond job plan examples/terraform-verify.vagabond.hcl
-vagabond job run -meta git_ref=<sha> examples/terraform-verify.vagabond.hcl
+vagabond job validate examples/go-test.vagabond.hcl
+vagabond job plan examples/go-test.vagabond.hcl
+vagabond job run -meta git_ref=<sha> examples/go-test.vagabond.hcl
 vagabond job status <execution-id>
 ```
 
@@ -390,7 +390,7 @@ internal/
     # additional provider packages added as adapters become real
 
 examples/
-  terraform-verify.vagabond.hcl
+  go-test.vagabond.hcl
 
 workers/
   cloudflare-executor/        small Rust Worker used by the Cloudflare plugin

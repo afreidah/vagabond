@@ -12,6 +12,7 @@
 package jobspec
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,9 +26,14 @@ import (
 	"github.com/afreidah/vagabond/internal/ptr"
 )
 
-// examplePath is the job the README points readers at. Parsing it is the
-// clearest statement that the parser works.
-var examplePath = filepath.Join("..", "..", "examples", "terraform-verify.vagabond.hcl")
+// fixturePath is the job that uses every block the specification defines. It is
+// a fixture rather than an example, so that a field can be added to cover it
+// without changing what a reader is shown.
+var fixturePath = filepath.Join("testdata", "complete.vagabond.hcl")
+
+// examplesDir holds the files a reader is pointed at. Every one of them has to
+// parse: an example that does not is worse than no example.
+var examplesDir = filepath.Join("..", "..", "examples")
 
 // parse is the common shape: parse a snippet and fail on any diagnostic.
 func parse(t *testing.T, src string, meta map[string]string) *job.File {
@@ -338,7 +344,7 @@ job "example" {
   type = "batch"
 
   meta {
-    project = "munchbox"
+    project = "example"
   }
 
   task "verify" {
@@ -362,8 +368,8 @@ job "example" {
 		t.Fatalf("decoding meta: %s", diags.Error())
 	}
 
-	if meta["project"] != "munchbox" {
-		t.Errorf("meta[project] = %q, want munchbox", meta["project"])
+	if meta["project"] != "example" {
+		t.Errorf("meta[project] = %q, want example", meta["project"])
 	}
 
 	env, diags := j.Tasks[0].Env.Attributes(nil)
@@ -398,16 +404,16 @@ func TestParseFile_MissingFile(t *testing.T) {
 // ACCEPTANCE
 // -------------------------------------------------------------------------
 
-// The documented example decodes into the value the specification package
-// builds by hand.
+// A job using every block the specification defines decodes into the value
+// built by hand below.
 //
-// Bodies are compared by their decoded attributes rather than by identity: a
-// parsed body and a constructed one hold different concrete types and different
-// source ranges, and neither difference means the jobs differ.
-func TestParseFile_MatchesTheHandBuiltExample(t *testing.T) {
-	file, diags := ParseFile(examplePath, map[string]string{"git_ref": "abc123"})
+// Bodies are compared by the values they hold rather than by identity: a parsed
+// body and a constructed one hold different concrete types and different source
+// ranges, and neither difference means the jobs differ.
+func TestParseFile_MatchesTheHandBuiltJob(t *testing.T) {
+	file, diags := ParseFile(fixturePath, map[string]string{"git_ref": "abc123"})
 	if diags.HasErrors() {
-		t.Fatalf("parsing the example failed: %s", diags.Error())
+		t.Fatalf("parsing the fixture failed: %s", diags.Error())
 	}
 
 	if len(file.Jobs) != 1 {
@@ -415,11 +421,81 @@ func TestParseFile_MatchesTheHandBuiltExample(t *testing.T) {
 	}
 
 	got := file.Jobs[0]
-	want := expectedExampleJob()
+	want := expectedFixtureJob()
 
 	if diff := cmp.Diff(want, got, cmp.Comparer(sameAttributes)); diff != "" {
-		t.Errorf("parsed example differs from the hand-built job (-want +got):\n%s", diff)
+		t.Errorf("parsed fixture differs from the hand-built job (-want +got):\n%s", diff)
 	}
+}
+
+// Every file under examples/ parses. An example that does not is worse than no
+// example, and nothing else checks them now that the acceptance fixture lives
+// in testdata.
+func TestExamples_AllParse(t *testing.T) {
+	entries, err := os.ReadDir(examplesDir)
+	if err != nil {
+		t.Fatalf("reading %s: %v", examplesDir, err)
+	}
+
+	found := 0
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".vagabond.hcl") {
+			continue
+		}
+
+		found++
+
+		t.Run(entry.Name(), func(t *testing.T) {
+			path := filepath.Join(examplesDir, entry.Name())
+
+			// Examples are parameterized, so they need values to parse.
+			// Anything they declare is supplied here.
+			body, diags := ParseFile(path, exampleMeta(t, path))
+			if diags.HasErrors() {
+				t.Errorf("example does not parse: %s", diags.Error())
+			}
+
+			if body == nil || len(body.Jobs) == 0 {
+				t.Error("example decoded to no jobs")
+			}
+		})
+	}
+
+	if found == 0 {
+		t.Errorf("no examples found in %s", examplesDir)
+	}
+}
+
+// exampleMeta supplies a placeholder for every key an example declares, so that
+// the parse check does not have to be updated whenever an example gains one.
+func exampleMeta(t *testing.T, path string) map[string]string {
+	t.Helper()
+
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+
+	f, diags := hclsyntax.ParseConfig(src, path, hcl.InitialPos)
+	if diags.HasErrors() {
+		t.Fatalf("parsing %s: %s", path, diags.Error())
+	}
+
+	required, diags := RequiredMeta(f.Body)
+	if diags.HasErrors() {
+		t.Fatalf("reading required metadata from %s: %s", path, diags.Error())
+	}
+
+	meta := make(map[string]string)
+
+	for _, req := range required {
+		for _, key := range req.Keys {
+			meta[key] = "placeholder"
+		}
+	}
+
+	return meta
 }
 
 // sameAttributes compares two undecoded blocks by the values they hold.
@@ -478,16 +554,15 @@ func blockValues(b *job.RawBlock) (map[string]cty.Value, bool) {
 	return values, true
 }
 
-// expectedExampleJob mirrors examples/terraform-verify.vagabond.hcl, with
+// expectedFixtureJob mirrors testdata/complete.vagabond.hcl, with
 // git_ref already substituted.
-func expectedExampleJob() job.Job {
+func expectedFixtureJob() job.Job {
 	return job.Job{
-		Name: "terraform-verify",
+		Name: "go-test",
 		Type: ptr.Of(job.TypeBatch),
 		Meta: rawBlock(`
-			project    = "munchbox"
-			repository = "afreidah/munchbox"
-			purpose    = "ci"
+			project = "example"
+			purpose = "ci"
 		`),
 		Parameterized: &job.Parameterized{MetaRequired: []string{"git_ref"}},
 		Routing: &job.Routing{
@@ -507,24 +582,24 @@ func expectedExampleJob() job.Job {
 			}},
 		},
 		Tasks: []job.Task{{
-			Name:   "verify",
+			Name:   "test",
 			Driver: job.DriverContainer,
 			Config: rawBlock(`
-				image   = "hashicorp/terraform:latest"
-				command = "sh"
-				args    = ["-lc", "terraform fmt -check -recursive && terraform validate"]
+				image   = "golang:1.27"
+				command = "go"
+				args    = ["test", "./..."]
 			`),
 			Env: rawBlock(`
-				CI               = "true"
-				TF_IN_AUTOMATION = "true"
+				CI          = "true"
+				CGO_ENABLED = "0"
 			`),
 			Source: &job.Source{
 				Type:        "git",
-				Repository:  "https://github.com/afreidah/munchbox.git",
+				Repository:  "https://git.example.com/example/service.git",
 				Ref:         ptr.Of("abc123"),
 				Destination: ptr.Of("/workspace"),
 			},
-			WorkingDirectory: ptr.Of("/workspace/infrastructure/terragrunt"),
+			WorkingDirectory: ptr.Of("/workspace"),
 			Resources:        &job.Resources{CPU: ptr.Of(1000), Memory: ptr.Of(2048)},
 			Timeout:          ptr.Of(job.Duration("15m")),
 			Network:          &job.Network{Internet: ptr.Of(true), Private: ptr.Of(false)},
