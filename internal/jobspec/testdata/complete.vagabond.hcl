@@ -1,31 +1,37 @@
 # -------------------------------------------------------------------------------
-# Terraform Verify - stateless CI validation
+# Complete Job - parser test fixture
 #
 # Project: Vagabond / Author: Alex Freidah
 #
-# Runs Terraform validation using any compatible container job provider with
-# available free-tier capacity. Admission determines which providers can satisfy
-# the task; the scheduler chooses among those admitted candidates.
+# Exercises every block and attribute the specification defines, so that the
+# parser is tested against a job using all of them at once.
 #
-# If no eligible provider has capacity, Vagabond rejects the job. The caller
-# decides whether to fail, retry later, or fall back to another execution path.
+# This is a fixture, not an example. It lives here rather than in examples/ so
+# that the test suite does not break when an illustrative file is edited, and so
+# that a field can be added here to cover it without changing what a reader is
+# shown. A separate test checks that everything under examples/ parses.
 # -------------------------------------------------------------------------------
 
-job "terraform-verify" {
+job "go-test" {
   type = "batch"
 
   # ---------------------------------------------------------------------------
   # Metadata
+  #
+  # Arbitrary key/value pairs carried with the job. Vagabond stores and reports
+  # them and is otherwise indifferent to what they mean.
   # ---------------------------------------------------------------------------
 
   meta {
-    project    = "munchbox"
-    repository = "afreidah/munchbox"
-    purpose    = "ci"
+    project = "example"
+    purpose = "ci"
   }
 
   # ---------------------------------------------------------------------------
   # Parameterized Inputs
+  #
+  # Metadata the caller must supply at submission. A job referencing a key that
+  # was not supplied is rejected before any provider is contacted.
   # ---------------------------------------------------------------------------
 
   parameterized {
@@ -68,55 +74,54 @@ job "terraform-verify" {
   }
 
   # ---------------------------------------------------------------------------
-  # Task: verify
+  # Task: test
   #
   # The driver declares the execution contract. `container` means Vagabond needs
   # a provider capable of running an arbitrary container image to completion;
   # the scheduler does not need to understand how that provider implements it.
   # ---------------------------------------------------------------------------
 
-  task "verify" {
+  task "test" {
     driver = "container"
 
     # --- Container Configuration ---
     # Image distribution is intentionally outside the POC. Vagabond assumes
     # the selected provider can pull the image named by the job.
     config {
-      image   = "hashicorp/terraform:latest"
-      command = "sh"
+      image   = "golang:1.27"
+      command = "go"
 
       args = [
-        "-lc",
-        "terraform fmt -check -recursive && terraform validate"
+        "test",
+        "./...",
       ]
     }
 
     # --- Environment ---
     env {
-      CI               = "true"
-      TF_IN_AUTOMATION = "true"
+      CI          = "true"
+      CGO_ENABLED = "0"
     }
 
     # -------------------------------------------------------------------------
     # Source
     #
-    # The executor checks out this exact revision before task execution.
+    # The executor checks out this exact revision before the task runs.
     #
     # meta.git_ref is supplied by the caller at submission time and substituted
-    # before dispatch, so the provider receives a literal revision and job
-    # validate can check the reference resolves. Task metadata is also injected
-    # into the running container as JOB_META_git_ref, for commands that want to
-    # read it themselves.
+    # before dispatch, so the provider receives a literal revision. Task
+    # metadata is also injected into the running container as JOB_META_git_ref,
+    # for commands that want to read it themselves.
     # -------------------------------------------------------------------------
 
     source {
       type        = "git"
-      repository  = "https://github.com/afreidah/munchbox.git"
+      repository  = "https://git.example.com/example/service.git"
       ref         = "${meta.git_ref}"
       destination = "/workspace"
     }
 
-    working_directory = "/workspace/infrastructure/terragrunt"
+    working_directory = "/workspace"
 
     # -------------------------------------------------------------------------
     # Resources
@@ -154,7 +159,8 @@ job "terraform-verify" {
     # Retry Policy
     #
     # Provider/infrastructure failures may be rerouted to another admitted
-    # backend. Workload failures are returned directly and are not rerouted.
+    # backend. Workload failures are returned directly and are not rerouted: a
+    # failing test suite is an answer, not an outage.
     # -------------------------------------------------------------------------
 
     retry {

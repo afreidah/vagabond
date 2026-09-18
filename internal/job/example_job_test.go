@@ -3,12 +3,13 @@
 //
 // Author: Alex Freidah
 //
-// Constructs examples/terraform-verify.vagabond.hcl as a Go literal. The
-// specification types have to express the documented example in full, and this
-// is what proves it before a parser exists to do so end to end.
+// Constructs a job using every block and attribute the specification defines,
+// as a Go literal. The types have to be able to express one, and a field they
+// cannot hold shows up here as a compile error, which is the earliest and
+// cheapest place for it to surface.
 //
-// A field the example uses that these types cannot hold shows up here as a
-// compile error, which is the earliest and cheapest place for it to surface.
+// It mirrors internal/jobspec/testdata/complete.vagabond.hcl, which the parser
+// is tested against, so the two stay a matched pair.
 // -------------------------------------------------------------------------------
 
 package job
@@ -43,17 +44,18 @@ func body(t *testing.T, src string) hcl.Body {
 	return f.Body
 }
 
-// exampleJob mirrors examples/terraform-verify.vagabond.hcl.
+// exampleJob is a job using every block and attribute the specification
+// defines. It mirrors internal/jobspec/testdata/complete.vagabond.hcl, which is
+// what the parser is tested against.
 func exampleJob(t *testing.T) Job {
 	t.Helper()
 
 	return Job{
-		Name: "terraform-verify",
+		Name: "go-test",
 		Type: ptr.Of(TypeBatch),
 		Meta: &RawBlock{Body: body(t, `
-			project    = "munchbox"
-			repository = "afreidah/munchbox"
-			purpose    = "ci"
+			project = "example"
+			purpose = "ci"
 		`)},
 		Parameterized: &Parameterized{
 			MetaRequired: []string{"git_ref"},
@@ -75,24 +77,24 @@ func exampleJob(t *testing.T) Job {
 			}},
 		},
 		Tasks: []Task{{
-			Name:   "verify",
+			Name:   "test",
 			Driver: DriverContainer,
 			Config: &RawBlock{Body: body(t, `
-				image   = "hashicorp/terraform:latest"
-				command = "sh"
-				args    = ["-lc", "terraform fmt -check -recursive && terraform validate"]
+				image   = "golang:1.27"
+				command = "go"
+				args    = ["test", "./..."]
 			`)},
 			Env: &RawBlock{Body: body(t, `
-				CI               = "true"
-				TF_IN_AUTOMATION = "true"
+				CI          = "true"
+				CGO_ENABLED = "0"
 			`)},
 			Source: &Source{
 				Type:        "git",
-				Repository:  "https://github.com/afreidah/munchbox.git",
+				Repository:  "https://git.example.com/example/service.git",
 				Ref:         ptr.Of("${meta.git_ref}"),
 				Destination: ptr.Of("/workspace"),
 			},
-			WorkingDirectory: ptr.Of("/workspace/infrastructure/terragrunt"),
+			WorkingDirectory: ptr.Of("/workspace"),
 			Resources:        &Resources{CPU: ptr.Of(1000), Memory: ptr.Of(2048)},
 			Timeout:          ptr.Of(FromDuration(15 * time.Minute)),
 			Network:          &Network{Internet: ptr.Of(true), Private: ptr.Of(false)},
@@ -119,8 +121,8 @@ func exampleJob(t *testing.T) Job {
 func TestExampleJob_TopLevel(t *testing.T) {
 	j := exampleJob(t)
 
-	if j.Name != "terraform-verify" {
-		t.Errorf("Name = %q, want %q", j.Name, "terraform-verify")
+	if j.Name != "go-test" {
+		t.Errorf("Name = %q, want %q", j.Name, "go-test")
 	}
 
 	if !ptr.Deref(j.Type).Valid() {
@@ -246,8 +248,8 @@ func TestExampleJob_MetaAndEnv(t *testing.T) {
 		t.Fatalf("decoding meta: %s", diags.Error())
 	}
 
-	if meta["project"] != "munchbox" {
-		t.Errorf("meta[project] = %q, want %q", meta["project"], "munchbox")
+	if meta["project"] != "example" {
+		t.Errorf("meta[project] = %q, want %q", meta["project"], "example")
 	}
 
 	env, diags := j.Tasks[0].Env.Attributes(nil)
@@ -255,8 +257,8 @@ func TestExampleJob_MetaAndEnv(t *testing.T) {
 		t.Fatalf("decoding env: %s", diags.Error())
 	}
 
-	if env["CI"] != "true" || env["TF_IN_AUTOMATION"] != "true" {
-		t.Errorf("env = %v, want CI and TF_IN_AUTOMATION set to true", env)
+	if env["CI"] != "true" || env["CGO_ENABLED"] != "0" {
+		t.Errorf("env = %v, want CI true and CGO_ENABLED 0", env)
 	}
 }
 

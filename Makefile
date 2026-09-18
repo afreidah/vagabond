@@ -59,14 +59,14 @@ help: ## Display available Make targets
 # BUILD
 # -------------------------------------------------------------------------
 
-build: ## Build the control plane and CLI
-	@if $(HAVE_GO_PKGS); then $(GO) build ./...; else echo "$(NO_PKGS_MSG) build"; fi
-
-# Only this target stamps the version, so `go build ./...` stays usable and a
-# binary produced that way reports itself as a development build rather than
-# claiming a release it is not.
-bin: ## Build the vagabond binary with version information
-	$(GO) build -ldflags "$(GO_LDFLAGS)" -o vagabond ./cmd/vagabond
+# Stamps the version, so a binary built any other way reports itself as a
+# development build rather than claiming a release it is not. Nothing else
+# compiles for its own sake: vet and test both build every package already.
+build: ## Build the vagabond binary with version information
+	@if [ -d cmd/vagabond ]; then \
+		$(GO) build -ldflags "$(GO_LDFLAGS)" -o vagabond ./cmd/vagabond; \
+		echo "built ./vagabond $(VERSION)"; \
+	else echo "$(NO_PKGS_MSG) build"; fi
 
 ##@ Quality
 
@@ -168,4 +168,4 @@ clean: ## Remove build and coverage artifacts
 	$(GO) clean
 	rm -f $(COVERPROFILE) vagabond
 
-.PHONY: help build bin fmt fmt-check vet lint test test-fast cover integration-test govulncheck check generate generate-check tools clean
+.PHONY: help build fmt fmt-check vet lint test test-fast cover integration-test govulncheck check generate generate-check tools clean
