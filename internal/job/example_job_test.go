@@ -50,11 +50,11 @@ func exampleJob(t *testing.T) Job {
 	return Job{
 		Name: "terraform-verify",
 		Type: ptr.Of(TypeBatch),
-		Meta: map[string]string{
-			"project":    "munchbox",
-			"repository": "afreidah/munchbox",
-			"purpose":    "ci",
-		},
+		Meta: &RawBlock{Body: body(t, `
+			project    = "munchbox"
+			repository = "afreidah/munchbox"
+			purpose    = "ci"
+		`)},
 		Parameterized: &Parameterized{
 			MetaRequired: []string{"git_ref"},
 		},
@@ -82,10 +82,10 @@ func exampleJob(t *testing.T) Job {
 				command = "sh"
 				args    = ["-lc", "terraform fmt -check -recursive && terraform validate"]
 			`)},
-			Env: map[string]string{
-				"CI":               "true",
-				"TF_IN_AUTOMATION": "true",
-			},
+			Env: &RawBlock{Body: body(t, `
+				CI               = "true"
+				TF_IN_AUTOMATION = "true"
+			`)},
 			Source: &Source{
 				Type:        "git",
 				Repository:  "https://github.com/afreidah/munchbox.git",
@@ -94,7 +94,7 @@ func exampleJob(t *testing.T) Job {
 			},
 			WorkingDirectory: ptr.Of("/workspace/infrastructure/terragrunt"),
 			Resources:        &Resources{CPU: ptr.Of(1000), Memory: ptr.Of(2048)},
-			Timeout:          ptr.Of(Duration(15 * time.Minute)),
+			Timeout:          ptr.Of(FromDuration(15 * time.Minute)),
 			Network:          &Network{Internet: ptr.Of(true), Private: ptr.Of(false)},
 			Execution: &ExecutionRequirements{
 				Architecture: ptr.Of(ArchAMD64),
@@ -104,8 +104,8 @@ func exampleJob(t *testing.T) Job {
 				Attempts: ptr.Of(2),
 				Reroute:  ptr.Of(true),
 				Backoff: &Backoff{
-					Initial: ptr.Of(Duration(5 * time.Second)),
-					Max:     ptr.Of(Duration(30 * time.Second)),
+					Initial: ptr.Of(FromDuration(5 * time.Second)),
+					Max:     ptr.Of(FromDuration(30 * time.Second)),
 				},
 			},
 		}},
@@ -173,9 +173,7 @@ func TestExampleJob_Task(t *testing.T) {
 		t.Errorf("Driver = %q, want %q", task.Driver, DriverContainer)
 	}
 
-	if ptr.Deref(task.Timeout).Std() != 15*time.Minute {
-		t.Errorf("Timeout = %v, want 15m", ptr.Deref(task.Timeout).Std())
-	}
+	assertDuration(t, "Timeout", ptr.Deref(task.Timeout), 15*time.Minute)
 
 	if ptr.Deref(task.Execution.Architecture) != ArchAMD64 {
 		t.Errorf("Architecture = %q, want %q", ptr.Deref(task.Execution.Architecture), ArchAMD64)
@@ -199,12 +197,22 @@ func TestExampleJob_RetryPolicy(t *testing.T) {
 		t.Error("Reroute = false, want true")
 	}
 
-	if ptr.Deref(retry.Backoff.Initial).Std() != 5*time.Second {
-		t.Errorf("Backoff.Initial = %v, want 5s", ptr.Deref(retry.Backoff.Initial).Std())
+	assertDuration(t, "Backoff.Initial", ptr.Deref(retry.Backoff.Initial), 5*time.Second)
+	assertDuration(t, "Backoff.Max", ptr.Deref(retry.Backoff.Max), 30*time.Second)
+}
+
+// assertDuration parses a specification duration and compares it, so that a
+// value which fails to parse is reported as that rather than as a mismatch.
+func assertDuration(t *testing.T, field string, got Duration, want time.Duration) {
+	t.Helper()
+
+	parsed, err := got.Std()
+	if err != nil {
+		t.Fatalf("%s = %q, which does not parse: %v", field, got, err)
 	}
 
-	if ptr.Deref(retry.Backoff.Max).Std() != 30*time.Second {
-		t.Errorf("Backoff.Max = %v, want 30s", ptr.Deref(retry.Backoff.Max).Std())
+	if parsed != want {
+		t.Errorf("%s = %v, want %v", parsed, got, want)
 	}
 }
 
@@ -227,19 +235,43 @@ func TestExampleJob_ConfigRetainsBody(t *testing.T) {
 	}
 }
 
-// Meta and env are ordinary string maps rather than undecoded bodies, because
-// their values have a known type even though their keys are chosen by the
-// author. Only config is genuinely dynamic.
+// Meta and env are bodies rather than maps, so that a bad value can be reported
+// against its own source range. Attributes is what turns one into the string
+// map a consumer actually wants.
 func TestExampleJob_MetaAndEnv(t *testing.T) {
 	j := exampleJob(t)
 
-	if j.Meta["project"] != "munchbox" {
-		t.Errorf("Meta[project] = %q, want %q", j.Meta["project"], "munchbox")
+	meta, diags := j.Meta.Attributes(nil)
+	if diags.HasErrors() {
+		t.Fatalf("decoding meta: %s", diags.Error())
 	}
 
-	env := j.Tasks[0].Env
+	if meta["project"] != "munchbox" {
+		t.Errorf("meta[project] = %q, want %q", meta["project"], "munchbox")
+	}
+
+	env, diags := j.Tasks[0].Env.Attributes(nil)
+	if diags.HasErrors() {
+		t.Fatalf("decoding env: %s", diags.Error())
+	}
+
 	if env["CI"] != "true" || env["TF_IN_AUTOMATION"] != "true" {
-		t.Errorf("Env = %v, want CI and TF_IN_AUTOMATION set to true", env)
+		t.Errorf("env = %v, want CI and TF_IN_AUTOMATION set to true", env)
+	}
+}
+
+// A nil block is not an error. An absent env block and an empty one mean the
+// same thing, and a caller should not have to check before asking.
+func TestRawBlock_NilYieldsNothing(t *testing.T) {
+	var block *RawBlock
+
+	attrs, diags := block.Attributes(nil)
+	if diags.HasErrors() {
+		t.Errorf("a nil block produced diagnostics: %s", diags.Error())
+	}
+
+	if len(attrs) != 0 {
+		t.Errorf("a nil block produced %d attributes", len(attrs))
 	}
 }
 

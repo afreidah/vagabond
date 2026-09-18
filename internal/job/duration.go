@@ -3,10 +3,20 @@
 //
 // Author: Alex Freidah
 //
-// Wraps time.Duration so that the text form is part of the type. Admission
-// compares a requested duration against provider limits on every candidate,
-// and a representation that stayed a string would mean parsing at each
-// comparison site.
+// Holds the text a job file carries, such as "15m", rather than a parsed
+// int64. That is not the first choice: Chunk 1 declared this as a
+// time.Duration, and recorded an objection that a typed duration loses the HCL
+// source range when a value parses but is nonsensical.
+//
+// The objection turned out to understate the cost. Upstream gohcl decodes
+// through gocty, which converts by reflected kind and consults neither
+// encoding.TextUnmarshaler nor any custom decoder, so an int64-kinded Duration
+// simply rejects "15m" with "a number is required". Nomad solves this with
+// RegisterExpressionDecoder on gohcl.Decoder, which is an addition in their
+// fork of HCL rather than something upstream offers.
+//
+// So the value stays text until validation proves it parses, which is also the
+// honest description of what is in the file.
 // -------------------------------------------------------------------------------
 
 package job
@@ -18,50 +28,69 @@ import (
 )
 
 // Duration is a time span written in a job file, such as "15m" or "5s".
-type Duration time.Duration
+type Duration string
 
 // ErrInvalidDuration is the sentinel behind every unparseable duration.
 var ErrInvalidDuration = errors.New("invalid duration")
 
-// ParseDuration converts s into a Duration.
+// FromDuration renders a standard library duration as a job file would write
+// it, for constructing a specification in Go rather than reading one.
+func FromDuration(d time.Duration) Duration {
+	return Duration(d.String())
+}
+
+// Std parses the value into a standard library duration.
 //
-// Negative values are rejected. A negative timeout or backoff has no meaning
-// Vagabond could act on, and accepting one defers the failure to whichever
-// provider plugin eventually divides by it.
-func ParseDuration(s string) (Duration, error) {
-	d, err := time.ParseDuration(s)
+// Returns an error rather than a zero, because a zero timeout and an
+// unparseable one mean opposite things and silently conflating them is how a
+// task ends up with no bound at all. Validation checks this before anything
+// schedules against it, so a caller past that point is handling an error that
+// cannot happen, which is the right cost for not being able to produce a wrong
+// answer.
+func (d Duration) Std() (time.Duration, error) {
+	parsed, err := time.ParseDuration(string(d))
 	if err != nil {
-		return 0, fmt.Errorf("%w %q: %w", ErrInvalidDuration, s, err)
+		return 0, fmt.Errorf("%w %q: %w", ErrInvalidDuration, string(d), err)
 	}
 
-	if d < 0 {
-		return 0, fmt.Errorf("%w %q: must not be negative", ErrInvalidDuration, s)
+	if parsed < 0 {
+		return 0, fmt.Errorf("%w %q: must not be negative", ErrInvalidDuration, string(d))
 	}
 
-	return Duration(d), nil
+	return parsed, nil
 }
 
-// Std returns the value as a standard library duration for arithmetic and
-// comparison.
-func (d Duration) Std() time.Duration {
-	return time.Duration(d)
+// Valid reports whether the value parses as a non-negative duration.
+func (d Duration) Valid() bool {
+	_, err := d.Std()
+
+	return err == nil
 }
 
-// String renders the duration in the form a job file would use.
+// String returns the duration as written.
 func (d Duration) String() string {
-	return time.Duration(d).String()
+	return string(d)
 }
 
 // MarshalText implements encoding.TextMarshaler.
 func (d Duration) MarshalText() ([]byte, error) {
-	return []byte(d.String()), nil
+	if !d.Valid() {
+		return nil, fmt.Errorf("%w %q", ErrInvalidDuration, string(d))
+	}
+
+	return []byte(d), nil
 }
 
 // UnmarshalText implements encoding.TextUnmarshaler.
+//
+// Validates, so that an unparseable duration cannot enter the model through
+// JSON or a database column. HCL is the exception: gohcl assigns the string
+// directly without consulting this, which is why validation checks durations
+// explicitly rather than trusting decoding to have done it.
 func (d *Duration) UnmarshalText(text []byte) error {
-	parsed, err := ParseDuration(string(text))
-	if err != nil {
-		return err
+	parsed := Duration(text)
+	if !parsed.Valid() {
+		return fmt.Errorf("%w %q", ErrInvalidDuration, string(text))
 	}
 
 	*d = parsed

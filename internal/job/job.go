@@ -41,12 +41,12 @@ type File struct {
 // care where it runs. Its absence is not the same as an empty provider list,
 // which would mean no provider is allowed.
 type Job struct {
-	Name          string            `hcl:"name,label"`
-	Type          *Type             `hcl:"type,optional"`
-	Meta          map[string]string `hcl:"meta,optional"`
-	Parameterized *Parameterized    `hcl:"parameterized,block"`
-	Routing       *Routing          `hcl:"routing,block"`
-	Tasks         []Task            `hcl:"task,block"`
+	Name          string         `hcl:"name,label"`
+	Type          *Type          `hcl:"type,optional"`
+	Meta          *RawBlock      `hcl:"meta,block"`
+	Parameterized *Parameterized `hcl:"parameterized,block"`
+	Routing       *Routing       `hcl:"routing,block"`
+	Tasks         []Task         `hcl:"task,block"`
 }
 
 // -------------------------------------------------------------------------
