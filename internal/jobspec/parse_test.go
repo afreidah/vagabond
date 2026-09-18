@@ -49,7 +49,7 @@ func parse(t *testing.T, src string, meta map[string]string) *job.File {
 		t.Fatalf("parsing failed: %s", diags.Error())
 	}
 
-	return file
+	return file.Spec
 }
 
 // parseErr is the mirror: parse a snippet expected to fail, and hand back the
@@ -186,8 +186,8 @@ func TestParse_DoesNotEnforceVocabularies(t *testing.T) {
 					diags.Error())
 			}
 
-			task := file.Jobs[0].Tasks[0]
-			decoded := task.Driver.String() + " " + ptr.Deref(file.Jobs[0].Type).String()
+			task := file.Spec.Jobs[0].Tasks[0]
+			decoded := task.Driver.String() + " " + ptr.Deref(file.Spec.Jobs[0].Type).String()
 
 			if !strings.Contains(decoded, tt.want) {
 				t.Errorf("decoded %q, want it to carry %q", decoded, tt.want)
@@ -416,11 +416,11 @@ func TestParseFile_MatchesTheHandBuiltJob(t *testing.T) {
 		t.Fatalf("parsing the fixture failed: %s", diags.Error())
 	}
 
-	if len(file.Jobs) != 1 {
-		t.Fatalf("len(Jobs) = %d, want 1", len(file.Jobs))
+	if len(file.Spec.Jobs) != 1 {
+		t.Fatalf("len(Jobs) = %d, want 1", len(file.Spec.Jobs))
 	}
 
-	got := file.Jobs[0]
+	got := file.Spec.Jobs[0]
 	want := expectedFixtureJob()
 
 	if diff := cmp.Diff(want, got, cmp.Comparer(sameAttributes)); diff != "" {
@@ -456,7 +456,7 @@ func TestExamples_AllParse(t *testing.T) {
 				t.Errorf("example does not parse: %s", diags.Error())
 			}
 
-			if body == nil || len(body.Jobs) == 0 {
+			if body == nil || len(body.Spec.Jobs) == 0 {
 				t.Error("example decoded to no jobs")
 			}
 		})

@@ -273,7 +273,7 @@ func TestParse_SuppliedMetaSucceeds(t *testing.T) {
 		t.Fatalf("parsing failed: %s", diags.Error())
 	}
 
-	if got := ptr.Deref(file.Jobs[0].Tasks[0].Source.Ref); got != "1.4.2" {
+	if got := ptr.Deref(file.Spec.Jobs[0].Tasks[0].Source.Ref); got != "1.4.2" {
 		t.Errorf("Ref = %q, want 1.4.2", got)
 	}
 }
