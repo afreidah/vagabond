@@ -264,6 +264,42 @@ func AffinityWeight(attrs map[string]string, affinities []job.Affinity) int {
 	return total
 }
 
+// TotalAffinityWeight sums every affinity's weight, satisfied or not.
+//
+// The denominator scoring divides by, which is what makes a weight a statement
+// of relative importance rather than an absolute number of points. Without it,
+// a job with one affinity and a job with six would produce scores on different
+// scales and neither would be comparable to the other.
+func TotalAffinityWeight(affinities []job.Affinity) int {
+	total := 0
+
+	for i := range affinities {
+		total += affinityWeight(&affinities[i])
+	}
+
+	return total
+}
+
+// AffinityScore reports how much of a job's stated preference a provider
+// satisfies, from zero to one.
+//
+// Nomad computes it the same way, as matched weight over total weight. A job
+// with no affinities scores zero here and the caller leaves this scorer out
+// entirely rather than averaging the zero in, because a preference nobody
+// stated is not one every provider failed.
+//
+// Weights are validated positive, so this cannot go negative. Nomad allows a
+// negative weight to mean avoidance and needs the wider range; a job here says
+// what it wants and constrains against what it does not.
+func AffinityScore(attrs map[string]string, affinities []job.Affinity) float64 {
+	total := TotalAffinityWeight(affinities)
+	if total == 0 {
+		return 0
+	}
+
+	return float64(AffinityWeight(attrs, affinities)) / float64(total)
+}
+
 // defaultAffinityWeight is what an affinity contributes when a job does not say.
 //
 // Nomad's weight range is -100 to 100 and its stanza requires one; ours is

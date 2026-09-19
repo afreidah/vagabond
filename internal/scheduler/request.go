@@ -96,6 +96,19 @@ func (r *Request) WillPay() bool {
 	return r.MaxCost() > 0
 }
 
+// Strategy returns how the job wants its candidates ordered.
+//
+// Free-first when the job did not say, which is the only strategy Vagabond
+// implements and the one the project exists for. A job that stated nothing gets
+// the behaviour it would have chosen.
+func (r *Request) Strategy() job.Strategy {
+	if r.Routing == nil || r.Routing.Strategy == nil {
+		return job.StrategyFreeFirst
+	}
+
+	return *r.Routing.Strategy
+}
+
 // Constraints returns the job's hard requirements, which may be empty.
 func (r *Request) Constraints() []job.Constraint {
 	if r.Routing == nil {
