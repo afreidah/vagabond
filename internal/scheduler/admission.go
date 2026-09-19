@@ -89,10 +89,18 @@ type Candidate struct {
 // needed: the code lets a CI system branch without parsing prose, and the
 // detail carries the numbers that make the code actionable, as in a duration
 // limit the job exceeded by four minutes.
+//
+// Also holds every other reason the provider failed, in the order the checkers
+// ran. The plan table shows one line per provider so only Reason is rendered,
+// but a task that fails five checks against a provider takes five edit-and-rerun
+// cycles to discover that if the other four are thrown away. Nomad reports
+// aggregate counts instead and has no equivalent, which is the right call at
+// five thousand anonymous nodes and the wrong one at five named providers.
 type Rejection struct {
 	Provider string
 	Reason   Reason
 	Detail   string
+	Also     []Reason
 }
 
 // Result is the outcome of admitting one task against every configured
@@ -150,17 +158,23 @@ func (r *Result) Sort() {
 // CHECKERS
 // -------------------------------------------------------------------------
 
-// Checker decides whether one provider can run one task.
+// Checker decides whether one provider can run one request.
 //
 // Returning nil admits. Returning a rejection removes the provider and says
 // why. A checker owns exactly one concern, which is what lets each be table
 // tested on its own and what keeps a new rule from being buried inside an
 // existing one.
 //
-// Implementations must be pure. Admission runs across every configured provider
-// on a plan, which has to stay fast and free of side effects; a checker that
-// reached the network would make that untrue without the signature changing.
+// Provider is left empty on the returned rejection and filled in by Admit,
+// because a checker is handed the input it is judging and should not have to
+// copy a field out of it correctly twelve times.
+//
+// Implementations are pure functions of their two arguments. Nomad's equivalent
+// returns a bare bool and reports its reason by writing to a shared metrics
+// sink; returning the rejection as a value instead means a checker can be
+// tested without constructing a context, and means nothing in admission holds
+// state that the order of evaluation could disturb.
 type Checker interface {
 	Name() string
-	Check(task job.Task, in *Input) *Rejection
+	Check(req *Request, in *Input) *Rejection
 }

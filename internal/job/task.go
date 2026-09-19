@@ -48,6 +48,32 @@ type Task struct {
 	Retry            *Retry                 `hcl:"retry,block"`
 }
 
+// ConfigImage is the driver config key naming a container image.
+//
+// The config block's shape belongs to the driver, with one exception: whether a
+// task names an image is something admission has to know, because a provider
+// can run containers without running anyone's container. Lambda is the case
+// that makes this real, and no capability comparison reaches it without reading
+// this key.
+const ConfigImage = "image"
+
+// Image returns the container image this task names, if it names one.
+//
+// Evaluated against ctx because the config block is left undecoded at parse
+// time and its values may still reference job metadata, as in an image tagged
+// with the commit a CI system supplied.
+//
+// Diagnostics rather than an error, so that a bad image expression is reported
+// against the line the author wrote.
+func (t *Task) Image(ctx *hcl.EvalContext) (string, hcl.Diagnostics) {
+	attrs, diags := t.Config.Attributes(ctx)
+	if attrs == nil {
+		return "", diags
+	}
+
+	return attrs[ConfigImage], diags
+}
+
 // -------------------------------------------------------------------------
 // UNDECODED CONFIG
 // -------------------------------------------------------------------------
