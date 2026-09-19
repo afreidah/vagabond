@@ -35,10 +35,13 @@ import (
 // Healthy are the control plane's own view, held separately because a provider
 // an operator turned off and one failing its health checks are different
 // rejections with different fixes.
+// Tags are the operator's own labels, reaching a job as provider.meta.*
+// attributes. Vagabond never interprets them.
 type Input struct {
 	Provider     string
 	Capabilities plugin.Capabilities
 	Quota        quota.Snapshot
+	Tags         map[string]string
 	Enabled      bool
 	Healthy      bool
 }
@@ -53,6 +56,13 @@ type Input struct {
 func (in *Input) Attributes() map[string]string {
 	attrs := in.Capabilities.Attributes()
 	attrs[plugin.AttrFreeQuotaPercent] = strconv.Itoa(in.Quota.FreePercent)
+
+	// An operator's tags cannot shadow a capability, because they land under a
+	// prefix nothing else writes to. That is what makes the closed half of the
+	// namespace checkable while this half stays open.
+	for name, value := range in.Tags {
+		attrs[plugin.MetaPrefix+name] = value
+	}
 
 	return attrs
 }
