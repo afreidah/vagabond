@@ -42,8 +42,8 @@ func TestInput_AttributesMergeQuota(t *testing.T) {
 
 	attrs := in.Attributes()
 
-	if got := attrs[AttrFreeQuotaPercent]; got != "72" {
-		t.Errorf("attrs[%q] = %q, want %q", AttrFreeQuotaPercent, got, "72")
+	if got := attrs[plugin.AttrFreeQuotaPercent]; got != "72" {
+		t.Errorf("attrs[%q] = %q, want %q", plugin.AttrFreeQuotaPercent, got, "72")
 	}
 
 	if _, ok := attrs[plugin.AttrDrivers]; !ok {
@@ -54,11 +54,11 @@ func TestInput_AttributesMergeQuota(t *testing.T) {
 // The example job matches on this exact name, so it has to stay reserved and
 // spelled this way.
 func TestAttrFreeQuotaPercent_IsReserved(t *testing.T) {
-	if AttrFreeQuotaPercent != "provider.free_quota_percent" {
-		t.Errorf("AttrFreeQuotaPercent = %q, want provider.free_quota_percent", AttrFreeQuotaPercent)
+	if plugin.AttrFreeQuotaPercent != "provider.free_quota_percent" {
+		t.Errorf("plugin.AttrFreeQuotaPercent = %q, want provider.free_quota_percent", plugin.AttrFreeQuotaPercent)
 	}
 
-	if !plugin.Reserved(AttrFreeQuotaPercent) {
+	if !plugin.Reserved(plugin.AttrFreeQuotaPercent) {
 		t.Error("the quota attribute is not under the reserved prefix")
 	}
 }

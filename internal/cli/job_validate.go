@@ -55,7 +55,7 @@ Validate Options:
 
   -meta <key>=<value>
     Supply job metadata, repeatable. Values are substituted into the job before
-    it is checked, so a specification that interpolates meta.git_ref is
+    it is checked, so a specification that interpolates meta.version is
     validated as it would actually be submitted.
 
     A job declaring meta_required is refused when a value is not supplied,

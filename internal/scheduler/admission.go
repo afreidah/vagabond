@@ -52,15 +52,10 @@ type Input struct {
 // have known.
 func (in *Input) Attributes() map[string]string {
 	attrs := in.Capabilities.Attributes()
-	attrs[AttrFreeQuotaPercent] = strconv.Itoa(in.Quota.FreePercent)
+	attrs[plugin.AttrFreeQuotaPercent] = strconv.Itoa(in.Quota.FreePercent)
 
 	return attrs
 }
-
-// AttrFreeQuotaPercent is the quota-derived attribute merged into every
-// provider's attribute set. It lives here rather than in the capability model
-// because no capability snapshot can know it.
-const AttrFreeQuotaPercent = plugin.Prefix + "free_quota_percent"
 
 // -------------------------------------------------------------------------
 // OUTPUTS

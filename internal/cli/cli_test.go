@@ -146,12 +146,12 @@ func TestJobValidate_TooManyPaths(t *testing.T) {
 func TestMetaFlags_Set(t *testing.T) {
 	var m metaFlags
 
-	if err := m.Set("git_ref=abc123"); err != nil {
+	if err := m.Set("version=abc123"); err != nil {
 		t.Fatalf("Set returned unexpected error: %v", err)
 	}
 
-	if got := m["git_ref"]; got != "abc123" {
-		t.Errorf("m[git_ref] = %q, want abc123", got)
+	if got := m["version"]; got != "abc123" {
+		t.Errorf("m[version] = %q, want abc123", got)
 	}
 }
 
@@ -174,7 +174,7 @@ func TestMetaFlags_Invalid(t *testing.T) {
 		name  string
 		input string
 	}{
-		{name: "no separator", input: "git_ref"},
+		{name: "no separator", input: "version"},
 		{name: "empty key", input: "=abc123"},
 		{name: "whitespace key", input: "   =abc123"},
 	}
@@ -195,21 +195,21 @@ func TestMetaFlags_Invalid(t *testing.T) {
 func TestMetaFlags_RepeatedKeyIsRejected(t *testing.T) {
 	var m metaFlags
 
-	if err := m.Set("git_ref=abc"); err != nil {
+	if err := m.Set("version=abc"); err != nil {
 		t.Fatalf("Set returned unexpected error: %v", err)
 	}
 
-	err := m.Set("git_ref=def")
+	err := m.Set("version=def")
 	if err == nil {
 		t.Fatal("a repeated key was accepted")
 	}
 
-	if !strings.Contains(err.Error(), "git_ref") {
+	if !strings.Contains(err.Error(), "version") {
 		t.Errorf("error does not name the repeated key: %v", err)
 	}
 
-	if m["git_ref"] != "abc" {
-		t.Errorf("the original value was overwritten: %q", m["git_ref"])
+	if m["version"] != "abc" {
+		t.Errorf("the original value was overwritten: %q", m["version"])
 	}
 }
 
@@ -219,16 +219,16 @@ func TestMetaFlags_String(t *testing.T) {
 		t.Errorf("empty metaFlags rendered as %q", empty.String())
 	}
 
-	m := metaFlags{"git_ref": "abc"}
-	if !strings.Contains(m.String(), "git_ref=abc") {
-		t.Errorf("String() = %q, want it to contain git_ref=abc", m.String())
+	m := metaFlags{"version": "abc"}
+	if !strings.Contains(m.String(), "version=abc") {
+		t.Errorf("String() = %q, want it to contain version=abc", m.String())
 	}
 }
 
 // The flag reaches the command and is accepted, which is what makes a
 // parameterized job submittable from the CLI at all.
 func TestJobValidate_AcceptsMetaFlag(t *testing.T) {
-	_, stdout, stderr := run("job", "validate", "-meta", "git_ref=abc123", "some.hcl")
+	_, stdout, stderr := run("job", "validate", "-meta", "version=abc123", "some.hcl")
 	output := stdout + stderr
 
 	if strings.Contains(output, "flag provided but not defined") {

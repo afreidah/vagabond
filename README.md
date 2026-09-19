@@ -357,7 +357,7 @@ The command surface should feel familiar to Nomad users:
 ```bash
 vagabond job validate examples/go-test.vagabond.hcl
 vagabond job plan examples/go-test.vagabond.hcl
-vagabond job run -meta git_ref=<sha> examples/go-test.vagabond.hcl
+vagabond job run -meta version=v1.4.2 examples/go-test.vagabond.hcl
 vagabond job status <execution-id>
 ```
 

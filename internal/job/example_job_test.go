@@ -58,7 +58,7 @@ func exampleJob(t *testing.T) Job {
 			purpose = "ci"
 		`)},
 		Parameterized: &Parameterized{
-			MetaRequired: []string{"git_ref"},
+			MetaRequired: []string{"version"},
 		},
 		Routing: &Routing{
 			Strategy:  ptr.Of(StrategyFreeFirst),
@@ -66,12 +66,12 @@ func exampleJob(t *testing.T) Job {
 			MaxCost:   ptr.Of(Cost(0)),
 			Constraints: []Constraint{{
 				Attribute: "provider.architecture",
-				Operator:  "=",
+				Operator:  OperatorSetContains,
 				Value:     "amd64",
 			}},
 			Affinities: []Affinity{{
 				Attribute: "provider.free_quota_percent",
-				Operator:  ">",
+				Operator:  OperatorGreater,
 				Value:     "50",
 				Weight:    ptr.Of(75),
 			}},
@@ -91,7 +91,7 @@ func exampleJob(t *testing.T) Job {
 			Source: &Source{
 				Type:        "git",
 				Repository:  "https://git.example.com/example/service.git",
-				Ref:         ptr.Of("${meta.git_ref}"),
+				Ref:         ptr.Of("${meta.version}"),
 				Destination: ptr.Of("/workspace"),
 			},
 			WorkingDirectory: ptr.Of("/workspace"),

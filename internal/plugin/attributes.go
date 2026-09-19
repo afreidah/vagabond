@@ -48,7 +48,42 @@ const (
 	AttrArbitraryImages = Prefix + "arbitrary_images"
 )
 
+// AttrFreeQuotaPercent is how much of a provider's free-tier allowance remains.
+//
+// Declared here so that the attribute vocabulary is in one place, but no
+// capability snapshot can populate it: the value comes from the quota ledger,
+// and admission is the only layer holding both.
+const AttrFreeQuotaPercent = Prefix + "free_quota_percent"
+
+// MetaPrefix is where an operator's own tags on a provider live.
+//
+// Everything under it is open. Nomad separates fingerprinted node attributes
+// from operator-set node metadata for the same reason, and cannot validate
+// either because both are extensible. Ours splits differently: the attributes
+// Vagabond derives are a closed set it can check, and this prefix is the escape
+// hatch for everything an operator wants to say that Vagabond has no opinion
+// about.
+const MetaPrefix = Prefix + "meta."
+
 var setValuedAttributes = []string{AttrArchitecture, AttrDrivers}
+
+// knownAttributes is every name Vagabond publishes about a provider.
+//
+// A constraint naming something outside this set, and outside MetaPrefix, is a
+// typo rather than a preference. Catching it matters because the alternative is
+// a job that silently matches no provider and reports as having no capacity,
+// which is the most misleading failure this can produce.
+var knownAttributes = []string{
+	AttrArchitecture,
+	AttrDrivers,
+	AttrMaxDuration,
+	AttrMaxCPU,
+	AttrMaxMemory,
+	AttrInternetEgress,
+	AttrPrivateNetwork,
+	AttrArbitraryImages,
+	AttrFreeQuotaPercent,
+}
 
 // -------------------------------------------------------------------------
 // PROJECTION
@@ -112,4 +147,25 @@ func SetValued(name string) bool {
 // a provider plugin.
 func Reserved(name string) bool {
 	return strings.HasPrefix(name, Prefix)
+}
+
+// KnownAttributes returns every attribute Vagabond publishes about a provider.
+//
+// The returned slice is a copy, so a caller rendering it into an error cannot
+// reorder the vocabulary for everyone else.
+func KnownAttributes() []string {
+	return slices.Clone(knownAttributes)
+}
+
+// Matchable reports whether a constraint may name this attribute.
+//
+// True for the attributes Vagabond publishes, and for anything under
+// MetaPrefix, which is an operator's own and deliberately unchecked. A name
+// that is neither is a mistake, not a preference nothing happens to satisfy.
+func Matchable(name string) bool {
+	if strings.HasPrefix(name, MetaPrefix) {
+		return true
+	}
+
+	return slices.Contains(knownAttributes, name)
 }

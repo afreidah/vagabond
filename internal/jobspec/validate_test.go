@@ -70,7 +70,7 @@ func mentions(messages []string, fragments ...string) bool {
 // The fixture uses every block the specification defines, so it is the strongest
 // statement that the rules do not fire on a correct job.
 func TestValidate_FixtureIsClean(t *testing.T) {
-	file, diags := ParseFile(fixturePath, map[string]string{"git_ref": "abc123"})
+	file, diags := ParseFile(fixturePath, map[string]string{"version": "abc123"})
 	if diags.HasErrors() {
 		t.Fatalf("parsing the fixture failed: %s", diags.Error())
 	}
@@ -471,5 +471,112 @@ func TestValidate_EmptyFile(t *testing.T) {
 
 	if found := Validate(file.Spec); !found.HasErrors() {
 		t.Error("an empty specification validated cleanly")
+	}
+}
+
+// -------------------------------------------------------------------------
+// CONSTRAINT OPERATORS AND ATTRIBUTES
+// -------------------------------------------------------------------------
+
+// routed wraps a routing block around the minimal job, for the rules that only
+// apply to constraints and affinities.
+func routed(body string) string {
+	return strings.Replace(minimalJob, `type = "batch"`,
+		"type = \"batch\"\n\n  routing {\n"+body+"\n  }", 1)
+}
+
+func TestValidate_UnknownOperator(t *testing.T) {
+	messages := validate(t, routed(`
+    constraint {
+      attribute = "provider.architecture"
+      operator  = "contains"
+      value     = "amd64"
+    }`), nil)
+
+	if !mentions(messages, "Unknown constraint operator", "contains", "set_contains") {
+		t.Errorf("diagnostics do not name the operator and the valid set: %v", messages)
+	}
+}
+
+// A typo in an attribute name would otherwise exclude every provider and report
+// as having no capacity, which is the most misleading failure available.
+func TestValidate_MisspelledAttribute(t *testing.T) {
+	messages := validate(t, routed(`
+    constraint {
+      attribute = "provider.architekture"
+      operator  = "set_contains"
+      value     = "amd64"
+    }`), nil)
+
+	if !mentions(messages, "Unknown constraint attribute", "provider.architekture") {
+		t.Errorf("diagnostics do not report the typo: %v", messages)
+	}
+}
+
+// An operator's own tags are open by definition, so anything under the meta
+// prefix is accepted without Vagabond knowing what it means.
+func TestValidate_OperatorTagsAreNotChecked(t *testing.T) {
+	messages := validate(t, routed(`
+    constraint {
+      attribute = "provider.meta.region"
+      operator  = "="
+      value     = "eu-west"
+    }`), nil)
+
+	if len(messages) != 0 {
+		t.Errorf("an operator tag was rejected: %v", messages)
+	}
+}
+
+// is_set asks only whether an attribute exists, so a value alongside it is a
+// misunderstanding rather than something to ignore.
+func TestValidate_PresenceOperatorWithValue(t *testing.T) {
+	messages := validate(t, routed(`
+    constraint {
+      attribute = "provider.internet"
+      operator  = "is_set"
+      value     = "true"
+    }`), nil)
+
+	if !mentions(messages, "Unexpected constraint value", "is_set") {
+		t.Errorf("diagnostics do not report the unused value: %v", messages)
+	}
+}
+
+func TestValidate_PresenceOperatorWithoutValue(t *testing.T) {
+	messages := validate(t, routed(`
+    constraint {
+      attribute = "provider.internet"
+      operator  = "is_set"
+    }`), nil)
+
+	if len(messages) != 0 {
+		t.Errorf("a presence operator with no value was rejected: %v", messages)
+	}
+}
+
+func TestValidate_ComparisonWithoutValue(t *testing.T) {
+	messages := validate(t, routed(`
+    constraint {
+      attribute = "provider.architecture"
+      operator  = "set_contains"
+    }`), nil)
+
+	if !mentions(messages, "Missing constraint value", "set_contains") {
+		t.Errorf("diagnostics do not report the missing value: %v", messages)
+	}
+}
+
+func TestValidate_AffinityOperatorIsChecked(t *testing.T) {
+	messages := validate(t, routed(`
+    affinity {
+      attribute = "provider.free_quota_percent"
+      operator  = "roughly"
+      value     = "50"
+      weight    = 40
+    }`), nil)
+
+	if !mentions(messages, "Unknown affinity operator", "roughly") {
+		t.Errorf("diagnostics do not check affinity operators: %v", messages)
 	}
 }
