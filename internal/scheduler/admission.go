@@ -73,14 +73,17 @@ func (in *Input) Attributes() map[string]string {
 
 // Candidate is a provider that can run the task.
 //
+// It embeds the input it was admitted from rather than copying fields out of
+// it, because scoring needs the quota snapshot and the operator's tags that
+// admission was already holding. Matching a candidate back to its input by name
+// afterwards would be the same data with a lookup in front of it.
+//
 // EstimatedCost is always zero while max_cost_usd = 0 is the only policy
-// Vagabond implements. It is carried anyway because adding it later means
-// touching every caller and every persisted row, and because a candidate that
-// cannot state its price is not one a paid path could ever use.
+// Vagabond implements. It is stated anyway, because a candidate that cannot say
+// its price is not one a paid path could ever use.
 type Candidate struct {
-	Provider      string
+	Input
 	EstimatedCost job.Cost
-	Capabilities  plugin.Capabilities
 }
 
 // Rejection is a provider that cannot run the task, and why.

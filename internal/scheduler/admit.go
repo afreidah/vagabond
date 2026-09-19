@@ -92,10 +92,15 @@ func Admit(req *Request, inputs []Input) Result {
 			continue
 		}
 
+		// Cloned rather than shared. Admission runs against snapshots the
+		// registry holds and reuses, so a caller that sorted a candidate's
+		// drivers would change what every later plan sees.
+		admitted := *in
+		admitted.Capabilities = in.Capabilities.Clone()
+
 		result.Candidates = append(result.Candidates, Candidate{
-			Provider:      in.Provider,
+			Input:         admitted,
 			EstimatedCost: in.Capabilities.EstimatedCost,
-			Capabilities:  in.Capabilities.Clone(),
 		})
 	}
 
