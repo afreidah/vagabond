@@ -46,6 +46,7 @@ const (
 	AttrInternetEgress  = Prefix + "internet"
 	AttrPrivateNetwork  = Prefix + "private_network"
 	AttrArbitraryImages = Prefix + "arbitrary_images"
+	AttrEstimatedCost   = Prefix + "estimated_cost"
 )
 
 // AttrFreeQuotaPercent is how much of a provider's free-tier allowance remains.
@@ -82,6 +83,7 @@ var knownAttributes = []string{
 	AttrInternetEgress,
 	AttrPrivateNetwork,
 	AttrArbitraryImages,
+	AttrEstimatedCost,
 	AttrFreeQuotaPercent,
 }
 
@@ -92,12 +94,15 @@ var knownAttributes = []string{
 // Attributes returns the dotted view of the snapshot.
 //
 // A limit the provider never advertised is left out of the map. Writing it as
-// "0" would make a constraint read it as a real limit of zero.
+// "0" would make a constraint read it as a real limit of zero. Cost is the
+// exception and is published even at zero, because a provider that charges
+// nothing is stating a fact rather than declining to state a limit.
 func (c *Capabilities) Attributes() map[string]string {
 	attrs := map[string]string{
 		AttrInternetEgress:  strconv.FormatBool(c.InternetEgress),
 		AttrPrivateNetwork:  strconv.FormatBool(c.PrivateNetwork),
 		AttrArbitraryImages: strconv.FormatBool(c.ArbitraryImages),
+		AttrEstimatedCost:   strconv.FormatInt(int64(c.EstimatedCost), 10),
 	}
 
 	if len(c.Architectures) > 0 {

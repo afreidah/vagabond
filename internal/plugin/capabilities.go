@@ -49,6 +49,11 @@ type Resources struct {
 // admission rejects what it cannot confirm rather than assuming capacity that
 // may not exist.
 //
+// EstimatedCost is zero for every provider Vagabond currently speaks to, and
+// the field exists anyway. A job declaring max_cost_usd = 0 is making the
+// promise this project exists to keep, and a promise checked against a number
+// nobody publishes is not checked at all.
+//
 // Methods take a pointer receiver. A value receiver would copy the struct on
 // every call without buying immutability in exchange, since copying it copies
 // the slice headers while sharing their backing arrays. Callers that need an
@@ -63,6 +68,8 @@ type Capabilities struct {
 	InternetEgress  bool
 	PrivateNetwork  bool
 	ArbitraryImages bool
+
+	EstimatedCost job.Cost // one execution, once free-tier no longer covers it
 
 	ObservedAt time.Time
 }

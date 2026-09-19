@@ -123,3 +123,48 @@ func TestRawBlock_AttributesSkipsNull(t *testing.T) {
 		t.Error("a null value was recorded")
 	}
 }
+
+// -------------------------------------------------------------------------
+// IMAGE
+// -------------------------------------------------------------------------
+
+// The config block's shape belongs to the driver, with one exception: whether a
+// task names an image is something admission has to know, because a provider
+// can run containers without running anyone's container.
+func TestTask_Image(t *testing.T) {
+	tests := map[string]struct {
+		config *RawBlock
+		want   string
+	}{
+		"names one": {
+			config: rawBlock(t, `
+image   = "golang:1.27"
+command = "go test ./..."
+`),
+			want: "golang:1.27",
+		},
+		"names something else": {
+			config: rawBlock(t, `handler = "main.handler"`),
+			want:   "",
+		},
+		"no config at all": {
+			config: nil,
+			want:   "",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			task := &Task{Name: "test", Config: tc.config}
+
+			got, diags := task.Image(nil)
+			if diags.HasErrors() {
+				t.Fatalf("Image returned diagnostics: %s", diags.Error())
+			}
+
+			if got != tc.want {
+				t.Errorf("Image() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
