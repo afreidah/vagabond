@@ -137,6 +137,8 @@ job "go-test" {
     # -------------------------------------------------------------------------
 
     resources {
+      # Millicores; 1000 is one vCPU. Not MHz, because no cloud sells clock
+      # speed. A plugin rounds up to the nearest size its platform offers.
       cpu    = 1000
       memory = 2048
     }

@@ -141,7 +141,7 @@ func (r *Request) Architecture() (job.Arch, bool) {
 	return *r.Task.Execution.Architecture, true
 }
 
-// CPU returns the MHz the task asked for, zero if it did not ask.
+// CPU returns the millicores the task asked for, zero if it did not ask.
 func (r *Request) CPU() int {
 	if r.Task.Resources == nil || r.Task.Resources.CPU == nil {
 		return 0

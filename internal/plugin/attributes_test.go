@@ -30,7 +30,7 @@ func TestCapabilities_Attributes(t *testing.T) {
 		AttrDrivers:         "function",
 		AttrArchitecture:    "amd64,arm64",
 		AttrMaxDuration:     "15m0s",
-		AttrMaxCPU:          "1800",
+		AttrMaxCPU:          "6000",
 		AttrMaxMemory:       "10240",
 		AttrInternetEgress:  "true",
 		AttrArbitraryImages: "false",
