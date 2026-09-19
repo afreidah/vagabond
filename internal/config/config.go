@@ -13,6 +13,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/gohcl"
@@ -73,6 +75,78 @@ type QuotaBlock struct {
 // LOADING
 // -------------------------------------------------------------------------
 
+// LoadPath reads configuration from a file or a directory.
+//
+// A directory loads every .hcl file inside it, sorted by name, and merges them
+// into one configuration. Nomad's agent config works the same way, and it is
+// what makes a provider per file possible: /etc/vagabond.d/ibm.hcl beside
+// lambda.hcl, each one reviewable on its own.
+//
+// Merging is concatenation, because a File is a list of providers. Two files
+// declaring the same provider name are caught by the duplicate check that
+// already runs, and reported once rather than per file.
+func LoadPath(path string) (*File, hcl.Diagnostics) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, hcl.Diagnostics{{
+			Severity: hcl.DiagError,
+			Summary:  "Cannot read configuration",
+			Detail:   fmt.Sprintf("Reading %s: %s.", path, err),
+		}}
+	}
+
+	if !info.IsDir() {
+		return LoadFile(path)
+	}
+
+	return loadDir(path)
+}
+
+// loadDir merges every .hcl file in a directory.
+func loadDir(dir string) (*File, hcl.Diagnostics) {
+	// Sorted, because two files disagreeing should be reported the same way
+	// every run, and because a reader looking for where a provider came from
+	// should not have to know the order a filesystem happened to return.
+	names, err := filepath.Glob(filepath.Join(dir, "*"+Extension))
+	if err != nil {
+		return nil, hcl.Diagnostics{{
+			Severity: hcl.DiagError,
+			Summary:  "Cannot read configuration directory",
+			Detail:   fmt.Sprintf("Listing %s: %s.", dir, err),
+		}}
+	}
+
+	sort.Strings(names)
+
+	if len(names) == 0 {
+		return nil, hcl.Diagnostics{{
+			Severity: hcl.DiagError,
+			Summary:  "Empty configuration directory",
+			Detail: fmt.Sprintf("%s holds no %s files, so no provider is "+
+				"configured.", dir, Extension),
+		}}
+	}
+
+	var (
+		merged File
+		diags  hcl.Diagnostics
+	)
+
+	for _, name := range names {
+		// Decoded without validating, so that a provider declared twice across
+		// two files is reported once by the merged check below rather than
+		// slipping past a per-file one.
+		file, fileDiags := decode(name)
+		diags = append(diags, fileDiags...)
+
+		if file != nil {
+			merged.Providers = append(merged.Providers, file.Providers...)
+		}
+	}
+
+	return &merged, append(diags, merged.validate()...)
+}
+
 // LoadFile reads and decodes the named configuration file.
 func LoadFile(path string) (*File, hcl.Diagnostics) {
 	src, err := os.ReadFile(path)
@@ -92,6 +166,33 @@ func LoadFile(path string) (*File, hcl.Diagnostics) {
 // Returns whatever decoded alongside its diagnostics, so that a file with one
 // bad provider still reports the rest.
 func Load(filename string, src []byte) (*File, hcl.Diagnostics) {
+	file, diags := decodeSource(filename, src)
+	if file == nil {
+		return nil, diags
+	}
+
+	return file, append(diags, file.validate()...)
+}
+
+// decode reads and decodes one file without validating it.
+//
+// Separate from Load so that a directory can validate the merged result
+// instead, and report a provider declared in two files once.
+func decode(path string) (*File, hcl.Diagnostics) {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return nil, hcl.Diagnostics{{
+			Severity: hcl.DiagError,
+			Summary:  "Cannot read configuration",
+			Detail:   fmt.Sprintf("Reading %s: %s.", path, err),
+		}}
+	}
+
+	return decodeSource(path, src)
+}
+
+// decodeSource parses and decodes, leaving validation to the caller.
+func decodeSource(filename string, src []byte) (*File, hcl.Diagnostics) {
 	f, diags := hclsyntax.ParseConfig(src, filename, hcl.InitialPos)
 	if f == nil {
 		return nil, diags
@@ -99,10 +200,7 @@ func Load(filename string, src []byte) (*File, hcl.Diagnostics) {
 
 	var file File
 
-	diags = append(diags, gohcl.DecodeBody(f.Body, nil, &file)...)
-	diags = append(diags, file.validate()...)
-
-	return &file, diags
+	return &file, append(diags, gohcl.DecodeBody(f.Body, nil, &file)...)
 }
 
 // -------------------------------------------------------------------------

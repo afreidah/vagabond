@@ -508,9 +508,10 @@ func TestCheckerOrder(t *testing.T) {
 
 	want := []string{
 		"allowlist", "cost",
+		"enabled", "healthy",
 		"driver", "arch", "image", "network", "resources", "duration",
 		"attribute", "constraint",
-		"enabled", "healthy", "quota",
+		"quota",
 	}
 
 	got := make([]string, 0, len(want))

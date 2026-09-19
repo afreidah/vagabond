@@ -59,19 +59,47 @@ const ConfigImage = "image"
 
 // Image returns the container image this task names, if it names one.
 //
+// Reads that one attribute rather than decoding the block, because the rest of
+// a driver config is not Vagabond's to understand: a command's args are a list
+// and a driver may accept nested blocks, neither of which survives being
+// flattened into a string map. Asking for one attribute leaves the rest for the
+// driver.
+//
 // Evaluated against ctx because the config block is left undecoded at parse
 // time and its values may still reference job metadata, as in an image tagged
 // with the commit a CI system supplied.
-//
-// Diagnostics rather than an error, so that a bad image expression is reported
-// against the line the author wrote.
 func (t *Task) Image(ctx *hcl.EvalContext) (string, hcl.Diagnostics) {
-	attrs, diags := t.Config.Attributes(ctx)
-	if attrs == nil {
+	if t.Config == nil || t.Config.Body == nil {
+		return "", nil
+	}
+
+	content, _, diags := t.Config.Body.PartialContent(&hcl.BodySchema{
+		Attributes: []hcl.AttributeSchema{{Name: ConfigImage}},
+	})
+
+	attr, ok := content.Attributes[ConfigImage]
+	if !ok {
 		return "", diags
 	}
 
-	return attrs[ConfigImage], diags
+	value, valueDiags := attr.Expr.Value(ctx)
+	diags = append(diags, valueDiags...)
+
+	if value.IsNull() || !value.IsKnown() {
+		return "", diags
+	}
+
+	str, err := convert.Convert(value, cty.String)
+	if err != nil {
+		return "", append(diags, &hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Invalid image",
+			Detail:   fmt.Sprintf("The %s must be a string: %s.", ConfigImage, err),
+			Subject:  attr.Expr.Range().Ptr(),
+		})
+	}
+
+	return str.AsString(), diags
 }
 
 // -------------------------------------------------------------------------

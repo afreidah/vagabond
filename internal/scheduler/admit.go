@@ -27,18 +27,29 @@ package scheduler
 // have run the work, and reporting an unsupported driver instead invites a fix
 // to a job that was never trying to go there.
 //
+// Availability second, and this is the subtle one. A provider that is disabled
+// or unhealthy has a fingerprint nobody refreshed, so every capability
+// comparison below is being made against stale or absent data. Run them first
+// and a disabled provider is rejected for offering no drivers, which is true of
+// its empty snapshot and says nothing about the provider. Nomad avoids the
+// problem by dropping ineligible nodes before any checker sees them; we keep
+// them so a plan can explain itself, which means judging them here instead.
+//
 // Mismatches next, cheapest first: set membership, then booleans, then integer
 // comparisons, then the constraint evaluation that builds an attribute map.
 // These say the pairing is impossible, which is the most actionable thing a job
 // author can be told.
 //
-// Conditions last, because they are the least explanatory. Quota is final,
-// mirroring Nomad's note that its quota iterator must come after everything
-// else so that usage never counts capacity already ruled out.
+// Capacity last. A provider that will never run this driver should say so
+// rather than report its quota, and Nomad makes the same call explicitly where
+// it notes that the quota iterator must follow every other feasibility step.
 func checkers() []Checker {
 	return []Checker{
 		allowlistChecker{},
 		costChecker{},
+
+		enabledChecker{},
+		healthyChecker{},
 
 		driverChecker{},
 		archChecker{},
@@ -49,8 +60,6 @@ func checkers() []Checker {
 		attributeChecker{},
 		constraintChecker{},
 
-		enabledChecker{},
-		healthyChecker{},
 		quotaChecker{},
 	}
 }
