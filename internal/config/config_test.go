@@ -12,6 +12,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -298,5 +300,108 @@ func TestLoadFileMissing(t *testing.T) {
 
 	if !strings.Contains(diags.Error(), "Cannot read configuration") {
 		t.Errorf("unexpected diagnostics: %s", diags.Error())
+	}
+}
+
+// -------------------------------------------------------------------------
+// DIRECTORIES
+// -------------------------------------------------------------------------
+
+// A directory loads every .hcl file in it, which is what makes a provider per
+// file possible once real credentials are involved and each one wants its own
+// review.
+func TestLoadPathMergesADirectory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	write(t, dir, "ibm.hcl", `provider "ibm" { type = "fake-container" }`)
+	write(t, dir, "lambda.hcl", `provider "lambda" { type = "fake-function" }`)
+	write(t, dir, "notes.txt", `this is not configuration`)
+
+	file, diags := LoadPath(dir)
+	if diags.HasErrors() {
+		t.Fatalf("loading %s failed: %s", dir, diags.Error())
+	}
+
+	// Sorted by filename, so the same directory reads the same way every run.
+	want := []string{"ibm", "lambda"}
+
+	got := make([]string, 0, len(file.Providers))
+	for i := range file.Providers {
+		got = append(got, file.Providers[i].Name)
+	}
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("providers mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// The name is a routing identifier, so it has to identify one provider whether
+// the collision is inside one file or across two.
+func TestLoadPathRejectsDuplicatesAcrossFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	write(t, dir, "a.hcl", `provider "ibm" { type = "fake-container" }`)
+	write(t, dir, "b.hcl", `provider "ibm" { type = "fake-function" }`)
+
+	_, diags := LoadPath(dir)
+	if !diags.HasErrors() {
+		t.Fatal("a provider declared in two files was accepted")
+	}
+
+	if !strings.Contains(diags.Error(), "Duplicate provider") {
+		t.Errorf("unexpected diagnostics: %s", diags.Error())
+	}
+}
+
+// A directory with nothing in it is a mistake worth naming, not an empty
+// configuration: somebody pointed at the wrong place.
+func TestLoadPathRejectsAnEmptyDirectory(t *testing.T) {
+	t.Parallel()
+
+	_, diags := LoadPath(t.TempDir())
+	if !diags.HasErrors() {
+		t.Fatal("an empty directory was accepted")
+	}
+
+	if !strings.Contains(diags.Error(), "Empty configuration directory") {
+		t.Errorf("unexpected diagnostics: %s", diags.Error())
+	}
+}
+
+func TestLoadPathReadsAFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	write(t, dir, "one.hcl", `provider "ibm" { type = "fake-container" }`)
+
+	file, diags := LoadPath(filepath.Join(dir, "one.hcl"))
+	if diags.HasErrors() {
+		t.Fatalf("loading failed: %s", diags.Error())
+	}
+
+	if len(file.Providers) != 1 {
+		t.Errorf("got %d providers, want 1", len(file.Providers))
+	}
+}
+
+func TestLoadPathMissing(t *testing.T) {
+	t.Parallel()
+
+	_, diags := LoadPath(filepath.Join(t.TempDir(), "absent"))
+	if !diags.HasErrors() {
+		t.Fatal("a missing path was accepted")
+	}
+}
+
+// write puts one file in a directory.
+func write(t *testing.T, dir, name, body string) {
+	t.Helper()
+
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+		t.Fatalf("writing %s: %s", name, err)
 	}
 }

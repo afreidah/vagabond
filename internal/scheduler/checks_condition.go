@@ -8,9 +8,12 @@
 // refresh, or once its free tier resets, which is what Reason.Transient reports
 // and what tells a caller to wait rather than to edit.
 //
-// They run last so that the more explanatory answer wins the one line the plan
-// table gives each provider. A Cloudflare worker that will never run a
-// container should say so, not that its quota is spent.
+// They do not all run at the same point, and the split is deliberate. Enabled
+// and healthy run before every capability comparison, because a provider nobody
+// refreshed has an empty fingerprint and the comparisons would be made against
+// it: a disabled provider rejected for offering no drivers is describing its
+// blank snapshot, not itself. Quota runs last, so that a provider which will
+// never run this driver says so rather than reporting its allowance.
 //
 // Nomad drops ineligible nodes at the source and never filters on them at all,
 // because at five thousand nodes a per-node reason is noise it reports as a
@@ -88,6 +91,8 @@ func (quotaChecker) Name() string { return "quota" }
 //
 // Last in the set, mirroring Nomad's note that its quota iterator must be the
 // final feasibility step so that usage never counts nodes already ineligible.
+// Unlike enabled and healthy, this one reads a snapshot that is meaningful
+// whether or not the provider answered, so it has no reason to run early.
 func (quotaChecker) Check(req *Request, in *Input) *Rejection {
 	if in.Quota.HasHeadroom() || req.WillPay() {
 		return nil

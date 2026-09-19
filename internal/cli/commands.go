@@ -15,8 +15,8 @@ import "github.com/hashicorp/cli"
 
 // Commands returns the command set, keyed by the words a user types.
 //
-// The README's target surface is job validate, plan, run, and status. Only
-// validate is registered, because a command that exists and refuses to work is
+// The README's target surface is job validate, plan, run, and status. Run and
+// status are absent, because a command that exists and refuses to work is
 // worse than one that does not exist: the first looks like a bug and the
 // second looks like a roadmap.
 func Commands(meta *Meta) map[string]cli.CommandFactory {
@@ -26,6 +26,9 @@ func Commands(meta *Meta) map[string]cli.CommandFactory {
 		},
 		"job validate": func() (cli.Command, error) {
 			return &JobValidateCommand{Meta: meta}, nil
+		},
+		"job plan": func() (cli.Command, error) {
+			return &JobPlanCommand{Meta: meta}, nil
 		},
 	}
 }

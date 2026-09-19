@@ -13,17 +13,10 @@ package cli
 
 import (
 	"fmt"
-	"io"
 	"strings"
-
-	"github.com/hashicorp/hcl/v2"
 
 	"github.com/afreidah/vagabond/internal/jobspec"
 )
-
-// stdinPath is the argument that means "read the specification from a pipe",
-// matching what nomad job validate accepts.
-const stdinPath = "-"
 
 // JobValidateCommand implements `vagabond job validate`.
 type JobValidateCommand struct {
@@ -81,7 +74,7 @@ func (c *JobValidateCommand) Run(args []string) int {
 		return c.Errorf("This command takes one argument: <path>\n\n%s", c.Help())
 	}
 
-	parsed, diags := c.parse(paths[0], meta)
+	parsed, diags := c.parseJob(paths[0], meta)
 
 	// Only validate what decoded. Rules run against the decoded specification,
 	// so a file that failed to decode would produce a second wave of complaints
@@ -99,24 +92,6 @@ func (c *JobValidateCommand) Run(args []string) int {
 	c.Ui.Output(fmt.Sprintf("%s is valid.", describe(paths[0])))
 
 	return ExitSuccess
-}
-
-// parse reads the specification from a file or from standard input.
-func (c *JobValidateCommand) parse(path string, meta metaFlags) (*jobspec.Parsed, hcl.Diagnostics) {
-	if path != stdinPath {
-		return jobspec.ParseFile(path, meta)
-	}
-
-	src, err := io.ReadAll(c.Stdin)
-	if err != nil {
-		return nil, hcl.Diagnostics{{
-			Severity: hcl.DiagError,
-			Summary:  "Cannot read standard input",
-			Detail:   fmt.Sprintf("Reading the specification: %s.", err),
-		}}
-	}
-
-	return jobspec.Parse(jobspec.Config{Source: src, Meta: meta})
 }
 
 // describe names the input for a success message, since "- is valid" reads
