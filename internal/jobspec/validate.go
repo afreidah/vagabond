@@ -341,8 +341,9 @@ func validateResources(jobName string, task *job.Task) hcl.Diagnostics {
 	if task.Resources.CPU != nil && ptr.Deref(task.Resources.CPU) <= 0 {
 		diags = append(diags, simple(
 			fmt.Sprintf("Invalid CPU request in %q task %q", jobName, task.Name),
-			fmt.Sprintf("CPU is %d. Request a positive number of MHz, or omit it "+
-				"to state no requirement.", ptr.Deref(task.Resources.CPU))))
+			fmt.Sprintf("CPU is %d. Request a positive number of millicores, "+
+				"where 1000 is one vCPU, or omit it to state no requirement.",
+				ptr.Deref(task.Resources.CPU))))
 	}
 
 	if task.Resources.Memory != nil && ptr.Deref(task.Resources.Memory) <= 0 {

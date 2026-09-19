@@ -194,13 +194,23 @@ type Source struct {
 // Resources is what a task requires, expressed as a workload requirement rather
 // than any provider's sizing model.
 //
-// CPU is in MHz and Memory in MiB, matching the units a Nomad user already
-// expects. Each provider plugin translates these into the closest configuration
-// its platform offers, which is rarely an exact match and is the plugin's
-// problem rather than the job author's.
+// CPU is in millicores and Memory in MiB. A thousand millicores is one vCPU,
+// which is the Kubernetes convention and, more to the point, the only unit
+// every target platform actually sells in: Code Engine offers quarter and half
+// vCPU tiers, Cloud Run the same, and none of them price in clock speed.
+//
+// Nomad uses MHz here and we deliberately do not, which is the one place this
+// specification departs from the vocabulary a Nomad user arrives with. Nomad
+// fingerprints the real clock speed of a machine it can see; a cloud sells a
+// share of a core it will not describe, and converting between the two would be
+// inventing a number.
+//
+// Each provider plugin translates these into the closest configuration its
+// platform offers. That is rarely an exact match, is almost always a round up,
+// and is the plugin's problem rather than the job author's.
 type Resources struct {
-	CPU    *int `hcl:"cpu,optional"`
-	Memory *int `hcl:"memory,optional"`
+	CPU    *int `hcl:"cpu,optional"`    // millicores; 1000 is one vCPU
+	Memory *int `hcl:"memory,optional"` // MiB
 }
 
 // Network is the connectivity a task expects.

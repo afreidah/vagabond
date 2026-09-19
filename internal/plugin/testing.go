@@ -23,6 +23,11 @@ import (
 //
 // It runs arbitrary images and advertises no duration limit, which is what
 // makes it the only family that can satisfy a general CI task.
+//
+// Four vCPU against eight gibibytes is one of Code Engine's real tiers. It does
+// not sell arbitrary sizes: a plugin rounds a request up to the nearest
+// combination its platform offers, and bills for the combination rather than
+// for what was asked.
 func FixtureContainer(observedAt time.Time) Capabilities {
 	return Capabilities{
 		Drivers:         []job.DriverName{job.DriverContainer},
@@ -42,11 +47,16 @@ func FixtureContainer(observedAt time.Time) Capabilities {
 //
 // ArbitraryImages is false. Lambda accepts container images, but only ones
 // implementing its runtime contract, which is not the same claim.
+//
+// The CPU ceiling is derived rather than offered. Lambda gives no way to choose
+// CPU: it scales with the memory tier, and roughly six vCPU is what the largest
+// one implies. Advertising that beats leaving it zero, which this model reads
+// as no limit at all.
 func FixtureFunction(observedAt time.Time) Capabilities {
 	return Capabilities{
 		Drivers:         []job.DriverName{job.DriverFunction},
 		Architectures:   []job.Arch{job.ArchAMD64, job.ArchARM64},
-		MaxResources:    Resources{CPU: 1800, Memory: 10240},
+		MaxResources:    Resources{CPU: 6000, Memory: 10240},
 		MaxDuration:     15 * time.Minute,
 		InternetEgress:  true,
 		ArbitraryImages: false,

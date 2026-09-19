@@ -32,8 +32,13 @@ import (
 // it: that type uses pointers because an omitted HCL field has to stay
 // distinguishable from a zero one, and nothing here is optional in that sense.
 // Zero means the provider advertised no limit.
+//
+// Units match job.Resources, so CPU is millicores. A provider that does not let
+// a caller choose CPU at all, as Lambda does not, advertises the ceiling its
+// largest memory tier implies rather than leaving it zero, because zero here
+// means unlimited.
 type Resources struct {
-	CPU    int // MHz
+	CPU    int // millicores; 1000 is one vCPU
 	Memory int // MiB
 }
 

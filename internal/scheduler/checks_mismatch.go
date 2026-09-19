@@ -117,7 +117,7 @@ func (resourcesChecker) Check(req *Request, in *Input) *Rejection {
 
 	if cpu := req.CPU(); max.CPU > 0 && cpu > max.CPU {
 		return reject(ReasonResourcesExceeded, fmt.Sprintf(
-			"The task asks for %d MHz and this provider allows %d.", cpu, max.CPU))
+			"The task asks for %d millicores and this provider allows %d.", cpu, max.CPU))
 	}
 
 	if memory := req.Memory(); max.Memory > 0 && memory > max.Memory {
