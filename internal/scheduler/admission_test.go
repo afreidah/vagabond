@@ -51,6 +51,32 @@ func TestInput_AttributesMergeQuota(t *testing.T) {
 	}
 }
 
+// An operator's tags reach a job under the open half of the namespace, which is
+// what makes the closed half checkable. A tag landing anywhere else could shadow
+// a capability and no validation would catch it.
+func TestInput_AttributesMergeTags(t *testing.T) {
+	in := &Input{
+		Provider:     "ibm-code-engine",
+		Capabilities: plugin.FixtureContainer(time.Now()),
+		Quota:        observedQuota(72),
+		Tags:         map[string]string{"region": "us-south"},
+	}
+
+	attrs := in.Attributes()
+
+	if got := attrs[plugin.MetaPrefix+"region"]; got != "us-south" {
+		t.Errorf("attrs[%q] = %q, want us-south", plugin.MetaPrefix+"region", got)
+	}
+
+	if _, ok := attrs["region"]; ok {
+		t.Error("a tag landed outside the meta prefix")
+	}
+
+	if got := attrs[plugin.AttrFreeQuotaPercent]; got != "72" {
+		t.Errorf("tags displaced the quota attribute: %q", got)
+	}
+}
+
 // The example job matches on this exact name, so it has to stay reserved and
 // spelled this way.
 func TestAttrFreeQuotaPercent_IsReserved(t *testing.T) {
