@@ -66,7 +66,7 @@ Estimated cost: free
 The example config uses in-memory providers, so this runs with no cloud account
 configured. See [docs/quickstart.md](docs/quickstart.md).
 
-## Architecture in 30 seconds
+## Architecture
 
 ```
   job file (HCL)
