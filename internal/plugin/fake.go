@@ -38,6 +38,7 @@ type FakeContainerProvider struct {
 	ProviderName string
 	Caps         Capabilities
 	SubmitErr    error
+	ExitCode     int
 
 	mu    sync.Mutex
 	runs  map[execution.ID]execution.Status
@@ -129,6 +130,30 @@ func (p *FakeContainerProvider) Cancel(_ context.Context, id execution.ID) error
 	return nil
 }
 
+// Result reports what a recorded run produced.
+//
+// Derived rather than stored: this fake exists to satisfy the interface and to
+// let the registry and job plan run with no cloud account, so ExitCode is the
+// one knob a test needs and anything more would be modelling a platform rather
+// than the contract.
+func (p *FakeContainerProvider) Result(
+	_ context.Context, id execution.ID,
+) (*execution.Result, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if _, ok := p.runs[id]; !ok {
+		return nil, Internal(fmt.Errorf("unknown execution %s", id))
+	}
+
+	return &execution.Result{
+		ID:       id,
+		ExitCode: ptr.Of(p.ExitCode),
+		Duration: time.Second,
+		Logs:     []byte("fake execution output\n"),
+	}, nil
+}
+
 // Advance moves a recorded run into the given state, standing in for whatever
 // the platform would have done between polls.
 func (p *FakeContainerProvider) Advance(id execution.ID, next execution.State) error {
@@ -161,6 +186,7 @@ func (p *FakeContainerProvider) Advance(id execution.ID, next execution.State) e
 // writing two method bodies.
 type FakeSyncProvider struct {
 	StatusNotSupported
+	ResultNotSupported
 	CancelNotSupported
 
 	ProviderName string
