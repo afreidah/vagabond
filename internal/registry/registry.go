@@ -122,7 +122,7 @@ func newEntry(ctx context.Context, cfg *config.Provider) (*entry, hcl.Diagnostic
 		})
 	}
 
-	provider, buildDiags := Build(cfg.Type, Settings{
+	provider, buildDiags := Build(ctx, cfg.Type, Settings{
 		Name:        cfg.Name,
 		Config:      cfg.ConfigBody(),
 		Credentials: credentials,

@@ -28,6 +28,7 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/providers/gcp"
 )
 
 // fixturePath is the deployment registering all three families.
@@ -402,14 +403,17 @@ func TestInputsAreIndependent(t *testing.T) {
 // TYPES
 // -------------------------------------------------------------------------
 
+// Every fake builds from nothing but a name, which is what keeps the registry
+// and job plan runnable with no cloud account. A real provider needs its own
+// config block and is covered by that plugin's own tests.
 func TestBuild(t *testing.T) {
 	t.Parallel()
 
-	for _, providerType := range Types() {
+	for _, providerType := range []string{TypeFakeContainer, TypeFakeFunction, TypeFakeWorker} {
 		t.Run(providerType, func(t *testing.T) {
 			t.Parallel()
 
-			p, diags := Build(providerType, Settings{Name: "named"})
+			p, diags := Build(t.Context(), providerType, Settings{Name: "named"})
 			if diags.HasErrors() {
 				t.Fatalf("building %s failed: %s", providerType, diags.Error())
 			}
@@ -421,13 +425,30 @@ func TestBuild(t *testing.T) {
 	}
 }
 
+// A real provider needs configuration, and saying so is more useful than
+// three complaints about absent attributes.
+func TestBuildRealProviderNeedsConfig(t *testing.T) {
+	t.Parallel()
+
+	_, diags := Build(t.Context(), gcp.Type, Settings{Name: "gcp-cloud-run"})
+	if !diags.HasErrors() {
+		t.Fatal("a cloud-run provider built with no configuration")
+	}
+
+	if !strings.Contains(diags.Error(), "config block") {
+		t.Errorf("diagnostics do not name the missing block: %s", diags.Error())
+	}
+}
+
 func TestTypesIsACopy(t *testing.T) {
 	t.Parallel()
+
+	first := Types()[0]
 
 	got := Types()
 	got[0] = "clobbered"
 
-	if Types()[0] != TypeFakeContainer {
+	if Types()[0] != first {
 		t.Error("mutating the returned slice changed the vocabulary")
 	}
 }
