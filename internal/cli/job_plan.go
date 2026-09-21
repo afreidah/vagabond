@@ -159,12 +159,16 @@ func (c *JobPlanCommand) loadRegistry(configPath string) (*registry.Registry, in
 		return nil, ExitFailure
 	}
 
-	reg, err := registry.New(cfg)
-	if err != nil {
-		return nil, c.Errorf("Building providers from %s: %s", path, err)
+	ctx := context.Background()
+
+	reg, diags := registry.New(ctx, cfg)
+	if diags.HasErrors() {
+		renderDiagnostics(c.Ui, nil, diags, c.color())
+
+		return nil, ExitFailure
 	}
 
-	if err := reg.Refresh(context.Background()); err != nil {
+	if err := reg.Refresh(ctx); err != nil {
 		c.Ui.Warn(fmt.Sprintf("Some providers did not answer: %s", err))
 	}
 

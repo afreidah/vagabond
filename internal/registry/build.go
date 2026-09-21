@@ -17,6 +17,9 @@ package registry
 import (
 	"fmt"
 	"slices"
+	"strings"
+
+	"github.com/hashicorp/hcl/v2"
 
 	"github.com/afreidah/vagabond/internal/plugin"
 )
@@ -55,24 +58,48 @@ func Types() []string {
 	return slices.Clone(providerTypes)
 }
 
+// Settings is everything a plugin constructor is handed.
+//
+// Config is the provider's own block, still undecoded. Passing the body rather
+// than a decoded map is what lets a plugin report a typo against the line the
+// operator wrote it on, and what keeps its field names out of internal/config.
+//
+// Credentials is already resolved to bytes, so a plugin never learns whether
+// its secret came from a file, an environment variable or a command. Nil for
+// providers that need none, which every fake does.
+type Settings struct {
+	Name        string
+	Config      hcl.Body
+	Credentials []byte
+}
+
 // Build constructs the plugin for a configured type.
 //
 // The name is passed through rather than derived from the type, so that one
 // deployment can register the same plugin twice against two accounts and a job
 // can name them apart.
-func Build(providerType, name string) (plugin.Provider, error) {
+//
+// Diagnostics rather than an error, because a plugin decoding its own config
+// reports against source ranges and a caller flattening that to a string would
+// throw away the line number.
+func Build(providerType string, settings Settings) (plugin.Provider, hcl.Diagnostics) {
 	switch providerType {
 	case TypeFakeContainer:
-		return plugin.NewFakeContainerProvider(name), nil
+		return plugin.NewFakeContainerProvider(settings.Name), nil
 
 	case TypeFakeFunction:
-		return plugin.NewFakeFunctionProvider(name), nil
+		return plugin.NewFakeFunctionProvider(settings.Name), nil
 
 	case TypeFakeWorker:
-		return plugin.NewFakeWorkerProvider(name), nil
+		return plugin.NewFakeWorkerProvider(settings.Name), nil
 
 	default:
-		return nil, fmt.Errorf("%w %q for provider %q: known types are %v",
-			ErrUnknownProviderType, providerType, name, providerTypes)
+		return nil, hcl.Diagnostics{{
+			Severity: hcl.DiagError,
+			Summary:  "Unknown provider type",
+			Detail: fmt.Sprintf("Provider %q is of type %q, which nothing "+
+				"implements. Known types are %s.",
+				settings.Name, providerType, strings.Join(providerTypes, ", ")),
+		}}
 	}
 }

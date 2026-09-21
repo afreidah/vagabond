@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/hashicorp/hcl/v2"
 
 	"github.com/afreidah/vagabond/internal/ptr"
 )
@@ -403,5 +404,67 @@ func write(t *testing.T, dir, name, body string) {
 
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 		t.Fatalf("writing %s: %s", name, err)
+	}
+}
+
+// -------------------------------------------------------------------------
+// THE OPAQUE BLOCK
+// -------------------------------------------------------------------------
+
+// A provider's own settings are not Vagabond's to understand. Cloud Run needs
+// a project and a runtime identity, Code Engine needs a GUID, and declaring
+// either here would make every provider carry another's fields.
+func TestProviderConfigIsOpaque(t *testing.T) {
+	t.Parallel()
+
+	file := load(t, `
+provider "gcp-cloud-run" {
+  type = "cloud-run"
+
+  config {
+    project                 = "munchbox-66afc"
+    region                  = "us-central1"
+    runtime_service_account = "vagabond-run@munchbox-66afc.iam.gserviceaccount.com"
+
+    nested {
+      anything = "goes"
+    }
+  }
+}
+`)
+
+	body := file.Providers[0].ConfigBody()
+	if body == nil {
+		t.Fatal("the config block did not reach the provider")
+	}
+
+	// Undecoded, so a plugin can ask for exactly the attributes it knows and
+	// report a typo against the line the operator wrote it on. A nested block
+	// is fine here precisely because nothing flattened it.
+	content, _, diags := body.PartialContent(&hcl.BodySchema{
+		Attributes: []hcl.AttributeSchema{{Name: "project"}},
+	})
+	if diags.HasErrors() {
+		t.Fatalf("reading one attribute failed: %s", diags.Error())
+	}
+
+	value, valueDiags := content.Attributes["project"].Expr.Value(nil)
+	if valueDiags.HasErrors() {
+		t.Fatalf("evaluating project failed: %s", valueDiags.Error())
+	}
+
+	if got := value.AsString(); got != "munchbox-66afc" {
+		t.Errorf("project = %q, want munchbox-66afc", got)
+	}
+}
+
+// A provider needing no settings should not have to declare an empty block.
+func TestProviderWithoutConfigBlock(t *testing.T) {
+	t.Parallel()
+
+	file := load(t, `provider "fake" { type = "fake-container" }`)
+
+	if file.Providers[0].ConfigBody() != nil {
+		t.Error("a provider with no config block produced a body")
 	}
 }

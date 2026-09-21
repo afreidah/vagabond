@@ -23,19 +23,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/hcl/v2"
+
 	"github.com/afreidah/vagabond/internal/config"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/scheduler"
 )
-
-// -------------------------------------------------------------------------
-// ERRORS
-// -------------------------------------------------------------------------
-
-// ErrUnknownProviderType reports configuration naming a plugin that does not
-// exist.
-var ErrUnknownProviderType = errors.New("unknown provider type")
 
 // -------------------------------------------------------------------------
 // TYPES
@@ -69,23 +63,35 @@ type entry struct {
 
 // New builds a registry from configuration.
 //
-// Providers are constructed but not contacted. Refresh is what gathers
-// capabilities, so that a caller decides when to pay for it and a registry can
-// be built in a test without anything reaching outward.
-func New(cfg *config.File) (*Registry, error) {
+// The context is for resolving credentials, which may run a command an
+// operator nominated. Nothing else here reaches outward: providers are
+// constructed but not contacted, and Refresh is what gathers capabilities, so
+// a caller decides when to pay for that and a test can build a registry
+// against nothing.
+//
+// Diagnostics rather than an error, because a plugin decoding its own config
+// block reports against source ranges, and flattening that to a string would
+// turn "line 12, column 5" into prose.
+//
+// Every provider is attempted even after one fails, so an operator fixing a
+// configuration sees everything wrong with it in one run.
+func New(ctx context.Context, cfg *config.File) (*Registry, hcl.Diagnostics) {
 	if cfg == nil {
 		return &Registry{}, nil
 	}
 
+	var diags hcl.Diagnostics
+
 	r := &Registry{entries: make([]*entry, 0, len(cfg.Providers))}
 
 	for i := range cfg.Providers {
-		e, err := newEntry(&cfg.Providers[i])
-		if err != nil {
-			return nil, err
-		}
+		e, entryDiags := newEntry(ctx, &cfg.Providers[i])
 
-		r.entries = append(r.entries, e)
+		diags = append(diags, entryDiags...)
+
+		if e != nil {
+			r.entries = append(r.entries, e)
+		}
 	}
 
 	// Sorted once here rather than at every read, so that a plan lists
@@ -94,19 +100,38 @@ func New(cfg *config.File) (*Registry, error) {
 		return strings.Compare(a.name, b.name)
 	})
 
-	return r, nil
+	return r, diags
 }
 
 // newEntry constructs one provider from its configuration.
-func newEntry(cfg *config.Provider) (*entry, error) {
-	provider, err := Build(cfg.Type, cfg.Name)
-	if err != nil {
-		return nil, err
-	}
-
+func newEntry(ctx context.Context, cfg *config.Provider) (*entry, hcl.Diagnostics) {
 	tags, diags := cfg.Tags()
 	if diags.HasErrors() {
-		return nil, fmt.Errorf("provider %q tags: %s", cfg.Name, diags.Error())
+		return nil, diags
+	}
+
+	// Resolved here rather than held as a resolver, so that a plugin is given
+	// bytes and never learns whether they came from a file, the environment or
+	// a command.
+	credentials, err := cfg.Credentials.Resolve(ctx)
+	if err != nil {
+		return nil, append(diags, &hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Cannot resolve credentials",
+			Detail:   fmt.Sprintf("Provider %q: %s.", cfg.Name, err),
+		})
+	}
+
+	provider, buildDiags := Build(cfg.Type, Settings{
+		Name:        cfg.Name,
+		Config:      cfg.ConfigBody(),
+		Credentials: credentials,
+	})
+
+	diags = append(diags, buildDiags...)
+
+	if provider == nil {
+		return nil, diags
 	}
 
 	return &entry{
@@ -121,7 +146,7 @@ func newEntry(cfg *config.Provider) (*entry, error) {
 		healthy: true,
 
 		quota: configuredQuota(cfg),
-	}, nil
+	}, diags
 }
 
 // configuredQuota reads the stand-in an operator stated.

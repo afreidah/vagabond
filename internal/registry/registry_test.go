@@ -43,9 +43,9 @@ func build(t *testing.T, src string) *Registry {
 		t.Fatalf("loading configuration failed: %s", diags.Error())
 	}
 
-	r, err := New(cfg)
-	if err != nil {
-		t.Fatalf("building registry failed: %s", err)
+	r, diags := New(t.Context(), cfg)
+	if diags.HasErrors() {
+		t.Fatalf("building registry failed: %s", diags.Error())
 	}
 
 	return r
@@ -63,12 +63,12 @@ func TestFixtureLoadsIntoInputs(t *testing.T) {
 		t.Fatalf("loading %s failed: %s", fixturePath, diags.Error())
 	}
 
-	r, err := New(cfg)
-	if err != nil {
-		t.Fatalf("building registry failed: %s", err)
+	r, diags := New(t.Context(), cfg)
+	if diags.HasErrors() {
+		t.Fatalf("building registry failed: %s", diags.Error())
 	}
 
-	if err := r.Refresh(context.Background()); err != nil {
+	if err := r.Refresh(t.Context()); err != nil {
 		t.Fatalf("refresh failed: %s", err)
 	}
 
@@ -129,9 +129,9 @@ func TestExampleConfigBuilds(t *testing.T) {
 		t.Fatalf("example configuration does not load: %s", diags.Error())
 	}
 
-	r, err := New(cfg)
-	if err != nil {
-		t.Fatalf("example configuration does not build: %s", err)
+	r, diags := New(t.Context(), cfg)
+	if diags.HasErrors() {
+		t.Fatalf("example configuration does not build: %s", diags.Error())
 	}
 
 	if r.Len() == 0 {
@@ -146,9 +146,9 @@ func TestExampleConfigBuilds(t *testing.T) {
 func TestNewNilConfig(t *testing.T) {
 	t.Parallel()
 
-	r, err := New(nil)
-	if err != nil {
-		t.Fatalf("building an empty registry failed: %s", err)
+	r, diags := New(t.Context(), nil)
+	if diags.HasErrors() {
+		t.Fatalf("building an empty registry failed: %s", diags.Error())
 	}
 
 	if r.Len() != 0 {
@@ -170,16 +170,16 @@ provider "mystery" { type = "fake-quantum" }
 		t.Fatalf("loading configuration failed: %s", diags.Error())
 	}
 
-	_, err := New(cfg)
-	if !errors.Is(err, ErrUnknownProviderType) {
-		t.Fatalf("err = %v, want ErrUnknownProviderType", err)
+	_, diags = New(t.Context(), cfg)
+	if !diags.HasErrors() {
+		t.Fatal("an unknown provider type was accepted")
 	}
 
 	// The message has to name what was asked for and what exists, because the
 	// operator reading it is looking at a typo.
 	for _, want := range []string{"fake-quantum", "mystery", TypeFakeContainer} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not mention %q", err, want)
+		if !strings.Contains(diags.Error(), want) {
+			t.Errorf("diagnostics %q do not mention %q", diags.Error(), want)
 		}
 	}
 }
@@ -200,7 +200,7 @@ provider "tagged" {
 		t.Fatalf("loading configuration failed: %s", diags.Error())
 	}
 
-	if _, err := New(cfg); err == nil {
+	if _, diags := New(t.Context(), cfg); !diags.HasErrors() {
 		t.Fatal("expected a non-string tag to fail construction")
 	}
 }
@@ -409,9 +409,9 @@ func TestBuild(t *testing.T) {
 		t.Run(providerType, func(t *testing.T) {
 			t.Parallel()
 
-			p, err := Build(providerType, "named")
-			if err != nil {
-				t.Fatalf("building %s failed: %s", providerType, err)
+			p, diags := Build(providerType, Settings{Name: "named"})
+			if diags.HasErrors() {
+				t.Fatalf("building %s failed: %s", providerType, diags.Error())
 			}
 
 			if got := p.Name(); got != "named" {
@@ -429,5 +429,89 @@ func TestTypesIsACopy(t *testing.T) {
 
 	if Types()[0] != TypeFakeContainer {
 		t.Error("mutating the returned slice changed the vocabulary")
+	}
+}
+
+// -------------------------------------------------------------------------
+// CREDENTIALS
+// -------------------------------------------------------------------------
+
+// A resolved credential reaches the plugin as bytes, and the plugin never
+// learns whether it came from a file, the environment or a command.
+func TestNewResolvesCredentials(t *testing.T) {
+	t.Setenv("VAGABOND_TEST_KEY", "a-secret")
+
+	cfg, diags := config.Load("test.hcl", []byte(`
+provider "needs-a-key" {
+  type = "fake-container"
+  credentials { env = "VAGABOND_TEST_KEY" }
+}
+`))
+	if diags.HasErrors() {
+		t.Fatalf("loading configuration failed: %s", diags.Error())
+	}
+
+	if _, diags := New(t.Context(), cfg); diags.HasErrors() {
+		t.Fatalf("building with a credential failed: %s", diags.Error())
+	}
+}
+
+// A credential that cannot be obtained stops that provider and says which one,
+// because the alternative is an authentication rejection several steps later
+// with nothing naming the cause.
+func TestNewReportsCredentialFailure(t *testing.T) {
+	t.Parallel()
+
+	cfg, diags := config.Load("test.hcl", []byte(`
+provider "unreachable-secret" {
+  type = "fake-container"
+  credentials { file = "/nowhere/key.json" }
+}
+`))
+	if diags.HasErrors() {
+		t.Fatalf("loading configuration failed: %s", diags.Error())
+	}
+
+	_, diags = New(t.Context(), cfg)
+	if !diags.HasErrors() {
+		t.Fatal("an unresolvable credential was accepted")
+	}
+
+	for _, want := range []string{"unreachable-secret", "/nowhere/key.json"} {
+		if !strings.Contains(diags.Error(), want) {
+			t.Errorf("diagnostics do not mention %q: %s", want, diags.Error())
+		}
+	}
+}
+
+// One broken provider does not hide the next one's problem: an operator fixing
+// a configuration should see everything wrong with it in one run.
+func TestNewCollectsEveryProblem(t *testing.T) {
+	t.Parallel()
+
+	cfg, diags := config.Load("test.hcl", []byte(`
+provider "bad-type"   { type = "fake-quantum" }
+provider "bad-secret" {
+  type = "fake-container"
+  credentials { file = "/nowhere/key.json" }
+}
+`))
+	if diags.HasErrors() {
+		t.Fatalf("loading configuration failed: %s", diags.Error())
+	}
+
+	_, diags = New(t.Context(), cfg)
+
+	// Diagnostics.Error renders only the first, so read them all rather than
+	// asserting against the summary.
+	var reported string
+	for _, d := range diags {
+		reported += d.Summary + " " + d.Detail + "\n"
+	}
+
+	for _, want := range []string{"bad-type", "bad-secret"} {
+		if !strings.Contains(reported, want) {
+			t.Errorf("diagnostics stopped before %q:\n%s", want, reported)
+		}
 	}
 }
