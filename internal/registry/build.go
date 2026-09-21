@@ -15,6 +15,7 @@
 package registry
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/hashicorp/hcl/v2"
 
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/providers/gcp"
 )
 
 // -------------------------------------------------------------------------
@@ -41,6 +43,8 @@ const (
 )
 
 var providerTypes = []string{
+	gcp.Type,
+
 	TypeFakeContainer,
 	TypeFakeFunction,
 	TypeFakeWorker,
@@ -82,8 +86,21 @@ type Settings struct {
 // Diagnostics rather than an error, because a plugin decoding its own config
 // reports against source ranges and a caller flattening that to a string would
 // throw away the line number.
-func Build(providerType string, settings Settings) (plugin.Provider, hcl.Diagnostics) {
+func Build(
+	ctx context.Context, providerType string, settings Settings,
+) (plugin.Provider, hcl.Diagnostics) {
 	switch providerType {
+	case gcp.Type:
+		// Returned through the interface rather than concretely, so a nil
+		// *gcp.Provider from a failed build does not become a non-nil
+		// plugin.Provider that later panics.
+		p, diags := gcp.New(ctx, settings.Name, settings.Config, settings.Credentials)
+		if diags.HasErrors() {
+			return nil, diags
+		}
+
+		return p, diags
+
 	case TypeFakeContainer:
 		return plugin.NewFakeContainerProvider(settings.Name), nil
 
