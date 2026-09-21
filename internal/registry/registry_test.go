@@ -278,6 +278,7 @@ provider "silent" { type = "fake-container" }
 // from here.
 type failingProvider struct {
 	plugin.StatusNotSupported
+	plugin.ResultNotSupported
 	plugin.CancelNotSupported
 
 	name string

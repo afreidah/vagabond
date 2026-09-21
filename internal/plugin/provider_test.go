@@ -189,7 +189,7 @@ func TestProvider_NonZeroExitFailsTheSubmission(t *testing.T) {
 
 // The embedded helpers are the demonstration: a provider with no work outliving
 // Submit declares that in two lines instead of two method bodies.
-func TestProvider_SyncProviderRejectsStatusAndCancel(t *testing.T) {
+func TestProvider_SyncProviderRejectsStatusResultAndCancel(t *testing.T) {
 	p := NewFakeWorkerProvider("fake-worker")
 	id := newID(t)
 
@@ -198,8 +198,91 @@ func TestProvider_SyncProviderRejectsStatusAndCancel(t *testing.T) {
 		t.Errorf("Status error = %v, want ErrUnsupported", err)
 	}
 
+	// Nothing left to fetch: the result came back from Submit.
+	if _, err := p.Result(t.Context(), id); !errors.Is(err, ErrUnsupported) {
+		t.Errorf("Result error = %v, want ErrUnsupported", err)
+	}
+
 	if err := p.Cancel(t.Context(), id); !errors.Is(err, ErrUnsupported) {
 		t.Errorf("Cancel error = %v, want ErrUnsupported", err)
+	}
+}
+
+// -------------------------------------------------------------------------
+// FETCHING A RESULT
+// -------------------------------------------------------------------------
+
+// A container provider's result has to be asked for, which is the whole reason
+// the method exists: the platform holds it and the submission did not.
+func TestProvider_ContainerResultIsFetched(t *testing.T) {
+	p := NewFakeContainerProvider("fake-container")
+	id := newID(t)
+
+	if _, err := p.Submit(t.Context(), id, &job.Task{Name: "test"}); err != nil {
+		t.Fatalf("Submit returned unexpected error: %v", err)
+	}
+
+	result, err := p.Result(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Result returned unexpected error: %v", err)
+	}
+
+	if result.ID != id {
+		t.Errorf("result ID = %s, want %s", result.ID, id)
+	}
+
+	if !result.Succeeded() {
+		t.Error("a zero exit code did not report success")
+	}
+
+	if len(result.Logs) == 0 {
+		t.Error("the result carries no output")
+	}
+}
+
+// A workload failing is an answer, not an error: Result returns it normally and
+// the exit code is what says the task failed.
+func TestProvider_ContainerResultCarriesNonZeroExit(t *testing.T) {
+	p := NewFakeContainerProvider("fake-container")
+	p.ExitCode = 3
+
+	id := newID(t)
+
+	if _, err := p.Submit(t.Context(), id, &job.Task{Name: "test"}); err != nil {
+		t.Fatalf("Submit returned unexpected error: %v", err)
+	}
+
+	result, err := p.Result(t.Context(), id)
+	if err != nil {
+		t.Fatalf("a failing workload made Result an error: %v", err)
+	}
+
+	if ptr.Deref(result.ExitCode) != 3 {
+		t.Errorf("exit code = %d, want 3", ptr.Deref(result.ExitCode))
+	}
+
+	if result.Succeeded() {
+		t.Error("exit code 3 reported success")
+	}
+}
+
+// Asking about an execution the provider never saw is Vagabond's own bug, so it
+// classifies as internal and must not be rerouted.
+func TestProvider_ResultForUnknownExecution(t *testing.T) {
+	p := NewFakeContainerProvider("fake-container")
+
+	_, err := p.Result(t.Context(), newID(t))
+	if err == nil {
+		t.Fatal("expected an error for an unknown execution")
+	}
+
+	var classified *Error
+	if !errors.As(err, &classified) {
+		t.Fatalf("errors.As did not yield *Error, got %T", err)
+	}
+
+	if classified.Class != ClassInternal {
+		t.Errorf("Class = %q, want %q", classified.Class, ClassInternal)
 	}
 }
 

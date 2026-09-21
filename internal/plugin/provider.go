@@ -75,11 +75,24 @@ type Provider interface {
 	// provider that finished inside Submit returns ErrUnsupported.
 	Status(ctx context.Context, id execution.ID) (execution.Status, error)
 
+	// Result returns what a finished execution produced.
+	//
+	// Called once, after Status reports a terminal state; a provider that
+	// finished inside Submit returns ErrUnsupported. Where the result lives is
+	// the plugin's problem, because platforms disagree — an exit code may be on
+	// a task resource while logs sit in a separate product.
+	//
+	// A failure here is not a failed execution, so it is never rerouted.
+	Result(ctx context.Context, id execution.ID) (*execution.Result, error)
+
 	// Cancel stops a running execution.
 	//
 	// Returns ErrUnsupported where the platform offers no way to stop work.
 	// Cancelling an execution that already finished is not an error: the
 	// caller's intent, that it not be running, is satisfied.
+	//
+	// May destroy what Result reads: Cloud Run keeps the exit code on a task
+	// that is deleted along with its job. Callers fetch the result first.
 	Cancel(ctx context.Context, id execution.ID) error
 }
 
@@ -174,6 +187,16 @@ type StatusNotSupported struct{}
 // Status reports that this provider has no work outliving Submit to report on.
 func (StatusNotSupported) Status(context.Context, execution.ID) (execution.Status, error) {
 	return execution.Status{}, Internal(fmt.Errorf("status: %w", ErrUnsupported))
+}
+
+// ResultNotSupported is embedded by providers that returned everything from
+// Submit, so there is nothing left to fetch.
+type ResultNotSupported struct{}
+
+// Result reports that this provider already returned what the execution
+// produced.
+func (ResultNotSupported) Result(context.Context, execution.ID) (*execution.Result, error) {
+	return nil, Internal(fmt.Errorf("result: %w", ErrUnsupported))
 }
 
 // CancelNotSupported is embedded by providers offering no way to stop work.
