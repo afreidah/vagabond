@@ -20,6 +20,8 @@ import (
 	"github.com/hashicorp/hcl/v2/gohcl"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
+
+	"github.com/afreidah/vagabond/internal/job"
 )
 
 // -------------------------------------------------------------------------
@@ -41,13 +43,22 @@ type File struct {
 // Enabled is a pointer so that an omitted value means the default rather than
 // false. A provider listed in configuration and silently off would be the
 // worst reading of a missing attribute.
+//
+// Config is left undecoded because its shape belongs to the plugin. Cloud Run
+// needs a project, a region and a runtime identity; Code Engine needs a region
+// and a project GUID; Azure would need a subscription and a resource group.
+// Declaring any of them here makes every provider carry another's fields, so
+// the plugin decodes its own block and reports its own diagnostics. The same
+// reasoning as a task's driver config, for the same reason.
 type Provider struct {
 	Name    string `hcl:"name,label"`
 	Type    string `hcl:"type"`
 	Enabled *bool  `hcl:"enabled,optional"`
 
-	Meta  *MetaBlock  `hcl:"meta,block"`
-	Quota *QuotaBlock `hcl:"quota,block"`
+	Config      *job.RawBlock     `hcl:"config,block"`
+	Credentials *CredentialsBlock `hcl:"credentials,block"`
+	Meta        *MetaBlock        `hcl:"meta,block"`
+	Quota       *QuotaBlock       `hcl:"quota,block"`
 }
 
 // MetaBlock holds an operator's own tags for a provider.
@@ -246,6 +257,8 @@ func (p *Provider) validate() hcl.Diagnostics {
 		})
 	}
 
+	diags = append(diags, p.Credentials.validate(p.Name)...)
+
 	if p.Quota == nil || p.Quota.FreePercent == nil {
 		return diags
 	}
@@ -276,6 +289,19 @@ func (p *Provider) IsEnabled() bool {
 	}
 
 	return *p.Enabled
+}
+
+// ConfigBody returns the provider's own configuration block, undecoded.
+//
+// Nil when the provider declared none, which is correct for anything needing
+// no settings. A plugin that requires some reports that itself, against the
+// block it was expecting.
+func (p *Provider) ConfigBody() hcl.Body {
+	if p.Config == nil {
+		return nil
+	}
+
+	return p.Config.Body
 }
 
 // Tags returns the operator's own labels for this provider.
