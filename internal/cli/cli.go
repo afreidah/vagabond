@@ -31,15 +31,14 @@ import (
 
 // Exit codes. These are an interface the moment a CI system runs job validate,
 // so they are fixed here and used everywhere rather than invented per command.
+//
+// Failure covers usage errors too, because a caller cannot act differently on
+// those. NoCapacity is separate because a caller can: a failing build is the
+// author's problem, and nowhere to run it is an infrastructure one.
 const (
-	// ExitSuccess reports that the command did what was asked.
-	ExitSuccess = 0
-
-	// ExitFailure reports that the command ran and the answer was no: a job
-	// that does not validate, a submission that was rejected. It also covers
-	// usage errors, because a caller cannot act differently on those and
-	// splitting them buys nothing.
-	ExitFailure = 1
+	ExitSuccess    = 0 // the command did what was asked
+	ExitFailure    = 1 // it ran and the answer was no
+	ExitNoCapacity = 2 // the work never ran
 )
 
 const binaryName = "vagabond"

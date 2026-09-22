@@ -39,6 +39,9 @@ the client's decision.
 - Scores the survivors and selects one.
 - Explains itself. `vagabond job plan` prints every provider, its score or the
   rule it failed, and how stale the data was.
+- Runs it. `vagabond job run` dispatches to the winner, streams the output where
+  the provider supports it, reroutes around providers that fail to answer, and
+  deletes what the execution left behind.
 - Dispatches `container` tasks to Google Cloud Run Jobs and returns the exit
   code and output.
 
@@ -88,8 +91,10 @@ configured. See [docs/quickstart.md](docs/quickstart.md).
   |  ranking  |   scorers in [0,1], score is their mean
   +-----------+
         |
-        v
-    selection
+        v  selection
+  +-----------+   submit, watch, collect, release
+  | dispatch  |   reroute on infrastructure failure
+  +-----------+
 ```
 
 Admission never calls a provider. It reads capability and quota snapshots
@@ -146,6 +151,7 @@ job "go-test" {
 | Provider config, credentials, discovery | [configuration.md](docs/configuration.md) |
 | Admission checks and reason codes | [admission.md](docs/admission.md) |
 | Scoring and strategies | [scheduling.md](docs/scheduling.md) |
+| Retries, rerouting, streaming, cleanup | [dispatch.md](docs/dispatch.md) |
 | Google Cloud Run Jobs | [providers/cloud-run.md](docs/providers/cloud-run.md) |
 | Writing a provider plugin | [writing-a-provider.md](docs/writing-a-provider.md) |
 | Coding conventions | [style-guide.md](docs/style-guide.md) |
@@ -155,9 +161,6 @@ job "go-test" {
 
 Not implemented. Everything above this line is.
 
-- **Dispatch.** Submit, poll, settle, cancel, and reroute infrastructure
-  failures. Provider plugins are currently driven only by their own tests.
-- **`vagabond job run`.** The CLI on top of dispatch.
 - **Quota ledger.** Reserve on dispatch, settle on completion, so
   `provider.free_quota_percent` is measured rather than declared in config.
 - **Persistence.** Execution and quota state.

@@ -110,6 +110,46 @@ Stops a running execution.
 
 Providers with no way to stop work embed `plugin.CancelNotSupported`.
 
+## Optional interfaces
+
+Two capabilities are declared by implementing an interface. Nothing registers
+them; dispatch type-asserts and skips what is absent.
+
+### `plugin.LogStreamer`
+
+```go
+StreamLogs(ctx context.Context, id execution.ID, w io.Writer) error
+```
+
+Writes output to `w` as it arrives, returning when the execution ends, the
+stream closes, or `ctx` is cancelled.
+
+A live view, never the record. `Result` stays authoritative, and a failure here
+never fails an execution — the caller is watching a build, and losing that view
+is not a reason to abandon work the provider is still doing.
+
+Once the stream is open, treat every way it stops as the end rather than
+classifying read errors. A cut connection, a closed body and a cancelled context
+all mean the same thing to the caller.
+
+Providers whose work finishes inside `Submit` have nothing to stream and should
+not implement this.
+
+### `plugin.Releaser`
+
+```go
+Release(ctx context.Context, id execution.ID) error
+```
+
+Deletes whatever the finished execution left behind. Implement it when an
+execution requires a resource that outlives it — Cloud Run has no ad-hoc run, so
+every execution needs a Job that persists until deleted.
+
+Called after `Result`, because releasing may destroy what the result reads. Best
+effort: a failure does not fail the execution.
+
+Providers with nothing to release do not implement it.
+
 ## Errors
 
 Every returned error should be a `*plugin.Error`.

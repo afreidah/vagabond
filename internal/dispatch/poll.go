@@ -35,6 +35,18 @@ type Poll struct {
 	Max     time.Duration
 }
 
+// Bounds on the two cleanup calls, both made on their own context because the
+// caller's may already be cancelled.
+const (
+	abandonTimeout = 30 * time.Second
+	releaseTimeout = 30 * time.Second
+)
+
+// DefaultLinger is how long a log stream is held open after the execution
+// ends. Cloud Logging runs seconds behind the container, so a job that
+// finishes promptly finishes before its own last lines are readable.
+const DefaultLinger = 5 * time.Second
+
 // DefaultPoll starts responsive and settles into something cheap.
 //
 // Two seconds catches a function invocation that finished almost immediately;
@@ -87,47 +99,110 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 // and reusing the id would ask the provider to resume the one that just
 // failed.
 func (d *Dispatcher) execute(
-	ctx context.Context, provider plugin.Provider, task *job.Task,
-) (execution.ID, *execution.Result, error) {
+	ctx context.Context, provider plugin.Provider, task *job.Task, attempt int,
+) (execution.ID, *execution.Result, bool, error) {
+	var streamed bool
+
 	id, err := execution.NewID()
 	if err != nil {
-		return id, nil, plugin.Internal(fmt.Errorf("generating an execution id: %w", err))
+		return id, nil, streamed,
+			plugin.Internal(fmt.Errorf("generating an execution id: %w", err))
+	}
+
+	event := Event{
+		Task: task.Name, Provider: provider.Name(), ID: id, Attempt: attempt,
 	}
 
 	submission, err := provider.Submit(ctx, id, task)
 	if err != nil {
-		return id, nil, err
+		return id, nil, streamed, err
 	}
 
 	if err := submission.Validate(); err != nil {
 		// A plugin describing its own submission incoherently is our bug to
 		// fix, not a provider outage, so it is not sent onward.
-		return id, nil, plugin.Internal(err)
+		return id, nil, streamed, plugin.Internal(err)
 	}
+
+	event.State = submission.State
+	d.report(event)
 
 	// A function or worker finished inside Submit and has nothing to poll.
 	if submission.Synchronous() {
-		return id, submission.Result, nil
+		d.release(provider, id)
+
+		return id, submission.Result, streamed, nil
 	}
 
-	state, err := d.watch(ctx, provider, id)
+	stream := d.startStream(ctx, provider, id)
+	defer stream.stop()
+
+	state, err := d.watch(ctx, provider, id, event)
+
+	// Settled before anything else prints, so the tail of a build does not land
+	// underneath the result.
+	d.settle(ctx, stream)
+
+	streamed = stream.wrote()
+
 	if err != nil {
-		return id, nil, err
+		// The caller gave up rather than the provider failing, so the work is
+		// still out there. Stop it, or it keeps running and billing.
+		if ctx.Err() != nil {
+			d.abandon(provider, id)
+		}
+
+		return id, nil, streamed, err
 	}
 
 	result, err := provider.Result(ctx, id)
 	if err != nil {
-		return id, nil, err
+		return id, nil, streamed, err
 	}
+
+	// After the result, because releasing may destroy what it reads.
+	d.release(provider, id)
 
 	// A provider that reported cancelled produced no verdict about the work,
 	// so it is not an answer even though a result came back.
 	if state == execution.StateCancelled {
-		return id, result, plugin.Infrastructure(
+		return id, result, streamed, plugin.Infrastructure(
 			fmt.Errorf("execution %s was cancelled by the provider", id))
 	}
 
-	return id, result, nil
+	return id, result, streamed, nil
+}
+
+// release frees whatever the provider left behind, for providers that leave
+// anything.
+//
+// Best effort and on its own context, so that a caller who has already stopped
+// waiting still gets the resource cleaned up. A failure here has not failed the
+// execution, and the provider's own sweep is the backstop.
+func (d *Dispatcher) release(provider plugin.Provider, id execution.ID) {
+	releaser, ok := provider.(plugin.Releaser)
+	if !ok {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()),
+		releaseTimeout)
+	defer cancel()
+
+	_ = releaser.Release(ctx, id)
+}
+
+// abandon stops an execution the caller stopped waiting for.
+//
+// On its own context, because the one that was cancelled is why we are here.
+// Best effort: nothing is left to report a failure to, and the sweep is the
+// backstop for whatever this misses.
+func (d *Dispatcher) abandon(provider plugin.Provider, id execution.ID) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()),
+		abandonTimeout)
+	defer cancel()
+
+	_ = provider.Cancel(ctx, id)
 }
 
 // watch polls until the execution reaches a state it never leaves.
@@ -136,8 +211,10 @@ func (d *Dispatcher) execute(
 // a status: there is no ledger to write it to, and the provider is the record
 // until there is.
 func (d *Dispatcher) watch(
-	ctx context.Context, provider plugin.Provider, id execution.ID,
+	ctx context.Context, provider plugin.Provider, id execution.ID, event Event,
 ) (execution.State, error) {
+	last := event.State
+
 	for n := 0; ; n++ {
 		if err := d.sleep(ctx, d.poll.interval(n)); err != nil {
 			return "", err
@@ -148,8 +225,20 @@ func (d *Dispatcher) watch(
 			return "", err
 		}
 
+		// A terminal state is left unreported: the caller announces that itself
+		// once the last of the output has arrived, and reporting it here puts
+		// "succeeded" above the build it describes.
 		if status.State.Terminal() {
 			return status.State, nil
+		}
+
+		// Only on a change, so a job that provisions for two minutes reports
+		// once rather than every poll.
+		if status.State != last {
+			last = status.State
+			event.State = status.State
+
+			d.report(event)
 		}
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 
 	"github.com/afreidah/vagabond/internal/execution"
@@ -33,66 +34,16 @@ import (
 
 // Provider is one cloud backend Vagabond can dispatch to.
 //
-// Implementations must not retry, back off, or choose an alternative provider.
-// Those are control plane decisions that need a view of every provider and of
-// the free-tier ledger, neither of which a plugin has. A plugin that retries
-// internally spends quota the ledger never sees.
-//
-// Every returned error should be a *Error so that the dispatcher can tell an
-// infrastructure failure from Vagabond's own bug. ClassifyHTTP covers the usual
-// shape.
+// Plugins translate and classify, nothing more: no retrying, no backoff, no
+// choosing another provider. Errors should be *Error. The id is the
+// idempotency key; the task is read-only. Cancel may destroy what Result reads,
+// so callers fetch the result first.
 type Provider interface {
-	// Name is the routing identifier a job's provider list refers to, such as
-	// "ibm-code-engine". It is stable for the life of the provider, because it
-	// is persisted on every execution and quota row.
 	Name() string
-
-	// Capabilities reports what this provider can currently do.
-	//
-	// Called by a refresh loop rather than on the request path, because
-	// admission must decide from a cached snapshot without reaching the
-	// network. Implementations may call their platform here.
 	Capabilities(ctx context.Context) (Capabilities, error)
-
-	// Submit dispatches a task under an id Vagabond has already recorded.
-	//
-	// The id is supplied rather than returned so that it exists durably before
-	// the call: a crash in between then leaves a row to reconcile against
-	// rather than an orphaned run. It is also the submission idempotency key,
-	// so a retry with the same id must not start a second run.
-	//
-	// The task is passed by pointer and must be treated as read-only.
-	// Implementations must not modify it: the same task is offered to other
-	// candidates when a submission is rerouted, and a plugin that rewrote it
-	// would change what every later provider is asked to run. A value would not
-	// prevent that anyway, since Task holds maps, slices, and pointers that a
-	// copy would share.
 	Submit(ctx context.Context, id execution.ID, task *job.Task) (Submission, error)
-
-	// Status reports where a previously submitted execution has reached.
-	//
-	// Only meaningful for providers whose work outlives the Submit call. A
-	// provider that finished inside Submit returns ErrUnsupported.
 	Status(ctx context.Context, id execution.ID) (execution.Status, error)
-
-	// Result returns what a finished execution produced.
-	//
-	// Called once, after Status reports a terminal state; a provider that
-	// finished inside Submit returns ErrUnsupported. Where the result lives is
-	// the plugin's problem, because platforms disagree — an exit code may be on
-	// a task resource while logs sit in a separate product.
-	//
-	// A failure here is not a failed execution, so it is never rerouted.
 	Result(ctx context.Context, id execution.ID) (*execution.Result, error)
-
-	// Cancel stops a running execution.
-	//
-	// Returns ErrUnsupported where the platform offers no way to stop work.
-	// Cancelling an execution that already finished is not an error: the
-	// caller's intent, that it not be running, is satisfied.
-	//
-	// May destroy what Result reads: Cloud Run keeps the exit code on a task
-	// that is deleted along with its job. Callers fetch the result first.
 	Cancel(ctx context.Context, id execution.ID) error
 }
 
@@ -102,16 +53,9 @@ type Provider interface {
 
 // Submission is what a provider reports back from dispatching a task.
 //
-// Result is the reason this is a struct rather than a provider id. Two of the
-// three execution families finish inside Submit: a function invocation and a
-// worker call both return their answer synchronously, while a container job is
-// only acknowledged and reports its result later through ingest. Carrying an
-// optional result lets one interface describe both without the dispatcher
-// having to ask which kind of provider it is holding.
-//
-// State says which of those happened. A provider that merely queued the work
-// reports StateAccepted; one that already finished reports a terminal state and
-// fills in Result.
+// Result carries the answer for providers that finish inside Submit, so one
+// interface describes both families. A provider that merely queued the work
+// reports StateAccepted and leaves it nil.
 type Submission struct {
 	ProviderID string
 	State      execution.State
@@ -162,6 +106,23 @@ var submittableStates = []execution.State{
 	execution.StateRunning,
 	execution.StateSucceeded,
 	execution.StateFailed,
+}
+
+// -------------------------------------------------------------------------
+// OPTIONAL CAPABILITIES
+// -------------------------------------------------------------------------
+
+// LogStreamer is implemented by providers that can show a running execution's
+// output before it finishes. A live view, never the record: Result stays
+// authoritative, and a broken stream is not a failed execution.
+type LogStreamer interface {
+	StreamLogs(ctx context.Context, id execution.ID, w io.Writer) error
+}
+
+// Releaser is implemented by providers that leave a resource behind, as Cloud
+// Run does. Called after Result, best effort, never failing the execution.
+type Releaser interface {
+	Release(ctx context.Context, id execution.ID) error
 }
 
 // -------------------------------------------------------------------------

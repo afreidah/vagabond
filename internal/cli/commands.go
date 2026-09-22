@@ -30,5 +30,8 @@ func Commands(meta *Meta) map[string]cli.CommandFactory {
 		"job plan": func() (cli.Command, error) {
 			return &JobPlanCommand{Meta: meta}, nil
 		},
+		"job run": func() (cli.Command, error) {
+			return &JobRunCommand{Meta: meta}, nil
+		},
 	}
 }

@@ -115,6 +115,13 @@ can start.
 | `Status` | `GET .../jobs/vagabond-<id>/executions` |
 | `Result` | `GET .../executions/<name>/tasks`, then Cloud Logging |
 | `Cancel` | `DELETE .../jobs/vagabond-<id>` |
+| `Release` | `DELETE .../jobs/vagabond-<id>` |
+| `StreamLogs` | `POST /v2/entries:tail` |
+
+`Release` is the same delete as `Cancel`, reached for a different reason:
+nothing is running, and the Job is the resource that outlived the execution.
+Dispatch calls it after every finished execution, so the sweep is a backstop
+rather than the only cleanup.
 
 Jobs are named `vagabond-<execution id>`. Every later call derives the name from
 the execution ID, so the plugin remembers nothing between calls and a process
@@ -171,6 +178,31 @@ Bounds, any of which marks the result truncated:
 
 A failure reading logs does not fail the result. An exit code with no readable
 output is still a usable answer.
+
+### Streaming
+
+`StreamLogs` uses `entries:tail`, a bidirectional streaming method reachable
+over plain HTTP through gRPC transcoding. No gRPC dependency is needed.
+
+Two details are not obvious from the documentation:
+
+- The request body is a **JSON array**, because a streaming method's body is a
+  stream of request messages. A bare object is rejected with
+  `400 Invalid value (Object)`.
+- The response is a JSON array that stays open, decoded element by element,
+  rather than one object per line.
+
+`bufferWindow` is set to 1s. Cloud Logging buffers server-side to return
+entries in timestamp order; below about a second, stderr starts arriving before
+the stdout that preceded it.
+
+Streaming is several seconds behind the container. A job shorter than the
+ingestion lag produces no live output at all — its entries arrive in one burst
+during the linger window after the execution ends. See
+[Dispatch](../dispatch.md#live-output).
+
+Cloud Run's own platform messages, such as `Container called exit(0).`, arrive
+through the same stream and are not filtered.
 
 ## Cancel destroys the result
 

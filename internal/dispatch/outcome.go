@@ -48,26 +48,24 @@ var ErrNoProvider = errors.New("provider is not registered")
 type Attempt struct {
 	Provider string
 	ID       execution.ID
-	Err      error
+	Err      error // nil on the attempt that answered
 }
 
 // TaskOutcome is what became of one task.
 //
 // Result is nil when no attempt produced one, in which case the error returned
 // alongside says whether nothing was eligible or everything failed.
+//
+// Rejections is carried so that a task with nowhere to run explains itself the
+// way a plan does, rather than reporting only that it found nothing.
 type TaskOutcome struct {
-	Task     string
-	Provider string
-	ID       execution.ID
-	Result   *execution.Result
-
-	// Attempts records every provider tried, in order, including the one that
-	// answered.
-	Attempts []Attempt
-
-	// Rejections is why the ineligible providers were never tried. Carried so
-	// that a task with nowhere to run explains itself the way a plan does.
-	Rejections []scheduler.Rejection
+	Task       string
+	Provider   string
+	ID         execution.ID
+	Result     *execution.Result
+	Streamed   bool                  // output was shown live; do not print it again
+	Attempts   []Attempt             // every provider tried, including the one that answered
+	Rejections []scheduler.Rejection // why the ineligible providers were never tried
 }
 
 // Succeeded reports whether the task ran and reported success.

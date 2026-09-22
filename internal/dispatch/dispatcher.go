@@ -14,6 +14,7 @@ package dispatch
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
@@ -33,22 +34,22 @@ import (
 // of a configured registry, and so dispatch does not depend on how providers
 // happen to be constructed.
 type Registry interface {
-	// Inputs returns the capability and quota snapshot for every provider.
-	Inputs() []scheduler.Input
-
-	// Provider returns the plugin registered under a name.
-	Provider(name string) (plugin.Provider, bool)
+	Inputs() []scheduler.Input                    // capability and quota snapshots
+	Provider(name string) (plugin.Provider, bool) // the plugin registered under a name
 }
 
 // Dispatcher runs jobs against the providers a registry holds.
+//
+// sleep is injected because the alternative is a test suite that waits out real
+// backoff. One that returns immediately turns a two minute run into
+// microseconds without the polling logic knowing it was not real.
 type Dispatcher struct {
 	registry Registry
 	poll     Poll
-
-	// sleep is injected because the alternative is a test suite that waits out
-	// real backoff. One that returns immediately turns a two minute run into
-	// microseconds without the polling logic knowing.
-	sleep func(ctx context.Context, d time.Duration) error
+	linger   time.Duration // how long to keep a stream open past the last poll
+	logs     io.Writer     // nil means nobody is watching, and nothing is streamed
+	progress func(Event)   // nil means nobody is listening
+	sleep    func(ctx context.Context, d time.Duration) error
 }
 
 // Option configures a Dispatcher.
@@ -64,11 +65,27 @@ func WithSleeper(sleep func(ctx context.Context, d time.Duration) error) Option 
 	return func(d *Dispatcher) { d.sleep = sleep }
 }
 
+// WithLogs streams a running execution's output to w, where the provider can.
+func WithLogs(w io.Writer) Option {
+	return func(d *Dispatcher) { d.logs = writerOrNil(w) }
+}
+
+// WithLinger replaces how long a stream is held open past the last poll.
+func WithLinger(d time.Duration) Option {
+	return func(disp *Dispatcher) { disp.linger = d }
+}
+
+// WithProgress reports state changes as they happen.
+func WithProgress(fn func(Event)) Option {
+	return func(d *Dispatcher) { d.progress = fn }
+}
+
 // New builds a dispatcher over a registry.
 func New(registry Registry, opts ...Option) *Dispatcher {
 	d := &Dispatcher{
 		registry: registry,
 		poll:     DefaultPoll,
+		linger:   DefaultLinger,
 		sleep:    sleepContext,
 	}
 
@@ -188,7 +205,7 @@ func (d *Dispatcher) attempt(
 			return outcome, fmt.Errorf("%w: %s", ErrNoProvider, name)
 		}
 
-		id, result, err := d.execute(ctx, provider, task)
+		id, result, streamed, err := d.execute(ctx, provider, task, i+1)
 
 		outcome.Attempts = append(outcome.Attempts, Attempt{
 			Provider: name,
@@ -200,6 +217,7 @@ func (d *Dispatcher) attempt(
 			outcome.Provider = name
 			outcome.ID = id
 			outcome.Result = result
+			outcome.Streamed = streamed
 
 			return outcome, nil
 		}

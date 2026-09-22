@@ -30,11 +30,19 @@ capability and ignore price use the same machinery.
   |  ranking  |   scorers in [0,1], score is their mean
   +-----------+
         |
+        v  selection
+  +-----------+   submit, watch, collect, release
+  | dispatch  |   reroute on infrastructure failure
+  +-----------+
+        |
         v
-    selection
+  +-----------+   one package per backend
+  | provider  |   cloud-run
+  +-----------+
 ```
 
-`vagabond job plan` runs this pipeline and prints the result.
+`vagabond job plan` stops at the selection and prints it. `vagabond job run`
+continues through dispatch.
 
 ## Packages
 
@@ -46,9 +54,10 @@ capability and ignore price use the same machinery.
 | `internal/registry` | Construct plugins from config; maps type to implementation |
 | `internal/plugin` | `Provider` interface, capability model, failure classes |
 | `internal/scheduler` | Admission and ranking |
+| `internal/dispatch` | Submit, watch, collect, reroute, release |
 | `internal/providers/gcp` | Cloud Run Jobs plugin |
 | `internal/execution` | Execution IDs, state machine, results |
-| `internal/cli` | `job validate`, `job plan` |
+| `internal/cli` | `job validate`, `job plan`, `job run` |
 
 ## Enforced boundaries
 
@@ -93,6 +102,17 @@ decisions require a view of every provider and of the ledger, which a plugin doe
 not have. A plugin that retries internally spends capacity the ledger never
 records.
 
+Two capabilities are optional, declared by implementing an interface rather than
+by registering anything:
+
+| Interface | Method | Used for |
+|---|---|---|
+| `plugin.LogStreamer` | `StreamLogs` | Showing output before the execution ends |
+| `plugin.Releaser` | `Release` | Deleting a resource the execution left behind |
+
+A provider that implements neither works normally; dispatch type-asserts and
+skips what is absent.
+
 See [Writing a provider](writing-a-provider.md).
 
 ## Drivers
@@ -115,5 +135,6 @@ All three are parsed, admitted and scored. `cloud-run` implements `container`.
 - [Configuration](configuration.md)
 - [Admission](admission.md)
 - [Scheduling](scheduling.md)
+- [Dispatch](dispatch.md)
 - [Cloud Run provider](providers/cloud-run.md)
 - [Writing a provider](writing-a-provider.md)

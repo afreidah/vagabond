@@ -98,8 +98,46 @@ Pass `-` as the path:
 cat job.vagabond.hcl | ./vagabond job plan -config examples/config.hcl -
 ```
 
+## Running it
+
+`job plan` contacts nothing. `job run` dispatches to the selected provider and
+waits, which needs a real backend configured — see
+[Cloud Run](providers/cloud-run.md).
+
+```bash
+./vagabond job run -config vagabond.hcl job.vagabond.hcl
+```
+
+```
+==> greet accepted on gcp-cloud-run
+==> greet running on gcp-cloud-run
+line-1
+line-2
+done
+==> greet succeeded on gcp-cloud-run in 11.87s
+```
+
+Progress goes to stderr and the task's output to stdout, so redirecting stdout
+captures the build alone:
+
+```bash
+./vagabond job run -config vagabond.hcl job.vagabond.hcl > build.log
+```
+
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| 0 | Every task ran and exited zero |
+| 1 | A task ran and failed, or the job could not be read |
+| 2 | The work never ran: nothing was eligible, or every provider failed |
+
+Expect roughly two minutes for a trivial Cloud Run job. Provisioning dominates;
+see [Cloud Run](providers/cloud-run.md#cost-characteristics).
+
 ## Next
 
 - [Job specification](job-specification.md) — what goes in a job file
 - [Configuration](configuration.md) — what goes in the provider config
 - [Cloud Run provider](providers/cloud-run.md) — configuring a real backend
+- [Dispatch](dispatch.md) — retries, rerouting, streaming, cleanup

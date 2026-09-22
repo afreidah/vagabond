@@ -260,6 +260,16 @@ func (p *Provider) Cancel(ctx context.Context, id execution.ID) error {
 	return err
 }
 
+// Release deletes the Job left behind by a finished execution.
+//
+// The same delete as Cancel, reached for a different reason: nothing is
+// running, and this is the resource that outlived it. Without this every run
+// leaves a Job against a per-region quota, and Sweep becomes the only thing
+// keeping the project usable rather than the backstop it is meant to be.
+func (p *Provider) Release(ctx context.Context, id execution.ID) error {
+	return p.Cancel(ctx, id)
+}
+
 // deleteJob removes a job, ignoring whether it worked.
 //
 // Used on paths already returning a failure, where the delete is tidying up

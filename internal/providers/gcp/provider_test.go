@@ -349,6 +349,16 @@ func TestStatusListsTheExecution(t *testing.T) {
 			},
 			want: execution.StateRunning,
 		},
+		// The container has exited but Cloud Run has not written a completion
+		// time yet. On the counter alone this reads as never having started.
+		"draining": {
+			execution: map[string]any{
+				"name":         "jobs/x/executions/x-nhrzk",
+				"startTime":    "2026-09-20T22:53:35Z",
+				"runningCount": 0,
+			},
+			want: execution.StateRunning,
+		},
 		"succeeded": {
 			execution: map[string]any{
 				"name":           "jobs/x/executions/x-nhrzk",
