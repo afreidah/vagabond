@@ -171,6 +171,25 @@ func (e *Error) WithContext(provider, op string) *Error {
 	return e
 }
 
+// Reroutable reports whether an arbitrary error may be retried on another
+// provider.
+//
+// Here rather than in each caller, because every consumer of the Provider
+// interface has to ask this, and a handful of separate errors.As calls is how
+// the two classes start being judged differently in different places.
+//
+// An error that is not a *Error is not reroutable. An unclassified failure is
+// one nobody has reasoned about, and sending work onward on that basis spends
+// capacity on a guess.
+func Reroutable(err error) bool {
+	var classified *Error
+	if !errors.As(err, &classified) {
+		return false
+	}
+
+	return classified.Reroutable()
+}
+
 // -------------------------------------------------------------------------
 // HTTP CLASSIFICATION
 // -------------------------------------------------------------------------
