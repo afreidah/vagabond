@@ -25,7 +25,6 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/afreidah/vagabond/internal/config"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobspec"
 	"github.com/afreidah/vagabond/internal/registry"
@@ -111,68 +110,12 @@ func (c *JobPlanCommand) Run(args []string) int {
 		return code
 	}
 
-	reg, code := c.loadRegistry(configPath)
+	reg, code := c.loadRegistry(context.Background(), configPath)
 	if reg == nil {
 		return code
 	}
 
 	return c.plan(spec, meta, reg, verbose)
-}
-
-// -------------------------------------------------------------------------
-// LOADING
-// -------------------------------------------------------------------------
-
-// loadJob parses and validates the specification, reporting as job validate
-// does so that the same mistake reads the same way in both commands.
-func (c *JobPlanCommand) loadJob(path string, meta metaFlags) (*job.File, int) {
-	parsed, diags := c.parseJob(path, meta)
-
-	if !diags.HasErrors() {
-		diags = append(diags, jobspec.Validate(parsed.Spec)...)
-	}
-
-	if diags.HasErrors() {
-		renderDiagnostics(c.Ui, parsed.Files(), diags, c.color())
-
-		return nil, ExitFailure
-	}
-
-	return parsed.Spec, ExitSuccess
-}
-
-// loadRegistry finds configuration, builds the providers, and refreshes them.
-//
-// A refresh failure is reported but does not stop the plan. A provider that
-// did not answer is marked unhealthy and rejected by name, which is more useful
-// than refusing to plan at all: the other providers still have answers.
-func (c *JobPlanCommand) loadRegistry(configPath string) (*registry.Registry, int) {
-	path, err := config.Discover(configPath)
-	if err != nil {
-		return nil, c.Errorf("%s", err)
-	}
-
-	cfg, diags := config.LoadPath(path)
-	if diags.HasErrors() {
-		renderDiagnostics(c.Ui, nil, diags, c.color())
-
-		return nil, ExitFailure
-	}
-
-	ctx := context.Background()
-
-	reg, diags := registry.New(ctx, cfg)
-	if diags.HasErrors() {
-		renderDiagnostics(c.Ui, nil, diags, c.color())
-
-		return nil, ExitFailure
-	}
-
-	if err := reg.Refresh(ctx); err != nil {
-		c.Ui.Warn(fmt.Sprintf("Some providers did not answer: %s", err))
-	}
-
-	return reg, ExitSuccess
 }
 
 // -------------------------------------------------------------------------

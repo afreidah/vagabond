@@ -50,7 +50,11 @@ type runExecution struct {
 func (e *runExecution) state() execution.State {
 	switch {
 	case e.CompletionTime == "":
-		if e.RunningCount > 0 {
+		// StartTime as well as the counter, because runningCount drops to zero
+		// when the container exits and before completionTime is written. On
+		// the counter alone the execution reports accepted again, having
+		// already run.
+		if e.RunningCount > 0 || e.StartTime != "" {
 			return execution.StateRunning
 		}
 

@@ -16,3 +16,7 @@ dist/
 # never a provider or database credential.
 .env
 *.local.hcl
+
+# Scratch configs and jobs for manual testing against real accounts. Machine
+# specific: they name credential paths that exist on one box.
+/local/
