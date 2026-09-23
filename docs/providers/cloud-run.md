@@ -227,6 +227,51 @@ counts as swept. One failed delete does not abort the rest.
 `Sweep` is not part of the `Provider` interface. It is a Cloud Run tax, paid in
 the Cloud Run plugin.
 
+## Free tier
+
+Monthly, and metered on three quantities. Requests do not apply to Jobs.
+
+| Quantity | Monthly allowance | Meter |
+|---|---|---|
+| vCPU-seconds | 180,000 | `cpu_seconds` |
+| GiB-seconds | 360,000 | `gb_seconds` |
+| Requests | 2,000,000 | not applicable to Jobs |
+
+Confirm these against Google's current pricing page before relying on them.
+Vagabond ships no defaults precisely because they move.
+
+```hcl
+provider "gcp-cloud-run" {
+  type = "cloud-run"
+
+  pool "cpu" {
+    meter  = "cpu_seconds"
+    limit  = 180000
+    period = "monthly"
+  }
+
+  pool "memory" {
+    meter  = "gb_seconds"
+    limit  = 360000
+    period = "monthly"
+  }
+}
+```
+
+Declare both. vCPU-seconds is the tighter budget at ordinary task shapes: one
+vCPU against 512 MiB exhausts the vCPU allowance after 180,000 task-seconds,
+having spent a quarter of the GiB allowance. A `gb_seconds` pool on its own would
+keep admitting work after billing started.
+
+Two caveats specific to this platform:
+
+- The allowance is per billing account, shared across every Cloud Run service and
+  job in it. Two `provider` blocks against one project draw on one allowance, and
+  Vagabond counts them separately. Split the limits between them.
+- Billable instance lifetime exceeds task duration, sometimes by a lot — see
+  below. A charge settled against task duration alone under-counts what Google
+  billed.
+
 ## Cost characteristics
 
 A 4-second task occupied 116 seconds of billable instance lifetime in a measured

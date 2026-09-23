@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/gohcl"
@@ -22,6 +23,7 @@ import (
 	"github.com/zclconf/go-cty/cty"
 
 	"github.com/afreidah/vagabond/internal/job"
+	"github.com/afreidah/vagabond/internal/quota"
 )
 
 // -------------------------------------------------------------------------
@@ -59,6 +61,21 @@ type Provider struct {
 	Credentials *CredentialsBlock `hcl:"credentials,block"`
 	Meta        *MetaBlock        `hcl:"meta,block"`
 	Quota       *QuotaBlock       `hcl:"quota,block"`
+	Pools       []PoolBlock       `hcl:"pool,block"`
+}
+
+// PoolBlock is one usage budget an operator declares for a provider, in the
+// unit that provider itself meters.
+//
+// Nothing ships a default. The limit encodes how much an operator is willing to
+// spend on a backend, which for most is the free tier exactly and for some is
+// deliberately more, so there is no correct number to supply. A provider with
+// no pools enforces nothing.
+type PoolBlock struct {
+	Name   string `hcl:"name,label"`
+	Meter  string `hcl:"meter"`
+	Limit  int64  `hcl:"limit"`
+	Period string `hcl:"period"`
 }
 
 // MetaBlock holds an operator's own tags for a provider.
@@ -258,6 +275,7 @@ func (p *Provider) validate() hcl.Diagnostics {
 	}
 
 	diags = append(diags, p.Credentials.validate(p.Name)...)
+	diags = append(diags, p.validatePools()...)
 
 	if p.Quota == nil || p.Quota.FreePercent == nil {
 		return diags
@@ -273,6 +291,72 @@ func (p *Provider) validate() hcl.Diagnostics {
 	}
 
 	return diags
+}
+
+// validatePools reports budgets that cannot be enforced.
+//
+// Every attribute is required. A pool with no limit refuses nothing, and a
+// daily budget left to default to monthly is enforced twelve times too
+// loosely, which is the direction that spends money.
+func (p *Provider) validatePools() hcl.Diagnostics {
+	var diags hcl.Diagnostics
+
+	seen := make(map[string]bool, len(p.Pools))
+
+	for i := range p.Pools {
+		pool := &p.Pools[i]
+
+		switch {
+		case seen[pool.Name]:
+			diags = append(diags, poolDiag(p.Name, pool.Name, "is declared twice. A pool "+
+				"name is what its usage is counted under, so it must identify one budget."))
+		case !quota.Meter(pool.Meter).Valid():
+			diags = append(diags, poolDiag(p.Name, pool.Name, fmt.Sprintf(
+				"meters %q, which is not something Vagabond counts. Known meters are %s.",
+				pool.Meter, joinMeters())))
+		case !quota.Period(pool.Period).Valid():
+			diags = append(diags, poolDiag(p.Name, pool.Name, fmt.Sprintf(
+				"resets %q. Known periods are %s.", pool.Period, joinPeriods())))
+		case pool.Limit <= 0:
+			diags = append(diags, poolDiag(p.Name, pool.Name, fmt.Sprintf(
+				"has a limit of %d. A pool exists to refuse an execution, so its limit "+
+					"must be positive.", pool.Limit)))
+		}
+
+		seen[pool.Name] = true
+	}
+
+	return diags
+}
+
+// poolDiag builds one pool diagnostic, since each names the provider and the
+// pool the same way.
+func poolDiag(provider, pool, problem string) *hcl.Diagnostic {
+	return &hcl.Diagnostic{
+		Severity: hcl.DiagError,
+		Summary:  "Invalid quota pool",
+		Detail:   fmt.Sprintf("Provider %q pool %q %s", provider, pool, problem),
+	}
+}
+
+// joinMeters and joinPeriods list the vocabulary for a diagnostic, so the
+// message stays correct when the vocabulary grows.
+func joinMeters() string {
+	names := make([]string, 0, len(quota.Meters()))
+	for _, m := range quota.Meters() {
+		names = append(names, string(m))
+	}
+
+	return strings.Join(names, ", ")
+}
+
+func joinPeriods() string {
+	names := make([]string, 0, len(quota.Periods()))
+	for _, p := range quota.Periods() {
+		names = append(names, string(p))
+	}
+
+	return strings.Join(names, ", ")
 }
 
 // -------------------------------------------------------------------------
@@ -302,6 +386,30 @@ func (p *Provider) ConfigBody() hcl.Body {
 	}
 
 	return p.Config.Body
+}
+
+// PoolSpecs returns the declared budgets in the form quota compiles.
+//
+// Field mapping only. Whether the meter and period are ones Vagabond knows is
+// the validate pass's business, so that an operator sees every problem with
+// their file in one run rather than the first one at startup.
+func (p *Provider) PoolSpecs() []quota.PoolSpec {
+	if len(p.Pools) == 0 {
+		return nil
+	}
+
+	specs := make([]quota.PoolSpec, 0, len(p.Pools))
+
+	for _, pool := range p.Pools {
+		specs = append(specs, quota.PoolSpec{
+			Name:   pool.Name,
+			Meter:  quota.Meter(pool.Meter),
+			Limit:  pool.Limit,
+			Period: quota.Period(pool.Period),
+		})
+	}
+
+	return specs
 }
 
 // Tags returns the operator's own labels for this provider.

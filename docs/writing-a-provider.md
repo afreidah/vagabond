@@ -187,6 +187,35 @@ func decodeConfig(name string, body hcl.Body) (*Config, hcl.Diagnostics)
 Declaring plugin fields in `internal/config` would make every provider carry
 every other provider's fields.
 
+## Usage budgets
+
+A plugin declares no budgets. Nothing in the `Provider` interface reports a free
+tier, and no default ships with the plugin: an operator declares `pool` blocks in
+configuration, in the units the platform meters.
+
+That is deliberate. The limit encodes how much an operator is willing to spend on
+a backend, which for most is the free tier exactly and for some is deliberately
+more, so there is no correct number for a plugin to supply. Most platforms
+publish theirs only on a pricing page.
+
+Reserving also has to be derivable from what a task declares, because `job plan`
+prices a job without dispatching it. A plugin-computed charge has nothing to
+compute from at that point, so the charge arithmetic is a closed vocabulary in
+`internal/quota` rather than a plugin call.
+
+What a plugin owes this:
+
+- Document the platform's metered quantities and its free-tier numbers in the
+  provider's page under `docs/providers/`, so an operator can transcribe them.
+- Name them against the meters in [Configuration](configuration.md#pool-block).
+- Say so plainly if the platform meters something no meter expresses. Extending
+  the vocabulary is a change to `internal/quota`, not something to approximate in
+  a plugin.
+
+Ceilings are not budgets. A fifteen-minute maximum refuses an execution and
+never depletes, so it belongs in `Capabilities.MaxDuration` where admission
+already checks it. Only quantities that deplete and reset are pools.
+
 ## Credentials
 
 Vagabond resolves the `credentials` block to bytes before the constructor is
