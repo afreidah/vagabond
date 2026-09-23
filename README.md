@@ -1,23 +1,31 @@
 <p align="center">
+  <br>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-light.png">
     <img alt="Vagabond" src="docs/assets/logo-light.png" width="420">
   </picture>
+  <br>
+  <br>
 </p>
+
+<br>
 
 Vagabond is a multi-cloud compute broker for short-lived, stateless workloads.
 Describe a workload once; Vagabond decides which backend can run it and which
 one should.
+
+It is an homage to HashiCorp Nomad. Vagabond borrows Nomad's scheduling model,
+its HCL ergonomics, and its habit of explaining every placement decision it
+makes — job files and plan output should read as familiar if you have used it.
+Vagabond does not depend on Nomad and does not reproduce it; the backends here
+are cloud services with no scheduler of their own.
 
 Routing is policy-driven. A job can require a driver, an architecture, a region,
 a resource envelope, or a cost ceiling. `max_cost_usd` defaults to 0, so jobs
 stay on free capacity unless they opt in to paying — which makes Vagabond good
 at spreading work across free tiers. Cost is one routing dimension among
 several, not the premise.
-
-Vagabond borrows Nomad's scheduling model and HCL ergonomics. It does not depend
-on Nomad and does not reproduce it.
 
 If no backend satisfies a job's constraints, Vagabond rejects it. Fallback is
 the client's decision.
