@@ -22,6 +22,12 @@ provider "gcp-cloud-run" {
     tier   = "free"
   }
 
+  pool "compute" {
+    meter  = "gb_seconds"
+    limit  = 360000
+    period = "monthly"
+  }
+
   quota {
     free_percent = 80
   }
@@ -131,7 +137,72 @@ meta {
 Vagabond never interprets these. Anything you want to route on that Vagabond has
 no opinion about belongs here.
 
+## `pool` block
+
+One usage budget, in a unit the provider itself meters. Repeatable.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| label | string | yes | Pool name; what its usage is counted under |
+| `meter` | string | yes | What the pool counts |
+| `limit` | number | yes | Ceiling, in the meter's unit |
+| `period` | string | yes | When the allowance resets |
+
+Meters:
+
+| Meter | Unit | Charged |
+|---|---|---|
+| `executions` | executions | One per execution |
+| `gb_seconds` | GB-seconds | Declared memory × declared timeout |
+| `cpu_seconds` | vCPU-seconds | Declared CPU × declared timeout |
+| `seconds` | seconds | Declared timeout |
+
+Periods:
+
+| Period | Resets |
+|---|---|
+| `daily` | UTC midnight |
+| `monthly` | First of the month, UTC |
+
+AWS Lambda's free tier, as two independent budgets:
+
+```hcl
+pool "requests" {
+  meter  = "executions"
+  limit  = 1000000
+  period = "monthly"
+}
+
+pool "compute" {
+  meter  = "gb_seconds"
+  limit  = 400000
+  period = "monthly"
+}
+```
+
+Rules:
+
+- Nothing ships a default. The limit is how much you are willing to spend on a
+  backend, not a published fact, so there is no correct number to supply.
+- Declare every quantity the platform meters. A provider metered on memory but
+  not CPU will keep admitting work after the CPU allowance is gone. The
+  provider's page under `docs/providers/` lists which apply.
+- A provider with no pools is unlimited. Capabilities still gate it.
+- Pools are additive. An execution charges every pool whose meter it touches and
+  needs headroom in all of them, so a daily cap can sit inside a monthly one.
+- Every attribute is required. A pool with no limit refuses nothing, and a daily
+  budget defaulted to monthly is enforced twelve times too loosely.
+- Charges come from what a task declares, not what it used, so `job plan` can
+  price a job without dispatching it.
+- A limit above the free tier is how you permit spending. Vagabond does not know
+  a provider's prices; do that arithmetic yourself and write the result.
+
+Pools are declared and validated today. Enforcement arrives with the usage
+ledger, which is what will count against them.
+
 ## `quota` block
+
+A stand-in, replaced by `pool` once the usage ledger tracks consumption.
 
 What is believed to remain of the provider's allowance.
 

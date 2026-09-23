@@ -21,6 +21,7 @@ import (
 	"github.com/hashicorp/hcl/v2"
 
 	"github.com/afreidah/vagabond/internal/ptr"
+	"github.com/afreidah/vagabond/internal/quota"
 )
 
 // load is the common shape: decode a snippet and fail on any diagnostic.
@@ -466,5 +467,201 @@ func TestProviderWithoutConfigBlock(t *testing.T) {
 
 	if file.Providers[0].ConfigBody() != nil {
 		t.Error("a provider with no config block produced a body")
+	}
+}
+
+// -------------------------------------------------------------------------
+// QUOTA POOLS
+// -------------------------------------------------------------------------
+
+func TestLoadDecodesPools(t *testing.T) {
+	t.Parallel()
+
+	file := load(t, `
+provider "aws-lambda" {
+  type = "fake-function"
+
+  pool "requests" {
+    meter  = "executions"
+    limit  = 1000000
+    period = "monthly"
+  }
+
+  pool "compute" {
+    meter  = "gb_seconds"
+    limit  = 400000
+    period = "monthly"
+  }
+}
+`)
+
+	want := []quota.PoolSpec{
+		{Name: "requests", Meter: quota.MeterExecutions, Limit: 1_000_000, Period: quota.PeriodMonthly},
+		{Name: "compute", Meter: quota.MeterGBSeconds, Limit: 400_000, Period: quota.PeriodMonthly},
+	}
+
+	if diff := cmp.Diff(want, file.Providers[0].PoolSpecs()); diff != "" {
+		t.Errorf("PoolSpecs() mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// No pools is unlimited, not refused, so it must decode to nothing rather than
+// to a pool that cannot be satisfied.
+func TestProviderWithoutPools(t *testing.T) {
+	t.Parallel()
+
+	file := load(t, `provider "fake" { type = "fake-container" }`)
+
+	if specs := file.Providers[0].PoolSpecs(); specs != nil {
+		t.Errorf("PoolSpecs() = %v, want nil", specs)
+	}
+}
+
+func TestPoolValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "unknown meter",
+			src: `provider "p" {
+  type = "fake-function"
+
+  pool "cpu" {
+    meter  = "vcpu_seconds"
+    limit  = 100
+    period = "monthly"
+  }
+}`,
+			want: "not something Vagabond counts",
+		},
+		{
+			name: "unknown period",
+			src: `provider "p" {
+  type = "fake-function"
+
+  pool "requests" {
+    meter  = "executions"
+    limit  = 100
+    period = "weekly"
+  }
+}`,
+			want: `resets "weekly"`,
+		},
+		{
+			name: "zero limit",
+			src: `provider "p" {
+  type = "fake-function"
+
+  pool "requests" {
+    meter  = "executions"
+    limit  = 0
+    period = "monthly"
+  }
+}`,
+			want: "must be positive",
+		},
+		{
+			name: "negative limit",
+			src: `provider "p" {
+  type = "fake-function"
+
+  pool "requests" {
+    meter  = "executions"
+    limit  = -5
+    period = "monthly"
+  }
+}`,
+			want: "must be positive",
+		},
+		{
+			name: "duplicate pool name",
+			src: `provider "p" {
+  type = "fake-function"
+
+  pool "requests" {
+    meter  = "executions"
+    limit  = 100
+    period = "monthly"
+  }
+
+  pool "requests" {
+    meter  = "executions"
+    limit  = 200
+    period = "daily"
+  }
+}`,
+			want: "declared twice",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := loadErr(t, tt.src); !strings.Contains(got, tt.want) {
+				t.Errorf("diagnostics = %q, want them to mention %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// Every attribute is required, so an operator cannot leave the period to a
+// default that silently enforces a daily budget monthly.
+func TestPoolRequiresEveryAttribute(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		"no meter": `
+    limit  = 100
+    period = "monthly"`,
+		"no limit": `
+    meter  = "executions"
+    period = "monthly"`,
+		"no period": `
+    meter = "executions"
+    limit = 100`,
+	}
+
+	for name, attrs := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			src := `provider "p" {
+  type = "fake-function"
+
+  pool "requests" {` + attrs + `
+  }
+}`
+
+			if got := loadErr(t, src); !strings.Contains(got, "Missing required argument") {
+				t.Errorf("diagnostics = %q, want a missing argument error", got)
+			}
+		})
+	}
+}
+
+// The diagnostic lists what the operator could have written, which is the whole
+// value of transcribing a pricing page by hand.
+func TestPoolDiagnosticListsVocabulary(t *testing.T) {
+	t.Parallel()
+
+	got := loadErr(t, `provider "p" {
+  type = "fake-function"
+
+  pool "cpu" {
+    meter  = "vcpu_seconds"
+    limit  = 100
+    period = "monthly"
+  }
+}`)
+
+	for _, m := range quota.Meters() {
+		if !strings.Contains(got, string(m)) {
+			t.Errorf("diagnostics do not mention the %s meter: %q", m, got)
+		}
 	}
 }

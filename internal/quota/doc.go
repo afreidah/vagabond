@@ -1,17 +1,19 @@
-// Package quota models each provider's free-tier allowance as a ledger
-// Vagabond maintains, not a number it reads back from the provider.
+// Package quota holds each provider's usage budgets and the account of what has
+// been spent against them.
 //
-// No provider exposes remaining free-tier capacity in a form that can be
-// scheduled against. Billing data lags by hours where it exists at all, so
-// Vagabond keeps its own account of what it has spent and treats provider APIs
-// as a reconciliation signal rather than as truth.
+// Budgets are declared entirely in configuration, in the units a provider
+// itself meters. Nothing ships a default, because the number an operator writes
+// encodes how much they are willing to spend on a backend: for most that is the
+// free tier exactly, for some it is deliberately more. A provider declared with
+// no budgets enforces nothing.
 //
-// Where the account is uncertain it over-counts. An execution that vanished is
-// charged its full declared timeout until reconciliation proves otherwise.
-// Over-counting wastes free capacity, which is recoverable; under-counting
-// drifts toward spending money, which is the one failure this project exists to
-// prevent.
+// The account is Vagabond's own. No provider exposes remaining capacity in a
+// form that can be scheduled against, and billing data lags by hours where it
+// exists at all, so provider APIs are a reconciliation signal rather than truth.
 //
-// Chunk 1 defines only the snapshot admission reads. The ledger that produces
-// it, and the periods it resets across, arrive with persistence.
+// Where the account is uncertain it over-counts. Over-counting wastes free
+// capacity, which is recoverable; under-counting drifts toward spending money.
+//
+// This package defines the budgets and what an execution charges against them.
+// The ledger that accumulates those charges and survives a restart is separate.
 package quota
