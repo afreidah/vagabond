@@ -241,8 +241,8 @@ job "ci" {
 provider "ibm-code-engine" {
   type = "fake-container"
 
-  pool "compute" {
-    meter  = "gb_seconds"
+  pool "runtime" {
+    meter  = "seconds"
     limit  = 1
     period = "monthly"
   }
