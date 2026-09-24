@@ -27,10 +27,6 @@ provider "gcp-cloud-run" {
     limit  = 360000
     period = "monthly"
   }
-
-  quota {
-    free_percent = 80
-  }
 }
 ```
 
@@ -197,29 +193,39 @@ Rules:
 - A limit above the free tier is how you permit spending. Vagabond does not know
   a provider's prices; do that arithmetic yourself and write the result.
 
-Pools are declared and validated today. Enforcement arrives with the usage
-ledger, which is what will count against them.
+`provider.free_quota_percent` is the tightest remaining pool the task charges.
+It drives the `headroom` scorer and the `quota-exhausted` check.
 
-## `quota` block
+## `store` block
 
-A stand-in, replaced by `pool` once the usage ledger tracks consumption.
+Where the usage ledger persists. Top level, at most one per deployment.
 
-What is believed to remain of the provider's allowance.
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `dsn` | string | yes | PostgreSQL or CockroachDB connection string |
 
-| Name | Type | Description |
-|---|---|---|
-| `free_percent` | number | Percent of the free allowance remaining, 0–100 |
-| `exhausted` | bool | Provider has no capacity left |
+```hcl
+store {
+  dsn = "postgres://vagabond@localhost:5432/vagabond"
+}
+```
 
-`free_percent` populates `provider.free_quota_percent`, which drives the
-`headroom` scorer and the `quota-exhausted` check.
+- Migrations apply on every command that opens the store.
+- Without a `store` block the ledger is in memory and starts empty every run.
+- A store that cannot be opened fails `job plan` and `job run`. `-untracked`
+  proceeds with an in-memory ledger instead.
+- The password can stay out of the DSN: `PGPASSWORD` and `~/.pgpass` are read.
 
-A provider with no headroom is rejected only for jobs that will not pay.
-`max_cost_usd` defaults to 0, so that is most jobs. A job with
-`max_cost_usd > 0` is admitted to a spent provider.
+Ledger behavior:
 
-An unobserved quota is treated the same as a spent one. State it, or jobs that
-refuse to pay will not route there.
+- Reserve on dispatch, in one statement: the reservation is written only if
+  every pool has room for it.
+- Settle on completion: the reservation is replaced by what the run cost.
+- A reservation left by a killed process holds its amount until `job run` reaps
+  it. The reaper asks the provider about reservations older than an hour:
+  - finished: charged for how long it ran
+  - never ran: dropped
+  - still running, or the provider could not answer: kept
 
 ## Multiple accounts
 
@@ -235,7 +241,6 @@ provider "gcp-us" {
 
   credentials { file = "/etc/vagabond/gcp.json" }
   meta        { region = "us-central1" }
-  quota       { free_percent = 80 }
 }
 
 provider "gcp-eu" {
@@ -249,7 +254,6 @@ provider "gcp-eu" {
 
   credentials { file = "/etc/vagabond/gcp.json" }
   meta        { region = "europe-west1" }
-  quota       { free_percent = 80 }
 }
 ```
 

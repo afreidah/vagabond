@@ -1,8 +1,8 @@
 # Vagabond daemon configuration.
 #
-# This is the operator's file: which backends exist, what to call them, and what
-# is believed to be left of each one's free tier. Job files say what to run;
-# this says what is available to run it on.
+# This is the operator's file: which backends exist, what to call them, and how
+# much of each one's quota Vagabond may spend. Job files say what to run; this
+# says what is available to run it on.
 #
 # Every provider here is a fake, which is what makes this runnable with nothing
 # installed and no cloud account anywhere. The names are the real ones because
@@ -15,6 +15,13 @@
 #
 #   vagabond job plan -config examples/config.hcl \
 #     -meta version=1.2.3 examples/go-test.vagabond.hcl
+
+# Where the usage ledger persists. Without it the ledger is kept in memory and
+# starts empty every run, which is fine for trying things out and nothing else.
+#
+# store {
+#   dsn = "postgres://vagabond@localhost:5432/vagabond"
+# }
 
 # The name is what a job's provider list refers to. The type is which plugin
 # implements it, and the two are separate so that one deployment can register
@@ -31,13 +38,25 @@ provider "ibm-code-engine" {
     tier   = "lite"
   }
 
-  # What you believe is left of this month's free tier.
-  #
-  # A stand-in. Vagabond will keep its own ledger of what it has spent, and this
-  # block goes away when it does. Until then a provider whose quota is unknown
-  # is one admission refuses, so state it.
-  quota {
-    free_percent = 80
+  # What Vagabond may spend here, in the units the provider meters. Pools are
+  # additive: a task must fit every pool it charges. A provider with no pools
+  # enforces nothing. These follow Code Engine's free tier.
+  pool "requests" {
+    meter  = "executions"
+    limit  = 100000
+    period = "monthly"
+  }
+
+  pool "cpu" {
+    meter  = "cpu_seconds"
+    limit  = 100000
+    period = "monthly"
+  }
+
+  pool "compute" {
+    meter  = "gb_seconds"
+    limit  = 200000
+    period = "monthly"
   }
 }
 
@@ -48,18 +67,32 @@ provider "gcp-cloud-run" {
     region = "us-central1"
   }
 
-  # Below the fifty percent the example job's affinity prefers, so the two
-  # container providers score differently and the plan has something to say.
-  quota {
-    free_percent = 45
+  pool "cpu" {
+    meter  = "cpu_seconds"
+    limit  = 180000
+    period = "monthly"
+  }
+
+  pool "compute" {
+    meter  = "gb_seconds"
+    limit  = 360000
+    period = "monthly"
   }
 }
 
 provider "aws-lambda" {
   type = "fake-function"
 
-  quota {
-    free_percent = 90
+  pool "requests" {
+    meter  = "executions"
+    limit  = 1000000
+    period = "monthly"
+  }
+
+  pool "compute" {
+    meter  = "gb_seconds"
+    limit  = 400000
+    period = "monthly"
   }
 }
 

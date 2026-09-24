@@ -55,20 +55,19 @@ job "ci" {
 }
 `
 
+// With no store the ledger starts empty, so both container providers report
+// full headroom and rank in name order.
 const planConfig = `
 provider "ibm-code-engine" {
   type = "fake-container"
-  quota { free_percent = 80 }
 }
 
 provider "gcp-cloud-run" {
   type = "fake-container"
-  quota { free_percent = 45 }
 }
 
 provider "aws-lambda" {
   type = "fake-function"
-  quota { free_percent = 90 }
 }
 `
 
@@ -118,29 +117,12 @@ func TestJobPlan_RendersTheTable(t *testing.T) {
 		"aws-lambda",
 		"rejected",
 		"not-allowlisted",
-		"Selected: ibm-code-engine",
+		"Selected: gcp-cloud-run",
 		"Estimated cost: free",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("plan output is missing %q:\n%s", want, stdout)
 		}
-	}
-}
-
-// The provider with more headroom wins, and the affinity the job wrote is what
-// separates them. Both are admitted, so ordering is the only visible effect.
-func TestJobPlan_RanksByHeadroom(t *testing.T) {
-	_, stdout, _ := plan(t, planJob, planConfig)
-
-	ibm := strings.Index(stdout, "ibm-code-engine")
-	gcp := strings.Index(stdout, "gcp-cloud-run")
-
-	if ibm < 0 || gcp < 0 {
-		t.Fatalf("both providers should appear:\n%s", stdout)
-	}
-
-	if ibm > gcp {
-		t.Errorf("the fuller provider ranked second:\n%s", stdout)
 	}
 }
 
@@ -210,7 +192,6 @@ job "ci" {
 	const functionsOnly = `
 provider "aws-lambda" {
   type = "fake-function"
-  quota { free_percent = 90 }
 }
 `
 
@@ -233,15 +214,42 @@ provider "aws-lambda" {
 
 // A rejection that may pass on its own says so, which is the difference
 // between waiting and editing.
+//
+// Spent here means a pool smaller than one run of the task, since an empty
+// ledger is all config can express.
 func TestJobPlan_TransientRejectionSaysSo(t *testing.T) {
-	const spent = `
-provider "ibm-code-engine" {
-  type = "fake-container"
-  quota { exhausted = true }
+	const timed = `
+job "ci" {
+  type = "batch"
+
+  routing {
+    providers = ["ibm-code-engine"]
+  }
+
+  task "test" {
+    driver  = "container"
+    timeout = "1h"
+
+    config {
+      image = "golang:1.27"
+    }
+  }
 }
 `
 
-	code, stdout, _ := plan(t, planJob, spent)
+	const spent = `
+provider "ibm-code-engine" {
+  type = "fake-container"
+
+  pool "runtime" {
+    meter  = "seconds"
+    limit  = 1
+    period = "monthly"
+  }
+}
+`
+
+	code, stdout, _ := plan(t, timed, spent)
 
 	if code != ExitFailure {
 		t.Errorf("exit code = %d, want %d", code, ExitFailure)
@@ -263,12 +271,10 @@ provider "ibm-code-engine" {
 
 provider "aws-lambda" {
   type = "fake-function"
-  quota { free_percent = 90 }
 }
 
 provider "cloudflare-workers" {
   type = "fake-worker"
-  quota { exhausted = true }
 }
 `
 
@@ -329,7 +335,7 @@ func TestJobPlan_ConfigFromEnvironment(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d\n%s%s", code, ExitSuccess, stdout, stderr)
 	}
 
-	if !strings.Contains(stdout, "Selected: ibm-code-engine") {
+	if !strings.Contains(stdout, "Selected: gcp-cloud-run") {
 		t.Errorf("plan did not use the configuration from the environment:\n%s", stdout)
 	}
 }
@@ -453,7 +459,7 @@ func TestJobPlan_ReadsStdin(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d\n%s%s", code, ExitSuccess, out.String(), errOut.String())
 	}
 
-	if !strings.Contains(out.String(), "Selected: ibm-code-engine") {
+	if !strings.Contains(out.String(), "Selected: gcp-cloud-run") {
 		t.Errorf("a piped specification was not planned:\n%s", out.String())
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/hashicorp/hcl/v2"
 
 	"github.com/afreidah/vagabond/internal/job"
+	"github.com/afreidah/vagabond/internal/quota"
 )
 
 // -------------------------------------------------------------------------
@@ -35,10 +36,15 @@ import (
 // Image is derived from the task's driver config rather than read from it,
 // because the config block's shape belongs to the driver and a checker must
 // not decode HCL. It is empty when the task names no image.
+//
+// Execution is what the task would charge a provider's quota pools. Derived
+// here so that admission's check, the free_quota_percent attribute and the
+// dispatcher's reservation are all pricing the same thing.
 type Request struct {
-	Task    *job.Task
-	Routing *job.Routing
-	Image   string
+	Task      *job.Task
+	Routing   *job.Routing
+	Image     string
+	Execution quota.Execution
 }
 
 // NewRequest derives a request from a task and its job's routing.
@@ -50,10 +56,39 @@ func NewRequest(task *job.Task, routing *job.Routing, ctx *hcl.EvalContext) (*Re
 	image, diags := task.Image(ctx)
 
 	return &Request{
-		Task:    task,
-		Routing: routing,
-		Image:   image,
+		Task:      task,
+		Routing:   routing,
+		Image:     image,
+		Execution: executionOf(task),
 	}, diags
+}
+
+// executionOf reads what the task declared, which is all a charge may rest on:
+// reserving happens before anything runs, and job plan prices a task it is not
+// going to dispatch.
+//
+// An unparseable timeout counts as none. Jobspec validation owns that error and
+// reports it against the line the author wrote.
+func executionOf(task *job.Task) quota.Execution {
+	var e quota.Execution
+
+	if task.Resources != nil {
+		if task.Resources.CPU != nil {
+			e.CPU = *task.Resources.CPU
+		}
+
+		if task.Resources.Memory != nil {
+			e.Memory = *task.Resources.Memory
+		}
+	}
+
+	if task.Timeout != nil {
+		if timeout, err := task.Timeout.Std(); err == nil {
+			e.Duration = timeout
+		}
+	}
+
+	return e
 }
 
 // -------------------------------------------------------------------------

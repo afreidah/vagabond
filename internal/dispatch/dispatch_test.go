@@ -23,6 +23,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
+	"github.com/afreidah/vagabond/internal/ledger"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/ptr"
 	"github.com/afreidah/vagabond/internal/quota"
@@ -125,13 +126,26 @@ func (p *scriptedProvider) Cancel(context.Context, execution.ID) error {
 	return nil
 }
 
-// fakeRegistry holds whatever providers a test declared.
+// fakeRegistry holds whatever providers a test declared, and the ledger they
+// are charged against.
 type fakeRegistry struct {
 	inputs    []scheduler.Input
 	providers map[string]plugin.Provider
+	ledger    *ledger.Ledger
 }
 
-func (r *fakeRegistry) Inputs() []scheduler.Input { return r.inputs }
+func (r *fakeRegistry) Inputs(usage func(string) quota.PoolUsage) []scheduler.Input {
+	inputs := make([]scheduler.Input, len(r.inputs))
+	copy(inputs, r.inputs)
+
+	if usage != nil {
+		for i := range inputs {
+			inputs[i].Usage = usage(inputs[i].Provider)
+		}
+	}
+
+	return inputs
+}
 
 func (r *fakeRegistry) Provider(name string) (plugin.Provider, bool) {
 	p, ok := r.providers[name]
@@ -143,32 +157,48 @@ func (r *fakeRegistry) Provider(name string) (plugin.Provider, bool) {
 // HELPERS
 // -------------------------------------------------------------------------
 
-// newRegistry registers providers, each healthy with full quota.
+// newRegistry registers providers, each healthy with container budgets.
+//
+// Each is charged a little more of its request pool than the one before, so
+// free quota descends, ranking order matches declaration order, and a test can
+// say "the second one" and mean it.
 func newRegistry(providers ...*scriptedProvider) *fakeRegistry {
 	reg := &fakeRegistry{providers: map[string]plugin.Provider{}}
 
+	limits := make(map[string]quota.Limits, len(providers))
+	baseline := make(ledger.Usage, len(providers))
+	period := quota.PeriodMonthly.Key(time.Now())
+
 	for i, p := range providers {
 		reg.providers[p.name] = p
+		limits[p.name] = quota.FixtureContainer()
+		baseline[ledger.Key{Provider: p.name, Pool: "requests", Period: period}] = int64(10_000 * (i + 1))
 
 		reg.inputs = append(reg.inputs, scheduler.Input{
 			Provider:     p.name,
 			Capabilities: plugin.FixtureContainer(time.Now()),
-			// Descending, so ranking order matches declaration order and a
-			// test can say "the second one" and mean it.
-			Quota:   quota.Snapshot{FreePercent: 90 - i*10, ObservedAt: time.Now()},
-			Enabled: true,
-			Healthy: true,
+			Limits:       limits[p.name],
+			Enabled:      true,
+			Healthy:      true,
 		})
 	}
+
+	// A memory store cannot fail to read.
+	reg.ledger, _ = ledger.New(context.Background(), limits, ledger.NewMemory(baseline))
 
 	return reg
 }
 
+// over builds a dispatcher charging the registry's own ledger.
+func over(reg *fakeRegistry, opts ...Option) *Dispatcher {
+	return New(reg, reg.ledger, opts...)
+}
+
 // newDispatcher builds one that never actually waits.
-func newDispatcher(t *testing.T, reg Registry) *Dispatcher {
+func newDispatcher(t *testing.T, reg *fakeRegistry) *Dispatcher {
 	t.Helper()
 
-	return New(reg, WithSleeper(func(context.Context, time.Duration) error {
+	return over(reg, WithSleeper(func(context.Context, time.Duration) error {
 		return nil
 	}))
 }
@@ -478,6 +508,170 @@ func TestUnregisteredProvider(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
+// QUOTA
+// -------------------------------------------------------------------------
+
+// refusingLedger refuses the providers a test names, standing in for quota
+// another process spent between admission and dispatch.
+type refusingLedger struct {
+	*ledger.Ledger
+	refuse map[string]bool
+}
+
+func (l *refusingLedger) Reserve(
+	ctx context.Context, id execution.ID, provider string, e quota.Execution,
+) error {
+	if l.refuse[provider] {
+		return &ledger.Refusal{
+			Provider: provider, Pool: "compute", Meter: quota.MeterGBSeconds,
+			Limit: 1, Used: 1, Needed: 1,
+		}
+	}
+
+	return l.Ledger.Reserve(ctx, id, provider, e)
+}
+
+// brokenLedger cannot record anything.
+type brokenLedger struct {
+	*ledger.Ledger
+}
+
+func (brokenLedger) Reserve(context.Context, execution.ID, string, quota.Execution) error {
+	return errors.New("store down")
+}
+
+func noWait(context.Context, time.Duration) error { return nil }
+
+// The reservation is the declared timeout; the settled charge is what the run
+// took.
+func TestCompletedRunSettlesToWhatItCost(t *testing.T) {
+	t.Parallel()
+
+	p := &scriptedProvider{name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded}
+	reg := newRegistry(p)
+
+	if _, err := newDispatcher(t, reg).
+		RunTask(t.Context(), containerTask(t, nil), nil, nil); err != nil {
+		t.Fatalf("RunTask failed: %v", err)
+	}
+
+	// The scripted result reports one second.
+	want := quota.FixtureContainer().Deltas(quota.Execution{CPU: 1000, Memory: 512, Duration: time.Second})
+	usage := reg.ledger.PoolUsage("a")
+
+	for _, pool := range []string{"cpu", "compute"} {
+		if usage[pool] != want[pool] {
+			t.Errorf("%s = %d, want the settled %d", pool, usage[pool], want[pool])
+		}
+	}
+
+	if got := usage["requests"]; got != 10_000+1 {
+		t.Errorf("requests = %d, want one more than the 10000 already charged", got)
+	}
+}
+
+// Nothing says what a run that never answered cost, so it stays charged at the
+// declared worst case.
+func TestLostRunKeepsItsReservation(t *testing.T) {
+	t.Parallel()
+
+	p := &scriptedProvider{name: "a", statusErr: plugin.Infrastructure(errors.New("503"))}
+	reg := newRegistry(p)
+
+	if _, err := newDispatcher(t, reg).
+		RunTask(t.Context(), containerTask(t, nil), nil, nil); err == nil {
+		t.Fatal("a provider that never answered reported success")
+	}
+
+	want := quota.FixtureContainer().Deltas(quota.Execution{CPU: 1000, Memory: 512, Duration: 5 * time.Minute})
+
+	if got := reg.ledger.PoolUsage("a")["compute"]; got != want["compute"] {
+		t.Errorf("compute = %d, want the reserved %d", got, want["compute"])
+	}
+}
+
+// A refusal sent nothing, so the task's single attempt is still there for the
+// next provider.
+func TestRefusedProviderDoesNotSpendAnAttempt(t *testing.T) {
+	t.Parallel()
+
+	first := &scriptedProvider{name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded}
+	second := &scriptedProvider{name: "b", pollsToFinish: 1, finalState: execution.StateSucceeded}
+	reg := newRegistry(first, second)
+
+	led := &refusingLedger{Ledger: reg.ledger, refuse: map[string]bool{"a": true}}
+
+	outcome, err := New(reg, led, WithSleeper(noWait)).
+		RunTask(t.Context(), containerTask(t, nil), nil, nil)
+	if err != nil {
+		t.Fatalf("RunTask failed: %v", err)
+	}
+
+	if first.submits != 0 {
+		t.Errorf("submitted %d times to a refused provider", first.submits)
+	}
+
+	if outcome.Provider != "b" {
+		t.Errorf("ran on %q, want b", outcome.Provider)
+	}
+
+	if len(outcome.Attempts) != 2 || !outcome.Attempts[0].Refused {
+		t.Errorf("attempts = %+v, want the refusal recorded ahead of the run", outcome.Attempts)
+	}
+
+	if outcome.Rerouted() {
+		t.Error("a refusal was reported as a reroute")
+	}
+}
+
+// Admission saw quota that was gone by dispatch, so nothing was eligible after
+// all.
+func TestEveryProviderRefusedIsNoCandidates(t *testing.T) {
+	t.Parallel()
+
+	a := &scriptedProvider{name: "a"}
+	b := &scriptedProvider{name: "b"}
+	reg := newRegistry(a, b)
+
+	led := &refusingLedger{Ledger: reg.ledger, refuse: map[string]bool{"a": true, "b": true}}
+
+	_, err := New(reg, led, WithSleeper(noWait)).
+		RunTask(t.Context(), containerTask(t, reroutingRetry(3)), nil, nil)
+	if !errors.Is(err, ErrNoCandidates) {
+		t.Fatalf("error = %v, want ErrNoCandidates", err)
+	}
+
+	var refusal *ledger.Refusal
+	if !errors.As(err, &refusal) {
+		t.Errorf("error = %v, want it to carry the refusal", err)
+	}
+
+	if a.submits+b.submits != 0 {
+		t.Error("something was submitted with every reservation refused")
+	}
+}
+
+// A charge that could not be recorded is spending without a record, so nothing
+// is dispatched on it and no other provider is tried.
+func TestUnrecordableReservationDispatchesNothing(t *testing.T) {
+	t.Parallel()
+
+	a := &scriptedProvider{name: "a"}
+	b := &scriptedProvider{name: "b"}
+	reg := newRegistry(a, b)
+
+	_, err := New(reg, brokenLedger{reg.ledger}, WithSleeper(noWait)).
+		RunTask(t.Context(), containerTask(t, reroutingRetry(3)), nil, nil)
+	if err == nil || errors.Is(err, ErrNoCandidates) {
+		t.Fatalf("error = %v, want the ledger failure", err)
+	}
+
+	if a.submits+b.submits != 0 {
+		t.Error("dispatched with no record of the charge")
+	}
+}
+
+// -------------------------------------------------------------------------
 // JOBS
 // -------------------------------------------------------------------------
 
@@ -574,7 +768,7 @@ func TestCancelledContextStopsTheRun(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 
-	d := New(newRegistry(p), WithSleeper(func(context.Context, time.Duration) error {
+	d := over(newRegistry(p), WithSleeper(func(context.Context, time.Duration) error {
 		cancel()
 
 		return context.Canceled

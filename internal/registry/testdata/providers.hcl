@@ -11,25 +11,19 @@ provider "container-primary" {
     region = "us-south"
     tier   = "lite"
   }
-
-  quota {
-    free_percent = 80
-  }
 }
 
 provider "function-primary" {
   type = "fake-function"
 
-  quota {
-    free_percent = 45
+  pool "compute" {
+    meter  = "gb_seconds"
+    limit  = 400000
+    period = "monthly"
   }
 }
 
 provider "worker-primary" {
   type    = "fake-worker"
   enabled = false
-
-  quota {
-    exhausted = true
-  }
 }

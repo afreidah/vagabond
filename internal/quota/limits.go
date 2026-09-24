@@ -158,19 +158,64 @@ func (l Limits) Deltas(e Execution) map[string]int64 {
 	return deltas
 }
 
-// Within reports whether e fits every pool that could refuse it, given what
-// those pools have already been charged this period.
-func (l Limits) Within(usage PoolUsage, e Execution) bool {
-	for _, p := range l.pools {
+// Exceeded returns the first pool e does not fit in, or nil when it fits
+// everywhere. A caller explaining a refusal names the pool from this.
+func (l Limits) Exceeded(usage PoolUsage, e Execution) *Pool {
+	for i := range l.pools {
+		p := &l.pools[i]
+
 		charge := p.Meter.charge(e)
 		if charge == 0 {
 			continue
 		}
 
 		if usage[p.Name]+charge > p.Limit {
-			return false
+			return p
 		}
 	}
 
-	return true
+	return nil
+}
+
+// Within reports whether e fits every pool that could refuse it, given what
+// those pools have already been charged this period.
+func (l Limits) Within(usage PoolUsage, e Execution) bool {
+	return l.Exceeded(usage, e) == nil
+}
+
+// FreePercent is the tightest remaining allowance among the pools e charges,
+// which is what provider.free_quota_percent reports.
+//
+// Shape-aware deliberately. A task declaring no duration is not constrained by
+// a spent compute budget, so a pool it does not charge cannot drag the number
+// down. A provider with no pools, or an execution that charges none, is 100.
+func (l Limits) FreePercent(usage PoolUsage, e Execution) int {
+	percent := 100
+
+	for i := range l.pools {
+		p := &l.pools[i]
+
+		if p.Meter.charge(e) == 0 {
+			continue
+		}
+
+		percent = min(percent, p.FreePercent(usage[p.Name]))
+	}
+
+	return percent
+}
+
+// Remaining is the base units left in the pool.
+func (p *Pool) Remaining(used int64) int64 {
+	return max(p.Limit-used, 0)
+}
+
+// FreePercent is the pool's remaining allowance, floored so that a pool with a
+// sliver left reports 0 rather than 1.
+func (p *Pool) FreePercent(used int64) int {
+	if used <= 0 {
+		return 100
+	}
+
+	return int(p.Remaining(used) * 100 / p.Limit)
 }

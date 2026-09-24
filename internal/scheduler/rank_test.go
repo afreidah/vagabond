@@ -19,17 +19,12 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/ptr"
-	"github.com/afreidah/vagabond/internal/quota"
 )
 
 // candidate is a provider admitted with a stated free-tier standing.
 func candidate(name string, freePercent int) Candidate {
 	in := fixtureInput(name, plugin.FixtureContainer)
-	in.Quota = quota.Snapshot{
-		Provider:    name,
-		FreePercent: freePercent,
-		ObservedAt:  observed,
-	}
+	setFreePercent(&in, freePercent)
 
 	return Candidate{Input: in}
 }

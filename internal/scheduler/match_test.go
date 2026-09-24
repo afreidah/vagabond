@@ -18,6 +18,7 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/ptr"
+	"github.com/afreidah/vagabond/internal/quota"
 )
 
 // providerAttrs is what the container fixture publishes, with quota merged in,
@@ -28,10 +29,10 @@ func providerAttrs(t *testing.T) map[string]string {
 	in := &Input{
 		Provider:     "fake-container",
 		Capabilities: plugin.FixtureContainer(time.Now()),
-		Quota:        observedQuota(72),
 	}
+	setFreePercent(in, 72)
 
-	return in.Attributes()
+	return in.Attributes(quota.Execution{})
 }
 
 func constrain(attribute string, op job.Operator, value string) *job.Constraint {

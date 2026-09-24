@@ -429,6 +429,23 @@ func TestStatusWithNoExecution(t *testing.T) {
 	if !errors.As(err, &classified) || classified.Class != plugin.ClassInfrastructure {
 		t.Errorf("error = %v, want an infrastructure failure", err)
 	}
+
+	if !errors.Is(err, plugin.ErrUnknownExecution) {
+		t.Errorf("error = %v, want plugin.ErrUnknownExecution", err)
+	}
+}
+
+// No job at all is Submit dying before it created one, which the reaper reads
+// as never having run.
+func TestStatusWithNoJob(t *testing.T) {
+	t.Parallel()
+
+	_, p := newFakeGoogle(t)
+
+	_, err := p.Status(t.Context(), newID(t))
+	if !errors.Is(err, plugin.ErrUnknownExecution) {
+		t.Errorf("error = %v, want plugin.ErrUnknownExecution", err)
+	}
 }
 
 // -------------------------------------------------------------------------

@@ -13,14 +13,18 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
 
+	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
+	"github.com/afreidah/vagabond/internal/ledger"
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/scheduler"
 )
 
@@ -34,8 +38,21 @@ import (
 // of a configured registry, and so dispatch does not depend on how providers
 // happen to be constructed.
 type Registry interface {
-	Inputs() []scheduler.Input                    // capability and quota snapshots
-	Provider(name string) (plugin.Provider, bool) // the plugin registered under a name
+	Inputs(usage func(provider string) quota.PoolUsage) []scheduler.Input // what admission reads
+	Provider(name string) (plugin.Provider, bool)                         // the plugin registered under a name
+}
+
+// Ledger is the account every dispatch charges, declared here for the same
+// reason as Registry.
+//
+// Reserve refuses with a *ledger.Refusal when the charge would pass a limit.
+// Any other error means the charge could not be made at all, and nothing is
+// dispatched on it.
+type Ledger interface {
+	Reserve(ctx context.Context, id execution.ID, provider string, e quota.Execution) error
+	Settle(ctx context.Context, id execution.ID, provider string, actual quota.Execution) error
+	Reap(ctx context.Context, resolve ledger.Resolver) (int, error)
+	PoolUsage(provider string) quota.PoolUsage
 }
 
 // Dispatcher runs jobs against the providers a registry holds.
@@ -45,6 +62,7 @@ type Registry interface {
 // microseconds without the polling logic knowing it was not real.
 type Dispatcher struct {
 	registry Registry
+	ledger   Ledger
 	poll     Poll
 	linger   time.Duration // how long to keep a stream open past the last poll
 	logs     io.Writer     // nil means nobody is watching, and nothing is streamed
@@ -80,10 +98,14 @@ func WithProgress(fn func(Event)) Option {
 	return func(d *Dispatcher) { d.progress = fn }
 }
 
-// New builds a dispatcher over a registry.
-func New(registry Registry, opts ...Option) *Dispatcher {
+// New builds a dispatcher over a registry, charging ledger for what it runs.
+//
+// The ledger is an argument rather than an option: a dispatcher that charges
+// nothing is the failure the ledger exists to prevent.
+func New(registry Registry, ledger Ledger, opts ...Option) *Dispatcher {
 	d := &Dispatcher{
 		registry: registry,
+		ledger:   ledger,
 		poll:     DefaultPoll,
 		linger:   DefaultLinger,
 		sleep:    sleepContext,
@@ -152,7 +174,7 @@ func (d *Dispatcher) RunTask(
 		return nil, fmt.Errorf("building the request: %s", diags.Error())
 	}
 
-	admitted := scheduler.Admit(req, d.registry.Inputs())
+	admitted := scheduler.Admit(req, d.registry.Inputs(d.ledger.PoolUsage))
 
 	outcome := &TaskOutcome{
 		Task:       task.Name,
@@ -163,49 +185,59 @@ func (d *Dispatcher) RunTask(
 		return outcome, ErrNoCandidates
 	}
 
-	return d.attempt(ctx, task, scheduler.Rank(req, admitted.Candidates), outcome)
+	return d.attempt(ctx, req, scheduler.Rank(req, admitted.Candidates), outcome)
 }
 
 // attempt works down the ranking until something answers or the budget runs
 // out.
 //
-// The budget is the smaller of what the task allows and how many providers
-// were admitted, because trying the same provider again for an outage it is
-// still having is a slower way to reach the same place.
+// The budget counts submissions. A provider whose ledger refuses the
+// reservation is passed over without spending one, because nothing was sent
+// and there is no outage to back off from. Trying the same provider again for
+// an outage it is still having is a slower way to reach the same place, so
+// each candidate is tried at most once.
 func (d *Dispatcher) attempt(
-	ctx context.Context, task *job.Task, ranking scheduler.Ranking, outcome *TaskOutcome,
+	ctx context.Context, req *scheduler.Request, ranking scheduler.Ranking, outcome *TaskOutcome,
 ) (*TaskOutcome, error) {
+	task := req.Task
 	policy := retryPolicy(task)
+	budget := policy.budget()
 
-	budget := policy.attempts
+	var (
+		lastErr error
+		tried   int
+	)
 
-	// Without reroute a task gets one provider: the best one. Retrying in
-	// place would spend capacity on a provider that just failed.
-	if !policy.reroute {
-		budget = 1
-	}
-
-	if budget > len(ranking) {
-		budget = len(ranking)
-	}
-
-	var lastErr error
-
-	for i := range budget {
+	for i := 0; i < len(ranking) && tried < budget; i++ {
 		name := ranking[i].Provider
-
-		if i > 0 {
-			if err := d.sleep(ctx, policy.backoff(i)); err != nil {
-				return outcome, err
-			}
-		}
 
 		provider, ok := d.registry.Provider(name)
 		if !ok {
 			return outcome, fmt.Errorf("%w: %s", ErrNoProvider, name)
 		}
 
-		id, result, streamed, err := d.execute(ctx, provider, task, i+1)
+		id, err := d.reserve(ctx, name, req.Execution)
+		if refused(err) {
+			outcome.Attempts = append(outcome.Attempts, Attempt{
+				Provider: name, ID: id, Err: err, Refused: true,
+			})
+			lastErr = err
+
+			continue
+		}
+
+		if err != nil {
+			return outcome, err
+		}
+
+		if err := d.pause(ctx, policy, tried); err != nil {
+			return outcome, err
+		}
+
+		tried++
+
+		result, streamed, err := d.execute(ctx, provider, task, id, tried)
+		d.charge(ctx, id, name, req.Execution, result)
 
 		outcome.Attempts = append(outcome.Attempts, Attempt{
 			Provider: name,
@@ -231,5 +263,69 @@ func (d *Dispatcher) attempt(
 		lastErr = err
 	}
 
+	// Every admitted provider refused the reservation, so nothing was
+	// attempted: the quota admission saw was spent before dispatch got there.
+	if tried == 0 {
+		return outcome, fmt.Errorf("%w: %w", ErrNoCandidates, lastErr)
+	}
+
 	return outcome, fmt.Errorf("%w: %w", ErrExhausted, lastErr)
+}
+
+// reserve mints an execution ID and charges it against name's quota. A refusal
+// comes back as the *ledger.Refusal; any other failure means nothing may be
+// dispatched.
+//
+// The ID is minted per attempt because it is the submission idempotency key:
+// reusing it would ask the provider to resume the one that just failed.
+func (d *Dispatcher) reserve(ctx context.Context, name string, e quota.Execution) (execution.ID, error) {
+	id, err := execution.NewID()
+	if err != nil {
+		return id, plugin.Internal(fmt.Errorf("generating an execution id: %w", err))
+	}
+
+	if err := d.ledger.Reserve(ctx, id, name, e); err != nil {
+		if refused(err) {
+			return id, err
+		}
+
+		return id, fmt.Errorf("reserving quota on %s: %w", name, err)
+	}
+
+	return id, nil
+}
+
+// refused reports whether err is the ledger turning a reservation down.
+func refused(err error) bool {
+	var refusal *ledger.Refusal
+
+	return errors.As(err, &refusal)
+}
+
+// pause waits out the backoff before every submission but the first.
+func (d *Dispatcher) pause(ctx context.Context, p policy, tried int) error {
+	if tried == 0 {
+		return nil
+	}
+
+	return d.sleep(ctx, p.backoff(tried))
+}
+
+// charge settles what a run cost, from its result.
+//
+// Only a result says what the run cost. Without one the reservation stands:
+// the run may be out there still, and charging its declared worst case is the
+// over-count this errs toward.
+func (d *Dispatcher) charge(
+	ctx context.Context, id execution.ID, name string, declared quota.Execution, result *execution.Result,
+) {
+	if result == nil {
+		return
+	}
+
+	_ = d.ledger.Settle(ctx, id, name, quota.Execution{
+		CPU:      declared.CPU,
+		Memory:   declared.Memory,
+		Duration: result.Duration,
+	})
 }

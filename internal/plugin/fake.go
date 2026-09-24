@@ -100,7 +100,7 @@ func (p *FakeContainerProvider) Status(
 
 	status, ok := p.runs[id]
 	if !ok {
-		return execution.Status{}, Internal(fmt.Errorf("unknown execution %s", id))
+		return execution.Status{}, Internal(fmt.Errorf("%w %s", ErrUnknownExecution, id))
 	}
 
 	return status, nil

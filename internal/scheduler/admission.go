@@ -31,31 +31,42 @@ import (
 
 // Input is everything admission knows about one provider.
 //
-// Capabilities and Quota are snapshots taken before admission runs. Enabled and
-// Healthy are the control plane's own view, held separately because a provider
-// an operator turned off and one failing its health checks are different
+// Capabilities is a snapshot taken before admission runs. Enabled and Healthy
+// are the control plane's own view, held separately because a provider an
+// operator turned off and one failing its health checks are different
 // rejections with different fixes.
 // Tags are the operator's own labels, reaching a job as provider.meta.*
 // attributes. Vagabond never interprets them.
+//
+// Limits are the budgets an operator declared and Usage is what the ledger has
+// charged against them. Both are needed because neither means anything alone.
 type Input struct {
 	Provider     string
 	Capabilities plugin.Capabilities
-	Quota        quota.Snapshot
+	Limits       quota.Limits
+	Usage        quota.PoolUsage
 	Tags         map[string]string
 	Enabled      bool
 	Healthy      bool
+}
+
+// FreePercent is the tightest remaining allowance among the pools e charges.
+func (in *Input) FreePercent(e quota.Execution) int {
+	return in.Limits.FreePercent(in.Usage, e)
 }
 
 // Attributes returns everything a constraint or affinity can match on for this
 // provider.
 //
 // Capability attributes come from the snapshot; the quota-derived ones are
-// merged here, because this is the only place holding both. A job matching on
-// provider.free_quota_percent is reading a number no capability model could
-// have known.
-func (in *Input) Attributes() map[string]string {
+// merged here, because this is the only place holding both.
+//
+// provider.free_quota_percent depends on the task. A pool the task does not
+// charge cannot constrain it, so the same provider reports a different number
+// for two jobs that meter differently.
+func (in *Input) Attributes(e quota.Execution) map[string]string {
 	attrs := in.Capabilities.Attributes()
-	attrs[plugin.AttrFreeQuotaPercent] = strconv.Itoa(in.Quota.FreePercent)
+	attrs[plugin.AttrFreeQuotaPercent] = strconv.Itoa(in.FreePercent(e))
 
 	// An operator's tags cannot shadow a capability, because they land under a
 	// prefix nothing else writes to. That is what makes the closed half of the

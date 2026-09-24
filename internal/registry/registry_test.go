@@ -29,6 +29,8 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/providers/gcp"
+	"github.com/afreidah/vagabond/internal/quota"
+	"github.com/afreidah/vagabond/internal/scheduler"
 )
 
 // fixturePath is the deployment registering all three families.
@@ -73,7 +75,7 @@ func TestFixtureLoadsIntoInputs(t *testing.T) {
 		t.Fatalf("refresh failed: %s", err)
 	}
 
-	inputs := r.Inputs()
+	inputs := r.Inputs(nil)
 	if len(inputs) != 3 {
 		t.Fatalf("got %d inputs, want 3", len(inputs))
 	}
@@ -95,12 +97,16 @@ func TestFixtureLoadsIntoInputs(t *testing.T) {
 		t.Errorf("drivers mismatch (-want +got):\n%s", diff)
 	}
 
-	if got := container.Quota.FreePercent; got != 80 {
-		t.Errorf("free percent = %d, want 80", got)
+	if !container.Limits.Unlimited() {
+		t.Error("container-primary declared no pools but enforces some")
+	}
+
+	if inputs[1].Limits.Unlimited() {
+		t.Error("function-primary declared a pool that did not reach admission")
 	}
 
 	// The operator's tags have to arrive where a constraint can see them.
-	attrs := container.Attributes()
+	attrs := container.Attributes(quota.Execution{})
 	if got := attrs[plugin.MetaPrefix+"region"]; got != "us-south" {
 		t.Errorf("provider.meta.region = %q, want us-south", got)
 	}
@@ -156,7 +162,7 @@ func TestNewNilConfig(t *testing.T) {
 		t.Errorf("Len() = %d, want 0", r.Len())
 	}
 
-	if got := r.Inputs(); len(got) != 0 {
+	if got := r.Inputs(nil); len(got) != 0 {
 		t.Errorf("Inputs() = %v, want empty", got)
 	}
 }
@@ -225,49 +231,69 @@ provider "mike"   { type = "fake-worker" }
 // QUOTA
 // -------------------------------------------------------------------------
 
-func TestConfiguredQuota(t *testing.T) {
+// Usage comes from whatever the caller reads it through, so plan and run see
+// the same ledger. Limits are what the ledger is built over.
+func TestInputsCarryLimitsAndUsage(t *testing.T) {
 	t.Parallel()
 
 	r := build(t, `
-provider "stated" {
-  type = "fake-container"
-  quota { free_percent = 60 }
+provider "metered" {
+  type = "fake-function"
+
+  pool "requests" {
+    meter  = "executions"
+    limit  = 100
+    period = "monthly"
+  }
 }
 
-provider "spent" {
-  type = "fake-container"
-  quota { exhausted = true }
-}
-
-provider "silent" { type = "fake-container" }
+provider "unmetered" { type = "fake-container" }
 `)
 
-	inputs := r.Inputs()
-	byName := make(map[string]int, len(inputs))
+	usage := func(provider string) quota.PoolUsage {
+		if provider == "metered" {
+			return quota.PoolUsage{"requests": 40}
+		}
 
-	for i, in := range inputs {
-		byName[in.Provider] = i
+		return nil
 	}
 
-	stated := inputs[byName["stated"]].Quota
-	if stated.FreePercent != 60 || !stated.HasHeadroom() {
-		t.Errorf("stated quota = %+v, want 60 percent with headroom", stated)
+	inputs := r.Inputs(usage)
+	byName := make(map[string]scheduler.Input, len(inputs))
+
+	for _, in := range inputs {
+		byName[in.Provider] = in
 	}
 
-	if spent := inputs[byName["spent"]].Quota; spent.HasHeadroom() {
-		t.Error("an exhausted provider reported headroom")
+	metered := byName["metered"]
+
+	if got := metered.Usage["requests"]; got != 40 {
+		t.Errorf("metered requests = %d, want 40", got)
 	}
 
-	// An operator who wrote a provider block and no quota block said nothing
-	// about consumption, which is an observation that nothing is spent rather
-	// than a provider admission has to refuse.
-	silent := inputs[byName["silent"]].Quota
-	if !silent.HasHeadroom() {
-		t.Error("a provider with no quota block has no headroom")
+	if got := metered.FreePercent(quota.Execution{}); got != 60 {
+		t.Errorf("metered FreePercent() = %d, want 60", got)
 	}
 
-	if silent.ObservedAt.IsZero() {
-		t.Error("configured quota was left unobserved")
+	if !byName["unmetered"].Limits.Unlimited() {
+		t.Error("a provider with no pools enforces some")
+	}
+
+	limits := r.Limits()
+	if len(limits) != 2 || limits["metered"].Unlimited() {
+		t.Errorf("Limits() = %v, want both providers with metered's pool", limits)
+	}
+}
+
+// A nil reader is a ledger with nothing charged, which is what plan reads
+// before any store exists.
+func TestInputsWithoutUsage(t *testing.T) {
+	t.Parallel()
+
+	r := build(t, `provider "p" { type = "fake-container" }`)
+
+	if got := r.Inputs(nil)[0].Usage; got != nil {
+		t.Errorf("Usage = %v, want nil", got)
 	}
 }
 
@@ -319,7 +345,7 @@ provider "steady" { type = "fake-function" }
 		t.Fatalf("err = %v, want it to wrap the provider failure", err)
 	}
 
-	inputs := r.Inputs()
+	inputs := r.Inputs(nil)
 
 	if inputs[0].Healthy {
 		t.Error("flaky is healthy after failing a refresh")
@@ -391,10 +417,10 @@ func TestInputsAreIndependent(t *testing.T) {
 	// Admission runs across every candidate against one cached snapshot, so a
 	// caller that sorted the drivers it was handed must not change what the
 	// next one sees.
-	first := r.Inputs()[0]
+	first := r.Inputs(nil)[0]
 	first.Capabilities.Drivers[0] = job.DriverWorker
 
-	if got := r.Inputs()[0].Capabilities.Drivers[0]; got != job.DriverContainer {
+	if got := r.Inputs(nil)[0].Capabilities.Drivers[0]; got != job.DriverContainer {
 		t.Errorf("mutating one input changed the registry: driver = %q", got)
 	}
 }

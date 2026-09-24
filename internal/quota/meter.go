@@ -71,6 +71,17 @@ func (m Meter) Unit() string {
 	}
 }
 
+// Natural converts base units back to the unit an operator wrote, for display.
+// Fractional, because half a GB-second is worth reading as such.
+func (m Meter) Natural(base int64) float64 {
+	scale := m.scale()
+	if scale <= 0 {
+		return 0
+	}
+
+	return float64(base) / float64(scale)
+}
+
 // scale converts a limit from the unit an operator writes to the base unit
 // counters accumulate in. Zero for an unknown meter, which NewLimits rejects.
 func (m Meter) scale() int64 {

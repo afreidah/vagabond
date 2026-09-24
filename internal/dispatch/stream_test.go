@@ -73,7 +73,7 @@ func TestStreamsLogsWhenSupported(t *testing.T) {
 
 	var logs bytes.Buffer
 
-	d := New(newRegistry(&p.scriptedProvider),
+	d := over(newRegistry(&p.scriptedProvider),
 		WithSleeper(func(context.Context, time.Duration) error { return nil }),
 		WithLogs(&logs))
 
@@ -102,7 +102,7 @@ func TestStreamIsClosedWhenTheExecutionEnds(t *testing.T) {
 
 	var logs bytes.Buffer
 
-	d := New(newRegistry(&p.scriptedProvider),
+	d := over(newRegistry(&p.scriptedProvider),
 		WithSleeper(func(context.Context, time.Duration) error { return nil }),
 		WithLogs(&logs))
 	d.registry.(*fakeRegistry).providers["a"] = p
@@ -126,7 +126,7 @@ func TestNoStreamingWhenUnsupported(t *testing.T) {
 
 	var logs bytes.Buffer
 
-	d := New(newRegistry(p),
+	d := over(newRegistry(p),
 		WithSleeper(func(context.Context, time.Duration) error { return nil }),
 		WithLogs(&logs))
 
@@ -145,7 +145,7 @@ func TestNoStreamingWithoutAWriter(t *testing.T) {
 
 	p := newStreamer("a", "output\n")
 
-	d := New(newRegistry(&p.scriptedProvider),
+	d := over(newRegistry(&p.scriptedProvider),
 		WithSleeper(func(context.Context, time.Duration) error { return nil }))
 	d.registry.(*fakeRegistry).providers["a"] = p
 
@@ -167,7 +167,7 @@ func TestStreamFailureDoesNotFailTheExecution(t *testing.T) {
 
 	var logs bytes.Buffer
 
-	d := New(newRegistry(&p.scriptedProvider),
+	d := over(newRegistry(&p.scriptedProvider),
 		WithSleeper(func(context.Context, time.Duration) error { return nil }),
 		WithLogs(&logs))
 	d.registry.(*fakeRegistry).providers["a"] = p
@@ -195,7 +195,7 @@ func TestProgressReportsEachStateChange(t *testing.T) {
 
 	var states []execution.State
 
-	d := New(newRegistry(p),
+	d := over(newRegistry(p),
 		WithSleeper(func(context.Context, time.Duration) error { return nil }),
 		WithProgress(func(e Event) { states = append(states, e.State) }))
 
@@ -236,7 +236,7 @@ func TestProgressCarriesTheAttemptNumber(t *testing.T) {
 
 	var events []Event
 
-	d := New(newRegistry(first, second),
+	d := over(newRegistry(first, second),
 		WithSleeper(func(context.Context, time.Duration) error { return nil }),
 		WithProgress(func(e Event) { events = append(events, e) }))
 
@@ -354,7 +354,7 @@ func TestCancelledRunStopsTheExecution(t *testing.T) {
 
 	polls := 0
 
-	d := New(newRegistry(p), WithSleeper(func(context.Context, time.Duration) error {
+	d := over(newRegistry(p), WithSleeper(func(context.Context, time.Duration) error {
 		polls++
 		if polls > 1 {
 			cancel()

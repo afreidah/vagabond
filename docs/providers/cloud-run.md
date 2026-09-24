@@ -20,10 +20,6 @@ provider "gcp-cloud-run" {
   credentials {
     file = "/etc/vagabond/gcp-dispatcher.json"
   }
-
-  quota {
-    free_percent = 80
-  }
 }
 ```
 

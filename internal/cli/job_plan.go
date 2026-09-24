@@ -25,6 +25,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/afreidah/vagabond/internal/dispatch"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobspec"
 	"github.com/afreidah/vagabond/internal/registry"
@@ -54,9 +55,10 @@ Usage: vagabond job plan [options] <path>
 
   Reads from standard input when the path is "-".
 
-  No provider is contacted. Admission reads capability and quota snapshots
-  gathered earlier, so a plan is only as current as its data and can be wrong
-  by the age of it. Each provider's observation time is shown.
+  No provider is contacted. Admission reads capability snapshots gathered
+  earlier, so a plan is only as current as its data and can be wrong by the
+  age of it. Each provider's observation time is shown. Quota is priced from
+  the usage store, when one is configured.
 
   Plan will return one of the following exit codes:
     * 0: At least one provider can run every task.
@@ -76,6 +78,11 @@ Plan Options:
     it is planned, so a specification that interpolates meta.version is planned
     as it would actually be submitted.
 
+  -untracked
+    Plan even when the configured usage store cannot be reached, pricing every
+    provider as if nothing had been spent. A store that can be reached is
+    always used.
+
   -verbose
     Show every scorer's contribution rather than the final score alone.
 `
@@ -89,12 +96,14 @@ func (c *JobPlanCommand) Run(args []string) int {
 		meta       metaFlags
 		configPath string
 		verbose    bool
+		untracked  bool
 	)
 
 	flags := c.FlagSet("job plan")
 	flags.Var(&meta, "meta", "job metadata as key=value, repeatable")
 	flags.StringVar(&configPath, "config", "", "provider configuration file or directory")
 	flags.BoolVar(&verbose, "verbose", false, "show each scorer's contribution")
+	flags.BoolVar(&untracked, "untracked", false, "plan even when the usage store is unreachable")
 
 	if err := flags.Parse(args); err != nil {
 		return ExitFailure
@@ -110,12 +119,21 @@ func (c *JobPlanCommand) Run(args []string) int {
 		return code
 	}
 
-	reg, code := c.loadRegistry(context.Background(), configPath)
+	ctx := context.Background()
+
+	reg, store, code := c.loadRegistry(ctx, configPath)
 	if reg == nil {
 		return code
 	}
 
-	return c.plan(spec, meta, reg, verbose)
+	led, finish, code := c.loadLedger(ctx, store, reg, untracked, "plan")
+	if led == nil {
+		return code
+	}
+
+	defer finish()
+
+	return c.plan(spec, meta, reg, led, verbose)
 }
 
 // -------------------------------------------------------------------------
@@ -123,10 +141,14 @@ func (c *JobPlanCommand) Run(args []string) int {
 // -------------------------------------------------------------------------
 
 // plan admits and ranks every task in the specification.
+//
+// Reads usage from the ledger and never reserves, so a plan is priced the way a
+// run would be and changes nothing.
 func (c *JobPlanCommand) plan(
-	spec *job.File, meta metaFlags, reg *registry.Registry, verbose bool,
+	spec *job.File, meta metaFlags, reg *registry.Registry,
+	led dispatch.Ledger, verbose bool,
 ) int {
-	inputs := reg.Inputs()
+	inputs := reg.Inputs(led.PoolUsage)
 	if len(inputs) == 0 {
 		return c.Errorf("No providers are configured, so there is nothing to plan against.")
 	}

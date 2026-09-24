@@ -253,6 +253,114 @@ func TestLimits_Within(t *testing.T) {
 	}
 }
 
+// A refusal has to name the pool, because "no quota" and "no CPU quota, plenty
+// of memory quota" are different things to an operator reading a plan.
+func TestLimits_Exceeded(t *testing.T) {
+	limits := FixtureFunction()
+	task := Execution{Memory: 1024, Duration: 10 * time.Second}
+
+	if p := limits.Exceeded(nil, task); p != nil {
+		t.Errorf("Exceeded() named %q against an empty ledger", p.Name)
+	}
+
+	p := limits.Exceeded(PoolUsage{"compute": 400_000 * gbSeconds}, task)
+	if p == nil {
+		t.Fatal("Exceeded() named no pool for an execution that does not fit")
+	}
+
+	if p.Name != "compute" {
+		t.Errorf("Exceeded() = %q, want compute", p.Name)
+	}
+}
+
+// The number the free_quota_percent affinity reads.
+func TestLimits_FreePercent(t *testing.T) {
+	limits := FixtureFunction()
+	task := Execution{Memory: 1024, Duration: 10 * time.Second}
+
+	tests := []struct {
+		name  string
+		usage PoolUsage
+		want  int
+	}{
+		{
+			name:  "nothing spent",
+			usage: nil,
+			want:  100,
+		},
+		{
+			name:  "the tightest pool wins",
+			usage: PoolUsage{"requests": 100_000, "compute": 360_000 * gbSeconds},
+			want:  10,
+		},
+		{
+			name:  "an exhausted pool reports zero",
+			usage: PoolUsage{"compute": 400_000 * gbSeconds},
+			want:  0,
+		},
+		{
+			name:  "a sliver left floors to zero rather than rounding to one",
+			usage: PoolUsage{"compute": 399_999 * gbSeconds},
+			want:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := limits.FreePercent(tt.usage, task); got != tt.want {
+				t.Errorf("FreePercent() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// A pool the task does not charge must not drag the number down, or a job
+// declaring no duration would be steered away by a spent compute budget it
+// cannot touch.
+func TestLimits_FreePercentIgnoresUntouchedPools(t *testing.T) {
+	limits := FixtureFunction()
+	spent := PoolUsage{"compute": 400_000 * gbSeconds, "requests": 500_000}
+
+	if got := limits.FreePercent(spent, Execution{Memory: 1024}); got != 50 {
+		t.Errorf("FreePercent() = %d, want 50 from the requests pool alone", got)
+	}
+}
+
+// A provider an operator declared no pools for is not scored as if it were out
+// of room.
+func TestLimits_FreePercentOfUnlimitedProvider(t *testing.T) {
+	var limits Limits
+
+	if got := limits.FreePercent(nil, Execution{Memory: 1024, Duration: time.Hour}); got != 100 {
+		t.Errorf("FreePercent() = %d, want 100", got)
+	}
+}
+
+// Base units are an implementation detail of the counters; what an operator
+// reads back has to be the unit they wrote.
+func TestMeter_Natural(t *testing.T) {
+	tests := []struct {
+		meter Meter
+		base  int64
+		want  float64
+	}{
+		{MeterExecutions, 412, 412},
+		{MeterGBSeconds, 10 * gbSeconds, 10},
+		{MeterGBSeconds, gbSeconds / 2, 0.5},
+		{MeterCPUSeconds, 180_000 * cpuSeconds, 180_000},
+		{MeterSeconds, 90 * millisPerSecond, 90},
+		{Meter("instance_hours"), 5, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.meter), func(t *testing.T) {
+			if got := tt.meter.Natural(tt.base); got != tt.want {
+				t.Errorf("Natural(%d) = %v, want %v", tt.base, got, tt.want)
+			}
+		})
+	}
+}
+
 // Pools are additive: two pools may meter the same thing over different
 // periods, and whichever runs out first refuses the execution.
 func TestLimits_WithinAdditivePools(t *testing.T) {

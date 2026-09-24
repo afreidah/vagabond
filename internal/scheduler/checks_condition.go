@@ -70,41 +70,47 @@ func (healthyChecker) Check(_ *Request, in *Input) *Rejection {
 // FREE-TIER STANDING
 // -------------------------------------------------------------------------
 
-// quotaChecker removes providers with no free-tier allowance left, for jobs
-// that will not pay for what comes after it.
+// quotaChecker removes providers whose declared budgets have no room for this
+// task, for jobs that will not pay for what comes after them.
 type quotaChecker struct{}
 
 // Name identifies the checker in traces and test failures.
 func (quotaChecker) Name() string { return "quota" }
 
-// Check rejects a spent provider unless the job budgeted for paid capacity.
+// Check rejects a provider with no room unless the job budgeted for paid
+// capacity.
 //
 // The willingness to pay is what makes this a policy question rather than a
-// fact. An exhausted free tier is not a provider being unable to run the work;
-// it is the work costing money from here on, and only a job that said it would
-// not pay is refused for that. Without the distinction a job that explicitly
+// fact. An exhausted budget is not a provider being unable to run the work; it
+// is the work costing money from here on, and only a job that said it would not
+// pay is refused for that. Without the distinction a job that explicitly
 // budgeted would still be turned away the moment an allowance ran out.
 //
-// A snapshot nobody has observed has no headroom, which is deliberate: an
-// unknown allowance and a spent one lead to the same decision, and the one that
-// spends money is not the one to guess toward.
+// Asks whether this task fits rather than whether the provider is generally
+// spent. A pool with room for a small task and not a large one gives different
+// answers to each, and a percentage could not express either.
 //
 // Last in the set, mirroring Nomad's note that its quota iterator must be the
 // final feasibility step so that usage never counts nodes already ineligible.
-// Unlike enabled and healthy, this one reads a snapshot that is meaningful
-// whether or not the provider answered, so it has no reason to run early.
 func (quotaChecker) Check(req *Request, in *Input) *Rejection {
-	if in.Quota.HasHeadroom() || req.WillPay() {
+	if req.WillPay() {
 		return nil
 	}
 
-	if in.Quota.ObservedAt.IsZero() {
-		return reject(ReasonQuotaExhausted,
-			"Nothing is known about this provider's free-tier allowance, and the "+
-				"job will not pay for capacity beyond it.")
+	pool := in.Limits.Exceeded(in.Usage, req.Execution)
+	if pool == nil {
+		return nil
 	}
 
+	used := in.Usage[pool.Name]
+
 	return reject(ReasonQuotaExhausted, fmt.Sprintf(
-		"This provider's free tier is spent, %d percent remaining, and the job "+
-			"will not pay for capacity beyond it.", in.Quota.FreePercent))
+		"Pool %q has %g of %g %s left and this task needs %g, and the job will "+
+			"not pay for capacity beyond it.",
+		pool.Name,
+		pool.Meter.Natural(pool.Remaining(used)),
+		pool.Meter.Natural(pool.Limit),
+		pool.Meter.Unit(),
+		pool.Meter.Natural(in.Limits.Deltas(req.Execution)[pool.Name]),
+	))
 }

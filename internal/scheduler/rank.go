@@ -23,6 +23,7 @@ import (
 	"sort"
 
 	"github.com/afreidah/vagabond/internal/job"
+	"github.com/afreidah/vagabond/internal/quota"
 )
 
 // -------------------------------------------------------------------------
@@ -126,7 +127,7 @@ func Rank(req *Request, candidates []Candidate) Ranking {
 func score(req *Request, candidate *Candidate) ScoredCandidate {
 	scores := []Score{{
 		Name:  ScorerHeadroom,
-		Value: baseScorer(req.Strategy())(candidate),
+		Value: baseScorer(req.Strategy())(candidate, req.Execution),
 	}}
 
 	// Left out entirely when the job stated no preference, rather than averaged
@@ -136,7 +137,7 @@ func score(req *Request, candidate *Candidate) ScoredCandidate {
 	if affinities := req.Affinities(); len(affinities) > 0 {
 		scores = append(scores, Score{
 			Name:  ScorerAffinity,
-			Value: AffinityScore(candidate.Attributes(), affinities),
+			Value: AffinityScore(candidate.Attributes(req.Execution), affinities),
 		})
 	}
 
@@ -171,7 +172,7 @@ func mean(scores []Score) float64 {
 // alternative is scoring inlined into Rank, and a second strategy would then
 // arrive as a conditional inside the function that averages, rather than as a
 // line in this switch. Affinities apply on top of whichever base is chosen.
-func baseScorer(strategy job.Strategy) func(*Candidate) float64 {
+func baseScorer(strategy job.Strategy) func(*Candidate, quota.Execution) float64 {
 	switch strategy {
 	case job.StrategyFreeFirst:
 		return headroomScore
@@ -182,15 +183,15 @@ func baseScorer(strategy job.Strategy) func(*Candidate) float64 {
 }
 
 // headroomScore is what free-first prefers: the provider with the most
-// free-tier allowance left.
+// allowance left in the pools this task charges.
 //
 // The point is not that a fuller provider runs the work better, because it does
 // not. It is that spending the scarcest allowance first strands the workloads
 // with the fewest eligible providers, and those are the ones with nowhere else
 // to go. Draining the emptiest last keeps the most options open for whatever
 // arrives next.
-func headroomScore(candidate *Candidate) float64 {
-	return clamp(float64(candidate.Quota.FreePercent) / 100)
+func headroomScore(candidate *Candidate, e quota.Execution) float64 {
+	return clamp(float64(candidate.FreePercent(e)) / 100)
 }
 
 // clamp keeps a scorer inside the range every other scorer is averaged against.

@@ -23,6 +23,7 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/ptr"
+	"github.com/afreidah/vagabond/internal/quota"
 )
 
 // configBlock parses a driver config the way the job parser leaves it: decoded
@@ -161,7 +162,7 @@ func TestPayingJobSurvivesAnExhaustedFreeTier(t *testing.T) {
 	t.Parallel()
 
 	spent := baseInput()
-	spent.Quota.Exhausted = true
+	setFreePercent(&spent, 0)
 
 	free := baseRequest()
 	if admitOnly(t, free, &spent).Admitted() {
@@ -199,27 +200,38 @@ func TestPayingJobStillHasACeiling(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
-// UNOBSERVED QUOTA
+// POOLS
 // -------------------------------------------------------------------------
 
-// A provider nothing is known about has no headroom, and says so differently
-// from one that is merely spent: the fix for the first is a refresh and for the
-// second it is waiting.
-func TestUnobservedQuotaIsRefusedByName(t *testing.T) {
+// A refusal names the pool, since "no quota" and "no compute quota, plenty of
+// requests" have different fixes.
+func TestQuotaRefusalNamesThePool(t *testing.T) {
 	t.Parallel()
 
-	unobserved := baseInput()
-	unobserved.Quota.ObservedAt = time.Time{}
+	spent := baseInput()
+	setFreePercent(&spent, 0)
 
-	result := admitOnly(t, baseRequest(), &unobserved)
-
-	rejection := result.Rejections[0]
+	rejection := admitOnly(t, baseRequest(), &spent).Rejections[0]
 	if rejection.Reason != ReasonQuotaExhausted {
 		t.Fatalf("reason = %s, want %s", rejection.Reason, ReasonQuotaExhausted)
 	}
 
-	if !strings.Contains(rejection.Detail, "Nothing is known") {
-		t.Errorf("an unobserved provider reads as a spent one: %s", rejection.Detail)
+	if !strings.Contains(rejection.Detail, `Pool "requests"`) {
+		t.Errorf("detail does not name the pool: %s", rejection.Detail)
+	}
+}
+
+// An operator who declared no pools enforces nothing, so the provider is
+// admitted rather than treated as unknown.
+func TestProviderWithoutPoolsIsAdmitted(t *testing.T) {
+	t.Parallel()
+
+	unmetered := baseInput()
+	unmetered.Limits = quota.Limits{}
+	unmetered.Usage = nil
+
+	if !admitOnly(t, baseRequest(), &unmetered).Admitted() {
+		t.Error("a provider with no pools was refused")
 	}
 }
 

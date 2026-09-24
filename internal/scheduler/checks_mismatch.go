@@ -231,7 +231,7 @@ func (constraintChecker) Check(req *Request, in *Input) *Rejection {
 		return nil
 	}
 
-	attrs := in.Attributes()
+	attrs := in.Attributes(req.Execution)
 
 	unmet := UnmatchedConstraint(attrs, constraints)
 	if unmet == nil {

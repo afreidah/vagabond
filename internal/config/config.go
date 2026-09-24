@@ -32,7 +32,17 @@ import (
 
 // File is the decoded contents of one configuration file.
 type File struct {
-	Providers []Provider `hcl:"provider,block"`
+	Store     *StoreBlock `hcl:"store,block"`
+	Providers []Provider  `hcl:"provider,block"`
+}
+
+// StoreBlock is where the usage ledger persists. Absent means the ledger lives
+// in memory and starts empty every run.
+//
+// DSN is anything pgx accepts. A password can stay out of it: pgx reads
+// PGPASSWORD and ~/.pgpass as libpq does.
+type StoreBlock struct {
+	DSN string `hcl:"dsn"`
 }
 
 // Provider is one backend a deployment can dispatch to.
@@ -60,7 +70,6 @@ type Provider struct {
 	Config      *job.RawBlock     `hcl:"config,block"`
 	Credentials *CredentialsBlock `hcl:"credentials,block"`
 	Meta        *MetaBlock        `hcl:"meta,block"`
-	Quota       *QuotaBlock       `hcl:"quota,block"`
 	Pools       []PoolBlock       `hcl:"pool,block"`
 }
 
@@ -87,18 +96,6 @@ type MetaBlock struct {
 	Body hcl.Body `hcl:",remain"`
 }
 
-// QuotaBlock states a provider's free-tier standing.
-//
-// A stand-in. The ledger that tracks consumption and survives a restart does
-// not exist yet, so until it does an operator states what they believe is left
-// and admission reads that. It is here rather than absent because a provider
-// whose quota is unknown is one admission refuses, which would leave nothing
-// admissible and nothing demonstrable.
-type QuotaBlock struct {
-	FreePercent *int  `hcl:"free_percent,optional"`
-	Exhausted   *bool `hcl:"exhausted,optional"`
-}
-
 // -------------------------------------------------------------------------
 // LOADING
 // -------------------------------------------------------------------------
@@ -110,9 +107,9 @@ type QuotaBlock struct {
 // what makes a provider per file possible: /etc/vagabond.d/ibm.hcl beside
 // lambda.hcl, each one reviewable on its own.
 //
-// Merging is concatenation, because a File is a list of providers. Two files
-// declaring the same provider name are caught by the duplicate check that
-// already runs, and reported once rather than per file.
+// Merging concatenates providers. Two files declaring the same provider name
+// are caught by the duplicate check that already runs, and reported once rather
+// than per file. A store may be declared in one file only.
 func LoadPath(path string) (*File, hcl.Diagnostics) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -167,8 +164,27 @@ func loadDir(dir string) (*File, hcl.Diagnostics) {
 		file, fileDiags := decode(name)
 		diags = append(diags, fileDiags...)
 
-		if file != nil {
-			merged.Providers = append(merged.Providers, file.Providers...)
+		if file == nil {
+			continue
+		}
+
+		merged.Providers = append(merged.Providers, file.Providers...)
+
+		// A second store is refused rather than letting file order decide which
+		// database a deployment writes its ledger to.
+		if file.Store != nil && merged.Store != nil {
+			diags = append(diags, &hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Duplicate store",
+				Detail: fmt.Sprintf("%s declares a store block, but one is already "+
+					"declared in an earlier file. A deployment has one ledger.", name),
+			})
+
+			continue
+		}
+
+		if file.Store != nil {
+			merged.Store = file.Store
 		}
 	}
 
@@ -239,6 +255,15 @@ func decodeSource(filename string, src []byte) (*File, hcl.Diagnostics) {
 func (f *File) validate() hcl.Diagnostics {
 	var diags hcl.Diagnostics
 
+	if f.Store != nil && f.Store.DSN == "" {
+		diags = append(diags, &hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Empty store DSN",
+			Detail: "The store block names no database. Remove the block to keep " +
+				"the ledger in memory.",
+		})
+	}
+
 	seen := make(map[string]bool, len(f.Providers))
 
 	for i := range f.Providers {
@@ -276,19 +301,6 @@ func (p *Provider) validate() hcl.Diagnostics {
 
 	diags = append(diags, p.Credentials.validate(p.Name)...)
 	diags = append(diags, p.validatePools()...)
-
-	if p.Quota == nil || p.Quota.FreePercent == nil {
-		return diags
-	}
-
-	if percent := *p.Quota.FreePercent; percent < 0 || percent > 100 {
-		diags = append(diags, &hcl.Diagnostic{
-			Severity: hcl.DiagError,
-			Summary:  "Invalid free quota",
-			Detail: fmt.Sprintf("Provider %q reports %d percent remaining. A percentage "+
-				"runs from 0 to 100.", p.Name, percent),
-		})
-	}
 
 	return diags
 }

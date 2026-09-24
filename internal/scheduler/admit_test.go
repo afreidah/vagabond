@@ -24,7 +24,6 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/ptr"
-	"github.com/afreidah/vagabond/internal/quota"
 )
 
 // observed is a fixed point in time, so that a snapshot counts as observed
@@ -45,7 +44,7 @@ func baseRequest() *Request {
 // baseInput is a provider that admits the baseline request. Each table case
 // changes one field, so whatever it produces is attributable to that field.
 func baseInput() Input {
-	return Input{
+	in := Input{
 		Provider: "test",
 		Capabilities: plugin.Capabilities{
 			Drivers:         []job.DriverName{job.DriverContainer},
@@ -55,14 +54,12 @@ func baseInput() Input {
 			ArbitraryImages: true,
 			ObservedAt:      observed,
 		},
-		Quota: quota.Snapshot{
-			Provider:    "test",
-			FreePercent: 50,
-			ObservedAt:  observed,
-		},
 		Enabled: true,
 		Healthy: true,
 	}
+	setFreePercent(&in, 50)
+
+	return in
 }
 
 // admitOnly runs admission against a single provider and returns the verdict.
@@ -225,7 +222,7 @@ var reasonCases = map[string]reasonCase{
 		want:  ReasonUnhealthy,
 	},
 	"free tier is spent": {
-		input: func(in *Input) { in.Quota.Exhausted = true },
+		input: func(in *Input) { setFreePercent(in, 0) },
 		want:  ReasonQuotaExhausted,
 	},
 }
@@ -302,7 +299,7 @@ func TestAdmitCollectsEveryReason(t *testing.T) {
 
 	in := baseInput()
 	in.Capabilities = plugin.FixtureWorker(observed)
-	in.Quota.Exhausted = true
+	setFreePercent(&in, 0)
 
 	result := admitOnly(t, req, &in)
 
@@ -416,17 +413,15 @@ func TestAdmitContainerTaskAcrossFixtures(t *testing.T) {
 // Takes the fixture rather than its result, so that a call site reads as the
 // family it is standing up and no 112 byte snapshot is copied to get there.
 func fixtureInput(name string, fixture func(time.Time) plugin.Capabilities) Input {
-	return Input{
+	in := Input{
 		Provider:     name,
 		Capabilities: fixture(observed),
-		Quota: quota.Snapshot{
-			Provider:    name,
-			FreePercent: 50,
-			ObservedAt:  observed,
-		},
-		Enabled: true,
-		Healthy: true,
+		Enabled:      true,
+		Healthy:      true,
 	}
+	setFreePercent(&in, 50)
+
+	return in
 }
 
 // candidateNames returns the admitted providers in result order.
@@ -540,7 +535,7 @@ func TestRetryable(t *testing.T) {
 	t.Parallel()
 
 	spent := baseInput()
-	spent.Quota.Exhausted = true
+	setFreePercent(&spent, 0)
 
 	onQuota := Admit(baseRequest(), []Input{spent})
 	if !onQuota.Retryable() {

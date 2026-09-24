@@ -13,6 +13,7 @@ package gcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -79,6 +80,10 @@ func (e *runExecution) state() execution.State {
 // Listing rather than addressing, because the name is Google's. Submit creates
 // one job per execution, so more than one here would mean somebody ran the job
 // by hand and the newest is the one we care about.
+//
+// No job, or a job with no execution, is plugin.ErrUnknownExecution: Submit
+// died before running it. The class of the empty case stays infrastructure,
+// because right after Submit it can be the listing lagging the run.
 func (p *Provider) execution(ctx context.Context, jobName string) (*runExecution, error) {
 	var out struct {
 		Executions []runExecution `json:"executions"`
@@ -86,12 +91,17 @@ func (p *Provider) execution(ctx context.Context, jobName string) (*runExecution
 
 	url := p.cfg.jobURL(p.runURL, jobName) + "/executions"
 	if err := p.call(ctx, http.MethodGet, url, nil, &out); err != nil {
+		if errors.Is(err, plugin.ErrNotFound) {
+			return nil, plugin.Internal(
+				fmt.Errorf("%w: job %s does not exist", plugin.ErrUnknownExecution, jobName))
+		}
+
 		return nil, err
 	}
 
 	if len(out.Executions) == 0 {
 		return nil, plugin.Infrastructure(
-			fmt.Errorf("job %s has no execution", jobName))
+			fmt.Errorf("%w: job %s has no execution", plugin.ErrUnknownExecution, jobName))
 	}
 
 	newest := &out.Executions[0]
