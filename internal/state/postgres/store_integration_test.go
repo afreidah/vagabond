@@ -152,10 +152,10 @@ func newID(t *testing.T) execution.ID {
 
 // fnReservation asks for one request and some compute, against limits of 10
 // requests and 1000 GB-seconds.
-func fnReservation(t *testing.T, created time.Time, compute int64) ledger.Reservation {
+func fnReservation(t *testing.T, created time.Time, compute int64) *ledger.Reservation {
 	t.Helper()
 
-	return ledger.Reservation{
+	return &ledger.Reservation{
 		ID:       newID(t),
 		Provider: "fn",
 		CPU:      1000,
@@ -168,7 +168,7 @@ func fnReservation(t *testing.T, created time.Time, compute int64) ledger.Reserv
 	}
 }
 
-func mustReserve(ctx context.Context, t *testing.T, s *postgres.Store, r ledger.Reservation) {
+func mustReserve(ctx context.Context, t *testing.T, s *postgres.Store, r *ledger.Reservation) {
 	t.Helper()
 
 	fits, _, err := s.Reserve(ctx, r)
@@ -494,7 +494,7 @@ func TestReap_SettlesWhatTheCallbackAccepts(t *testing.T) {
 			kept := fnReservation(t, old, 900*gbSeconds)
 			fresh := fnReservation(t, now, 0)
 
-			for _, r := range []ledger.Reservation{dropped, kept, fresh} {
+			for _, r := range []*ledger.Reservation{dropped, kept, fresh} {
 				mustReserve(ctx, t, store, r)
 			}
 

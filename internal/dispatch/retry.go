@@ -77,6 +77,17 @@ func retryPolicy(task *job.Task) policy {
 	return p
 }
 
+// budget is how many submissions a task gets. Without reroute it gets one
+// provider, the best one: retrying in place would spend capacity on a provider
+// that just failed.
+func (p policy) budget() int {
+	if !p.reroute {
+		return 1
+	}
+
+	return p.attempts
+}
+
 // backoff returns how long to wait before attempt n, counting from zero.
 //
 // Doubling from the initial interval, capped. The first attempt never waits,

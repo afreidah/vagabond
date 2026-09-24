@@ -25,7 +25,7 @@ var _ ledger.Store = (*Store)(nil)
 // Reserve records r only if every charge fits. When it does not, the usage
 // the refusal was decided against is read in the same transaction, so the
 // ledger names a pool that really was full.
-func (s *Store) Reserve(ctx context.Context, r ledger.Reservation) (bool, ledger.Usage, error) {
+func (s *Store) Reserve(ctx context.Context, r *ledger.Reservation) (bool, ledger.Usage, error) {
 	params := db.ReserveQuotaParams{
 		ExecutionID: r.ID.String(),
 		Provider:    r.Provider,

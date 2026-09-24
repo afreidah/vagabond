@@ -201,14 +201,7 @@ func (d *Dispatcher) attempt(
 ) (*TaskOutcome, error) {
 	task := req.Task
 	policy := retryPolicy(task)
-
-	budget := policy.attempts
-
-	// Without reroute a task gets one provider: the best one. Retrying in
-	// place would spend capacity on a provider that just failed.
-	if !policy.reroute {
-		budget = 1
-	}
+	budget := policy.budget()
 
 	var (
 		lastErr error
@@ -223,21 +216,8 @@ func (d *Dispatcher) attempt(
 			return outcome, fmt.Errorf("%w: %s", ErrNoProvider, name)
 		}
 
-		// Generated here rather than by the caller because it is the
-		// submission idempotency key: a second attempt is a different
-		// execution, and reusing the id would ask the provider to resume the
-		// one that just failed.
-		id, err := execution.NewID()
-		if err != nil {
-			return outcome, plugin.Internal(fmt.Errorf("generating an execution id: %w", err))
-		}
-
-		if err := d.ledger.Reserve(ctx, id, name, req.Execution); err != nil {
-			var refusal *ledger.Refusal
-			if !errors.As(err, &refusal) {
-				return outcome, fmt.Errorf("reserving quota on %s: %w", name, err)
-			}
-
+		id, err := d.reserve(ctx, name, req.Execution)
+		if refused(err) {
 			outcome.Attempts = append(outcome.Attempts, Attempt{
 				Provider: name, ID: id, Err: err, Refused: true,
 			})
@@ -246,26 +226,18 @@ func (d *Dispatcher) attempt(
 			continue
 		}
 
-		if tried > 0 {
-			if err := d.sleep(ctx, policy.backoff(tried)); err != nil {
-				return outcome, err
-			}
+		if err != nil {
+			return outcome, err
+		}
+
+		if err := d.pause(ctx, policy, tried); err != nil {
+			return outcome, err
 		}
 
 		tried++
 
 		result, streamed, err := d.execute(ctx, provider, task, id, tried)
-
-		// Only a result says what the run cost. Without one the reservation
-		// stands: the run may be out there still, and charging its declared
-		// worst case is the over-count this errs toward.
-		if result != nil {
-			_ = d.ledger.Settle(ctx, id, name, quota.Execution{
-				CPU:      req.Execution.CPU,
-				Memory:   req.Execution.Memory,
-				Duration: result.Duration,
-			})
-		}
+		d.charge(ctx, id, name, req.Execution, result)
 
 		outcome.Attempts = append(outcome.Attempts, Attempt{
 			Provider: name,
@@ -298,4 +270,62 @@ func (d *Dispatcher) attempt(
 	}
 
 	return outcome, fmt.Errorf("%w: %w", ErrExhausted, lastErr)
+}
+
+// reserve mints an execution ID and charges it against name's quota. A refusal
+// comes back as the *ledger.Refusal; any other failure means nothing may be
+// dispatched.
+//
+// The ID is minted per attempt because it is the submission idempotency key:
+// reusing it would ask the provider to resume the one that just failed.
+func (d *Dispatcher) reserve(ctx context.Context, name string, e quota.Execution) (execution.ID, error) {
+	id, err := execution.NewID()
+	if err != nil {
+		return id, plugin.Internal(fmt.Errorf("generating an execution id: %w", err))
+	}
+
+	if err := d.ledger.Reserve(ctx, id, name, e); err != nil {
+		if refused(err) {
+			return id, err
+		}
+
+		return id, fmt.Errorf("reserving quota on %s: %w", name, err)
+	}
+
+	return id, nil
+}
+
+// refused reports whether err is the ledger turning a reservation down.
+func refused(err error) bool {
+	var refusal *ledger.Refusal
+
+	return errors.As(err, &refusal)
+}
+
+// pause waits out the backoff before every submission but the first.
+func (d *Dispatcher) pause(ctx context.Context, p policy, tried int) error {
+	if tried == 0 {
+		return nil
+	}
+
+	return d.sleep(ctx, p.backoff(tried))
+}
+
+// charge settles what a run cost, from its result.
+//
+// Only a result says what the run cost. Without one the reservation stands:
+// the run may be out there still, and charging its declared worst case is the
+// over-count this errs toward.
+func (d *Dispatcher) charge(
+	ctx context.Context, id execution.ID, name string, declared quota.Execution, result *execution.Result,
+) {
+	if result == nil {
+		return
+	}
+
+	_ = d.ledger.Settle(ctx, id, name, quota.Execution{
+		CPU:      declared.CPU,
+		Memory:   declared.Memory,
+		Duration: result.Duration,
+	})
 }

@@ -72,6 +72,11 @@ func TestResolve(t *testing.T) {
 		},
 		{
 			name: "started with no recorded end", want: ledger.Stand,
+			status: execution.Status{State: execution.StateFailed, StartedAt: started},
+		},
+		{
+			// Lost is not terminal: reconciliation may still learn the answer.
+			name: "lost", want: ledger.Keep,
 			status: execution.Status{State: execution.StateLost, StartedAt: started},
 		},
 		{

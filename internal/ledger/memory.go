@@ -39,7 +39,7 @@ func NewMemory(used Usage) *Memory {
 }
 
 // Reserve records r if every charge fits against settled plus reserved usage.
-func (m *Memory) Reserve(_ context.Context, r Reservation) (bool, Usage, error) {
+func (m *Memory) Reserve(_ context.Context, r *Reservation) (bool, Usage, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -53,7 +53,7 @@ func (m *Memory) Reserve(_ context.Context, r Reservation) (bool, Usage, error) 
 		}
 	}
 
-	m.held[r.ID] = &r
+	m.held[r.ID] = r
 
 	return true, nil, nil
 }

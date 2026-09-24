@@ -97,7 +97,7 @@ type Store interface {
 	// Reserve records r only if every charge fits. When it does not, the
 	// usage it was refused against comes back so the refusal can name a
 	// pool.
-	Reserve(ctx context.Context, r Reservation) (bool, Usage, error)
+	Reserve(ctx context.Context, r *Reservation) (bool, Usage, error)
 
 	// Settle replaces an execution's reservation with actual, by pool. An
 	// execution with none settles to nothing.
@@ -191,7 +191,7 @@ func (l *Ledger) Reserve(ctx context.Context, id execution.ID, provider string, 
 		Charges:  charges(limits, e, now),
 	}
 
-	fits, standing, err := l.store.Reserve(ctx, r)
+	fits, standing, err := l.store.Reserve(ctx, &r)
 	if err != nil {
 		return fmt.Errorf("reserving quota: %w", err)
 	}
