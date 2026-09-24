@@ -169,9 +169,7 @@ job "go-test" {
 
 Not implemented. Everything above this line is.
 
-- **Quota ledger.** Reserve on dispatch, settle on completion, so
-  `provider.free_quota_percent` is measured rather than declared in config.
-- **Persistence.** Execution and quota state.
+- **Persistence.** Execution state. Quota state is persisted already.
 - **More providers.** `function` and `worker` drivers are modeled, admitted and
   scored, but no plugin implements either. The next container backend should
   have a meaningfully different execution model, to prove the plugin boundary

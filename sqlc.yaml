@@ -1,0 +1,24 @@
+# -------------------------------------------------------------------------------
+# sqlc Configuration
+#
+# Author: Alex Freidah
+#
+# Generates pgx/v5 bindings from the query files against the goose migrations as
+# the schema. Output lands in internal/state/postgres/sqlc.
+# -------------------------------------------------------------------------------
+
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "internal/state/postgres/sqlc/queries"
+    schema: "internal/state/postgres/migrations"
+    gen:
+      go:
+        package: "db"
+        out: "internal/state/postgres/sqlc"
+        sql_package: "pgx/v5"
+        emit_pointers_for_null_types: true
+        emit_empty_slices: true
+        overrides:
+          - db_type: "timestamptz"
+            go_type: "time.Time"

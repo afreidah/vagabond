@@ -28,6 +28,7 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobspec"
 	"github.com/afreidah/vagabond/internal/registry"
+	"github.com/afreidah/vagabond/internal/scheduler"
 )
 
 // JobRunCommand implements `vagabond job run`.
@@ -82,6 +83,11 @@ Run Options:
 
   -no-logs
     Do not print the task's output. The exit status is still reported.
+
+  -untracked
+    Dispatch even when the configured usage store cannot be reached. Usage is
+    then kept in memory only, so this run is not charged against the quota
+    other runs see. A store that can be reached is always used.
 `
 
 	return strings.TrimSpace(text)
@@ -93,12 +99,14 @@ func (c *JobRunCommand) Run(args []string) int {
 		meta       metaFlags
 		configPath string
 		noLogs     bool
+		untracked  bool
 	)
 
 	flags := c.FlagSet("job run")
 	flags.Var(&meta, "meta", "job metadata as key=value, repeatable")
 	flags.StringVar(&configPath, "config", "", "provider configuration file or directory")
 	flags.BoolVar(&noLogs, "no-logs", false, "do not print the task's output")
+	flags.BoolVar(&untracked, "untracked", false, "dispatch even when the usage store is unreachable")
 
 	if err := flags.Parse(args); err != nil {
 		return ExitFailure
@@ -119,12 +127,23 @@ func (c *JobRunCommand) Run(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	reg, code := c.loadRegistry(ctx, configPath)
+	reg, store, code := c.loadRegistry(ctx, configPath)
 	if reg == nil {
 		return code
 	}
 
-	return c.run(ctx, spec, meta, reg, noLogs)
+	if store == nil {
+		c.Ui.Warn("No store is configured, so this run's usage is not recorded.")
+	}
+
+	led, finish, code := c.loadLedger(ctx, store, reg, untracked, "run")
+	if led == nil {
+		return code
+	}
+
+	defer finish()
+
+	return c.run(ctx, spec, meta, reg, led, noLogs)
 }
 
 // -------------------------------------------------------------------------
@@ -134,9 +153,9 @@ func (c *JobRunCommand) Run(args []string) int {
 // run dispatches every job in the specification.
 func (c *JobRunCommand) run(
 	ctx context.Context, spec *job.File, meta metaFlags,
-	reg *registry.Registry, noLogs bool,
+	reg *registry.Registry, led dispatch.Ledger, noLogs bool,
 ) int {
-	if len(reg.Inputs()) == 0 {
+	if len(reg.Inputs(nil)) == 0 {
 		return c.Errorf("No providers are configured, so there is nothing to run on.")
 	}
 
@@ -145,8 +164,16 @@ func (c *JobRunCommand) run(
 		opts = append(opts, dispatch.WithLogs(os.Stdout))
 	}
 
-	d := dispatch.New(reg, opts...)
+	d := dispatch.New(reg, led, opts...)
 	eval := jobspec.EvalContext(meta)
+
+	// Reservations a killed run left behind hold quota this run may need.
+	// Failing to resolve them costs headroom, not correctness, so it warns.
+	if reaped, err := d.Reap(ctx); err != nil {
+		c.Ui.Warn(fmt.Sprintf("Could not resolve abandoned quota reservations: %s", err))
+	} else if reaped > 0 {
+		c.Ui.Info(fmt.Sprintf("Resolved %d abandoned quota reservation(s).", reaped))
+	}
 
 	worst := ExitSuccess
 
@@ -221,8 +248,10 @@ func (c *JobRunCommand) reportTask(outcome *dispatch.TaskOutcome, noLogs bool) {
 		outcome.Task, verdict(outcome), outcome.Provider, outcome.Result.Duration))
 
 	if outcome.Rerouted() {
-		c.Ui.Error(fmt.Sprintf("    rerouted after %d attempts", len(outcome.Attempts)))
+		c.Ui.Error(fmt.Sprintf("    rerouted after %d attempts", outcome.Tried()))
 	}
+
+	c.renderRefusals(outcome)
 }
 
 // renderRejections explains a task that had nowhere to go.
@@ -231,6 +260,22 @@ func (c *JobRunCommand) renderRejections(outcome *dispatch.TaskOutcome) {
 		r := &outcome.Rejections[i]
 
 		c.Ui.Error(fmt.Sprintf("    %s: %s %s", r.Provider, r.Reason, r.Detail))
+	}
+
+	c.renderRefusals(outcome)
+}
+
+// renderRefusals explains providers the ledger turned away at dispatch.
+//
+// Worded as the admission rejection they are: the quota admission saw was
+// spent by the time dispatch got there.
+func (c *JobRunCommand) renderRefusals(outcome *dispatch.TaskOutcome) {
+	for i := range outcome.Attempts {
+		a := &outcome.Attempts[i]
+
+		if a.Refused {
+			c.Ui.Error(fmt.Sprintf("    %s: %s %s", a.Provider, scheduler.ReasonQuotaExhausted, a.Err))
+		}
 	}
 }
 

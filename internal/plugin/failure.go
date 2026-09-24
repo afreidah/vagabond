@@ -85,6 +85,10 @@ func (c Class) Reroutable() bool {
 // ErrProvider is the sentinel behind every classified provider failure.
 var ErrProvider = errors.New("provider operation failed")
 
+// ErrNotFound marks a 404 from ClassifyHTTP, so a plugin can tell a resource
+// that does not exist from a request that failed.
+var ErrNotFound = errors.New("not found")
+
 // Error is a failed provider operation, classified.
 //
 // Retryable is independent of Class rather than derived from it. A 429 and a
@@ -214,6 +218,9 @@ func ClassifyHTTP(status int, retryAfter time.Duration, err error) *Error {
 		e.RetryAfter = retryAfter
 
 		return e
+
+	case status == http.StatusNotFound:
+		return Internal(fmt.Errorf("%w: %w", ErrNotFound, wrapped))
 
 	case status >= 400 && status < 500:
 		return Internal(wrapped)

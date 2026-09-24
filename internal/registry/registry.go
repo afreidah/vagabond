@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/hashicorp/hcl/v2"
 
@@ -42,19 +41,19 @@ type Registry struct {
 
 // entry is one provider and everything last known about it.
 //
-// Capabilities and quota are held beside the plugin rather than fetched on
-// demand, because admission must not call anything. Healthy is separate from
-// enabled because a provider an operator turned off and one failing its checks
-// are different rejections with different fixes.
+// Capabilities are held beside the plugin rather than fetched on demand,
+// because admission must not call anything. Healthy is separate from enabled
+// because a provider an operator turned off and one failing its checks are
+// different rejections with different fixes.
 type entry struct {
 	name     string
 	provider plugin.Provider
 	tags     map[string]string
+	limits   quota.Limits
 	enabled  bool
 	healthy  bool
 
 	capabilities plugin.Capabilities
-	quota        quota.Snapshot
 }
 
 // -------------------------------------------------------------------------
@@ -122,6 +121,17 @@ func newEntry(ctx context.Context, cfg *config.Provider) (*entry, hcl.Diagnostic
 		})
 	}
 
+	// Config validation already reported a bad pool against its line; this is
+	// the backstop for a config that skipped it.
+	limits, err := quota.NewLimits(cfg.PoolSpecs())
+	if err != nil {
+		return nil, append(diags, &hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Invalid quota pools",
+			Detail:   fmt.Sprintf("Provider %q: %s.", cfg.Name, err),
+		})
+	}
+
 	provider, buildDiags := Build(ctx, cfg.Type, Settings{
 		Name:        cfg.Name,
 		Config:      cfg.ConfigBody(),
@@ -138,40 +148,14 @@ func newEntry(ctx context.Context, cfg *config.Provider) (*entry, hcl.Diagnostic
 		name:     cfg.Name,
 		provider: provider,
 		tags:     tags,
+		limits:   limits,
 		enabled:  cfg.IsEnabled(),
 
 		// Healthy until something says otherwise. Health checking arrives with
 		// the refresh loop that can observe a provider failing; assuming the
 		// worst before then would make every provider unusable.
 		healthy: true,
-
-		quota: configuredQuota(cfg),
 	}, diags
-}
-
-// configuredQuota reads the stand-in an operator stated.
-//
-// ObservedAt is set because an unobserved snapshot has no headroom by design,
-// and a configured value is an observation: an operator said so.
-func configuredQuota(cfg *config.Provider) quota.Snapshot {
-	snapshot := quota.Snapshot{
-		Provider:   cfg.Name,
-		ObservedAt: time.Now(),
-	}
-
-	if cfg.Quota == nil {
-		return snapshot
-	}
-
-	if cfg.Quota.FreePercent != nil {
-		snapshot.FreePercent = *cfg.Quota.FreePercent
-	}
-
-	if cfg.Quota.Exhausted != nil {
-		snapshot.Exhausted = *cfg.Quota.Exhausted
-	}
-
-	return snapshot
 }
 
 // -------------------------------------------------------------------------
@@ -217,23 +201,43 @@ func (r *Registry) Refresh(ctx context.Context) error {
 
 // Inputs returns what admission reads, one per configured provider.
 //
+// Usage is read through the function rather than held here, so plan and run
+// price providers from the same ledger. Nil reads as nothing charged.
+//
 // Ordered by provider name, so a plan built from them is deterministic without
 // the caller having to sort.
-func (r *Registry) Inputs() []scheduler.Input {
+func (r *Registry) Inputs(usage func(provider string) quota.PoolUsage) []scheduler.Input {
 	inputs := make([]scheduler.Input, 0, len(r.entries))
 
 	for _, e := range r.entries {
-		inputs = append(inputs, scheduler.Input{
+		in := scheduler.Input{
 			Provider:     e.name,
 			Capabilities: e.capabilities.Clone(),
-			Quota:        e.quota,
+			Limits:       e.limits,
 			Tags:         e.tags,
 			Enabled:      e.enabled,
 			Healthy:      e.healthy,
-		})
+		}
+
+		if usage != nil {
+			in.Usage = usage(e.name)
+		}
+
+		inputs = append(inputs, in)
 	}
 
 	return inputs
+}
+
+// Limits returns every provider's compiled pools, keyed by name, which is what
+// a ledger is built over.
+func (r *Registry) Limits() map[string]quota.Limits {
+	limits := make(map[string]quota.Limits, len(r.entries))
+	for _, e := range r.entries {
+		limits[e.name] = e.limits
+	}
+
+	return limits
 }
 
 // Provider returns the plugin registered under a name.

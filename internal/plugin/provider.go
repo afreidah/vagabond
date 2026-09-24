@@ -140,6 +140,11 @@ var ErrUnsupported = errors.New("operation not supported by this provider")
 // incoherently.
 var ErrInvalidSubmission = errors.New("invalid submission")
 
+// ErrUnknownExecution reports an execution the platform has no record of. The
+// reaper reads it as never having run, so it drops the quota reservation. Wrap
+// it only when the platform says so, never for a lookup that merely failed.
+var ErrUnknownExecution = errors.New("unknown execution")
+
 // StatusNotSupported is embedded by providers whose work finishes inside
 // Submit, so that declaring the fact is one line rather than a method body
 // every plugin writes slightly differently.

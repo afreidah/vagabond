@@ -84,7 +84,15 @@ the resource up.
 
 Where a previously submitted execution has reached.
 
+- Wrap `plugin.ErrUnknownExecution` when the platform has no record of the ID.
+  The quota reaper drops the reservation of such an execution as never having
+  run. A lookup that merely failed must not wrap it.
+- `ClassifyHTTP` marks a 404 with `plugin.ErrNotFound` for plugins to translate.
+- Set `StartedAt` and `EndedAt` on terminal states. The reaper charges an
+  abandoned execution for the time between them.
+
 Providers whose work finishes inside `Submit` embed `plugin.StatusNotSupported`.
+The reaper charges their abandoned reservations at the reserved amount.
 
 ### `Result`
 

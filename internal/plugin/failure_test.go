@@ -240,6 +240,22 @@ func TestClassifyHTTP(t *testing.T) {
 	}
 }
 
+// A 404 stays internal and is marked, so a plugin can tell a missing resource
+// from a failed request. Only a 404 is marked.
+func TestClassifyHTTP_NotFoundIsMarked(t *testing.T) {
+	if err := ClassifyHTTP(http.StatusNotFound, 0, errUnderlying); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ClassifyHTTP(404) = %v, want ErrNotFound", err)
+	}
+
+	if err := ClassifyHTTP(http.StatusForbidden, 0, errUnderlying); errors.Is(err, ErrNotFound) {
+		t.Errorf("ClassifyHTTP(403) = %v, marked ErrNotFound", err)
+	}
+
+	if err := ClassifyHTTP(http.StatusNotFound, 0, errUnderlying); !errors.Is(err, errUnderlying) {
+		t.Errorf("ClassifyHTTP(404) = %v, lost the underlying error", err)
+	}
+}
+
 // A 400 is infrastructure-shaped but must never be retried, which is why
 // Retryable is independent of Class rather than derived from it.
 func TestClassifyHTTP_BadRequestIsNotRetryable(t *testing.T) {

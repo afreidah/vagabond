@@ -20,11 +20,18 @@ import (
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
-func observedQuota(percent int) quota.Snapshot {
-	return quota.Snapshot{
-		FreePercent: percent,
-		ObservedAt:  time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC),
+// setFreePercent gives in one pool of a hundred executions with percent left.
+// Every execution charges it, so FreePercent reads percent whatever the task.
+func setFreePercent(in *Input, percent int) {
+	limits, err := quota.NewLimits([]quota.PoolSpec{
+		{Name: "requests", Meter: quota.MeterExecutions, Limit: 100, Period: quota.PeriodMonthly},
+	})
+	if err != nil {
+		panic(err)
 	}
+
+	in.Limits = limits
+	in.Usage = quota.PoolUsage{"requests": int64(100 - percent)}
 }
 
 // -------------------------------------------------------------------------
@@ -32,15 +39,16 @@ func observedQuota(percent int) quota.Snapshot {
 // -------------------------------------------------------------------------
 
 // The quota-derived attribute is merged here because this is the only layer
-// holding both snapshots. A capability model could never know it.
+// holding both the capabilities and the ledger. A capability model could never
+// know it.
 func TestInput_AttributesMergeQuota(t *testing.T) {
 	in := &Input{
 		Provider:     "ibm-code-engine",
 		Capabilities: plugin.FixtureContainer(time.Now()),
-		Quota:        observedQuota(72),
 	}
+	setFreePercent(in, 72)
 
-	attrs := in.Attributes()
+	attrs := in.Attributes(quota.Execution{})
 
 	if got := attrs[plugin.AttrFreeQuotaPercent]; got != "72" {
 		t.Errorf("attrs[%q] = %q, want %q", plugin.AttrFreeQuotaPercent, got, "72")
@@ -58,11 +66,11 @@ func TestInput_AttributesMergeTags(t *testing.T) {
 	in := &Input{
 		Provider:     "ibm-code-engine",
 		Capabilities: plugin.FixtureContainer(time.Now()),
-		Quota:        observedQuota(72),
 		Tags:         map[string]string{"region": "us-south"},
 	}
+	setFreePercent(in, 72)
 
-	attrs := in.Attributes()
+	attrs := in.Attributes(quota.Execution{})
 
 	if got := attrs[plugin.MetaPrefix+"region"]; got != "us-south" {
 		t.Errorf("attrs[%q] = %q, want us-south", plugin.MetaPrefix+"region", got)

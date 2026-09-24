@@ -45,10 +45,14 @@ var ErrNoProvider = errors.New("provider is not registered")
 // Err is nil on the attempt that produced a result. Every other attempt
 // carries the failure that ended it, which is what the decision to try
 // somewhere else was made on.
+//
+// Refused marks a provider passed over because the ledger would not reserve
+// its quota. Nothing was submitted, so it is not counted as a try.
 type Attempt struct {
 	Provider string
 	ID       execution.ID
 	Err      error // nil on the attempt that answered
+	Refused  bool  // the ledger refused; nothing was submitted
 }
 
 // TaskOutcome is what became of one task.
@@ -76,9 +80,23 @@ func (o *TaskOutcome) Succeeded() bool {
 	return o.Result != nil && o.Result.Succeeded()
 }
 
-// Rerouted reports whether this task needed more than one provider.
+// Rerouted reports whether this task was submitted to more than one provider.
 func (o *TaskOutcome) Rerouted() bool {
-	return len(o.Attempts) > 1
+	return o.Tried() > 1
+}
+
+// Tried counts the providers the task was actually submitted to, leaving out
+// the ones the ledger refused.
+func (o *TaskOutcome) Tried() int {
+	n := 0
+
+	for i := range o.Attempts {
+		if !o.Attempts[i].Refused {
+			n++
+		}
+	}
+
+	return n
 }
 
 // JobOutcome is what became of every task in a job.

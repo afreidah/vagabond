@@ -92,22 +92,12 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 // ONE ATTEMPT
 // -------------------------------------------------------------------------
 
-// execute runs a task on one provider and returns what it produced.
-//
-// The execution id is generated here rather than by the caller because it is
-// the submission idempotency key: a second attempt is a different execution,
-// and reusing the id would ask the provider to resume the one that just
-// failed.
+// execute runs a task on one provider under an id the caller reserved quota
+// for, and returns what it produced.
 func (d *Dispatcher) execute(
-	ctx context.Context, provider plugin.Provider, task *job.Task, attempt int,
-) (execution.ID, *execution.Result, bool, error) {
+	ctx context.Context, provider plugin.Provider, task *job.Task, id execution.ID, attempt int,
+) (*execution.Result, bool, error) {
 	var streamed bool
-
-	id, err := execution.NewID()
-	if err != nil {
-		return id, nil, streamed,
-			plugin.Internal(fmt.Errorf("generating an execution id: %w", err))
-	}
 
 	event := Event{
 		Task: task.Name, Provider: provider.Name(), ID: id, Attempt: attempt,
@@ -115,13 +105,13 @@ func (d *Dispatcher) execute(
 
 	submission, err := provider.Submit(ctx, id, task)
 	if err != nil {
-		return id, nil, streamed, err
+		return nil, streamed, err
 	}
 
 	if err := submission.Validate(); err != nil {
 		// A plugin describing its own submission incoherently is our bug to
 		// fix, not a provider outage, so it is not sent onward.
-		return id, nil, streamed, plugin.Internal(err)
+		return nil, streamed, plugin.Internal(err)
 	}
 
 	event.State = submission.State
@@ -131,7 +121,7 @@ func (d *Dispatcher) execute(
 	if submission.Synchronous() {
 		d.release(provider, id)
 
-		return id, submission.Result, streamed, nil
+		return submission.Result, streamed, nil
 	}
 
 	stream := d.startStream(ctx, provider, id)
@@ -152,12 +142,12 @@ func (d *Dispatcher) execute(
 			d.abandon(provider, id)
 		}
 
-		return id, nil, streamed, err
+		return nil, streamed, err
 	}
 
 	result, err := provider.Result(ctx, id)
 	if err != nil {
-		return id, nil, streamed, err
+		return nil, streamed, err
 	}
 
 	// After the result, because releasing may destroy what it reads.
@@ -166,11 +156,11 @@ func (d *Dispatcher) execute(
 	// A provider that reported cancelled produced no verdict about the work,
 	// so it is not an answer even though a result came back.
 	if state == execution.StateCancelled {
-		return id, result, streamed, plugin.Infrastructure(
+		return result, streamed, plugin.Infrastructure(
 			fmt.Errorf("execution %s was cancelled by the provider", id))
 	}
 
-	return id, result, streamed, nil
+	return result, streamed, nil
 }
 
 // release frees whatever the provider left behind, for providers that leave
@@ -208,8 +198,8 @@ func (d *Dispatcher) abandon(provider plugin.Provider, id execution.ID) {
 // watch polls until the execution reaches a state it never leaves.
 //
 // Returns the terminal state rather than a status, because nothing here keeps
-// a status: there is no ledger to write it to, and the provider is the record
-// until there is.
+// a status: the ledger records cost, not state, and the provider is the record
+// of the run.
 func (d *Dispatcher) watch(
 	ctx context.Context, provider plugin.Provider, id execution.ID, event Event,
 ) (execution.State, error) {

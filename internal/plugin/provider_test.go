@@ -442,8 +442,8 @@ func TestFakeContainerProvider_UnknownExecution(t *testing.T) {
 	p := NewFakeContainerProvider("fake-container")
 	id := newID(t)
 
-	if _, err := p.Status(t.Context(), id); err == nil {
-		t.Error("Status on an unknown execution returned no error")
+	if _, err := p.Status(t.Context(), id); !errors.Is(err, ErrUnknownExecution) {
+		t.Errorf("Status on an unknown execution = %v, want ErrUnknownExecution", err)
 	}
 
 	if err := p.Cancel(t.Context(), id); err == nil {

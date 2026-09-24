@@ -65,15 +65,14 @@ provider "ibm-primary" {
     region = "us-south"
     tier   = "lite"
   }
-
-  quota {
-    free_percent = 40
-    exhausted    = false
-  }
 }
 
 provider "lambda" {
   type = "fake-function"
+}
+
+store {
+  dsn = "postgres://vagabond@localhost/vagabond"
 }
 `)
 
@@ -95,12 +94,17 @@ provider "lambda" {
 		t.Errorf("enabled mismatch (-want +got):\n%s", diff)
 	}
 
-	if diff := cmp.Diff(ptr.Of(40), ibm.Quota.FreePercent); diff != "" {
-		t.Errorf("free_percent mismatch (-want +got):\n%s", diff)
+	if file.Store == nil || file.Store.DSN != "postgres://vagabond@localhost/vagabond" {
+		t.Errorf("Store = %+v, want the declared DSN", file.Store)
 	}
+}
 
-	if file.Providers[1].Quota != nil {
-		t.Error("a provider with no quota block decoded one anyway")
+// No store block is a ledger kept in memory, not an error.
+func TestLoadWithoutStore(t *testing.T) {
+	t.Parallel()
+
+	if file := load(t, `provider "ibm" { type = "fake-container" }`); file.Store != nil {
+		t.Errorf("Store = %+v, want nil", file.Store)
 	}
 }
 
@@ -143,23 +147,16 @@ provider "ibm" { type = "fake-function" }
 			src:  `provider "ibm" { type = "" }`,
 			want: "Missing provider type",
 		},
-		"quota above one hundred": {
-			src: `
-provider "ibm" {
-  type = "fake-container"
-  quota { free_percent = 140 }
-}
-`,
-			want: "Invalid free quota",
+		"empty store dsn": {
+			src:  `store { dsn = "" }`,
+			want: "Empty store DSN",
 		},
-		"quota below zero": {
+		"two stores in one file": {
 			src: `
-provider "ibm" {
-  type = "fake-container"
-  quota { free_percent = -1 }
-}
+store { dsn = "postgres://one" }
+store { dsn = "postgres://two" }
 `,
-			want: "Invalid free quota",
+			want: "Duplicate store",
 		},
 	}
 
@@ -170,25 +167,6 @@ provider "ibm" {
 			if got := loadErr(t, tc.src); !strings.Contains(got, tc.want) {
 				t.Errorf("diagnostics = %s, want them to mention %q", got, tc.want)
 			}
-		})
-	}
-}
-
-func TestValidateAcceptsQuotaBounds(t *testing.T) {
-	t.Parallel()
-
-	// Nothing here is arbitrary: zero is an exhausted provider and a hundred is
-	// an untouched one, and both are states the ledger will report.
-	for _, percent := range []string{"0", "100"} {
-		t.Run(percent, func(t *testing.T) {
-			t.Parallel()
-
-			load(t, `
-provider "ibm" {
-  type = "fake-container"
-  quota { free_percent = `+percent+` }
-}
-`)
 		})
 	}
 }
@@ -356,6 +334,45 @@ func TestLoadPathRejectsDuplicatesAcrossFiles(t *testing.T) {
 
 	if !strings.Contains(diags.Error(), "Duplicate provider") {
 		t.Errorf("unexpected diagnostics: %s", diags.Error())
+	}
+}
+
+// Two stores would leave file order deciding where the ledger is written.
+func TestLoadPathRejectsAStoreDeclaredTwice(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	write(t, dir, "a.hcl", `store { dsn = "postgres://one" }`)
+	write(t, dir, "b.hcl", `store { dsn = "postgres://two" }`)
+
+	_, diags := LoadPath(dir)
+	if !diags.HasErrors() {
+		t.Fatal("a store declared in two files was accepted")
+	}
+
+	if !strings.Contains(diags.Error(), "Duplicate store") {
+		t.Errorf("unexpected diagnostics: %s", diags.Error())
+	}
+}
+
+// A store beside the providers, in a file of its own, is the layout a
+// directory exists for.
+func TestLoadPathMergesAStore(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	write(t, dir, "ibm.hcl", `provider "ibm" { type = "fake-container" }`)
+	write(t, dir, "store.hcl", `store { dsn = "postgres://ledger" }`)
+
+	file, diags := LoadPath(dir)
+	if diags.HasErrors() {
+		t.Fatalf("LoadPath() = %s", diags.Error())
+	}
+
+	if file.Store == nil || file.Store.DSN != "postgres://ledger" {
+		t.Errorf("Store = %+v, want the one store.hcl declares", file.Store)
 	}
 }
 

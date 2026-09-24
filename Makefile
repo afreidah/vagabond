@@ -103,13 +103,13 @@ cover: ## Run tests and report total coverage
 	else echo "$(NO_PKGS_MSG) cover"; fi
 
 # Integration tests are gated behind a build tag and manage their own
-# containers through testcontainers, so nothing needs starting by hand. The
-# target exists now so that the invocation is settled before Chunk 4 adds the
-# first test that needs it.
+# containers through testcontainers, so nothing needs starting by hand.
+#
+# Repo-wide rather than one directory: these live beside the code they cover, so
+# the store's tests are in internal/state/postgres. The build tag is what marks
+# them, not their location.
 integration-test: ## Run integration tests (requires Docker)
-	@if [ -d internal/integration ]; then \
-		$(GO) test -race -tags=integration ./internal/integration/...; \
-	else echo "$(NO_PKGS_MSG) integration-test"; fi
+	$(GO) test -race -tags=integration -timeout 20m ./...
 
 # -------------------------------------------------------------------------
 # SECURITY
