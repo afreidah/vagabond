@@ -148,6 +148,29 @@ job "empty" {
 	}
 }
 
+// An empty namespace is neither a namespace nor the default, so it is refused
+// rather than read as either.
+func TestValidate_EmptyNamespace(t *testing.T) {
+	messages := validate(t, `
+job "ci" {
+  type      = "batch"
+  namespace = " "
+
+  task "test" {
+    driver = "container"
+
+    config {
+      image = "golang:1.27"
+    }
+  }
+}
+`, nil)
+
+	if !mentions(messages, "Empty namespace", "ci") {
+		t.Errorf("diagnostics do not report the empty namespace: %v", messages)
+	}
+}
+
 // Task names identify a task in results and logs, so two tasks sharing one
 // would make an execution unattributable.
 func TestValidate_DuplicateTaskNames(t *testing.T) {

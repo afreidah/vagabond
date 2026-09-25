@@ -25,6 +25,7 @@ import (
 	"github.com/hashicorp/hcl/v2"
 
 	"github.com/afreidah/vagabond/internal/config"
+	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/scheduler"
@@ -35,8 +36,12 @@ import (
 // -------------------------------------------------------------------------
 
 // Registry is every provider a deployment can dispatch to.
+//
+// namespaces holds every declared namespace, each with its compiled shares by
+// provider; a namespace with none maps to an empty map.
 type Registry struct {
-	entries []*entry
+	entries    []*entry
+	namespaces map[string]map[string]quota.Limits
 }
 
 // entry is one provider and everything last known about it.
@@ -79,9 +84,12 @@ func New(ctx context.Context, cfg *config.File) (*Registry, hcl.Diagnostics) {
 		return &Registry{}, nil
 	}
 
-	var diags hcl.Diagnostics
+	namespaces, diags := compileNamespaces(cfg.Namespaces)
 
-	r := &Registry{entries: make([]*entry, 0, len(cfg.Providers))}
+	r := &Registry{
+		entries:    make([]*entry, 0, len(cfg.Providers)),
+		namespaces: namespaces,
+	}
 
 	for i := range cfg.Providers {
 		e, entryDiags := newEntry(ctx, &cfg.Providers[i])
@@ -100,6 +108,40 @@ func New(ctx context.Context, cfg *config.File) (*Registry, hcl.Diagnostics) {
 	})
 
 	return r, diags
+}
+
+// compileNamespaces compiles every namespace's shares. Config validation
+// already reported a bad pool against its line; this is the backstop.
+func compileNamespaces(namespaces []config.Namespace) (map[string]map[string]quota.Limits, hcl.Diagnostics) {
+	var diags hcl.Diagnostics
+
+	compiled := make(map[string]map[string]quota.Limits, len(namespaces))
+
+	for i := range namespaces {
+		ns := &namespaces[i]
+		shares := make(map[string]quota.Limits, len(ns.Quotas))
+
+		for j := range ns.Quotas {
+			q := &ns.Quotas[j]
+
+			limits, err := quota.NewLimits(q.PoolSpecs())
+			if err != nil {
+				diags = append(diags, &hcl.Diagnostic{
+					Severity: hcl.DiagError,
+					Summary:  "Invalid quota pools",
+					Detail:   fmt.Sprintf("Namespace %q quota for provider %q: %s.", ns.Name, q.Provider, err),
+				})
+
+				continue
+			}
+
+			shares[q.Provider] = limits
+		}
+
+		compiled[ns.Name] = shares
+	}
+
+	return compiled, diags
 }
 
 // newEntry constructs one provider from its configuration.
@@ -199,14 +241,18 @@ func (r *Registry) Refresh(ctx context.Context) error {
 // QUERIES
 // -------------------------------------------------------------------------
 
-// Inputs returns what admission reads, one per configured provider.
+// Inputs returns what admission reads for a job in namespace, one per
+// configured provider.
 //
 // Usage is read through the function rather than held here, so plan and run
-// price providers from the same ledger. Nil reads as nothing charged.
+// price providers from the same ledger: a provider's total and the namespace's
+// share of it. Nil reads as nothing charged.
 //
 // Ordered by provider name, so a plan built from them is deterministic without
 // the caller having to sort.
-func (r *Registry) Inputs(usage func(provider string) quota.PoolUsage) []scheduler.Input {
+func (r *Registry) Inputs(
+	namespace string, usage func(namespace, provider string) (total, share quota.PoolUsage),
+) []scheduler.Input {
 	inputs := make([]scheduler.Input, 0, len(r.entries))
 
 	for _, e := range r.entries {
@@ -214,13 +260,15 @@ func (r *Registry) Inputs(usage func(provider string) quota.PoolUsage) []schedul
 			Provider:     e.name,
 			Capabilities: e.capabilities.Clone(),
 			Limits:       e.limits,
+			Namespace:    namespace,
+			Share:        r.namespaces[namespace][e.name],
 			Tags:         e.tags,
 			Enabled:      e.enabled,
 			Healthy:      e.healthy,
 		}
 
 		if usage != nil {
-			in.Usage = usage(e.name)
+			in.Usage, in.ShareUsage = usage(namespace, e.name)
 		}
 
 		inputs = append(inputs, in)
@@ -229,15 +277,26 @@ func (r *Registry) Inputs(usage func(provider string) quota.PoolUsage) []schedul
 	return inputs
 }
 
-// Limits returns every provider's compiled pools, keyed by name, which is what
-// a ledger is built over.
-func (r *Registry) Limits() map[string]quota.Limits {
-	limits := make(map[string]quota.Limits, len(r.entries))
-	for _, e := range r.entries {
-		limits[e.name] = e.limits
+// HasNamespace reports whether a job may name namespace. The default always
+// exists.
+func (r *Registry) HasNamespace(namespace string) bool {
+	if namespace == job.DefaultNamespace {
+		return true
 	}
 
-	return limits
+	_, ok := r.namespaces[namespace]
+
+	return ok
+}
+
+// Budgets returns every compiled pool, which is what a ledger is built over.
+func (r *Registry) Budgets() quota.Budgets {
+	totals := make(map[string]quota.Limits, len(r.entries))
+	for _, e := range r.entries {
+		totals[e.name] = e.limits
+	}
+
+	return quota.Budgets{Totals: totals, Namespaces: r.namespaces}
 }
 
 // Provider returns the plugin registered under a name.

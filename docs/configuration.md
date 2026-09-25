@@ -194,8 +194,41 @@ Rules:
 - A limit above the free tier is how you permit spending. Vagabond does not know
   a provider's prices; do that arithmetic yourself and write the result.
 
-`provider.free_quota_percent` is the tightest remaining pool the task charges.
-It drives the `headroom` scorer and the `quota-exhausted` check.
+`provider.free_quota_percent` is the tightest remaining pool the task charges,
+across the provider's pools and the job namespace's share. It drives the
+`headroom` scorer and the `quota-exhausted` check.
+
+## `namespace` block
+
+An owner of jobs, with an optional share of each provider's allowance. Top
+level, repeatable, and may sit in its own file.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| label | string | yes | Namespace name |
+
+Contains zero or more `quota` blocks, each labelled with a provider name and
+holding `pool` blocks with the same attributes as a provider's.
+
+```hcl
+namespace "ci" {
+  quota "aws-lambda" {
+    pool "compute" {
+      meter  = "gb_seconds"
+      limit  = 100000
+      period = "monthly"
+    }
+  }
+}
+```
+
+- `default` exists without being declared. A job naming no namespace runs there.
+- An execution charges the provider's pools and its namespace's share, and needs
+  room in both. Shares may add up past the provider's pools; the provider's
+  still bind.
+- A namespace with no share of a provider is limited only by the provider's
+  pools.
+- A job naming an undeclared namespace is refused.
 
 ## `store` block
 

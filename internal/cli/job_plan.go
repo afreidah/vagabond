@@ -22,6 +22,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"text/tabwriter"
 
@@ -78,6 +79,11 @@ Plan Options:
     it is planned, so a specification that interpolates meta.version is planned
     as it would actually be submitted.
 
+  -namespace <name>
+    The namespace to plan in, for a job that names none. Defaults to
+    $VAGABOND_NAMESPACE, then "default". A job naming a different one is an
+    error.
+
   -untracked
     Plan even when the configured usage store cannot be reached, pricing every
     provider as if nothing had been spent. A store that can be reached is
@@ -95,12 +101,14 @@ func (c *JobPlanCommand) Run(args []string) int {
 	var (
 		meta       metaFlags
 		configPath string
+		namespace  string
 		verbose    bool
 		untracked  bool
 	)
 
 	flags := c.FlagSet("job plan")
 	flags.Var(&meta, "meta", "job metadata as key=value, repeatable")
+	flags.StringVar(&namespace, "namespace", os.Getenv(namespaceEnv), "namespace for a job that names none")
 	flags.StringVar(&configPath, "config", "", "provider configuration file or directory")
 	flags.BoolVar(&verbose, "verbose", false, "show each scorer's contribution")
 	flags.BoolVar(&untracked, "untracked", false, "plan even when the usage store is unreachable")
@@ -133,7 +141,7 @@ func (c *JobPlanCommand) Run(args []string) int {
 
 	defer finish()
 
-	return c.plan(spec, meta, reg, led, verbose)
+	return c.plan(spec, meta, namespace, reg, led, verbose)
 }
 
 // -------------------------------------------------------------------------
@@ -145,12 +153,16 @@ func (c *JobPlanCommand) Run(args []string) int {
 // Reads usage from the ledger and never reserves, so a plan is priced the way a
 // run would be and changes nothing.
 func (c *JobPlanCommand) plan(
-	spec *job.File, meta metaFlags, reg *registry.Registry,
+	spec *job.File, meta metaFlags, namespaceFlag string, reg *registry.Registry,
 	led dispatch.Ledger, verbose bool,
 ) int {
-	inputs := reg.Inputs(led.PoolUsage)
-	if len(inputs) == 0 {
+	if len(reg.Names()) == 0 {
 		return c.Errorf("No providers are configured, so there is nothing to plan against.")
+	}
+
+	namespaces, err := resolveNamespaces(namespaceFlag, spec, reg)
+	if err != nil {
+		return c.Errorf("%s", err)
 	}
 
 	ctx := jobspec.EvalContext(meta)
@@ -160,6 +172,7 @@ func (c *JobPlanCommand) plan(
 
 	for i := range spec.Jobs {
 		j := &spec.Jobs[i]
+		inputs := reg.Inputs(namespaces[i], led.PoolUsage)
 
 		for k := range j.Tasks {
 			req, diags := scheduler.NewRequest(&j.Tasks[k], j.Routing, ctx)

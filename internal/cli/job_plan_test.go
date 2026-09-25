@@ -302,6 +302,100 @@ job "ci" {
 }
 
 // -------------------------------------------------------------------------
+// NAMESPACES
+// -------------------------------------------------------------------------
+
+// A one-hour task on a provider with room, planned from a namespace whose share
+// of it is one second.
+const (
+	timedJob = `
+job "ci" {
+  type = "batch"
+
+  task "test" {
+    driver  = "container"
+    timeout = "1h"
+
+    config {
+      image = "golang:1.27"
+    }
+  }
+}
+`
+
+	sharedConfig = `
+provider "ibm-code-engine" { type = "fake-container" }
+
+namespace "ci" {
+  quota "ibm-code-engine" {
+    pool "runtime" {
+      meter  = "seconds"
+      limit  = 1
+      period = "monthly"
+    }
+  }
+}
+`
+)
+
+// The namespace's share refuses the task even though the provider itself has
+// room, and says whose pool it was.
+func TestJobPlan_NamespaceShareRefuses(t *testing.T) {
+	code, stdout, _ := plan(t, timedJob, sharedConfig, "-namespace", "ci")
+
+	if code != ExitFailure {
+		t.Errorf("exit code = %d, want %d", code, ExitFailure)
+	}
+
+	if !strings.Contains(stdout, `Namespace "ci"'s pool "runtime"`) {
+		t.Errorf("the refusal does not name the namespace's pool:\n%s", stdout)
+	}
+}
+
+// The same job in the default namespace has no share, so only the provider's
+// total applies.
+func TestJobPlan_DefaultNamespaceHasNoShare(t *testing.T) {
+	code, stdout, _ := plan(t, timedJob, sharedConfig)
+
+	if code != ExitSuccess {
+		t.Errorf("exit code = %d, want %d\n%s", code, ExitSuccess, stdout)
+	}
+}
+
+func TestJobPlan_UndeclaredNamespace(t *testing.T) {
+	code, _, stderr := plan(t, planJob, planConfig, "-namespace", "nowhere")
+
+	if code != ExitFailure || !strings.Contains(stderr, `namespace "nowhere" is not declared`) {
+		t.Errorf("exit %d, stderr:\n%s", code, stderr)
+	}
+}
+
+// A job naming its namespace and a flag naming another is an error rather than
+// one silently winning.
+func TestJobPlan_NamespaceConflict(t *testing.T) {
+	const pinned = `
+job "ci" {
+  type      = "batch"
+  namespace = "ci"
+
+  task "test" {
+    driver = "container"
+
+    config {
+      image = "golang:1.27"
+    }
+  }
+}
+`
+
+	code, _, stderr := plan(t, pinned, sharedConfig, "-namespace", "default")
+
+	if code != ExitFailure || !strings.Contains(stderr, "remove one") {
+		t.Errorf("exit %d, stderr:\n%s", code, stderr)
+	}
+}
+
+// -------------------------------------------------------------------------
 // CONFIGURATION
 // -------------------------------------------------------------------------
 

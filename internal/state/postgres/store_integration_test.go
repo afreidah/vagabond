@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -166,6 +167,21 @@ func fnReservation(t *testing.T, created time.Time, compute int64) *ledger.Reser
 			{Pool: "compute", Period: "2026-09", Amount: compute, Limit: 1000 * gbSeconds},
 		},
 	}
+}
+
+// withShare adds a namespace's compute share to r, limited to limit.
+func withShare(r *ledger.Reservation, namespace string, limit int64) *ledger.Reservation {
+	compute := r.Charges[1]
+	compute.Namespace = namespace
+	compute.Limit = limit
+	r.Charges = append(r.Charges, compute)
+
+	return r
+}
+
+// totalPool names one of a provider's own pools.
+func totalPool(pool string) ledger.PoolRef {
+	return ledger.PoolRef{Namespace: ledger.Total, Pool: pool}
 }
 
 func mustReserve(ctx context.Context, t *testing.T, s *postgres.Store, r *ledger.Reservation) {
@@ -343,6 +359,37 @@ func TestReserve_ConcurrentReservationsStopAtTheLimit(t *testing.T) {
 	}
 }
 
+// A namespace's share is its own counter: spending it refuses that namespace
+// and no other, while the provider's total still counts everything.
+func TestReserve_ShareIsCountedApart(t *testing.T) {
+	for _, e := range engines() {
+		t.Run(e.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := open(ctx, t, e)
+
+			mustReserve(ctx, t, store, withShare(fnReservation(t, time.Now(), 95*gbSeconds), "ci", 100*gbSeconds))
+
+			fits, standing, err := store.Reserve(ctx,
+				withShare(fnReservation(t, time.Now(), 10*gbSeconds), "ci", 100*gbSeconds))
+			if err != nil {
+				t.Fatalf("Reserve() = %v", err)
+			}
+
+			ciCompute := ledger.Key{Namespace: "ci", Provider: "fn", Pool: "compute", Period: "2026-09"}
+
+			if fits || standing[ciCompute] != 95*gbSeconds {
+				t.Errorf("fits = %v, ci standing = %d; want refused against 95 GB-seconds", fits, standing[ciCompute])
+			}
+
+			mustReserve(ctx, t, store, withShare(fnReservation(t, time.Now(), 10*gbSeconds), "batch", 100*gbSeconds))
+
+			if got := readSeptember(ctx, t, store)[fnCompute]; got != 105*gbSeconds {
+				t.Errorf("total compute = %d, want both namespaces' 105 GB-seconds", got)
+			}
+		})
+	}
+}
+
 // -------------------------------------------------------------------------
 // SETTLE
 // -------------------------------------------------------------------------
@@ -358,7 +405,7 @@ func TestSettle_ReplacesTheReservationOnce(t *testing.T) {
 			r := fnReservation(t, time.Now(), 900*gbSeconds)
 			mustReserve(ctx, t, store, r)
 
-			actual := map[string]int64{"requests": 1, "compute": 10 * gbSeconds}
+			actual := map[ledger.PoolRef]int64{totalPool("requests"): 1, totalPool("compute"): 10 * gbSeconds}
 
 			for range 2 {
 				if err := store.Settle(ctx, r.ID, actual); err != nil {
@@ -385,7 +432,7 @@ func TestSettle_ChargesTheReservedPeriod(t *testing.T) {
 			r := fnReservation(t, time.Now(), 900*gbSeconds)
 			mustReserve(ctx, t, store, r)
 
-			if err := store.Settle(ctx, r.ID, map[string]int64{"compute": 10 * gbSeconds}); err != nil {
+			if err := store.Settle(ctx, r.ID, map[ledger.PoolRef]int64{totalPool("compute"): 10 * gbSeconds}); err != nil {
 				t.Fatalf("Settle() = %v", err)
 			}
 
@@ -501,7 +548,7 @@ func TestReap_SettlesWhatTheCallbackAccepts(t *testing.T) {
 			offered := map[execution.ID]ledger.Held{}
 
 			reaped, err := store.Reap(ctx, now.Add(-time.Hour),
-				func(_ context.Context, h ledger.Held) (map[string]int64, bool) {
+				func(_ context.Context, h ledger.Held) (map[ledger.PoolRef]int64, bool) {
 					offered[h.ID] = h
 
 					return nil, h.ID == dropped.ID
@@ -518,7 +565,7 @@ func TestReap_SettlesWhatTheCallbackAccepts(t *testing.T) {
 				t.Errorf("offered %d reservations, want the two old ones", len(offered))
 			}
 
-			if h := offered[kept.ID]; h.CPU != 1000 || h.Memory != 1024 || h.Amounts["compute"] != 900*gbSeconds {
+			if h := offered[kept.ID]; h.CPU != 1000 || h.Memory != 1024 || h.Amounts[totalPool("compute")] != 900*gbSeconds {
 				t.Errorf("held = %+v, want the reservation's shape and amounts", h)
 			}
 
@@ -543,30 +590,42 @@ func TestLedgerSurvivesARestart(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
-			limits := map[string]quota.Limits{"fn": quota.FixtureFunction()}
+			share, err := quota.NewLimits([]quota.PoolSpec{
+				{Name: "compute", Meter: quota.MeterGBSeconds, Limit: 1000, Period: quota.PeriodMonthly},
+			})
+			if err != nil {
+				t.Fatalf("NewLimits() = %v", err)
+			}
 
-			before, err := ledger.New(ctx, limits, store)
+			budgets := quota.Budgets{
+				Totals:     map[string]quota.Limits{"fn": quota.FixtureFunction()},
+				Namespaces: map[string]map[string]quota.Limits{"ci": {"fn": share}},
+			}
+
+			before, err := ledger.New(ctx, budgets, store)
 			if err != nil {
 				t.Fatalf("New() = %v", err)
 			}
 
-			if err := before.Reserve(ctx, newID(t), "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}); err != nil {
+			if err := before.Reserve(ctx, newID(t), "ci", "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}); err != nil {
 				t.Fatalf("Reserve() = %v", err)
 			}
 
-			want := before.PoolUsage("fn")
+			wantTotal, wantShare := before.PoolUsage("ci", "fn")
 
-			after, err := ledger.New(ctx, limits, store)
+			after, err := ledger.New(ctx, budgets, store)
 			if err != nil {
 				t.Fatalf("New() = %v", err)
 			}
 
-			got := after.PoolUsage("fn")
+			gotTotal, gotShare := after.PoolUsage("ci", "fn")
 
-			for pool, amount := range want {
-				if got[pool] != amount {
-					t.Errorf("pool %q = %d after restart, want %d", pool, got[pool], amount)
-				}
+			if diff := cmp.Diff(wantTotal, gotTotal); diff != "" {
+				t.Errorf("total after restart (-want +got):\n%s", diff)
+			}
+
+			if diff := cmp.Diff(wantShare, gotShare); diff != "" || gotShare["compute"] == 0 {
+				t.Errorf("share after restart (-want +got):\n%s", diff)
 			}
 		})
 	}

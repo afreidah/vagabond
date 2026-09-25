@@ -82,6 +82,11 @@ func validateJob(j *job.Job) hcl.Diagnostics {
 			"A job block must carry a name."))
 	}
 
+	if j.Namespace != nil && strings.TrimSpace(*j.Namespace) == "" {
+		diags = append(diags, simple(fmt.Sprintf("Empty namespace in %q", j.Name),
+			"Remove the attribute to use the default namespace."))
+	}
+
 	diags = append(diags, validateJobType(j)...)
 	diags = append(diags, validateRouting(j)...)
 	diags = append(diags, validateTasks(j)...)

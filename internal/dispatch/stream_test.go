@@ -80,7 +80,7 @@ func TestStreamsLogsWhenSupported(t *testing.T) {
 	// The registry must hand back the streaming type, not the embedded one.
 	d.registry.(*fakeRegistry).providers["a"] = p
 
-	if _, err := d.RunTask(t.Context(), containerTask(t, nil), nil, nil); err != nil {
+	if _, err := d.RunTask(t.Context(), ns, containerTask(t, nil), nil, nil); err != nil {
 		t.Fatalf("RunTask failed: %v", err)
 	}
 
@@ -107,7 +107,7 @@ func TestStreamIsClosedWhenTheExecutionEnds(t *testing.T) {
 		WithLogs(&logs))
 	d.registry.(*fakeRegistry).providers["a"] = p
 
-	if _, err := d.RunTask(t.Context(), containerTask(t, nil), nil, nil); err != nil {
+	if _, err := d.RunTask(t.Context(), ns, containerTask(t, nil), nil, nil); err != nil {
 		t.Fatalf("RunTask failed: %v", err)
 	}
 
@@ -130,7 +130,7 @@ func TestNoStreamingWhenUnsupported(t *testing.T) {
 		WithSleeper(func(context.Context, time.Duration) error { return nil }),
 		WithLogs(&logs))
 
-	if _, err := d.RunTask(t.Context(), containerTask(t, nil), nil, nil); err != nil {
+	if _, err := d.RunTask(t.Context(), ns, containerTask(t, nil), nil, nil); err != nil {
 		t.Fatalf("RunTask failed: %v", err)
 	}
 
@@ -149,7 +149,7 @@ func TestNoStreamingWithoutAWriter(t *testing.T) {
 		WithSleeper(func(context.Context, time.Duration) error { return nil }))
 	d.registry.(*fakeRegistry).providers["a"] = p
 
-	if _, err := d.RunTask(t.Context(), containerTask(t, nil), nil, nil); err != nil {
+	if _, err := d.RunTask(t.Context(), ns, containerTask(t, nil), nil, nil); err != nil {
 		t.Fatalf("RunTask failed: %v", err)
 	}
 
@@ -172,7 +172,7 @@ func TestStreamFailureDoesNotFailTheExecution(t *testing.T) {
 		WithLogs(&logs))
 	d.registry.(*fakeRegistry).providers["a"] = p
 
-	outcome, err := d.RunTask(t.Context(), containerTask(t, nil), nil, nil)
+	outcome, err := d.RunTask(t.Context(), ns, containerTask(t, nil), nil, nil)
 	if err != nil {
 		t.Fatalf("a broken stream failed the execution: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestProgressReportsEachStateChange(t *testing.T) {
 		WithSleeper(func(context.Context, time.Duration) error { return nil }),
 		WithProgress(func(e Event) { states = append(states, e.State) }))
 
-	if _, err := d.RunTask(t.Context(), containerTask(t, nil), nil, nil); err != nil {
+	if _, err := d.RunTask(t.Context(), ns, containerTask(t, nil), nil, nil); err != nil {
 		t.Fatalf("RunTask failed: %v", err)
 	}
 
@@ -240,7 +240,7 @@ func TestProgressCarriesTheAttemptNumber(t *testing.T) {
 		WithSleeper(func(context.Context, time.Duration) error { return nil }),
 		WithProgress(func(e Event) { events = append(events, e) }))
 
-	if _, err := d.RunTask(t.Context(), containerTask(t, reroutingRetry(2)), nil, nil); err != nil {
+	if _, err := d.RunTask(t.Context(), ns, containerTask(t, reroutingRetry(2)), nil, nil); err != nil {
 		t.Fatalf("RunTask failed: %v", err)
 	}
 
@@ -288,7 +288,7 @@ func TestReleaseIsCalledOnSuccess(t *testing.T) {
 	d := newDispatcher(t, newRegistry(&p.scriptedProvider))
 	d.registry.(*fakeRegistry).providers["a"] = p
 
-	if _, err := d.RunTask(t.Context(), containerTask(t, nil), nil, nil); err != nil {
+	if _, err := d.RunTask(t.Context(), ns, containerTask(t, nil), nil, nil); err != nil {
 		t.Fatalf("RunTask failed: %v", err)
 	}
 
@@ -315,7 +315,7 @@ func TestReleaseIsCalledOnAFailedWorkload(t *testing.T) {
 	d := newDispatcher(t, newRegistry(&p.scriptedProvider))
 	d.registry.(*fakeRegistry).providers["a"] = p
 
-	if _, err := d.RunTask(t.Context(), containerTask(t, nil), nil, nil); err != nil {
+	if _, err := d.RunTask(t.Context(), ns, containerTask(t, nil), nil, nil); err != nil {
 		t.Fatalf("RunTask failed: %v", err)
 	}
 
@@ -333,7 +333,7 @@ func TestNoReleaseWhenUnsupported(t *testing.T) {
 	}
 
 	if _, err := newDispatcher(t, newRegistry(p)).
-		RunTask(t.Context(), containerTask(t, nil), nil, nil); err != nil {
+		RunTask(t.Context(), ns, containerTask(t, nil), nil, nil); err != nil {
 		t.Fatalf("RunTask failed: %v", err)
 	}
 }
@@ -365,7 +365,7 @@ func TestCancelledRunStopsTheExecution(t *testing.T) {
 		return nil
 	}))
 
-	_, err := d.RunTask(ctx, containerTask(t, nil), nil, nil)
+	_, err := d.RunTask(ctx, ns, containerTask(t, nil), nil, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
@@ -385,7 +385,7 @@ func TestProviderFailureDoesNotCancel(t *testing.T) {
 	}
 
 	if _, err := newDispatcher(t, newRegistry(p)).
-		RunTask(t.Context(), containerTask(t, nil), nil, nil); err == nil {
+		RunTask(t.Context(), ns, containerTask(t, nil), nil, nil); err == nil {
 		t.Fatal("expected a failure")
 	}
 

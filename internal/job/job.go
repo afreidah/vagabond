@@ -21,6 +21,10 @@ import (
 	"strings"
 )
 
+// DefaultNamespace is where a job naming no namespace runs. It exists without
+// being declared.
+const DefaultNamespace = "default"
+
 // -------------------------------------------------------------------------
 // FILE
 // -------------------------------------------------------------------------
@@ -40,8 +44,12 @@ type File struct {
 // everywhere, which is the sensible default for work that genuinely does not
 // care where it runs. Its absence is not the same as an empty provider list,
 // which would mean no provider is allowed.
+//
+// Namespace is nil when the job names none; the caller's -namespace or the
+// default namespace applies.
 type Job struct {
 	Name          string         `hcl:"name,label"`
+	Namespace     *string        `hcl:"namespace,optional"`
 	Type          *Type          `hcl:"type,optional"`
 	Meta          *RawBlock      `hcl:"meta,block"`
 	Parameterized *Parameterized `hcl:"parameterized,block"`

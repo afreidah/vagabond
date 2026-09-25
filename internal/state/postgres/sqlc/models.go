@@ -17,6 +17,7 @@ type QuotaReservation struct {
 	Cpu         int64
 	Memory      int64
 	CreatedAt   time.Time
+	Namespace   string
 }
 
 type QuotaUsage struct {
@@ -25,4 +26,5 @@ type QuotaUsage struct {
 	Period    string
 	Used      int64
 	UpdatedAt time.Time
+	Namespace string
 }
