@@ -19,6 +19,7 @@ import (
 	"github.com/afreidah/vagabond/internal/jobspec"
 	"github.com/afreidah/vagabond/internal/ledger"
 	"github.com/afreidah/vagabond/internal/registry"
+	"github.com/afreidah/vagabond/internal/state/memory"
 	"github.com/afreidah/vagabond/internal/state/postgres"
 )
 
@@ -122,27 +123,34 @@ func (m *Meta) loadRegistry(
 	return reg, cfg.Store, ExitSuccess
 }
 
-// loadLedger builds the ledger a command prices and charges against, and the
-// function that finishes with it.
+// stores is what a command reads and writes: the quota ledger and the record
+// of every execution.
+type stores struct {
+	ledger     dispatch.Ledger
+	executions dispatch.Executions
+}
+
+// loadStores builds the ledger a command prices and charges against, the store
+// it records executions in, and the function that finishes with both.
 //
-// No store block is an in-memory ledger; the caller decides whether that is
+// No store block keeps both in memory; the caller decides whether that is
 // worth a warning. A store that cannot be opened fails the command unless
 // untracked was given, because pricing against an empty ledger reads every
 // provider as full and dispatching against one spends without a record. A
 // store that opens is always used, untracked or not.
 //
 // action names what -untracked would let the command do, for the error.
-func (m *Meta) loadLedger(
+func (m *Meta) loadStores(
 	ctx context.Context, store *config.StoreBlock, reg *registry.Registry,
 	untracked bool, action string,
-) (dispatch.Ledger, func(), int) {
+) (*stores, func(), int) {
 	if store == nil {
-		return m.memoryLedger(ctx, reg)
+		return m.memoryStores(ctx, reg)
 	}
 
-	led, closeStore, err := openLedger(ctx, store.DSN, reg)
+	s, closeStore, err := openStores(ctx, store.DSN, reg)
 	if err == nil {
-		return led, closeStore, ExitSuccess
+		return s, closeStore, ExitSuccess
 	}
 
 	if !untracked {
@@ -154,25 +162,26 @@ func (m *Meta) loadLedger(
 	m.Ui.Warn(fmt.Sprintf(
 		"Could not open the usage store: %s\nContinuing untracked: usage is not recorded.", err))
 
-	return m.memoryLedger(ctx, reg)
+	return m.memoryStores(ctx, reg)
 }
 
-// memoryLedger is a ledger whose usage leaves with the process.
-func (m *Meta) memoryLedger(ctx context.Context, reg *registry.Registry) (dispatch.Ledger, func(), int) {
+// memoryStores keep usage and executions in memory, and lose both with the
+// process.
+func (m *Meta) memoryStores(ctx context.Context, reg *registry.Registry) (*stores, func(), int) {
 	led, err := ledger.New(ctx, reg.Budgets(), ledger.NewMemory(nil))
 	if err != nil {
 		return nil, nil, m.Errorf("%s", err)
 	}
 
-	return led, func() {}, ExitSuccess
+	return &stores{ledger: led, executions: memory.NewExecutions()}, func() {}, ExitSuccess
 }
 
-// openLedger connects, migrates, and loads the stored usage, as
+// openStores connects, migrates, and loads the stored usage, as
 // s3-orchestrator's store provider does at startup. The function returned
 // closes the connection.
-func openLedger(
+func openStores(
 	ctx context.Context, dsn string, reg *registry.Registry,
-) (*ledger.Ledger, func(), error) {
+) (*stores, func(), error) {
 	db, err := postgres.Open(ctx, dsn)
 	if err != nil {
 		return nil, nil, err
@@ -197,5 +206,5 @@ func openLedger(
 		return nil, nil, err
 	}
 
-	return led, db.Close, nil
+	return &stores{ledger: led, executions: db}, db.Close, nil
 }

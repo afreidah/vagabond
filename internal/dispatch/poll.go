@@ -95,24 +95,32 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 // execute runs a task on one provider under an id the caller reserved quota
 // for, and returns what it produced.
 func (d *Dispatcher) execute(
-	ctx context.Context, provider plugin.Provider, task *job.Task, id execution.ID, attempt int,
+	ctx context.Context, provider plugin.Provider, task *job.Task, run *tracked,
 ) (*execution.Result, bool, error) {
 	var streamed bool
 
+	id := run.rec.ID
+
 	event := Event{
-		Task: task.Name, Provider: provider.Name(), ID: id, Attempt: attempt,
+		Task: task.Name, Provider: provider.Name(), ID: id, Attempt: run.rec.Attempt,
 	}
 
 	submission, err := provider.Submit(ctx, id, task)
+	if err == nil {
+		// A plugin describing its own submission incoherently is our bug to
+		// fix, not a provider outage, so it is not sent onward.
+		if invalid := submission.Validate(); invalid != nil {
+			err = plugin.Internal(invalid)
+		}
+	}
+
 	if err != nil {
+		run.failed(ctx, err)
+
 		return nil, streamed, err
 	}
 
-	if err := submission.Validate(); err != nil {
-		// A plugin describing its own submission incoherently is our bug to
-		// fix, not a provider outage, so it is not sent onward.
-		return nil, streamed, plugin.Internal(err)
-	}
+	run.submitted(ctx, &submission)
 
 	event.State = submission.State
 	d.report(event)
@@ -127,7 +135,7 @@ func (d *Dispatcher) execute(
 	stream := d.startStream(ctx, provider, id)
 	defer stream.stop()
 
-	state, err := d.watch(ctx, provider, id, event)
+	state, err := d.watch(ctx, provider, run, event)
 
 	// Settled before anything else prints, so the tail of a build does not land
 	// underneath the result.
@@ -140,12 +148,17 @@ func (d *Dispatcher) execute(
 		// still out there. Stop it, or it keeps running and billing.
 		if ctx.Err() != nil {
 			d.abandon(provider, id)
+			run.to(ctx, execution.StateCancelled)
+		} else {
+			run.failed(ctx, err)
 		}
 
 		return nil, streamed, err
 	}
 
 	result, err := provider.Result(ctx, id)
+	run.finish(ctx, state, result)
+
 	if err != nil {
 		return nil, streamed, err
 	}
@@ -195,13 +208,13 @@ func (d *Dispatcher) abandon(provider plugin.Provider, id execution.ID) {
 	_ = provider.Cancel(ctx, id)
 }
 
-// watch polls until the execution reaches a state it never leaves.
+// watch polls until the execution reaches a state it never leaves, recording
+// each state it passes through.
 //
-// Returns the terminal state rather than a status, because nothing here keeps
-// a status: the ledger records cost, not state, and the provider is the record
-// of the run.
+// Returns the terminal state unrecorded, because the caller records it with
+// the result that goes with it.
 func (d *Dispatcher) watch(
-	ctx context.Context, provider plugin.Provider, id execution.ID, event Event,
+	ctx context.Context, provider plugin.Provider, run *tracked, event Event,
 ) (execution.State, error) {
 	last := event.State
 
@@ -210,7 +223,7 @@ func (d *Dispatcher) watch(
 			return "", err
 		}
 
-		status, err := provider.Status(ctx, id)
+		status, err := provider.Status(ctx, run.rec.ID)
 		if err != nil {
 			return "", err
 		}
@@ -228,6 +241,7 @@ func (d *Dispatcher) watch(
 			last = status.State
 			event.State = status.State
 
+			run.to(ctx, status.State)
 			d.report(event)
 		}
 	}

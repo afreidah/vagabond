@@ -33,7 +33,7 @@ var migrationFS embed.FS
 
 // SchemaVersion is the migration version this binary expects. Raised with every
 // migration added.
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // ErrUnavailable reports a database that could not be reached. The circuit
 // breaker that will stand in front of the store returns the same sentinel, so

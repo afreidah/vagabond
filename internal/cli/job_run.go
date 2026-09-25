@@ -143,14 +143,14 @@ func (c *JobRunCommand) Run(args []string) int {
 		c.Ui.Warn("No store is configured, so this run's usage is not recorded.")
 	}
 
-	led, finish, code := c.loadLedger(ctx, store, reg, untracked, "run")
-	if led == nil {
+	s, finish, code := c.loadStores(ctx, store, reg, untracked, "run")
+	if s == nil {
 		return code
 	}
 
 	defer finish()
 
-	return c.run(ctx, spec, meta, namespace, reg, led, noLogs)
+	return c.run(ctx, spec, meta, namespace, reg, s, noLogs)
 }
 
 // -------------------------------------------------------------------------
@@ -160,7 +160,7 @@ func (c *JobRunCommand) Run(args []string) int {
 // run dispatches every job in the specification.
 func (c *JobRunCommand) run(
 	ctx context.Context, spec *job.File, meta metaFlags, namespaceFlag string,
-	reg *registry.Registry, led dispatch.Ledger, noLogs bool,
+	reg *registry.Registry, s *stores, noLogs bool,
 ) int {
 	if len(reg.Names()) == 0 {
 		return c.Errorf("No providers are configured, so there is nothing to run on.")
@@ -176,7 +176,7 @@ func (c *JobRunCommand) run(
 		opts = append(opts, dispatch.WithLogs(os.Stdout))
 	}
 
-	d := dispatch.New(reg, led, opts...)
+	d := dispatch.New(reg, s.ledger, s.executions, opts...)
 	eval := jobspec.EvalContext(meta)
 
 	// Reservations a killed run left behind hold quota this run may need.

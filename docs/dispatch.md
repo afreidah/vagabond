@@ -4,8 +4,29 @@ Dispatch takes the selection [ranking](scheduling.md) produced and runs it:
 submit, watch until terminal, collect the result, release what the provider left
 behind.
 
-Synchronous and stateless. A run holds its execution in memory, so a process
-that dies mid-run loses it.
+Synchronous. Every attempt is recorded in the execution store before it is
+submitted and as it changes state.
+
+## Execution records
+
+One record per attempt, in Postgres when a `store` is configured and in memory
+otherwise.
+
+| State written | When |
+|---|---|
+| `pending` | Before `Submit`. A record that cannot be written stops the dispatch. |
+| `submitted`, then the provider's | `Submit` returned |
+| Each polled state | On change |
+| Terminal, with the result | The provider reported one |
+| `failed` | `Submit` failed; the failure class is kept |
+| `lost` | Submitted, then the provider stopped answering |
+| `cancelled` | The caller gave up and the execution was stopped |
+
+- Writes after `pending` are best effort. The run already happened; failing it
+  over a record would lose the answer.
+- An update applies only if the record is still in the state it was read in.
+- Stored output is the last 64 KiB, marked truncated when cut.
+- A rerouted attempt names the attempt before it.
 
 ## The rule
 

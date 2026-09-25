@@ -8,6 +8,31 @@ import (
 	"time"
 )
 
+type Execution struct {
+	ID            string
+	Namespace     string
+	Job           string
+	JobVersion    int64
+	Task          string
+	Provider      string
+	Attempt       int64
+	PreviousID    string
+	State         string
+	ProviderID    string
+	Failure       string
+	CreatedAt     time.Time
+	StartedAt     *time.Time
+	EndedAt       *time.Time
+	UpdatedAt     time.Time
+	ExitCode      *int64
+	DurationMs    *int64
+	BilledCpu     *int64
+	BilledMemory  *int64
+	BilledMs      *int64
+	Logs          []byte
+	LogsTruncated bool
+}
+
 type QuotaReservation struct {
 	ExecutionID string
 	Provider    string

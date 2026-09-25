@@ -58,19 +58,39 @@ type Ledger interface {
 	PoolUsage(namespace, provider string) (total, share quota.PoolUsage)
 }
 
+// Executions is where every attempt is recorded, declared here for the same
+// reason as Registry.
+//
+// Update writes the record only if the stored one is still in from, and fails
+// with execution.ErrStale otherwise.
+type Executions interface {
+	Create(ctx context.Context, r *execution.Record) error
+	Update(ctx context.Context, r *execution.Record, from execution.State) error
+}
+
+// Origin is what a task runs for: the job and the namespace it runs in.
+// JobVersion is 0 for a job run from a file.
+type Origin struct {
+	Namespace  string
+	Job        string
+	JobVersion int64
+}
+
 // Dispatcher runs jobs against the providers a registry holds.
 //
 // sleep is injected because the alternative is a test suite that waits out real
 // backoff. One that returns immediately turns a two minute run into
 // microseconds without the polling logic knowing it was not real.
 type Dispatcher struct {
-	registry Registry
-	ledger   Ledger
-	poll     Poll
-	linger   time.Duration // how long to keep a stream open past the last poll
-	logs     io.Writer     // nil means nobody is watching, and nothing is streamed
-	progress func(Event)   // nil means nobody is listening
-	sleep    func(ctx context.Context, d time.Duration) error
+	registry   Registry
+	ledger     Ledger
+	executions Executions
+	now        func() time.Time
+	poll       Poll
+	linger     time.Duration // how long to keep a stream open past the last poll
+	logs       io.Writer     // nil means nobody is watching, and nothing is streamed
+	progress   func(Event)   // nil means nobody is listening
+	sleep      func(ctx context.Context, d time.Duration) error
 }
 
 // Option configures a Dispatcher.
@@ -101,17 +121,20 @@ func WithProgress(fn func(Event)) Option {
 	return func(d *Dispatcher) { d.progress = fn }
 }
 
-// New builds a dispatcher over a registry, charging ledger for what it runs.
+// New builds a dispatcher over a registry, charging ledger for what it runs and
+// recording every attempt in executions.
 //
-// The ledger is an argument rather than an option: a dispatcher that charges
-// nothing is the failure the ledger exists to prevent.
-func New(registry Registry, ledger Ledger, opts ...Option) *Dispatcher {
+// Both are arguments rather than options: a dispatcher that charges nothing or
+// records nothing is the failure each exists to prevent.
+func New(registry Registry, ledger Ledger, executions Executions, opts ...Option) *Dispatcher {
 	d := &Dispatcher{
-		registry: registry,
-		ledger:   ledger,
-		poll:     DefaultPoll,
-		linger:   DefaultLinger,
-		sleep:    sleepContext,
+		registry:   registry,
+		ledger:     ledger,
+		executions: executions,
+		now:        time.Now,
+		poll:       DefaultPoll,
+		linger:     DefaultLinger,
+		sleep:      sleepContext,
 	}
 
 	for _, opt := range opts {
@@ -142,11 +165,12 @@ func (d *Dispatcher) Run(
 	ctx context.Context, namespace string, j *job.Job, eval *hcl.EvalContext,
 ) (*JobOutcome, error) {
 	outcome := &JobOutcome{Job: j.Name}
+	origin := Origin{Namespace: namespace, Job: j.Name}
 
 	for i := range j.Tasks {
 		task := &j.Tasks[i]
 
-		result, err := d.RunTask(ctx, namespace, task, j.Routing, eval)
+		result, err := d.RunTask(ctx, origin, task, j.Routing, eval)
 		if result != nil {
 			outcome.Tasks = append(outcome.Tasks, *result)
 		}
@@ -173,14 +197,14 @@ func (d *Dispatcher) Run(
 // answer is abandoned and the next is tried, subject to the task's retry
 // policy; a provider that gives one, of any kind, ends the task.
 func (d *Dispatcher) RunTask(
-	ctx context.Context, namespace string, task *job.Task, routing *job.Routing, eval *hcl.EvalContext,
+	ctx context.Context, origin Origin, task *job.Task, routing *job.Routing, eval *hcl.EvalContext,
 ) (*TaskOutcome, error) {
 	req, diags := scheduler.NewRequest(task, routing, eval)
 	if diags.HasErrors() {
 		return nil, fmt.Errorf("building the request: %s", diags.Error())
 	}
 
-	admitted := scheduler.Admit(req, d.registry.Inputs(namespace, d.ledger.PoolUsage))
+	admitted := scheduler.Admit(req, d.registry.Inputs(origin.Namespace, d.ledger.PoolUsage))
 
 	outcome := &TaskOutcome{
 		Task:       task.Name,
@@ -191,7 +215,7 @@ func (d *Dispatcher) RunTask(
 		return outcome, ErrNoCandidates
 	}
 
-	return d.attempt(ctx, namespace, req, scheduler.Rank(req, admitted.Candidates), outcome)
+	return d.attempt(ctx, origin, req, scheduler.Rank(req, admitted.Candidates), outcome)
 }
 
 // attempt works down the ranking until something answers or the budget runs
@@ -203,15 +227,16 @@ func (d *Dispatcher) RunTask(
 // an outage it is still having is a slower way to reach the same place, so
 // each candidate is tried at most once.
 func (d *Dispatcher) attempt(
-	ctx context.Context, namespace string, req *scheduler.Request, ranking scheduler.Ranking, outcome *TaskOutcome,
+	ctx context.Context, origin Origin, req *scheduler.Request, ranking scheduler.Ranking, outcome *TaskOutcome,
 ) (*TaskOutcome, error) {
 	task := req.Task
 	policy := retryPolicy(task)
 	budget := policy.budget()
 
 	var (
-		lastErr error
-		tried   int
+		lastErr  error
+		tried    int
+		previous execution.ID
 	)
 
 	for i := 0; i < len(ranking) && tried < budget; i++ {
@@ -222,10 +247,10 @@ func (d *Dispatcher) attempt(
 			return outcome, fmt.Errorf("%w: %s", ErrNoProvider, name)
 		}
 
-		id, err := d.reserve(ctx, namespace, name, req.Execution)
+		run, err := d.prepare(ctx, origin, req, name, tried+1, previous)
 		if refused(err) {
 			outcome.Attempts = append(outcome.Attempts, Attempt{
-				Provider: name, ID: id, Err: err, Refused: true,
+				Provider: name, ID: run.rec.ID, Err: err, Refused: true,
 			})
 			lastErr = err
 
@@ -236,14 +261,17 @@ func (d *Dispatcher) attempt(
 			return outcome, err
 		}
 
+		id := run.rec.ID
+		previous = id
+
 		if err := d.pause(ctx, policy, tried); err != nil {
 			return outcome, err
 		}
 
 		tried++
 
-		result, streamed, err := d.execute(ctx, provider, task, id, tried)
-		d.charge(ctx, id, namespace, name, req.Execution, result)
+		result, streamed, err := d.execute(ctx, provider, task, run)
+		d.charge(ctx, id, origin.Namespace, name, req.Execution, result)
 
 		outcome.Attempts = append(outcome.Attempts, Attempt{
 			Provider: name,
@@ -278,29 +306,51 @@ func (d *Dispatcher) attempt(
 	return outcome, fmt.Errorf("%w: %w", ErrExhausted, lastErr)
 }
 
-// reserve mints an execution ID and charges it against name's quota. A refusal
-// comes back as the *ledger.Refusal; any other failure means nothing may be
-// dispatched.
+// prepare mints an execution ID, charges it against name's quota, and records
+// it as pending. A refusal comes back as the *ledger.Refusal with the run
+// carrying its ID; any other failure means nothing may be dispatched.
 //
 // The ID is minted per attempt because it is the submission idempotency key:
-// reusing it would ask the provider to resume the one that just failed.
-func (d *Dispatcher) reserve(
-	ctx context.Context, namespace, name string, e quota.Execution,
-) (execution.ID, error) {
+// reusing it would ask the provider to resume the one that just failed. It is
+// recorded before Submit for the same reason, so it exists durably first.
+func (d *Dispatcher) prepare(
+	ctx context.Context, origin Origin, req *scheduler.Request, name string, attempt int, previous execution.ID,
+) (*tracked, error) {
 	id, err := execution.NewID()
 	if err != nil {
-		return id, plugin.Internal(fmt.Errorf("generating an execution id: %w", err))
+		return nil, plugin.Internal(fmt.Errorf("generating an execution id: %w", err))
 	}
 
-	if err := d.ledger.Reserve(ctx, id, namespace, name, e); err != nil {
+	now := d.now()
+
+	run := &tracked{
+		store: d.executions,
+		now:   d.now,
+		rec: execution.Record{
+			Status:     execution.Status{ID: id, State: execution.StatePending, UpdatedAt: now},
+			Namespace:  origin.Namespace,
+			Job:        origin.Job,
+			JobVersion: origin.JobVersion,
+			Task:       req.Task.Name,
+			Provider:   name,
+			Attempt:    attempt,
+			Previous:   previous,
+		},
+	}
+
+	if err := d.ledger.Reserve(ctx, id, origin.Namespace, name, req.Execution); err != nil {
 		if refused(err) {
-			return id, err
+			return run, err
 		}
 
-		return id, fmt.Errorf("reserving quota on %s: %w", name, err)
+		return nil, fmt.Errorf("reserving quota on %s: %w", name, err)
 	}
 
-	return id, nil
+	if err := d.executions.Create(ctx, &run.rec); err != nil {
+		return nil, fmt.Errorf("recording execution %s: %w", id, err)
+	}
+
+	return run, nil
 }
 
 // refused reports whether err is the ledger turning a reservation down.
