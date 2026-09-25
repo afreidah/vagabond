@@ -11,26 +11,39 @@ import (
 )
 
 const claimStaleReservations = `-- name: ClaimStaleReservations :many
-SELECT execution_id, provider, pool, period, amount, cpu, memory, created_at
+SELECT execution_id, namespace, provider, pool, period, amount, cpu, memory, created_at
 FROM quota_reservations
 WHERE created_at < $1::timestamptz
-ORDER BY execution_id, pool
+ORDER BY execution_id, namespace, pool
 FOR UPDATE SKIP LOCKED
 `
 
+type ClaimStaleReservationsRow struct {
+	ExecutionID string
+	Namespace   string
+	Provider    string
+	Pool        string
+	Period      string
+	Amount      int64
+	Cpu         int64
+	Memory      int64
+	CreatedAt   time.Time
+}
+
 // Locks reservation rows older than the cutoff, skipping any another process
 // holds, so two reapers never resolve the same execution.
-func (q *Queries) ClaimStaleReservations(ctx context.Context, before time.Time) ([]QuotaReservation, error) {
+func (q *Queries) ClaimStaleReservations(ctx context.Context, before time.Time) ([]ClaimStaleReservationsRow, error) {
 	rows, err := q.db.Query(ctx, claimStaleReservations, before)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []QuotaReservation{}
+	items := []ClaimStaleReservationsRow{}
 	for rows.Next() {
-		var i QuotaReservation
+		var i ClaimStaleReservationsRow
 		if err := rows.Scan(
 			&i.ExecutionID,
+			&i.Namespace,
 			&i.Provider,
 			&i.Pool,
 			&i.Period,
@@ -50,24 +63,25 @@ func (q *Queries) ClaimStaleReservations(ctx context.Context, before time.Time) 
 }
 
 const readQuotaUsage = `-- name: ReadQuotaUsage :many
-SELECT charged.provider, charged.pool, charged.period, SUM(charged.amount)::bigint AS used
+SELECT charged.namespace, charged.provider, charged.pool, charged.period, SUM(charged.amount)::bigint AS used
 FROM (
-    SELECT u.provider, u.pool, u.period, u.used AS amount
+    SELECT u.namespace, u.provider, u.pool, u.period, u.used AS amount
     FROM quota_usage u
     WHERE u.period = ANY($1::text[])
     UNION ALL
-    SELECT r.provider, r.pool, r.period, r.amount
+    SELECT r.namespace, r.provider, r.pool, r.period, r.amount
     FROM quota_reservations r
     WHERE r.period = ANY($1::text[])
 ) AS charged
-GROUP BY charged.provider, charged.pool, charged.period
+GROUP BY charged.namespace, charged.provider, charged.pool, charged.period
 `
 
 type ReadQuotaUsageRow struct {
-	Provider string
-	Pool     string
-	Period   string
-	Used     int64
+	Namespace string
+	Provider  string
+	Pool      string
+	Period    string
+	Used      int64
 }
 
 // Returns settled plus reserved per pool in the given periods, which is what
@@ -82,6 +96,7 @@ func (q *Queries) ReadQuotaUsage(ctx context.Context, periods []string) ([]ReadQ
 	for rows.Next() {
 		var i ReadQuotaUsageRow
 		if err := rows.Scan(
+			&i.Namespace,
 			&i.Provider,
 			&i.Pool,
 			&i.Period,
@@ -101,29 +116,33 @@ const reserveQuota = `-- name: ReserveQuota :execrows
 
 WITH wanted AS (
     SELECT
-        ($6::text[])[g.i]     AS pool,
-        ($7::text[])[g.i]   AS period,
-        ($8::bigint[])[g.i] AS amount,
-        ($9::bigint[])[g.i]  AS pool_limit
-    FROM generate_series(1, array_length($6::text[], 1)) AS g (i)
+        ($6::text[])[g.i] AS namespace,
+        ($7::text[])[g.i]      AS pool,
+        ($8::text[])[g.i]    AS period,
+        ($9::bigint[])[g.i]  AS amount,
+        ($10::bigint[])[g.i]   AS pool_limit
+    FROM generate_series(1, array_length($7::text[], 1)) AS g (i)
 ),
 standing AS (
     SELECT
+        wanted.namespace,
         wanted.pool,
         wanted.period,
         wanted.amount,
         wanted.pool_limit,
         COALESCE((
             SELECT u.used FROM quota_usage u
-            WHERE u.provider = $2::text AND u.pool = wanted.pool AND u.period = wanted.period
+            WHERE u.namespace = wanted.namespace AND u.provider = $2::text
+              AND u.pool = wanted.pool AND u.period = wanted.period
         ), 0) + COALESCE((
             SELECT SUM(r.amount) FROM quota_reservations r
-            WHERE r.provider = $2::text AND r.pool = wanted.pool AND r.period = wanted.period
+            WHERE r.namespace = wanted.namespace AND r.provider = $2::text
+              AND r.pool = wanted.pool AND r.period = wanted.period
         ), 0) AS charged
     FROM wanted
 )
-INSERT INTO quota_reservations (execution_id, provider, pool, period, amount, cpu, memory, created_at)
-SELECT $1::text, $2::text, s.pool, s.period, s.amount, $3::bigint, $4::bigint, $5::timestamptz
+INSERT INTO quota_reservations (execution_id, namespace, provider, pool, period, amount, cpu, memory, created_at)
+SELECT $1::text, s.namespace, $2::text, s.pool, s.period, s.amount, $3::bigint, $4::bigint, $5::timestamptz
 FROM standing s
 WHERE NOT EXISTS (
     SELECT 1 FROM standing x
@@ -137,6 +156,7 @@ type ReserveQuotaParams struct {
 	Cpu         int64
 	Memory      int64
 	CreatedAt   time.Time
+	Namespaces  []string
 	Pools       []string
 	Periods     []string
 	Amounts     []int64
@@ -149,10 +169,13 @@ type ReserveQuotaParams struct {
 // Every mutation is one statement, run in a serializable transaction by the
 // caller. Serializable is what makes Reserve exact on Postgres: under its
 // default isolation two reserves can both read room and both insert.
+//
+// namespace ” is a provider's total; any other is that namespace's share.
 // -----------------------------------------------------------------------------
-// Inserts one reservation row per pool, only if every pool the execution
-// charges has room: used + reserved + amount <= limit. Zero rows means refused.
-// The headroom test and the claim are one statement, so nothing lands between.
+// Inserts one reservation row per pool of both layers, only if every pool the
+// execution charges has room: used + reserved + amount <= limit. Zero rows
+// means refused. The headroom test and the claim are one statement, so nothing
+// lands between.
 //
 // The per-pool arrays are zipped by subscript rather than multi-argument
 // unnest, which sqlc's catalog does not know.
@@ -163,6 +186,7 @@ func (q *Queries) ReserveQuota(ctx context.Context, arg ReserveQuotaParams) (int
 		arg.Cpu,
 		arg.Memory,
 		arg.CreatedAt,
+		arg.Namespaces,
 		arg.Pools,
 		arg.Periods,
 		arg.Amounts,
@@ -178,26 +202,28 @@ const settleQuota = `-- name: SettleQuota :exec
 WITH done AS (
     DELETE FROM quota_reservations
     WHERE execution_id = $1::text
-    RETURNING provider, pool, period
+    RETURNING namespace, provider, pool, period
 ),
 actual AS (
     SELECT
-        ($2::text[])[g.i]     AS pool,
-        ($3::bigint[])[g.i] AS amount
-    FROM generate_series(1, array_length($2::text[], 1)) AS g (i)
+        ($2::text[])[g.i] AS namespace,
+        ($3::text[])[g.i]      AS pool,
+        ($4::bigint[])[g.i]  AS amount
+    FROM generate_series(1, array_length($3::text[], 1)) AS g (i)
 )
-INSERT INTO quota_usage (provider, pool, period, used, updated_at)
-SELECT done.provider, done.pool, done.period, actual.amount, NOW()
+INSERT INTO quota_usage (namespace, provider, pool, period, used, updated_at)
+SELECT done.namespace, done.provider, done.pool, done.period, actual.amount, NOW()
 FROM done
-JOIN actual ON actual.pool = done.pool
+JOIN actual ON actual.namespace = done.namespace AND actual.pool = done.pool
 WHERE actual.amount <> 0
-ON CONFLICT (provider, pool, period) DO UPDATE SET
+ON CONFLICT (namespace, provider, pool, period) DO UPDATE SET
     used       = quota_usage.used + EXCLUDED.used,
     updated_at = NOW()
 `
 
 type SettleQuotaParams struct {
 	ExecutionID string
+	Namespaces  []string
 	Pools       []string
 	Amounts     []int64
 }
@@ -207,6 +233,11 @@ type SettleQuotaParams struct {
 // so settling twice, or after the reaper, charges once. No amounts drops the
 // reservation outright.
 func (q *Queries) SettleQuota(ctx context.Context, arg SettleQuotaParams) error {
-	_, err := q.db.Exec(ctx, settleQuota, arg.ExecutionID, arg.Pools, arg.Amounts)
+	_, err := q.db.Exec(ctx, settleQuota,
+		arg.ExecutionID,
+		arg.Namespaces,
+		arg.Pools,
+		arg.Amounts,
+	)
 	return err
 }

@@ -51,9 +51,13 @@ job "go-test" {
 | Name | Type | Default | Description |
 |---|---|---|---|
 | label | string | — | Job name |
+| `namespace` | string | `-namespace`, then `default` | Namespace to run in; must be declared in configuration |
 | `type` | string | `batch` | Only `batch` is defined |
 
 Contains `meta`, `parameterized`, `routing`, and one or more `task` blocks.
+
+`-namespace` and `VAGABOND_NAMESPACE` apply to a job that names no namespace. A
+job naming one and a flag naming another is an error.
 
 ## `meta` block
 

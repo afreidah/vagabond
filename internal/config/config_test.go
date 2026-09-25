@@ -682,3 +682,120 @@ func TestPoolDiagnosticListsVocabulary(t *testing.T) {
 		}
 	}
 }
+
+// -------------------------------------------------------------------------
+// NAMESPACES
+// -------------------------------------------------------------------------
+
+func TestLoadDecodesNamespaceShares(t *testing.T) {
+	t.Parallel()
+
+	file := load(t, `
+provider "fn" { type = "fake-function" }
+
+namespace "ci" {
+  quota "fn" {
+    pool "compute" {
+      meter  = "gb_seconds"
+      limit  = 100000
+      period = "monthly"
+    }
+  }
+}
+
+namespace "empty" {}
+`)
+
+	if len(file.Namespaces) != 2 {
+		t.Fatalf("decoded %d namespaces, want 2", len(file.Namespaces))
+	}
+
+	want := []quota.PoolSpec{
+		{Name: "compute", Meter: quota.MeterGBSeconds, Limit: 100_000, Period: quota.PeriodMonthly},
+	}
+
+	if diff := cmp.Diff(want, file.Namespaces[0].Quotas[0].PoolSpecs()); diff != "" {
+		t.Errorf("PoolSpecs() mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestNamespaceValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "duplicate namespace",
+			src:  "namespace \"ci\" {}\nnamespace \"ci\" {}",
+			want: "Two namespaces are named",
+		},
+		{
+			name: "unknown provider",
+			src: `namespace "ci" {
+  quota "nowhere" {}
+}`,
+			want: "names a provider that is not configured",
+		},
+		{
+			name: "duplicate quota",
+			src: `provider "fn" { type = "fake-function" }
+
+namespace "ci" {
+  quota "fn" {}
+  quota "fn" {}
+}`,
+			want: "declares two quotas",
+		},
+		{
+			name: "invalid share pool",
+			src: `provider "fn" { type = "fake-function" }
+
+namespace "ci" {
+  quota "fn" {
+    pool "compute" {
+      meter  = "gb_seconds"
+      limit  = 0
+      period = "monthly"
+    }
+  }
+}`,
+			want: `Namespace "ci" quota for provider "fn" pool "compute"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := loadErr(t, tt.src); !strings.Contains(got, tt.want) {
+				t.Errorf("diagnostics = %q, want them to mention %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// A namespace may live in its own file, beside the provider it shares.
+func TestLoadPathMergesNamespaces(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	write(t, dir, "fn.hcl", `provider "fn" { type = "fake-function" }`)
+	write(t, dir, "ci.hcl", `
+namespace "ci" {
+  quota "fn" {}
+}
+`)
+
+	file, diags := LoadPath(dir)
+	if diags.HasErrors() {
+		t.Fatalf("loading %s failed: %s", dir, diags.Error())
+	}
+
+	if len(file.Namespaces) != 1 || file.Namespaces[0].Name != "ci" {
+		t.Errorf("namespaces = %+v, want ci", file.Namespaces)
+	}
+}

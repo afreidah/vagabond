@@ -81,6 +81,11 @@ Run Options:
     Supply job metadata, repeatable. Values are substituted into the job before
     it is dispatched.
 
+  -namespace <name>
+    The namespace to run in, for a job that names none. Defaults to
+    $VAGABOND_NAMESPACE, then "default". A job naming a different one is an
+    error.
+
   -no-logs
     Do not print the task's output. The exit status is still reported.
 
@@ -98,12 +103,14 @@ func (c *JobRunCommand) Run(args []string) int {
 	var (
 		meta       metaFlags
 		configPath string
+		namespace  string
 		noLogs     bool
 		untracked  bool
 	)
 
 	flags := c.FlagSet("job run")
 	flags.Var(&meta, "meta", "job metadata as key=value, repeatable")
+	flags.StringVar(&namespace, "namespace", os.Getenv(namespaceEnv), "namespace for a job that names none")
 	flags.StringVar(&configPath, "config", "", "provider configuration file or directory")
 	flags.BoolVar(&noLogs, "no-logs", false, "do not print the task's output")
 	flags.BoolVar(&untracked, "untracked", false, "dispatch even when the usage store is unreachable")
@@ -143,7 +150,7 @@ func (c *JobRunCommand) Run(args []string) int {
 
 	defer finish()
 
-	return c.run(ctx, spec, meta, reg, led, noLogs)
+	return c.run(ctx, spec, meta, namespace, reg, led, noLogs)
 }
 
 // -------------------------------------------------------------------------
@@ -152,11 +159,16 @@ func (c *JobRunCommand) Run(args []string) int {
 
 // run dispatches every job in the specification.
 func (c *JobRunCommand) run(
-	ctx context.Context, spec *job.File, meta metaFlags,
+	ctx context.Context, spec *job.File, meta metaFlags, namespaceFlag string,
 	reg *registry.Registry, led dispatch.Ledger, noLogs bool,
 ) int {
-	if len(reg.Inputs(nil)) == 0 {
+	if len(reg.Names()) == 0 {
 		return c.Errorf("No providers are configured, so there is nothing to run on.")
+	}
+
+	namespaces, err := resolveNamespaces(namespaceFlag, spec, reg)
+	if err != nil {
+		return c.Errorf("%s", err)
 	}
 
 	opts := []dispatch.Option{dispatch.WithProgress(c.progress)}
@@ -178,7 +190,7 @@ func (c *JobRunCommand) run(
 	worst := ExitSuccess
 
 	for i := range spec.Jobs {
-		if code := c.runJob(ctx, d, &spec.Jobs[i], eval, noLogs); code > worst {
+		if code := c.runJob(ctx, d, namespaces[i], &spec.Jobs[i], eval, noLogs); code > worst {
 			worst = code
 		}
 	}
@@ -188,10 +200,10 @@ func (c *JobRunCommand) run(
 
 // runJob dispatches one job and reports what happened.
 func (c *JobRunCommand) runJob(
-	ctx context.Context, d *dispatch.Dispatcher, j *job.Job,
+	ctx context.Context, d *dispatch.Dispatcher, namespace string, j *job.Job,
 	eval *hcl.EvalContext, noLogs bool,
 ) int {
-	outcome, err := d.Run(ctx, j, eval)
+	outcome, err := d.Run(ctx, namespace, j, eval)
 
 	for i := range outcome.Tasks {
 		c.reportTask(&outcome.Tasks[i], noLogs)

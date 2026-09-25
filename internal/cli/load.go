@@ -22,6 +22,53 @@ import (
 	"github.com/afreidah/vagabond/internal/state/postgres"
 )
 
+// namespaceEnv supplies -namespace's default, as NOMAD_NAMESPACE does.
+const namespaceEnv = "VAGABOND_NAMESPACE"
+
+// resolveNamespace returns the namespace a job runs in: its own, else the
+// flag's, else the default. A job and a flag naming different namespaces is an
+// error rather than one silently winning, and a namespace the configuration
+// does not declare is refused.
+func resolveNamespace(flag string, j *job.Job, reg *registry.Registry) (string, error) {
+	namespace := flag
+
+	if j.Namespace != nil {
+		if flag != "" && flag != *j.Namespace {
+			return "", fmt.Errorf("job %q names namespace %q, but -namespace or %s asks for %q; "+
+				"remove one", j.Name, *j.Namespace, namespaceEnv, flag)
+		}
+
+		namespace = *j.Namespace
+	}
+
+	if namespace == "" {
+		namespace = job.DefaultNamespace
+	}
+
+	if !reg.HasNamespace(namespace) {
+		return "", fmt.Errorf("namespace %q is not declared in the configuration", namespace)
+	}
+
+	return namespace, nil
+}
+
+// resolveNamespaces resolves every job's namespace up front, so a bad one
+// fails the command before anything is planned or dispatched.
+func resolveNamespaces(flag string, spec *job.File, reg *registry.Registry) ([]string, error) {
+	namespaces := make([]string, len(spec.Jobs))
+
+	for i := range spec.Jobs {
+		namespace, err := resolveNamespace(flag, &spec.Jobs[i], reg)
+		if err != nil {
+			return nil, err
+		}
+
+		namespaces[i] = namespace
+	}
+
+	return namespaces, nil
+}
+
 // loadJob parses and validates the specification, reporting as job validate
 // does so that the same mistake reads the same way in every command.
 func (m *Meta) loadJob(path string, meta metaFlags) (*job.File, int) {
@@ -112,7 +159,7 @@ func (m *Meta) loadLedger(
 
 // memoryLedger is a ledger whose usage leaves with the process.
 func (m *Meta) memoryLedger(ctx context.Context, reg *registry.Registry) (dispatch.Ledger, func(), int) {
-	led, err := ledger.New(ctx, reg.Limits(), ledger.NewMemory(nil))
+	led, err := ledger.New(ctx, reg.Budgets(), ledger.NewMemory(nil))
 	if err != nil {
 		return nil, nil, m.Errorf("%s", err)
 	}
@@ -143,7 +190,7 @@ func openLedger(
 		return nil, nil, err
 	}
 
-	led, err := ledger.New(ctx, reg.Limits(), db)
+	led, err := ledger.New(ctx, reg.Budgets(), db)
 	if err != nil {
 		db.Close()
 

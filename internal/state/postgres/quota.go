@@ -35,6 +35,7 @@ func (s *Store) Reserve(ctx context.Context, r *ledger.Reservation) (bool, ledge
 	}
 
 	for _, c := range r.Charges {
+		params.Namespaces = append(params.Namespaces, c.Namespace)
 		params.Pools = append(params.Pools, c.Pool)
 		params.Periods = append(params.Periods, c.Period)
 		params.Amounts = append(params.Amounts, c.Amount)
@@ -71,7 +72,7 @@ func (s *Store) Reserve(ctx context.Context, r *ledger.Reservation) (bool, ledge
 }
 
 // Settle replaces id's reservation with actual, by pool.
-func (s *Store) Settle(ctx context.Context, id execution.ID, actual map[string]int64) error {
+func (s *Store) Settle(ctx context.Context, id execution.ID, actual map[ledger.PoolRef]int64) error {
 	return s.serializable(ctx, func(q *db.Queries) error {
 		return settleOne(ctx, q, id, actual)
 	})
@@ -102,7 +103,7 @@ func (s *Store) ReadUsage(ctx context.Context, periods []string) (ledger.Usage, 
 // failure asks again; the questions are reads, so asking twice is harmless.
 func (s *Store) Reap(
 	ctx context.Context, before time.Time,
-	settle func(context.Context, ledger.Held) (map[string]int64, bool),
+	settle func(context.Context, ledger.Held) (map[ledger.PoolRef]int64, bool),
 ) (int, error) {
 	var reaped int
 
@@ -139,11 +140,12 @@ func (s *Store) Reap(
 }
 
 // settleOne runs SettleQuota with actual flattened into its arrays.
-func settleOne(ctx context.Context, q *db.Queries, id execution.ID, actual map[string]int64) error {
+func settleOne(ctx context.Context, q *db.Queries, id execution.ID, actual map[ledger.PoolRef]int64) error {
 	params := db.SettleQuotaParams{ExecutionID: id.String()}
 
-	for pool, amount := range actual {
-		params.Pools = append(params.Pools, pool)
+	for ref, amount := range actual {
+		params.Namespaces = append(params.Namespaces, ref.Namespace)
+		params.Pools = append(params.Pools, ref.Pool)
 		params.Amounts = append(params.Amounts, amount)
 	}
 
@@ -159,7 +161,9 @@ func usageFromRows(rows []db.ReadQuotaUsageRow) ledger.Usage {
 	usage := make(ledger.Usage, len(rows))
 
 	for _, row := range rows {
-		usage[ledger.Key{Provider: row.Provider, Pool: row.Pool, Period: row.Period}] = row.Used
+		usage[ledger.Key{
+			Namespace: row.Namespace, Provider: row.Provider, Pool: row.Pool, Period: row.Period,
+		}] = row.Used
 	}
 
 	return usage
@@ -167,10 +171,12 @@ func usageFromRows(rows []db.ReadQuotaUsageRow) ledger.Usage {
 
 // heldFromRows groups claimed rows by execution. Rows arrive ordered by
 // execution, so each group is contiguous.
-func heldFromRows(rows []db.QuotaReservation) ([]ledger.Held, error) {
+func heldFromRows(rows []db.ClaimStaleReservationsRow) ([]ledger.Held, error) {
 	var held []ledger.Held
 
-	for _, row := range rows {
+	for i := range rows {
+		row := &rows[i]
+
 		id, err := execution.ParseID(row.ExecutionID)
 		if err != nil {
 			return nil, fmt.Errorf("reservation row: %w", err)
@@ -182,11 +188,11 @@ func heldFromRows(rows []db.QuotaReservation) ([]ledger.Held, error) {
 				Provider: row.Provider,
 				CPU:      int(row.Cpu),
 				Memory:   int(row.Memory),
-				Amounts:  make(map[string]int64),
+				Amounts:  make(map[ledger.PoolRef]int64),
 			})
 		}
 
-		held[len(held)-1].Amounts[row.Pool] = row.Amount
+		held[len(held)-1].Amounts[ledger.PoolRef{Namespace: row.Namespace, Pool: row.Pool}] = row.Amount
 	}
 
 	return held, nil

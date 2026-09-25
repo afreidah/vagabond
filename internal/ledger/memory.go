@@ -46,9 +46,7 @@ func (m *Memory) Reserve(_ context.Context, r *Reservation) (bool, Usage, error)
 	standing := m.standing()
 
 	for _, c := range r.Charges {
-		key := Key{Provider: r.Provider, Pool: c.Pool, Period: c.Period}
-
-		if c.Amount > 0 && standing[key]+c.Amount > c.Limit {
+		if c.Amount > 0 && standing[chargeKey(r.Provider, &c)]+c.Amount > c.Limit {
 			return false, standing, nil
 		}
 	}
@@ -59,7 +57,7 @@ func (m *Memory) Reserve(_ context.Context, r *Reservation) (bool, Usage, error)
 }
 
 // Settle removes id's reservation and adds actual in the periods it held.
-func (m *Memory) Settle(_ context.Context, id execution.ID, actual map[string]int64) error {
+func (m *Memory) Settle(_ context.Context, id execution.ID, actual map[PoolRef]int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -87,7 +85,7 @@ func (m *Memory) ReadUsage(_ context.Context, periods []string) (Usage, error) {
 // Reap settles the reservations created before the cutoff that settle accepts.
 func (m *Memory) Reap(
 	ctx context.Context, before time.Time,
-	settle func(context.Context, Held) (map[string]int64, bool),
+	settle func(context.Context, Held) (map[PoolRef]int64, bool),
 ) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -104,11 +102,11 @@ func (m *Memory) Reap(
 			Provider: r.Provider,
 			CPU:      r.CPU,
 			Memory:   r.Memory,
-			Amounts:  make(map[string]int64, len(r.Charges)),
+			Amounts:  make(map[PoolRef]int64, len(r.Charges)),
 		}
 
 		for _, c := range r.Charges {
-			held.Amounts[c.Pool] = c.Amount
+			held.Amounts[PoolRef{Namespace: c.Namespace, Pool: c.Pool}] = c.Amount
 		}
 
 		actual, ok := settle(ctx, held)
@@ -124,7 +122,7 @@ func (m *Memory) Reap(
 }
 
 // settle does Settle's work. Callers hold the mutex.
-func (m *Memory) settle(id execution.ID, actual map[string]int64) {
+func (m *Memory) settle(id execution.ID, actual map[PoolRef]int64) {
 	r, ok := m.held[id]
 	if !ok {
 		return
@@ -132,9 +130,11 @@ func (m *Memory) settle(id execution.ID, actual map[string]int64) {
 
 	delete(m.held, id)
 
-	for _, c := range r.Charges {
-		if amount := actual[c.Pool]; amount != 0 {
-			m.used[Key{Provider: r.Provider, Pool: c.Pool, Period: c.Period}] += amount
+	for i := range r.Charges {
+		c := &r.Charges[i]
+
+		if amount := actual[PoolRef{Namespace: c.Namespace, Pool: c.Pool}]; amount != 0 {
+			m.used[chargeKey(r.Provider, c)] += amount
 		}
 	}
 }
@@ -148,10 +148,15 @@ func (m *Memory) standing() Usage {
 	}
 
 	for _, r := range m.held {
-		for _, c := range r.Charges {
-			usage[Key{Provider: r.Provider, Pool: c.Pool, Period: c.Period}] += c.Amount
+		for i := range r.Charges {
+			usage[chargeKey(r.Provider, &r.Charges[i])] += r.Charges[i].Amount
 		}
 	}
 
 	return usage
+}
+
+// chargeKey is the counter a charge lands on.
+func chargeKey(provider string, c *Charge) Key {
+	return Key{Namespace: c.Namespace, Provider: provider, Pool: c.Pool, Period: c.Period}
 }

@@ -23,7 +23,11 @@
 
 package scheduler
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/afreidah/vagabond/internal/quota"
+)
 
 // -------------------------------------------------------------------------
 // OPERATOR STATE
@@ -97,20 +101,29 @@ func (quotaChecker) Check(req *Request, in *Input) *Rejection {
 		return nil
 	}
 
-	pool := in.Limits.Exceeded(in.Usage, req.Execution)
+	if r := exhausted("Pool", in.Limits, in.Usage, req.Execution); r != nil {
+		return r
+	}
+
+	return exhausted(fmt.Sprintf("Namespace %q's pool", in.Namespace), in.Share, in.ShareUsage, req.Execution)
+}
+
+// exhausted rejects when e does not fit one layer of pools. owner opens the
+// message, naming whose pool it is.
+func exhausted(owner string, limits quota.Limits, usage quota.PoolUsage, e quota.Execution) *Rejection {
+	pool := limits.Exceeded(usage, e)
 	if pool == nil {
 		return nil
 	}
 
-	used := in.Usage[pool.Name]
-
 	return reject(ReasonQuotaExhausted, fmt.Sprintf(
-		"Pool %q has %g of %g %s left and this task needs %g, and the job will "+
+		"%s %q has %g of %g %s left and this task needs %g, and the job will "+
 			"not pay for capacity beyond it.",
+		owner,
 		pool.Name,
-		pool.Meter.Natural(pool.Remaining(used)),
+		pool.Meter.Natural(pool.Remaining(usage[pool.Name])),
 		pool.Meter.Natural(pool.Limit),
 		pool.Meter.Unit(),
-		pool.Meter.Natural(in.Limits.Deltas(req.Execution)[pool.Name]),
+		pool.Meter.Natural(limits.Deltas(e)[pool.Name]),
 	))
 }

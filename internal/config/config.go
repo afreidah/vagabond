@@ -32,8 +32,27 @@ import (
 
 // File is the decoded contents of one configuration file.
 type File struct {
-	Store     *StoreBlock `hcl:"store,block"`
-	Providers []Provider  `hcl:"provider,block"`
+	Store      *StoreBlock `hcl:"store,block"`
+	Providers  []Provider  `hcl:"provider,block"`
+	Namespaces []Namespace `hcl:"namespace,block"`
+}
+
+// Namespace is an owner of jobs and, optionally, of its own share of each
+// provider's allowance. The default namespace exists without being declared.
+//
+// A namespace's pools sit inside the provider's, never beside them: an
+// execution charges both and needs room in both, so the shares cannot add up
+// past what the provider offers.
+type Namespace struct {
+	Name   string           `hcl:"name,label"`
+	Quotas []NamespaceQuota `hcl:"quota,block"`
+}
+
+// NamespaceQuota is a namespace's share of one provider, labelled with the
+// provider's name.
+type NamespaceQuota struct {
+	Provider string      `hcl:"provider,label"`
+	Pools    []PoolBlock `hcl:"pool,block"`
 }
 
 // StoreBlock is where the usage ledger persists. Absent means the ledger lives
@@ -169,6 +188,7 @@ func loadDir(dir string) (*File, hcl.Diagnostics) {
 		}
 
 		merged.Providers = append(merged.Providers, file.Providers...)
+		merged.Namespaces = append(merged.Namespaces, file.Namespaces...)
 
 		// A second store is refused rather than letting file order decide which
 		// database a deployment writes its ledger to.
@@ -283,6 +303,57 @@ func (f *File) validate() hcl.Diagnostics {
 		diags = append(diags, p.validate()...)
 	}
 
+	return append(diags, f.validateNamespaces(seen)...)
+}
+
+// validateNamespaces reports namespaces declared twice, and shares of
+// providers that do not exist or are declared twice.
+func (f *File) validateNamespaces(providers map[string]bool) hcl.Diagnostics {
+	var diags hcl.Diagnostics
+
+	seen := make(map[string]bool, len(f.Namespaces))
+
+	for i := range f.Namespaces {
+		ns := &f.Namespaces[i]
+
+		if seen[ns.Name] {
+			diags = append(diags, &hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Duplicate namespace",
+				Detail:   fmt.Sprintf("Two namespaces are named %q.", ns.Name),
+			})
+		}
+
+		seen[ns.Name] = true
+
+		shares := make(map[string]bool, len(ns.Quotas))
+
+		for j := range ns.Quotas {
+			q := &ns.Quotas[j]
+			owner := fmt.Sprintf("Namespace %q quota for provider %q", ns.Name, q.Provider)
+
+			switch {
+			case !providers[q.Provider]:
+				diags = append(diags, &hcl.Diagnostic{
+					Severity: hcl.DiagError,
+					Summary:  "Unknown provider in namespace quota",
+					Detail:   owner + " names a provider that is not configured.",
+				})
+			case shares[q.Provider]:
+				diags = append(diags, &hcl.Diagnostic{
+					Severity: hcl.DiagError,
+					Summary:  "Duplicate namespace quota",
+					Detail: fmt.Sprintf("Namespace %q declares two quotas for provider %q.",
+						ns.Name, q.Provider),
+				})
+			}
+
+			shares[q.Provider] = true
+
+			diags = append(diags, validatePools(owner, q.Pools)...)
+		}
+	}
+
 	return diags
 }
 
@@ -300,37 +371,38 @@ func (p *Provider) validate() hcl.Diagnostics {
 	}
 
 	diags = append(diags, p.Credentials.validate(p.Name)...)
-	diags = append(diags, p.validatePools()...)
+	diags = append(diags, validatePools(fmt.Sprintf("Provider %q", p.Name), p.Pools)...)
 
 	return diags
 }
 
-// validatePools reports budgets that cannot be enforced.
+// validatePools reports budgets that cannot be enforced. owner names whose
+// pools they are, for the diagnostic.
 //
 // Every attribute is required. A pool with no limit refuses nothing, and a
 // daily budget left to default to monthly is enforced twelve times too
 // loosely, which is the direction that spends money.
-func (p *Provider) validatePools() hcl.Diagnostics {
+func validatePools(owner string, pools []PoolBlock) hcl.Diagnostics {
 	var diags hcl.Diagnostics
 
-	seen := make(map[string]bool, len(p.Pools))
+	seen := make(map[string]bool, len(pools))
 
-	for i := range p.Pools {
-		pool := &p.Pools[i]
+	for i := range pools {
+		pool := &pools[i]
 
 		switch {
 		case seen[pool.Name]:
-			diags = append(diags, poolDiag(p.Name, pool.Name, "is declared twice. A pool "+
+			diags = append(diags, poolDiag(owner, pool.Name, "is declared twice. A pool "+
 				"name is what its usage is counted under, so it must identify one budget."))
 		case !quota.Meter(pool.Meter).Valid():
-			diags = append(diags, poolDiag(p.Name, pool.Name, fmt.Sprintf(
+			diags = append(diags, poolDiag(owner, pool.Name, fmt.Sprintf(
 				"meters %q, which is not something Vagabond counts. Known meters are %s.",
 				pool.Meter, joinMeters())))
 		case !quota.Period(pool.Period).Valid():
-			diags = append(diags, poolDiag(p.Name, pool.Name, fmt.Sprintf(
+			diags = append(diags, poolDiag(owner, pool.Name, fmt.Sprintf(
 				"resets %q. Known periods are %s.", pool.Period, joinPeriods())))
 		case pool.Limit <= 0:
-			diags = append(diags, poolDiag(p.Name, pool.Name, fmt.Sprintf(
+			diags = append(diags, poolDiag(owner, pool.Name, fmt.Sprintf(
 				"has a limit of %d. A pool exists to refuse an execution, so its limit "+
 					"must be positive.", pool.Limit)))
 		}
@@ -341,13 +413,13 @@ func (p *Provider) validatePools() hcl.Diagnostics {
 	return diags
 }
 
-// poolDiag builds one pool diagnostic, since each names the provider and the
-// pool the same way.
-func poolDiag(provider, pool, problem string) *hcl.Diagnostic {
+// poolDiag builds one pool diagnostic, since each names the owner and the pool
+// the same way.
+func poolDiag(owner, pool, problem string) *hcl.Diagnostic {
 	return &hcl.Diagnostic{
 		Severity: hcl.DiagError,
 		Summary:  "Invalid quota pool",
-		Detail:   fmt.Sprintf("Provider %q pool %q %s", provider, pool, problem),
+		Detail:   fmt.Sprintf("%s pool %q %s", owner, pool, problem),
 	}
 }
 
@@ -406,13 +478,24 @@ func (p *Provider) ConfigBody() hcl.Body {
 // the validate pass's business, so that an operator sees every problem with
 // their file in one run rather than the first one at startup.
 func (p *Provider) PoolSpecs() []quota.PoolSpec {
-	if len(p.Pools) == 0 {
+	return poolSpecs(p.Pools)
+}
+
+// PoolSpecs returns a namespace's share of one provider in the form quota
+// compiles.
+func (q *NamespaceQuota) PoolSpecs() []quota.PoolSpec {
+	return poolSpecs(q.Pools)
+}
+
+// poolSpecs maps pool blocks to specs. Nil for none.
+func poolSpecs(pools []PoolBlock) []quota.PoolSpec {
+	if len(pools) == 0 {
 		return nil
 	}
 
-	specs := make([]quota.PoolSpec, 0, len(p.Pools))
+	specs := make([]quota.PoolSpec, 0, len(pools))
 
-	for _, pool := range p.Pools {
+	for _, pool := range pools {
 		specs = append(specs, quota.PoolSpec{
 			Name:   pool.Name,
 			Meter:  quota.Meter(pool.Meter),

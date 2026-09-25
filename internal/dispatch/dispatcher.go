@@ -38,8 +38,11 @@ import (
 // of a configured registry, and so dispatch does not depend on how providers
 // happen to be constructed.
 type Registry interface {
-	Inputs(usage func(provider string) quota.PoolUsage) []scheduler.Input // what admission reads
-	Provider(name string) (plugin.Provider, bool)                         // the plugin registered under a name
+	// Inputs is what admission reads for a job in namespace.
+	Inputs(namespace string, usage func(namespace, provider string) (total, share quota.PoolUsage)) []scheduler.Input
+
+	// Provider is the plugin registered under a name.
+	Provider(name string) (plugin.Provider, bool)
 }
 
 // Ledger is the account every dispatch charges, declared here for the same
@@ -49,10 +52,10 @@ type Registry interface {
 // Any other error means the charge could not be made at all, and nothing is
 // dispatched on it.
 type Ledger interface {
-	Reserve(ctx context.Context, id execution.ID, provider string, e quota.Execution) error
-	Settle(ctx context.Context, id execution.ID, provider string, actual quota.Execution) error
+	Reserve(ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution) error
+	Settle(ctx context.Context, id execution.ID, namespace, provider string, actual quota.Execution) error
 	Reap(ctx context.Context, resolve ledger.Resolver) (int, error)
-	PoolUsage(provider string) quota.PoolUsage
+	PoolUsage(namespace, provider string) (total, share quota.PoolUsage)
 }
 
 // Dispatcher runs jobs against the providers a registry holds.
@@ -132,15 +135,18 @@ func New(registry Registry, ledger Ledger, opts ...Option) *Dispatcher {
 //
 // The outcome is populated even when the error is non-nil, so a caller can
 // report what did run before the failure.
+//
+// namespace is the one the caller resolved for the job; its share of each
+// provider is charged alongside the provider's total.
 func (d *Dispatcher) Run(
-	ctx context.Context, j *job.Job, eval *hcl.EvalContext,
+	ctx context.Context, namespace string, j *job.Job, eval *hcl.EvalContext,
 ) (*JobOutcome, error) {
 	outcome := &JobOutcome{Job: j.Name}
 
 	for i := range j.Tasks {
 		task := &j.Tasks[i]
 
-		result, err := d.RunTask(ctx, task, j.Routing, eval)
+		result, err := d.RunTask(ctx, namespace, task, j.Routing, eval)
 		if result != nil {
 			outcome.Tasks = append(outcome.Tasks, *result)
 		}
@@ -167,14 +173,14 @@ func (d *Dispatcher) Run(
 // answer is abandoned and the next is tried, subject to the task's retry
 // policy; a provider that gives one, of any kind, ends the task.
 func (d *Dispatcher) RunTask(
-	ctx context.Context, task *job.Task, routing *job.Routing, eval *hcl.EvalContext,
+	ctx context.Context, namespace string, task *job.Task, routing *job.Routing, eval *hcl.EvalContext,
 ) (*TaskOutcome, error) {
 	req, diags := scheduler.NewRequest(task, routing, eval)
 	if diags.HasErrors() {
 		return nil, fmt.Errorf("building the request: %s", diags.Error())
 	}
 
-	admitted := scheduler.Admit(req, d.registry.Inputs(d.ledger.PoolUsage))
+	admitted := scheduler.Admit(req, d.registry.Inputs(namespace, d.ledger.PoolUsage))
 
 	outcome := &TaskOutcome{
 		Task:       task.Name,
@@ -185,7 +191,7 @@ func (d *Dispatcher) RunTask(
 		return outcome, ErrNoCandidates
 	}
 
-	return d.attempt(ctx, req, scheduler.Rank(req, admitted.Candidates), outcome)
+	return d.attempt(ctx, namespace, req, scheduler.Rank(req, admitted.Candidates), outcome)
 }
 
 // attempt works down the ranking until something answers or the budget runs
@@ -197,7 +203,7 @@ func (d *Dispatcher) RunTask(
 // an outage it is still having is a slower way to reach the same place, so
 // each candidate is tried at most once.
 func (d *Dispatcher) attempt(
-	ctx context.Context, req *scheduler.Request, ranking scheduler.Ranking, outcome *TaskOutcome,
+	ctx context.Context, namespace string, req *scheduler.Request, ranking scheduler.Ranking, outcome *TaskOutcome,
 ) (*TaskOutcome, error) {
 	task := req.Task
 	policy := retryPolicy(task)
@@ -216,7 +222,7 @@ func (d *Dispatcher) attempt(
 			return outcome, fmt.Errorf("%w: %s", ErrNoProvider, name)
 		}
 
-		id, err := d.reserve(ctx, name, req.Execution)
+		id, err := d.reserve(ctx, namespace, name, req.Execution)
 		if refused(err) {
 			outcome.Attempts = append(outcome.Attempts, Attempt{
 				Provider: name, ID: id, Err: err, Refused: true,
@@ -237,7 +243,7 @@ func (d *Dispatcher) attempt(
 		tried++
 
 		result, streamed, err := d.execute(ctx, provider, task, id, tried)
-		d.charge(ctx, id, name, req.Execution, result)
+		d.charge(ctx, id, namespace, name, req.Execution, result)
 
 		outcome.Attempts = append(outcome.Attempts, Attempt{
 			Provider: name,
@@ -278,13 +284,15 @@ func (d *Dispatcher) attempt(
 //
 // The ID is minted per attempt because it is the submission idempotency key:
 // reusing it would ask the provider to resume the one that just failed.
-func (d *Dispatcher) reserve(ctx context.Context, name string, e quota.Execution) (execution.ID, error) {
+func (d *Dispatcher) reserve(
+	ctx context.Context, namespace, name string, e quota.Execution,
+) (execution.ID, error) {
 	id, err := execution.NewID()
 	if err != nil {
 		return id, plugin.Internal(fmt.Errorf("generating an execution id: %w", err))
 	}
 
-	if err := d.ledger.Reserve(ctx, id, name, e); err != nil {
+	if err := d.ledger.Reserve(ctx, id, namespace, name, e); err != nil {
 		if refused(err) {
 			return id, err
 		}
@@ -318,7 +326,7 @@ func (d *Dispatcher) pause(ctx context.Context, p policy, tried int) error {
 // over-count this errs toward. A result carrying what the platform billed is
 // charged at that; otherwise at the declared shape over how long it ran.
 func (d *Dispatcher) charge(
-	ctx context.Context, id execution.ID, name string, declared quota.Execution, result *execution.Result,
+	ctx context.Context, id execution.ID, namespace, name string, declared quota.Execution, result *execution.Result,
 ) {
 	if result == nil {
 		return
@@ -334,5 +342,5 @@ func (d *Dispatcher) charge(
 		actual = *result.Billed
 	}
 
-	_ = d.ledger.Settle(ctx, id, name, actual)
+	_ = d.ledger.Settle(ctx, id, namespace, name, actual)
 }

@@ -75,7 +75,7 @@ func TestFixtureLoadsIntoInputs(t *testing.T) {
 		t.Fatalf("refresh failed: %s", err)
 	}
 
-	inputs := r.Inputs(nil)
+	inputs := r.Inputs(job.DefaultNamespace, nil)
 	if len(inputs) != 3 {
 		t.Fatalf("got %d inputs, want 3", len(inputs))
 	}
@@ -162,7 +162,7 @@ func TestNewNilConfig(t *testing.T) {
 		t.Errorf("Len() = %d, want 0", r.Len())
 	}
 
-	if got := r.Inputs(nil); len(got) != 0 {
+	if got := r.Inputs(job.DefaultNamespace, nil); len(got) != 0 {
 		t.Errorf("Inputs() = %v, want empty", got)
 	}
 }
@@ -250,15 +250,15 @@ provider "metered" {
 provider "unmetered" { type = "fake-container" }
 `)
 
-	usage := func(provider string) quota.PoolUsage {
+	usage := func(_, provider string) (quota.PoolUsage, quota.PoolUsage) {
 		if provider == "metered" {
-			return quota.PoolUsage{"requests": 40}
+			return quota.PoolUsage{"requests": 40}, nil
 		}
 
-		return nil
+		return nil, nil
 	}
 
-	inputs := r.Inputs(usage)
+	inputs := r.Inputs(job.DefaultNamespace, usage)
 	byName := make(map[string]scheduler.Input, len(inputs))
 
 	for _, in := range inputs {
@@ -279,9 +279,68 @@ provider "unmetered" { type = "fake-container" }
 		t.Error("a provider with no pools enforces some")
 	}
 
-	limits := r.Limits()
-	if len(limits) != 2 || limits["metered"].Unlimited() {
-		t.Errorf("Limits() = %v, want both providers with metered's pool", limits)
+	budgets := r.Budgets()
+	if len(budgets.Totals) != 2 || budgets.Total("metered").Unlimited() {
+		t.Errorf("Budgets().Totals = %v, want both providers with metered's pool", budgets.Totals)
+	}
+}
+
+// A namespace's share reaches admission beside the provider's total, and a
+// namespace with none leaves the total as the only limit.
+func TestInputsCarryTheNamespaceShare(t *testing.T) {
+	t.Parallel()
+
+	r := build(t, `
+provider "fn" {
+  type = "fake-function"
+
+  pool "requests" {
+    meter  = "executions"
+    limit  = 100
+    period = "monthly"
+  }
+}
+
+namespace "ci" {
+  quota "fn" {
+    pool "requests" {
+      meter  = "executions"
+      limit  = 10
+      period = "monthly"
+    }
+  }
+}
+
+namespace "empty" {}
+`)
+
+	usage := func(_, _ string) (quota.PoolUsage, quota.PoolUsage) {
+		return quota.PoolUsage{"requests": 5}, quota.PoolUsage{"requests": 9}
+	}
+
+	ci := r.Inputs("ci", usage)[0]
+
+	if ci.Share.Unlimited() || ci.ShareUsage["requests"] != 9 {
+		t.Errorf("ci input = %+v, want its share and share usage", ci)
+	}
+
+	// The share has 1 of 10 left, tighter than the total's 95 of 100.
+	if got := ci.FreePercent(quota.Execution{}); got != 10 {
+		t.Errorf("FreePercent() = %d, want the share's 10", got)
+	}
+
+	if empty := r.Inputs("empty", nil)[0]; !empty.Share.Unlimited() {
+		t.Error("a namespace with no quotas has a share")
+	}
+
+	for _, name := range []string{"ci", "empty", job.DefaultNamespace} {
+		if !r.HasNamespace(name) {
+			t.Errorf("HasNamespace(%q) = false", name)
+		}
+	}
+
+	if r.HasNamespace("undeclared") {
+		t.Error("HasNamespace() accepted an undeclared namespace")
 	}
 }
 
@@ -292,7 +351,7 @@ func TestInputsWithoutUsage(t *testing.T) {
 
 	r := build(t, `provider "p" { type = "fake-container" }`)
 
-	if got := r.Inputs(nil)[0].Usage; got != nil {
+	if got := r.Inputs(job.DefaultNamespace, nil)[0].Usage; got != nil {
 		t.Errorf("Usage = %v, want nil", got)
 	}
 }
@@ -345,7 +404,7 @@ provider "steady" { type = "fake-function" }
 		t.Fatalf("err = %v, want it to wrap the provider failure", err)
 	}
 
-	inputs := r.Inputs(nil)
+	inputs := r.Inputs(job.DefaultNamespace, nil)
 
 	if inputs[0].Healthy {
 		t.Error("flaky is healthy after failing a refresh")
@@ -417,10 +476,10 @@ func TestInputsAreIndependent(t *testing.T) {
 	// Admission runs across every candidate against one cached snapshot, so a
 	// caller that sorted the drivers it was handed must not change what the
 	// next one sees.
-	first := r.Inputs(nil)[0]
+	first := r.Inputs(job.DefaultNamespace, nil)[0]
 	first.Capabilities.Drivers[0] = job.DriverWorker
 
-	if got := r.Inputs(nil)[0].Capabilities.Drivers[0]; got != job.DriverContainer {
+	if got := r.Inputs(job.DefaultNamespace, nil)[0].Capabilities.Drivers[0]; got != job.DriverContainer {
 		t.Errorf("mutating one input changed the registry: driver = %q", got)
 	}
 }

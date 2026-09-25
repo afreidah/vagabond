@@ -40,19 +40,26 @@ import (
 //
 // Limits are the budgets an operator declared and Usage is what the ledger has
 // charged against them. Both are needed because neither means anything alone.
+//
+// Share and ShareUsage are the job's namespace's own slice of this provider,
+// zero when the namespace declared none. Both layers must have room.
 type Input struct {
 	Provider     string
 	Capabilities plugin.Capabilities
 	Limits       quota.Limits
 	Usage        quota.PoolUsage
+	Namespace    string
+	Share        quota.Limits
+	ShareUsage   quota.PoolUsage
 	Tags         map[string]string
 	Enabled      bool
 	Healthy      bool
 }
 
-// FreePercent is the tightest remaining allowance among the pools e charges.
+// FreePercent is the tightest remaining allowance among the pools e charges,
+// across the provider's total and the namespace's share.
 func (in *Input) FreePercent(e quota.Execution) int {
-	return in.Limits.FreePercent(in.Usage, e)
+	return min(in.Limits.FreePercent(in.Usage, e), in.Share.FreePercent(in.ShareUsage, e))
 }
 
 // Attributes returns everything a constraint or affinity can match on for this
