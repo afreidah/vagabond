@@ -315,7 +315,8 @@ func (d *Dispatcher) pause(ctx context.Context, p policy, tried int) error {
 //
 // Only a result says what the run cost. Without one the reservation stands:
 // the run may be out there still, and charging its declared worst case is the
-// over-count this errs toward.
+// over-count this errs toward. A result carrying what the platform billed is
+// charged at that; otherwise at the declared shape over how long it ran.
 func (d *Dispatcher) charge(
 	ctx context.Context, id execution.ID, name string, declared quota.Execution, result *execution.Result,
 ) {
@@ -323,9 +324,15 @@ func (d *Dispatcher) charge(
 		return
 	}
 
-	_ = d.ledger.Settle(ctx, id, name, quota.Execution{
+	actual := quota.Execution{
 		CPU:      declared.CPU,
 		Memory:   declared.Memory,
 		Duration: result.Duration,
-	})
+	}
+
+	if result.Billed != nil {
+		actual = *result.Billed
+	}
+
+	_ = d.ledger.Settle(ctx, id, name, actual)
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/hashicorp/hcl/v2"
 
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/providers/aws"
 	"github.com/afreidah/vagabond/internal/providers/gcp"
 )
 
@@ -44,6 +45,7 @@ const (
 
 var providerTypes = []string{
 	gcp.Type,
+	aws.Type,
 
 	TypeFakeContainer,
 	TypeFakeFunction,
@@ -95,6 +97,14 @@ func Build(
 		// *gcp.Provider from a failed build does not become a non-nil
 		// plugin.Provider that later panics.
 		p, diags := gcp.New(ctx, settings.Name, settings.Config, settings.Credentials)
+		if diags.HasErrors() {
+			return nil, diags
+		}
+
+		return p, diags
+
+	case aws.Type:
+		p, diags := aws.New(ctx, settings.Name, settings.Config, settings.Credentials)
 		if diags.HasErrors() {
 			return nil, diags
 		}

@@ -11,7 +11,11 @@
 
 package execution
 
-import "time"
+import (
+	"time"
+
+	"github.com/afreidah/vagabond/internal/quota"
+)
 
 // Result is the output of a finished execution.
 //
@@ -22,10 +26,16 @@ import "time"
 // Logs are bounded and may be truncated. Truncation is deliberate rather than a
 // limitation, so that CockroachDB stays the only datastore: a caller needing
 // complete output should be writing it somewhere itself.
+//
+// Billed is what the platform reported it charged, for providers whose platform
+// says. Nil is the common case, and the ledger then prices the declared shape
+// over Duration. When set it supersedes that estimate, above the reservation
+// included: the platform's figure is a fact and ours is a formula.
 type Result struct {
 	ID       ID
 	ExitCode *int
 	Duration time.Duration
+	Billed   *quota.Execution
 
 	Logs          []byte
 	LogsTruncated bool

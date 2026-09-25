@@ -69,6 +69,7 @@ A disabled provider stays in the registry. A plan reports it as
 | Type | Plugin |
 |---|---|
 | `cloud-run` | [Google Cloud Run Jobs](providers/cloud-run.md) |
+| `lambda` | [AWS Lambda](providers/lambda.md) |
 | `fake-container` | In-memory container provider |
 | `fake-function` | In-memory function provider |
 | `fake-worker` | In-memory worker provider |

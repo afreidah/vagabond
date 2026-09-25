@@ -52,6 +52,7 @@ the client's decision.
   deletes what the execution left behind.
 - Dispatches `container` tasks to Google Cloud Run Jobs and returns the exit
   code and output.
+- Invokes `function` tasks on AWS Lambda and settles quota at what AWS billed.
 
 ## Quickstart
 
@@ -161,6 +162,7 @@ job "go-test" {
 | Scoring and strategies | [scheduling.md](docs/scheduling.md) |
 | Retries, rerouting, streaming, cleanup | [dispatch.md](docs/dispatch.md) |
 | Google Cloud Run Jobs | [providers/cloud-run.md](docs/providers/cloud-run.md) |
+| AWS Lambda | [providers/lambda.md](docs/providers/lambda.md) |
 | Writing a provider plugin | [writing-a-provider.md](docs/writing-a-provider.md) |
 | Coding conventions | [style-guide.md](docs/style-guide.md) |
 | Build / test / contribute | [CONTRIBUTING.md](CONTRIBUTING.md) |
@@ -170,8 +172,8 @@ job "go-test" {
 Not implemented. Everything above this line is.
 
 - **Persistence.** Execution state. Quota state is persisted already.
-- **More providers.** `function` and `worker` drivers are modeled, admitted and
-  scored, but no plugin implements either. The next container backend should
+- **More providers.** The `worker` driver is modeled, admitted and scored, but
+  no plugin implements it. The next container backend should
   have a meaningfully different execution model, to prove the plugin boundary
   rather than add another similar API.
 - **Free-tier guide.** A walkthrough of running real CI across several
