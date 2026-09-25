@@ -51,6 +51,9 @@ type scriptedProvider struct {
 	// synchronous providers finish inside Submit, like a function invocation.
 	synchronous bool
 
+	// billed is what the platform reports it charged, nil for most.
+	billed *quota.Execution
+
 	submits int
 	polls   int
 	results int
@@ -116,6 +119,7 @@ func (p *scriptedProvider) Result(
 		ID:       id,
 		ExitCode: ptr.Of(p.exitCode),
 		Duration: time.Second,
+		Billed:   p.billed,
 		Logs:     []byte("scripted output\n"),
 	}, nil
 }
@@ -567,6 +571,30 @@ func TestCompletedRunSettlesToWhatItCost(t *testing.T) {
 
 	if got := usage["requests"]; got != 10_000+1 {
 		t.Errorf("requests = %d, want one more than the 10000 already charged", got)
+	}
+}
+
+// What the platform billed is a fact and supersedes the formula, even past the
+// reservation.
+func TestBilledRunSettlesToWhatThePlatformCharged(t *testing.T) {
+	t.Parallel()
+
+	billed := quota.Execution{Memory: 4096, Duration: 10 * time.Minute}
+
+	p := &scriptedProvider{
+		name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded, billed: &billed,
+	}
+	reg := newRegistry(p)
+
+	if _, err := newDispatcher(t, reg).
+		RunTask(t.Context(), containerTask(t, nil), nil, nil); err != nil {
+		t.Fatalf("RunTask failed: %v", err)
+	}
+
+	want := quota.FixtureContainer().Deltas(billed)
+
+	if got := reg.ledger.PoolUsage("a")["compute"]; got != want["compute"] {
+		t.Errorf("compute = %d, want the billed %d", got, want["compute"])
 	}
 }
 

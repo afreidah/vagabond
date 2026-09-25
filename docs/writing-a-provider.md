@@ -104,6 +104,11 @@ may sit on a task resource while logs sit in a separate product.
 
 A failure here is not a failed execution, so it is never rerouted.
 
+Set `Result.Billed` when the platform reports what it charged, as Lambda's
+`REPORT` line does. The ledger settles at it instead of the declared shape over
+`Duration`, above the reservation included. Leave it nil when the platform says
+nothing.
+
 Providers that returned everything from `Submit` embed
 `plugin.ResultNotSupported`.
 

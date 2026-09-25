@@ -7,8 +7,7 @@ integration-coverage.out
 dist/
 
 # Editor swap and backup files
-*.swp
-*.swo
+*.sw?
 *~
 
 # Local provider credentials. Never committed; see docs/style-guide.md for the
