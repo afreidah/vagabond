@@ -134,14 +134,14 @@ func (c *JobPlanCommand) Run(args []string) int {
 		return code
 	}
 
-	led, finish, code := c.loadLedger(ctx, store, reg, untracked, "plan")
-	if led == nil {
+	s, finish, code := c.loadStores(ctx, store, reg, untracked, "plan")
+	if s == nil {
 		return code
 	}
 
 	defer finish()
 
-	return c.plan(spec, meta, namespace, reg, led, verbose)
+	return c.plan(spec, meta, namespace, reg, s.ledger, verbose)
 }
 
 // -------------------------------------------------------------------------

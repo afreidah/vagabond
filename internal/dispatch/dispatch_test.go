@@ -28,6 +28,7 @@ import (
 	"github.com/afreidah/vagabond/internal/ptr"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/scheduler"
+	"github.com/afreidah/vagabond/internal/state/memory"
 )
 
 // -------------------------------------------------------------------------
@@ -133,9 +134,10 @@ func (p *scriptedProvider) Cancel(context.Context, execution.ID) error {
 // fakeRegistry holds whatever providers a test declared, and the ledger they
 // are charged against.
 type fakeRegistry struct {
-	inputs    []scheduler.Input
-	providers map[string]plugin.Provider
-	ledger    *ledger.Ledger
+	inputs     []scheduler.Input
+	providers  map[string]plugin.Provider
+	ledger     *ledger.Ledger
+	executions *memory.Executions
 }
 
 func (r *fakeRegistry) Inputs(
@@ -155,6 +157,21 @@ func (r *fakeRegistry) Inputs(
 
 // ns is the namespace every dispatch here runs in. It declares no shares.
 const ns = "default"
+
+// origin is what every task here runs for.
+var origin = Origin{Namespace: ns, Job: "ci"}
+
+// record reads back what the registry's store holds for id.
+func record(t *testing.T, reg *fakeRegistry, id execution.ID) *execution.Record {
+	t.Helper()
+
+	r, err := reg.executions.Get(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Get(%s) = %v", id, err)
+	}
+
+	return r
+}
 
 // usageOf reads a provider's total usage from the registry's ledger.
 func usageOf(reg *fakeRegistry, provider string) quota.PoolUsage {
@@ -179,7 +196,7 @@ func (r *fakeRegistry) Provider(name string) (plugin.Provider, bool) {
 // free quota descends, ranking order matches declaration order, and a test can
 // say "the second one" and mean it.
 func newRegistry(providers ...*scriptedProvider) *fakeRegistry {
-	reg := &fakeRegistry{providers: map[string]plugin.Provider{}}
+	reg := &fakeRegistry{providers: map[string]plugin.Provider{}, executions: memory.NewExecutions()}
 
 	limits := make(map[string]quota.Limits, len(providers))
 	baseline := make(ledger.Usage, len(providers))
@@ -207,7 +224,7 @@ func newRegistry(providers ...*scriptedProvider) *fakeRegistry {
 
 // over builds a dispatcher charging the registry's own ledger.
 func over(reg *fakeRegistry, opts ...Option) *Dispatcher {
-	return New(reg, reg.ledger, opts...)
+	return New(reg, reg.ledger, reg.executions, opts...)
 }
 
 // newDispatcher builds one that never actually waits.
@@ -261,7 +278,7 @@ func TestRunTaskPollsUntilTerminal(t *testing.T) {
 	}
 
 	outcome, err := newDispatcher(t, newRegistry(p)).
-		RunTask(t.Context(), ns, containerTask(t, nil), nil, nil)
+		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil)
 	if err != nil {
 		t.Fatalf("RunTask failed: %v", err)
 	}
@@ -291,7 +308,7 @@ func TestRunTaskSkipsPollingWhenSynchronous(t *testing.T) {
 	p := &scriptedProvider{name: "a", synchronous: true}
 
 	outcome, err := newDispatcher(t, newRegistry(p)).
-		RunTask(t.Context(), ns, containerTask(t, nil), nil, nil)
+		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil)
 	if err != nil {
 		t.Fatalf("RunTask failed: %v", err)
 	}
@@ -322,7 +339,7 @@ func TestWorkloadFailureIsNotRerouted(t *testing.T) {
 	}
 
 	outcome, err := newDispatcher(t, newRegistry(first, second)).
-		RunTask(t.Context(), ns, containerTask(t, reroutingRetry(3)), nil, nil)
+		RunTask(t.Context(), origin, containerTask(t, reroutingRetry(3)), nil, nil)
 	if err != nil {
 		t.Fatalf("a non-zero exit code was reported as a dispatch failure: %v", err)
 	}
@@ -353,7 +370,7 @@ func TestInfrastructureFailureReroutes(t *testing.T) {
 	}
 
 	outcome, err := newDispatcher(t, newRegistry(first, second)).
-		RunTask(t.Context(), ns, containerTask(t, reroutingRetry(2)), nil, nil)
+		RunTask(t.Context(), origin, containerTask(t, reroutingRetry(2)), nil, nil)
 	if err != nil {
 		t.Fatalf("RunTask failed: %v", err)
 	}
@@ -386,7 +403,7 @@ func TestInternalFailureDoesNotReroute(t *testing.T) {
 	}
 
 	_, err := newDispatcher(t, newRegistry(first, second)).
-		RunTask(t.Context(), ns, containerTask(t, reroutingRetry(3)), nil, nil)
+		RunTask(t.Context(), origin, containerTask(t, reroutingRetry(3)), nil, nil)
 	if err == nil {
 		t.Fatal("an internal failure was swallowed")
 	}
@@ -413,7 +430,7 @@ func TestAttemptsIsTotalAttempts(t *testing.T) {
 	a, b, c := down("a"), down("b"), down("c")
 
 	outcome, err := newDispatcher(t, newRegistry(a, b, c)).
-		RunTask(t.Context(), ns, containerTask(t, reroutingRetry(2)), nil, nil)
+		RunTask(t.Context(), origin, containerTask(t, reroutingRetry(2)), nil, nil)
 	if !errors.Is(err, ErrExhausted) {
 		t.Fatalf("error = %v, want ErrExhausted", err)
 	}
@@ -435,7 +452,7 @@ func TestNoRetryBlockIsOneAttempt(t *testing.T) {
 	b := &scriptedProvider{name: "b", pollsToFinish: 1, finalState: execution.StateSucceeded}
 
 	_, err := newDispatcher(t, newRegistry(a, b)).
-		RunTask(t.Context(), ns, containerTask(t, nil), nil, nil)
+		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil)
 	if !errors.Is(err, ErrExhausted) {
 		t.Fatalf("error = %v, want ErrExhausted", err)
 	}
@@ -454,7 +471,7 @@ func TestAttemptsWithoutRerouteStaysPut(t *testing.T) {
 	b := &scriptedProvider{name: "b", pollsToFinish: 1, finalState: execution.StateSucceeded}
 
 	outcome, err := newDispatcher(t, newRegistry(a, b)).
-		RunTask(t.Context(), ns, containerTask(t, &job.Retry{Attempts: ptr.Of(3)}), nil, nil)
+		RunTask(t.Context(), origin, containerTask(t, &job.Retry{Attempts: ptr.Of(3)}), nil, nil)
 	if !errors.Is(err, ErrExhausted) {
 		t.Fatalf("error = %v, want ErrExhausted", err)
 	}
@@ -476,7 +493,7 @@ func TestBudgetIsCappedByCandidates(t *testing.T) {
 	a := &scriptedProvider{name: "a", submitErr: plugin.Infrastructure(errors.New("503"))}
 
 	outcome, err := newDispatcher(t, newRegistry(a)).
-		RunTask(t.Context(), ns, containerTask(t, reroutingRetry(5)), nil, nil)
+		RunTask(t.Context(), origin, containerTask(t, reroutingRetry(5)), nil, nil)
 	if !errors.Is(err, ErrExhausted) {
 		t.Fatalf("error = %v, want ErrExhausted", err)
 	}
@@ -497,7 +514,7 @@ func TestNoCandidates(t *testing.T) {
 	reg.inputs[0].Enabled = false
 
 	outcome, err := newDispatcher(t, reg).
-		RunTask(t.Context(), ns, containerTask(t, nil), nil, nil)
+		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil)
 	if !errors.Is(err, ErrNoCandidates) {
 		t.Fatalf("error = %v, want ErrNoCandidates", err)
 	}
@@ -517,7 +534,7 @@ func TestUnregisteredProvider(t *testing.T) {
 	delete(reg.providers, "a")
 
 	_, err := newDispatcher(t, reg).
-		RunTask(t.Context(), ns, containerTask(t, nil), nil, nil)
+		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil)
 	if !errors.Is(err, ErrNoProvider) {
 		t.Fatalf("error = %v, want ErrNoProvider", err)
 	}
@@ -567,7 +584,7 @@ func TestCompletedRunSettlesToWhatItCost(t *testing.T) {
 	reg := newRegistry(p)
 
 	if _, err := newDispatcher(t, reg).
-		RunTask(t.Context(), ns, containerTask(t, nil), nil, nil); err != nil {
+		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil); err != nil {
 		t.Fatalf("RunTask failed: %v", err)
 	}
 
@@ -599,7 +616,7 @@ func TestBilledRunSettlesToWhatThePlatformCharged(t *testing.T) {
 	reg := newRegistry(p)
 
 	if _, err := newDispatcher(t, reg).
-		RunTask(t.Context(), ns, containerTask(t, nil), nil, nil); err != nil {
+		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil); err != nil {
 		t.Fatalf("RunTask failed: %v", err)
 	}
 
@@ -619,7 +636,7 @@ func TestLostRunKeepsItsReservation(t *testing.T) {
 	reg := newRegistry(p)
 
 	if _, err := newDispatcher(t, reg).
-		RunTask(t.Context(), ns, containerTask(t, nil), nil, nil); err == nil {
+		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil); err == nil {
 		t.Fatal("a provider that never answered reported success")
 	}
 
@@ -641,8 +658,8 @@ func TestRefusedProviderDoesNotSpendAnAttempt(t *testing.T) {
 
 	led := &refusingLedger{Ledger: reg.ledger, refuse: map[string]bool{"a": true}}
 
-	outcome, err := New(reg, led, WithSleeper(noWait)).
-		RunTask(t.Context(), ns, containerTask(t, nil), nil, nil)
+	outcome, err := New(reg, led, reg.executions, WithSleeper(noWait)).
+		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil)
 	if err != nil {
 		t.Fatalf("RunTask failed: %v", err)
 	}
@@ -675,8 +692,8 @@ func TestEveryProviderRefusedIsNoCandidates(t *testing.T) {
 
 	led := &refusingLedger{Ledger: reg.ledger, refuse: map[string]bool{"a": true, "b": true}}
 
-	_, err := New(reg, led, WithSleeper(noWait)).
-		RunTask(t.Context(), ns, containerTask(t, reroutingRetry(3)), nil, nil)
+	_, err := New(reg, led, reg.executions, WithSleeper(noWait)).
+		RunTask(t.Context(), origin, containerTask(t, reroutingRetry(3)), nil, nil)
 	if !errors.Is(err, ErrNoCandidates) {
 		t.Fatalf("error = %v, want ErrNoCandidates", err)
 	}
@@ -700,8 +717,8 @@ func TestUnrecordableReservationDispatchesNothing(t *testing.T) {
 	b := &scriptedProvider{name: "b"}
 	reg := newRegistry(a, b)
 
-	_, err := New(reg, brokenLedger{reg.ledger}, WithSleeper(noWait)).
-		RunTask(t.Context(), ns, containerTask(t, reroutingRetry(3)), nil, nil)
+	_, err := New(reg, brokenLedger{reg.ledger}, reg.executions, WithSleeper(noWait)).
+		RunTask(t.Context(), origin, containerTask(t, reroutingRetry(3)), nil, nil)
 	if err == nil || errors.Is(err, ErrNoCandidates) {
 		t.Fatalf("error = %v, want the ledger failure", err)
 	}
@@ -814,7 +831,7 @@ func TestCancelledContextStopsTheRun(t *testing.T) {
 		return context.Canceled
 	}))
 
-	_, err := d.RunTask(ctx, ns, containerTask(t, nil), nil, nil)
+	_, err := d.RunTask(ctx, origin, containerTask(t, nil), nil, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
