@@ -188,7 +188,7 @@ func New(ctx context.Context, budgets quota.Budgets, store Store) (*Ledger, erro
 		snapshot: make(Usage),
 	}
 
-	if err := l.refresh(ctx); err != nil {
+	if err := l.Refresh(ctx); err != nil {
 		return nil, err
 	}
 
@@ -233,8 +233,6 @@ func (l *Ledger) Reserve(
 		return l.refusal(namespace, provider, standing, e, now)
 	}
 
-	_ = l.refresh(ctx)
-
 	return nil
 }
 
@@ -253,8 +251,6 @@ func (l *Ledger) Settle(
 	if err := l.store.Settle(ctx, id, l.deltas(namespace, provider, actual)); err != nil {
 		return fmt.Errorf("settling quota: %w", err)
 	}
-
-	_ = l.refresh(ctx)
 
 	return nil
 }
@@ -283,8 +279,6 @@ func (l *Ledger) Reap(ctx context.Context, resolve Resolver) (int, error) {
 	if err != nil {
 		return reaped, fmt.Errorf("reaping quota reservations: %w", err)
 	}
-
-	_ = l.refresh(ctx)
 
 	return reaped, nil
 }
@@ -357,9 +351,10 @@ func (l *Ledger) PoolUsage(namespace, provider string) (total, share quota.PoolU
 	return total, share
 }
 
-// refresh replaces the snapshot with what the store holds now. A failed read
-// keeps the last one.
-func (l *Ledger) refresh(ctx context.Context) error {
+// Refresh replaces the snapshot with what the store holds now. A failed read
+// keeps the last one. Reserving, settling and reaping do not refresh; callers
+// re-read when they are about to admit, or on a timer.
+func (l *Ledger) Refresh(ctx context.Context) error {
 	usage, err := l.store.ReadUsage(ctx, l.periods())
 	if err != nil {
 		return fmt.Errorf("reading quota usage: %w", err)

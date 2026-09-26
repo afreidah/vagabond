@@ -39,7 +39,10 @@ import (
 func (m *Meta) newDispatcher(
 	ctx context.Context, reg *registry.Registry, s *stores, noLogs bool,
 ) *dispatch.Dispatcher {
-	opts := []dispatch.Option{dispatch.WithProgress(m.progress)}
+	opts := []dispatch.Option{
+		dispatch.WithProgress(m.progress),
+		dispatch.WithOwner(dispatch.ProcessOwner("cli")),
+	}
 	if !noLogs {
 		opts = append(opts, dispatch.WithLogs(os.Stdout))
 	}
@@ -61,7 +64,7 @@ func (m *Meta) runJob(
 	ctx context.Context, d *dispatch.Dispatcher, origin dispatch.Origin, j *job.Job,
 	eval *hcl.EvalContext, noLogs bool,
 ) int {
-	origin, err := d.Begin(ctx, origin, j.Name)
+	origin, err := d.Begin(ctx, origin, j)
 	if err != nil {
 		return m.Errorf("Job %q did not start: %s", j.Name, err)
 	}

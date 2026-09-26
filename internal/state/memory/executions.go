@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/afreidah/vagabond/internal/execution"
 )
@@ -50,14 +51,14 @@ func (s *Executions) CreateDispatch(_ context.Context, d *execution.Dispatch) er
 	return nil
 }
 
-// FinishDispatch records how a run ended, only while it is still running, and
-// keeps the time it was created.
+// FinishDispatch records how a run ended, only while it is still running under
+// d.Owner, and keeps the time it was created.
 func (s *Executions) FinishDispatch(_ context.Context, d *execution.Dispatch) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	stored, ok := s.dispatches[d.ID]
-	if !ok || stored.State != execution.DispatchRunning {
+	stored, ok := s.held(d.ID, d.Owner)
+	if !ok {
 		return fmt.Errorf("%w: dispatch %s", execution.ErrStale, d.ID)
 	}
 
@@ -65,6 +66,53 @@ func (s *Executions) FinishDispatch(_ context.Context, d *execution.Dispatch) er
 	s.dispatches[d.ID] = stored
 
 	return nil
+}
+
+// RenewDispatch extends owner's lease on a running dispatch to until.
+func (s *Executions) RenewDispatch(_ context.Context, id execution.ID, owner string, until time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stored, ok := s.held(id, owner)
+	if !ok {
+		return fmt.Errorf("%w: dispatch %s", execution.ErrStale, id)
+	}
+
+	stored.LeaseUntil = until
+	s.dispatches[id] = stored
+
+	return nil
+}
+
+// ClaimDispatches takes over every running dispatch whose lease lapsed before
+// now, leasing each to owner until until.
+func (s *Executions) ClaimDispatches(
+	_ context.Context, owner string, now, until time.Time,
+) ([]*execution.Dispatch, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var claimed []*execution.Dispatch
+
+	for id := range s.dispatches {
+		stored := s.dispatches[id]
+		if stored.State != execution.DispatchRunning || !stored.LeaseUntil.Before(now) {
+			continue
+		}
+
+		stored.Owner, stored.LeaseUntil = owner, until
+		s.dispatches[id] = stored
+		claimed = append(claimed, &stored)
+	}
+
+	return claimed, nil
+}
+
+// held returns the dispatch for id when it is running under owner.
+func (s *Executions) held(id execution.ID, owner string) (execution.Dispatch, bool) {
+	stored, ok := s.dispatches[id]
+
+	return stored, ok && stored.State == execution.DispatchRunning && stored.Owner == owner
 }
 
 // GetDispatch returns a copy of the dispatch record for id.

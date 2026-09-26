@@ -26,8 +26,11 @@ import (
 
 	"github.com/afreidah/vagabond/internal/api"
 	"github.com/afreidah/vagabond/internal/config"
+	"github.com/afreidah/vagabond/internal/execution"
+	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobs"
 	"github.com/afreidah/vagabond/internal/ledger"
+	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/registry"
 	"github.com/afreidah/vagabond/internal/state/memory"
@@ -92,8 +95,9 @@ type harness struct {
 	jobs *MockserverJobs
 }
 
-// newHarness starts a server over the fixtures and returns its URL.
-func newHarness(t *testing.T) *harness {
+// fixtures builds the registry from testConfig, refreshed, and an empty
+// memory ledger over it.
+func fixtures(t *testing.T) (*registry.Registry, *ledger.Ledger) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -117,6 +121,26 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("ledger: %v", err)
 	}
 
+	return reg, led
+}
+
+// newExecutionID mints an execution ID.
+func newExecutionID(t *testing.T) execution.ID {
+	t.Helper()
+
+	id, err := execution.NewID()
+	if err != nil {
+		t.Fatalf("NewID() = %v", err)
+	}
+
+	return id
+}
+
+// newHarness starts a server over the fixtures and returns its URL.
+func newHarness(t *testing.T) *harness {
+	t.Helper()
+
+	reg, led := fixtures(t)
 	jobStore := NewMockserverJobs(gomock.NewController(t))
 	logger := slog.New(slog.DiscardHandler)
 
@@ -421,6 +445,76 @@ func TestNamespace_Undeclared(t *testing.T) {
 // -------------------------------------------------------------------------
 // LIFECYCLE
 // -------------------------------------------------------------------------
+
+// A dispatch whose owner died mid-execution is claimed at startup, polled to
+// its end, and recorded as finished by this server.
+func TestServeListener_ResumesAnAbandonedDispatch(t *testing.T) {
+	ctx := t.Context()
+
+	reg, led := fixtures(t)
+	executions := memory.NewExecutions()
+
+	box, _ := reg.Provider("box")
+	lapsed := time.Now().Add(-time.Hour)
+
+	d := &execution.Dispatch{
+		ID: newExecutionID(t), Namespace: "default", Job: "sleepy", Tasks: 1,
+		State: execution.DispatchRunning, Owner: "cli:dead:1", LeaseUntil: lapsed, Created: lapsed,
+	}
+	if err := executions.CreateDispatch(ctx, d); err != nil {
+		t.Fatalf("CreateDispatch() = %v", err)
+	}
+
+	id := newExecutionID(t)
+	if _, err := box.Submit(ctx, id, &job.Task{Name: "wait"}); err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+
+	for _, next := range []execution.State{execution.StateRunning, execution.StateSucceeded} {
+		if err := box.(*plugin.FakeContainerProvider).Advance(id, next); err != nil {
+			t.Fatalf("Advance(%s) = %v", next, err)
+		}
+	}
+
+	err := executions.Create(ctx, &execution.Record{
+		Status:    execution.Status{ID: id, State: execution.StateRunning, UpdatedAt: lapsed},
+		Namespace: "default", Job: "sleepy", Dispatch: d.ID, Task: "wait", Provider: "box", Attempt: 1,
+	})
+	if err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+
+	var lc net.ListenConfig
+
+	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	srv := New(reg, led, executions, NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler))
+
+	serveCtx, stop := context.WithCancel(ctx)
+	defer stop()
+
+	go func() { _ = srv.ServeListener(serveCtx, listener, nil) }()
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for time.Now().Before(deadline) {
+		got, err := executions.GetDispatch(ctx, d.ID)
+		if err == nil && got.State != execution.DispatchRunning {
+			if got.State != execution.DispatchSucceeded || got.Owner != srv.owner {
+				t.Errorf("dispatch = %+v, want succeeded under this server", got)
+			}
+
+			return
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatal("the abandoned dispatch was never finished")
+}
 
 // The server stops cleanly when its context is cancelled.
 func TestServeListener_StopsOnCancel(t *testing.T) {

@@ -113,7 +113,7 @@ func (s *Server) dispatchStatus(_ http.ResponseWriter, r *http.Request) (any, er
 func (s *Server) launch(
 	ctx context.Context, origin dispatch.Origin, j *job.Job, meta map[string]string,
 ) (any, error) {
-	origin, err := s.dispatcher.Begin(ctx, origin, j.Name)
+	origin, err := s.dispatcher.Begin(ctx, origin, j)
 	if err != nil {
 		return nil, err
 	}

@@ -89,6 +89,20 @@ func (mr *MockserverRegistryMockRecorder) Provider(name any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Provider", reflect.TypeOf((*MockserverRegistry)(nil).Provider), name)
 }
 
+// Refresh mocks base method.
+func (m *MockserverRegistry) Refresh(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Refresh", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Refresh indicates an expected call of Refresh.
+func (mr *MockserverRegistryMockRecorder) Refresh(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Refresh", reflect.TypeOf((*MockserverRegistry)(nil).Refresh), ctx)
+}
+
 // MockserverExecutions is a mock of serverExecutions interface.
 type MockserverExecutions struct {
 	ctrl     *gomock.Controller
@@ -111,6 +125,21 @@ func NewMockserverExecutions(ctrl *gomock.Controller) *MockserverExecutions {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockserverExecutions) EXPECT() *MockserverExecutionsMockRecorder {
 	return m.recorder
+}
+
+// ClaimDispatches mocks base method.
+func (m *MockserverExecutions) ClaimDispatches(ctx context.Context, owner string, now, until time.Time) ([]*execution.Dispatch, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ClaimDispatches", ctx, owner, now, until)
+	ret0, _ := ret[0].([]*execution.Dispatch)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ClaimDispatches indicates an expected call of ClaimDispatches.
+func (mr *MockserverExecutionsMockRecorder) ClaimDispatches(ctx, owner, now, until any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClaimDispatches", reflect.TypeOf((*MockserverExecutions)(nil).ClaimDispatches), ctx, owner, now, until)
 }
 
 // Create mocks base method.
@@ -198,6 +227,20 @@ func (m *MockserverExecutions) GetDispatch(ctx context.Context, id execution.ID)
 func (mr *MockserverExecutionsMockRecorder) GetDispatch(ctx, id any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDispatch", reflect.TypeOf((*MockserverExecutions)(nil).GetDispatch), ctx, id)
+}
+
+// RenewDispatch mocks base method.
+func (m *MockserverExecutions) RenewDispatch(ctx context.Context, id execution.ID, owner string, until time.Time) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RenewDispatch", ctx, id, owner, until)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RenewDispatch indicates an expected call of RenewDispatch.
+func (mr *MockserverExecutionsMockRecorder) RenewDispatch(ctx, id, owner, until any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RenewDispatch", reflect.TypeOf((*MockserverExecutions)(nil).RenewDispatch), ctx, id, owner, until)
 }
 
 // Update mocks base method.

@@ -42,7 +42,8 @@ namespace is a 400.
 - Cancelling an execution whose dispatch is running in this server stops the
   whole dispatch. Otherwise the provider is asked to stop it and the record is
   marked `cancelled`.
-- Stopping the server leaves running executions recorded as they were.
+- Stopping the server leaves running executions alone. Their leases lapse and
+  the next server resumes them; see [dispatch](dispatch.md#leases-and-resuming).
 
 ## Status codes
 

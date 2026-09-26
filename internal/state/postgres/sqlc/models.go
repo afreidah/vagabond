@@ -17,6 +17,9 @@ type Dispatch struct {
 	Error      string
 	CreatedAt  time.Time
 	EndedAt    *time.Time
+	Tasks      int64
+	Owner      string
+	LeaseUntil time.Time
 }
 
 type Execution struct {
@@ -43,6 +46,8 @@ type Execution struct {
 	Logs          []byte
 	LogsTruncated bool
 	DispatchID    string
+	Cpu           int64
+	Memory        int64
 }
 
 type Job struct {

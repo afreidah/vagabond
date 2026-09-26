@@ -15,7 +15,8 @@ anything is reserved, so a run refused on quota is recorded even though it has
 no executions.
 
 One execution record per attempt, in Postgres when a `store` is configured and
-in memory otherwise.
+in memory otherwise. Each keeps the task's declared CPU and memory, so it can be
+charged without its job.
 
 | State written | When |
 |---|---|
@@ -32,6 +33,34 @@ in memory otherwise.
 - An update applies only if the record is still in the state it was read in.
 - Stored output is the last 64 KiB, marked truncated when cut.
 - A rerouted attempt names the attempt before it.
+
+## Leases and resuming
+
+A running dispatch is leased to the process running it: `server:<host>:<pid>`
+or `cli:<host>:<pid>`.
+
+| | |
+|---|---|
+| Lease | 60s, renewed every 20s |
+| Claim | The server takes over running dispatches whose lease lapsed, at startup and every 30s |
+| Taken over | The old owner starts no more tasks and does not record the ending |
+
+A claimed dispatch is resumed:
+
+- Every unfinished execution is asked about by ID, followed to its result, and
+  settled.
+- An execution the provider does not know is `failed` if still `pending`,
+  `lost` otherwise. Its reservation is left to the reaper.
+- Tasks not yet reached are not run; the job and its metadata are not kept.
+
+| Last execution | Dispatch |
+|---|---|
+| Passed, and it was the last task | `succeeded` |
+| Passed, earlier task | `unanswered`: interrupted after n of m tasks |
+| Ran and failed | `failed` |
+| Anything else | `unanswered` |
+
+A dispatch left by a killed CLI is resumed by the next server that runs.
 
 ## The rule
 
