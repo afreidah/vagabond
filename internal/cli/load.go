@@ -16,6 +16,7 @@ import (
 	"github.com/afreidah/vagabond/internal/config"
 	"github.com/afreidah/vagabond/internal/dispatch"
 	"github.com/afreidah/vagabond/internal/job"
+	"github.com/afreidah/vagabond/internal/jobs"
 	"github.com/afreidah/vagabond/internal/jobspec"
 	"github.com/afreidah/vagabond/internal/ledger"
 	"github.com/afreidah/vagabond/internal/registry"
@@ -23,34 +24,17 @@ import (
 	"github.com/afreidah/vagabond/internal/state/postgres"
 )
 
-// namespaceEnv supplies -namespace's default, as NOMAD_NAMESPACE does.
+// -------------------------------------------------------------------------
+// NAMESPACES
+// -------------------------------------------------------------------------
+
+// namespaceEnv supplies -namespace's default when the flag is not given.
 const namespaceEnv = "VAGABOND_NAMESPACE"
 
-// resolveNamespace returns the namespace a job runs in: its own, else the
-// flag's, else the default. A job and a flag naming different namespaces is an
-// error rather than one silently winning, and a namespace the configuration
-// does not declare is refused.
+// resolveNamespace returns the namespace a job runs in, with -namespace as the
+// request and the configuration deciding what exists.
 func resolveNamespace(flag string, j *job.Job, reg *registry.Registry) (string, error) {
-	namespace := flag
-
-	if j.Namespace != nil {
-		if flag != "" && flag != *j.Namespace {
-			return "", fmt.Errorf("job %q names namespace %q, but -namespace or %s asks for %q; "+
-				"remove one", j.Name, *j.Namespace, namespaceEnv, flag)
-		}
-
-		namespace = *j.Namespace
-	}
-
-	if namespace == "" {
-		namespace = job.DefaultNamespace
-	}
-
-	if !reg.HasNamespace(namespace) {
-		return "", fmt.Errorf("namespace %q is not declared in the configuration", namespace)
-	}
-
-	return namespace, nil
+	return jobs.Namespace(flag, j, reg.HasNamespace)
 }
 
 // resolveNamespaces resolves every job's namespace up front, so a bad one
@@ -70,6 +54,10 @@ func resolveNamespaces(flag string, spec *job.File, reg *registry.Registry) ([]s
 	return namespaces, nil
 }
 
+// -------------------------------------------------------------------------
+// JOB FILES
+// -------------------------------------------------------------------------
+
 // loadJob parses and validates the specification, reporting as job validate
 // does so that the same mistake reads the same way in every command.
 func (m *Meta) loadJob(path string, meta metaFlags) (*job.File, int) {
@@ -88,15 +76,20 @@ func (m *Meta) loadJob(path string, meta metaFlags) (*job.File, int) {
 	return parsed.Spec, ExitSuccess
 }
 
+// -------------------------------------------------------------------------
+// REGISTRY AND STORES
+// -------------------------------------------------------------------------
+
 // loadRegistry finds configuration, builds the providers, and refreshes them.
-// The store block comes back beside the registry for loadLedger.
+// The configuration comes back beside the registry for its store and server
+// blocks.
 //
 // A refresh failure is reported but does not stop the command. A provider that
 // did not answer is marked unhealthy and rejected by name, which is more useful
 // than refusing to proceed at all: the other providers still have answers.
 func (m *Meta) loadRegistry(
 	ctx context.Context, configPath string,
-) (*registry.Registry, *config.StoreBlock, int) {
+) (*registry.Registry, *config.File, int) {
 	path, err := config.Discover(configPath)
 	if err != nil {
 		return nil, nil, m.Errorf("%s", err)
@@ -120,16 +113,17 @@ func (m *Meta) loadRegistry(
 		m.Ui.Warn(fmt.Sprintf("Some providers did not answer: %s", err))
 	}
 
-	return reg, cfg.Store, ExitSuccess
+	return reg, cfg, ExitSuccess
 }
 
 // stores is what a command reads and writes: the quota ledger, the record of
-// every execution, and registered jobs. jobs is nil without a store block,
-// since a registered job must outlive the process.
+// every execution, and registered jobs. db and jobs are nil without a store
+// block, since a registered job must outlive the process.
 type stores struct {
 	ledger     dispatch.Ledger
 	executions dispatch.Executions
-	jobs       jobStore
+	jobs       cliJobStore
+	db         *postgres.Store
 }
 
 // loadStores builds the ledger a command prices and charges against, the store
@@ -208,5 +202,5 @@ func openStores(
 		return nil, nil, err
 	}
 
-	return &stores{ledger: led, executions: db, jobs: db}, db.Close, nil
+	return &stores{ledger: led, executions: db, jobs: db, db: db}, db.Close, nil
 }

@@ -45,5 +45,8 @@ func Commands(meta *Meta) map[string]cli.CommandFactory {
 		"job stop": func() (cli.Command, error) {
 			return &JobStopCommand{Meta: meta}, nil
 		},
+		"server": func() (cli.Command, error) {
+			return &ServerCommand{Meta: meta}, nil
+		},
 	}
 }

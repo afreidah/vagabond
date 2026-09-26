@@ -127,16 +127,16 @@ func (c *JobRunCommand) Run(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	reg, store, code := c.loadRegistry(ctx, configPath)
+	reg, cfg, code := c.loadRegistry(ctx, configPath)
 	if reg == nil {
 		return code
 	}
 
-	if store == nil {
+	if cfg.Store == nil {
 		c.Ui.Warn("No store is configured, so this run's usage is not recorded.")
 	}
 
-	s, finish, code := c.loadStores(ctx, store, reg, untracked, "run")
+	s, finish, code := c.loadStores(ctx, cfg.Store, reg, untracked, "run")
 	if s == nil {
 		return code
 	}
@@ -146,7 +146,12 @@ func (c *JobRunCommand) Run(args []string) int {
 	return c.run(ctx, spec, meta, namespace, reg, s, noLogs)
 }
 
-// run dispatches every job in the specification.
+// -------------------------------------------------------------------------
+// DISPATCH
+// -------------------------------------------------------------------------
+
+// run dispatches every job in the specification, resolving every namespace
+// first, and returns the worst exit code.
 func (c *JobRunCommand) run(
 	ctx context.Context, spec *job.File, meta metaFlags, namespaceFlag string,
 	reg *registry.Registry, s *stores, noLogs bool,

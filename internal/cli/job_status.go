@@ -56,7 +56,8 @@ Status Options:
 	return strings.TrimSpace(text)
 }
 
-// Run lists or shows.
+// Run lists the namespace's jobs with no argument, or shows the one job it
+// names.
 func (c *JobStatusCommand) Run(args []string) int {
 	var configPath, namespace string
 
@@ -94,7 +95,12 @@ func (c *JobStatusCommand) Run(args []string) int {
 	return c.show(ctx, s, ns, names[0])
 }
 
-// list prints every job in the namespace.
+// -------------------------------------------------------------------------
+// RENDERING
+// -------------------------------------------------------------------------
+
+// list prints every job in the namespace as a table, stopped ones included, or
+// says there are none.
 func (c *JobStatusCommand) list(ctx context.Context, s *stores, namespace string) int {
 	all, err := s.jobs.Jobs(ctx, namespace)
 	if err != nil {
@@ -122,7 +128,8 @@ func (c *JobStatusCommand) list(ctx context.Context, s *stores, namespace string
 	return ExitSuccess
 }
 
-// show prints one job, its versions, and its recent executions.
+// show prints one job's standing, its versions, and its recent executions with
+// the dispatch each belongs to.
 func (c *JobStatusCommand) show(ctx context.Context, s *stores, namespace, name string) int {
 	j, err := s.jobs.Job(ctx, namespace, name)
 	if err != nil {
@@ -174,7 +181,8 @@ func (c *JobStatusCommand) show(ctx context.Context, s *stores, namespace, name 
 	return ExitSuccess
 }
 
-// standing renders whether a job can be dispatched.
+// standing renders whether a job can be dispatched: registered, or stopped
+// until registered again.
 func standing(j *jobs.Job) string {
 	if j.Stopped {
 		return "stopped"
@@ -188,9 +196,8 @@ func stamp(t time.Time) string {
 	return t.UTC().Format("2006-01-02 15:04:05Z")
 }
 
-// short keeps the last eight characters of an ID. Nomad shows the first eight,
-// but its IDs are random throughout; ours are UUIDv7, whose leading characters
-// are a timestamp that two runs a moment apart share.
+// short keeps the last eight characters of an ID. IDs are UUIDv7, whose leading
+// characters are a timestamp that two runs a moment apart share.
 func short(id string) string {
 	if len(id) > 8 {
 		return id[len(id)-8:]

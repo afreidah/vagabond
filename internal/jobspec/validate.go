@@ -53,9 +53,9 @@ func Validate(file *job.File) hcl.Diagnostics {
 			"A job file must declare a job."))
 	}
 
-	// One job per file, as Nomad has it. The specification holds a slice so
-	// that a second job is reported here rather than silently discarded by a
-	// parser that took the first and stopped.
+	// One job per file. The specification holds a slice so that a second job
+	// is reported here rather than silently discarded by a parser that took the
+	// first and stopped.
 	if len(file.Jobs) > 1 {
 		diags = append(diags, simple("Too many jobs",
 			fmt.Sprintf("A job file declares one job, and this one declares %d: %s.",

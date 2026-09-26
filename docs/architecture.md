@@ -57,7 +57,12 @@ continues through dispatch.
 | `internal/dispatch` | Submit, watch, collect, reroute, release |
 | `internal/providers/gcp` | Cloud Run Jobs plugin |
 | `internal/execution` | Execution IDs, state machine, results |
-| `internal/cli` | `job validate`, `job plan`, `job run` |
+| `internal/cli` | Every command, `server` included; `cmd/vagabond` only calls `cli.Run` |
+| `internal/server` | The API: routes, dispatch in the background, lifecycle |
+| `internal/api` | Request and response bodies of the API |
+| `internal/jobs` | Registered jobs, and loading a job for register, dispatch or run |
+| `internal/ledger` | Quota reservations and settlement over a store |
+| `internal/state` | Postgres and in-memory stores |
 
 ## Enforced boundaries
 

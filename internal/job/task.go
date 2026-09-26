@@ -35,6 +35,9 @@ import (
 // Timeout is the task's own bound, not a provider's. Admission compares it
 // against each candidate's limit, and a task killed by a provider limit below
 // its declared timeout is an admission bug rather than a workload failure.
+//
+// Vars and Meta are set by the parser, not decoded. A provider reads config
+// with Vars and env through Environment.
 type Task struct {
 	Name             string                 `hcl:"name,label"`
 	Driver           DriverName             `hcl:"driver"`
@@ -48,15 +51,12 @@ type Task struct {
 	Execution        *ExecutionRequirements `hcl:"execution,block"`
 	Retry            *Retry                 `hcl:"retry,block"`
 
-	// Vars is what the undecoded config and env blocks are evaluated against,
-	// and Meta the job's metadata as the task sees it. Both are set by the
-	// parser; a provider reads config with Vars and env through Environment.
-	Vars *hcl.EvalContext
-	Meta map[string]string
+	Vars *hcl.EvalContext  // what config and env are evaluated against
+	Meta map[string]string // the job's metadata as this task sees it
 }
 
 // MetaEnvPrefix names the environment variables every task receives for its
-// metadata, as Nomad sets NOMAD_META_<key>.
+// metadata.
 const MetaEnvPrefix = "VAGABOND_META_"
 
 // Environment returns the task's env block evaluated against its Vars, plus

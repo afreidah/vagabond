@@ -81,7 +81,7 @@ meta {
 A missing key is rejected before any provider is contacted. Supply values with
 `-meta <key>=<value>`, repeatable. Passing the same key twice is an error.
 
-`job dispatch` of a registered job checks metadata as Nomad does:
+`job dispatch` of a registered job checks metadata:
 
 - A job without a `parameterized` block takes no metadata.
 - A key in neither list is refused.

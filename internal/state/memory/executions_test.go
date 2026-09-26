@@ -75,6 +75,34 @@ func TestExecutions_UpdateIsConditional(t *testing.T) {
 	}
 }
 
+// A run finishes once: a second finish, or one for a run never recorded, is
+// refused as stale.
+func TestExecutions_DispatchFinishesOnce(t *testing.T) {
+	s := NewExecutions()
+	id, _ := execution.NewID()
+
+	d := &execution.Dispatch{ID: id, Job: "ci", State: execution.DispatchRunning, Created: time.Now()}
+	if err := s.CreateDispatch(t.Context(), d); err != nil {
+		t.Fatalf("CreateDispatch() = %v", err)
+	}
+
+	finished := &execution.Dispatch{ID: id, State: execution.DispatchSucceeded, Ended: time.Now()}
+	if err := s.FinishDispatch(t.Context(), finished); err != nil {
+		t.Fatalf("FinishDispatch() = %v", err)
+	}
+
+	again := &execution.Dispatch{ID: id, State: execution.DispatchFailed, Ended: time.Now()}
+	if err := s.FinishDispatch(t.Context(), again); !errors.Is(err, execution.ErrStale) {
+		t.Errorf("second FinishDispatch() = %v, want ErrStale", err)
+	}
+
+	got, err := s.GetDispatch(t.Context(), id)
+	if err != nil || got.State != execution.DispatchSucceeded || got.Job != "ci" {
+		t.Errorf("GetDispatch() = %+v, %v; want the first finish, keeping the job", got, err)
+	}
+}
+
+// TestExecutions_GetUnknown reads an ID nothing recorded.
 func TestExecutions_GetUnknown(t *testing.T) {
 	id, _ := execution.NewID()
 

@@ -17,6 +17,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/hashicorp/hcl/v2"
+
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobs"
@@ -24,8 +26,13 @@ import (
 	"github.com/afreidah/vagabond/internal/registry"
 )
 
-// jobStore is what the registered-job commands read and write.
-type jobStore interface {
+// -------------------------------------------------------------------------
+// INTERFACE
+// -------------------------------------------------------------------------
+
+// cliJobStore is what the registered-job commands read and write: jobs, their
+// versions, and the executions they produced.
+type cliJobStore interface {
 	Register(ctx context.Context, namespace, name string, source []byte, now time.Time) (int64, bool, error)
 	Job(ctx context.Context, namespace, name string) (*jobs.Job, error)
 	Jobs(ctx context.Context, namespace string) ([]*jobs.Job, error)
@@ -35,16 +42,21 @@ type jobStore interface {
 	JobExecutions(ctx context.Context, namespace, job string, limit int) ([]*execution.Record, error)
 }
 
+// -------------------------------------------------------------------------
+// STORES
+// -------------------------------------------------------------------------
+
 // loadJobStores loads configuration and opens the store, refusing without a
 // store block. The function returned closes the store.
 func (m *Meta) loadJobStores(
 	ctx context.Context, configPath, action string,
 ) (*registry.Registry, *stores, func(), int) {
-	reg, store, code := m.loadRegistry(ctx, configPath)
+	reg, cfg, code := m.loadRegistry(ctx, configPath)
 	if reg == nil {
 		return nil, nil, nil, code
 	}
 
+	store := cfg.Store
 	if store == nil {
 		return nil, nil, nil, m.Errorf(
 			"%s needs a store block: a registered job is kept in the database.", action)
@@ -60,7 +72,12 @@ func (m *Meta) loadJobStores(
 	return reg, s, finish, ExitSuccess
 }
 
-// readSource reads a job file, or standard input for "-".
+// -------------------------------------------------------------------------
+// LOADING
+// -------------------------------------------------------------------------
+
+// readSource reads a job file's bytes as written, or standard input for "-",
+// for commands that store the source rather than only parse it.
 func (m *Meta) readSource(path string) ([]byte, error) {
 	if path == stdinPath {
 		src, err := io.ReadAll(m.Stdin)
@@ -79,15 +96,9 @@ func (m *Meta) readSource(path string) ([]byte, error) {
 	return src, nil
 }
 
-// loadSource parses and validates source with meta, reporting as job validate
-// does.
-func (m *Meta) loadSource(filename string, src []byte, meta map[string]string) (*job.File, int) {
-	parsed, diags := jobspec.Parse(jobspec.Config{Filename: filename, Source: src, Meta: meta})
-
-	if !diags.HasErrors() {
-		diags = append(diags, jobspec.Validate(parsed.Spec)...)
-	}
-
+// loaded renders what loading a job reported, as job validate does, and hands
+// back the job when nothing was wrong.
+func (m *Meta) loaded(parsed *jobspec.Parsed, diags hcl.Diagnostics) (*job.File, int) {
 	if diags.HasErrors() {
 		renderDiagnostics(m.Ui, parsed.Files(), diags, m.color())
 
@@ -97,35 +108,22 @@ func (m *Meta) loadSource(filename string, src []byte, meta map[string]string) (
 	return parsed.Spec, ExitSuccess
 }
 
-// loadRegistered reads a registered job's current version and parses it with
-// meta, enforcing what a dispatch may supply first. A stopped job is refused.
+// loadRegistered reads a registered job's current version and loads it for
+// dispatch with meta. A stopped job is refused.
 func (m *Meta) loadRegistered(
 	ctx context.Context, s *stores, namespace, name string, meta metaFlags,
 ) (*job.File, *jobs.Version, int) {
-	current, err := s.jobs.Job(ctx, namespace, name)
+	version, err := jobs.Current(ctx, s.jobs, namespace, name)
 	if err != nil {
 		return nil, nil, m.Errorf("%s", err)
 	}
 
-	if current.Stopped {
-		return nil, nil, m.Errorf("Job %q is stopped. Register it again to dispatch it.", name)
-	}
-
-	version, err := s.jobs.Version(ctx, namespace, name, current.Version)
+	parsed, diags, err := jobs.ForDispatch(fmt.Sprintf("%s (version %d)", name, version.Version), version.Source, meta)
 	if err != nil {
 		return nil, nil, m.Errorf("%s", err)
 	}
 
-	decl, diags := jobspec.Declared(name, version.Source)
-	if diags.HasErrors() {
-		return nil, nil, m.Errorf("Job %q version %d: %s", name, version.Version, diags.Error())
-	}
-
-	if err := decl.CheckDispatch(meta); err != nil {
-		return nil, nil, m.Errorf("%s", err)
-	}
-
-	spec, code := m.loadSource(fmt.Sprintf("%s (version %d)", name, version.Version), version.Source, meta)
+	spec, code := m.loaded(parsed, diags)
 	if spec == nil {
 		return nil, nil, code
 	}

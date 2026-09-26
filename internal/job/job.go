@@ -152,7 +152,7 @@ func unknownType(name string) error {
 // and any free-tier capacity is spent.
 //
 // MetaOptional names keys a submission may supply. A dispatch supplying a key
-// in neither list is refused, as Nomad refuses unpermitted metadata.
+// in neither list is refused.
 type Parameterized struct {
 	MetaRequired []string `hcl:"meta_required,optional"`
 	MetaOptional []string `hcl:"meta_optional,optional"`

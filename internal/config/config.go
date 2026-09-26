@@ -32,9 +32,35 @@ import (
 
 // File is the decoded contents of one configuration file.
 type File struct {
-	Store      *StoreBlock `hcl:"store,block"`
-	Providers  []Provider  `hcl:"provider,block"`
-	Namespaces []Namespace `hcl:"namespace,block"`
+	Server     *ServerBlock `hcl:"server,block"`
+	Store      *StoreBlock  `hcl:"store,block"`
+	Providers  []Provider   `hcl:"provider,block"`
+	Namespaces []Namespace  `hcl:"namespace,block"`
+}
+
+// DefaultBind is where the server listens when nothing says otherwise:
+// localhost only, until the API has authentication.
+const DefaultBind = "127.0.0.1:4747"
+
+// ServerBlock configures vagabond server. Absent means the defaults.
+type ServerBlock struct {
+	Bind *string   `hcl:"bind,optional"`
+	TLS  *TLSBlock `hcl:"tls,block"`
+}
+
+// TLSBlock names the certificate and key the server presents.
+type TLSBlock struct {
+	Cert string `hcl:"cert"`
+	Key  string `hcl:"key"`
+}
+
+// Address returns where the server listens. A nil block is the default.
+func (s *ServerBlock) Address() string {
+	if s == nil || s.Bind == nil {
+		return DefaultBind
+	}
+
+	return *s.Bind
 }
 
 // Namespace is an owner of jobs and, optionally, of its own share of each
@@ -190,25 +216,35 @@ func loadDir(dir string) (*File, hcl.Diagnostics) {
 		merged.Providers = append(merged.Providers, file.Providers...)
 		merged.Namespaces = append(merged.Namespaces, file.Namespaces...)
 
-		// A second store is refused rather than letting file order decide which
-		// database a deployment writes its ledger to.
-		if file.Store != nil && merged.Store != nil {
-			diags = append(diags, &hcl.Diagnostic{
-				Severity: hcl.DiagError,
-				Summary:  "Duplicate store",
-				Detail: fmt.Sprintf("%s declares a store block, but one is already "+
-					"declared in an earlier file. A deployment has one ledger.", name),
-			})
-
-			continue
+		// A second store or server block is refused rather than letting file
+		// order decide which database a deployment writes to or where it
+		// listens.
+		switch {
+		case file.Store != nil && merged.Store != nil:
+			diags = append(diags, duplicate(name, "store", "A deployment has one ledger."))
+		case file.Store != nil:
+			merged.Store = file.Store
 		}
 
-		if file.Store != nil {
-			merged.Store = file.Store
+		switch {
+		case file.Server != nil && merged.Server != nil:
+			diags = append(diags, duplicate(name, "server", "A deployment has one server."))
+		case file.Server != nil:
+			merged.Server = file.Server
 		}
 	}
 
 	return &merged, append(diags, merged.validate()...)
+}
+
+// duplicate reports a block that may appear once, declared again in file.
+func duplicate(file, block, why string) *hcl.Diagnostic {
+	return &hcl.Diagnostic{
+		Severity: hcl.DiagError,
+		Summary:  fmt.Sprintf("Duplicate %s", block),
+		Detail: fmt.Sprintf("%s declares a %s block, but one is already declared in an "+
+			"earlier file. %s", file, block, why),
+	}
 }
 
 // LoadFile reads and decodes the named configuration file.

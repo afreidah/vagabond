@@ -161,6 +161,22 @@ const ns = "default"
 // origin is what every task here runs for.
 var origin = Origin{Namespace: ns, Job: "ci"}
 
+// runJob begins, runs and finishes j as the CLI and server do, and returns
+// what Run returned.
+func runJob(t *testing.T, d *Dispatcher, o Origin, j *job.Job) (*JobOutcome, error) {
+	t.Helper()
+
+	o, err := d.Begin(t.Context(), o, j.Name)
+	if err != nil {
+		t.Fatalf("Begin() = %v", err)
+	}
+
+	outcome, err := d.Run(t.Context(), o, j, nil)
+	d.Finish(t.Context(), o, outcome, err)
+
+	return outcome, err
+}
+
 // record reads back what the registry's store holds for id.
 func record(t *testing.T, reg *fakeRegistry, id execution.ID) *execution.Record {
 	t.Helper()
@@ -770,7 +786,7 @@ func TestRunStopsAtTheFirstFailingTask(t *testing.T) {
 	j.Tasks[0].Name = "first"
 	j.Tasks[1].Name = "second"
 
-	outcome, err := newDispatcher(t, newRegistry(p)).Run(t.Context(), origin, j, nil)
+	outcome, err := runJob(t, newDispatcher(t, newRegistry(p)), origin, j)
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -800,7 +816,7 @@ func TestRunExecutesEveryTaskInOrder(t *testing.T) {
 	j.Tasks[0].Name = "first"
 	j.Tasks[1].Name = "second"
 
-	outcome, err := newDispatcher(t, newRegistry(p)).Run(t.Context(), origin, j, nil)
+	outcome, err := runJob(t, newDispatcher(t, newRegistry(p)), origin, j)
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -824,7 +840,7 @@ func TestRunReportsPartialProgress(t *testing.T) {
 
 	j := &job.Job{Name: "j", Tasks: []job.Task{*containerTask(t, nil)}}
 
-	outcome, err := newDispatcher(t, reg).Run(t.Context(), origin, j, nil)
+	outcome, err := runJob(t, newDispatcher(t, reg), origin, j)
 	if err == nil {
 		t.Fatal("expected an error")
 	}

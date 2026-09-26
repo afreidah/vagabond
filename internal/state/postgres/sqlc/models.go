@@ -8,6 +8,17 @@ import (
 	"time"
 )
 
+type Dispatch struct {
+	DispatchID string
+	Namespace  string
+	Job        string
+	JobVersion int64
+	State      string
+	Error      string
+	CreatedAt  time.Time
+	EndedAt    *time.Time
+}
+
 type Execution struct {
 	ID            string
 	Namespace     string

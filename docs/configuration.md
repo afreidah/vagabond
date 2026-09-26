@@ -230,6 +230,36 @@ namespace "ci" {
   pools.
 - A job naming an undeclared namespace is refused.
 
+## `server` block
+
+Where `vagabond server` listens. Top level, at most one per deployment.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `bind` | string | no | Address and port; default `127.0.0.1:4747` |
+
+Contains an optional `tls` block:
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `cert` | string | yes | PEM certificate path |
+| `key` | string | yes | PEM private key path |
+
+```hcl
+server {
+  bind = "0.0.0.0:4747"
+
+  tls {
+    cert = "/etc/vagabond/server.crt"
+    key  = "/etc/vagabond/server.key"
+  }
+}
+```
+
+- The API has no authentication yet. Keep the default localhost bind unless the
+  network in front of it is trusted.
+- The server requires a `store` block.
+
 ## `store` block
 
 Where the usage ledger persists. Top level, at most one per deployment.

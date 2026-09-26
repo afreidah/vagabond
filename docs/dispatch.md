@@ -9,8 +9,13 @@ submitted and as it changes state.
 
 ## Execution records
 
-One record per attempt, in Postgres when a `store` is configured and in memory
-otherwise.
+Each run of a job has a dispatch record: `running` when it starts, then
+`succeeded`, `failed`, or `unanswered` with the reason. It is written before
+anything is reserved, so a run refused on quota is recorded even though it has
+no executions.
+
+One execution record per attempt, in Postgres when a `store` is configured and
+in memory otherwise.
 
 | State written | When |
 |---|---|

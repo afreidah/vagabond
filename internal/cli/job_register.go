@@ -4,7 +4,7 @@
 // Author: Alex Freidah
 //
 // Stores a job so it can be dispatched by name. Nothing runs. A new version is
-// made only when the job changed, as Nomad does.
+// made only when the job changed.
 //
 // Validated in full, with each declared ${meta.key} standing as its own text:
 // the values arrive at dispatch, and a reference to an undeclared key is
@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/afreidah/vagabond/internal/jobspec"
+	"github.com/afreidah/vagabond/internal/jobs"
 )
 
 // JobRegisterCommand implements `vagabond job register`.
@@ -61,7 +61,8 @@ Register Options:
 	return strings.TrimSpace(text)
 }
 
-// Run registers the named specification.
+// Run validates the named specification and registers it, reporting whether it
+// made a new version.
 func (c *JobRegisterCommand) Run(args []string) int {
 	var configPath, namespace string
 
@@ -83,14 +84,14 @@ func (c *JobRegisterCommand) Run(args []string) int {
 		return c.Errorf("%s", err)
 	}
 
-	decl, diags := jobspec.Declared(paths[0], src)
-	if diags.HasErrors() {
+	parsed, diags := jobs.ForRegister(paths[0], src)
+	if parsed == nil {
 		renderDiagnostics(c.Ui, nil, diags, c.color())
 
 		return ExitFailure
 	}
 
-	spec, code := c.loadSource(paths[0], src, decl.References())
+	spec, code := c.loaded(parsed, diags)
 	if spec == nil {
 		return code
 	}

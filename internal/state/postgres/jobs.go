@@ -24,7 +24,7 @@ import (
 
 // Register stores source as the job's next version when it differs from the
 // current one, and reports the job's version afterwards and whether it changed.
-// Registering a stopped job always makes a new version, as Nomad does.
+// Registering a stopped job always makes a new version.
 func (s *Store) Register(
 	ctx context.Context, namespace, name string, source []byte, now time.Time,
 ) (int64, bool, error) {
