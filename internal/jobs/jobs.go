@@ -3,13 +3,8 @@
 //
 // Author: Alex Freidah
 //
-// A registered job is a named, versioned definition the server can launch
-// later without the file: by dispatch, by schedule, or through the API. The
-// source is stored as written and parsed again at each dispatch, because
-// metadata is substituted when a job is parsed.
-//
-// A new version is created only when the job changed, as Nomad does. Changed
-// means the source differs once formatted, so whitespace alone is not a change.
+// A registered job's standing and versions, and the fingerprint that decides
+// whether registering again is a change. Whitespace alone is not.
 // -------------------------------------------------------------------------------
 
 package jobs

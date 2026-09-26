@@ -122,6 +122,57 @@ func (q *Queries) GetExecution(ctx context.Context, id string) (Execution, error
 	return i, err
 }
 
+const listDispatchExecutions = `-- name: ListDispatchExecutions :many
+SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated, dispatch_id FROM executions
+WHERE dispatch_id = $1
+ORDER BY created_at
+`
+
+// Every execution of one dispatch, in the order they were created.
+func (q *Queries) ListDispatchExecutions(ctx context.Context, dispatchID string) ([]Execution, error) {
+	rows, err := q.db.Query(ctx, listDispatchExecutions, dispatchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Execution{}
+	for rows.Next() {
+		var i Execution
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Job,
+			&i.JobVersion,
+			&i.Task,
+			&i.Provider,
+			&i.Attempt,
+			&i.PreviousID,
+			&i.State,
+			&i.ProviderID,
+			&i.Failure,
+			&i.CreatedAt,
+			&i.StartedAt,
+			&i.EndedAt,
+			&i.UpdatedAt,
+			&i.ExitCode,
+			&i.DurationMs,
+			&i.BilledCpu,
+			&i.BilledMemory,
+			&i.BilledMs,
+			&i.Logs,
+			&i.LogsTruncated,
+			&i.DispatchID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listJobExecutions = `-- name: ListJobExecutions :many
 SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated, dispatch_id FROM executions
 WHERE namespace = $1 AND job = $2

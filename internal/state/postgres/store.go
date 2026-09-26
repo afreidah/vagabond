@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math/rand/v2"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -33,7 +34,7 @@ var migrationFS embed.FS
 
 // SchemaVersion is the migration version this binary expects. Raised with every
 // migration added.
-const SchemaVersion = 4
+const SchemaVersion = 5
 
 // ErrUnavailable reports a database that could not be reached. The circuit
 // breaker that will stand in front of the store returns the same sentinel, so
@@ -108,12 +109,13 @@ func (s *Store) Migrate(ctx context.Context) error {
 // TRANSACTIONS
 // -------------------------------------------------------------------------
 
-// Serialization failures are retried this many times, backing off linearly by
-// serializationBackoff. One of two conflicting transactions always commits, so
-// a retry makes progress; the bound is for a database that keeps refusing.
+// Serialization failures are retried this many times, the backoff doubling from
+// serializationBackoff to serializationBackoffMax with jitter so contenders
+// spread out instead of colliding again in lockstep.
 const (
-	serializationAttempts = 5
-	serializationBackoff  = 10 * time.Millisecond
+	serializationAttempts   = 10
+	serializationBackoff    = 5 * time.Millisecond
+	serializationBackoffMax = 500 * time.Millisecond
 )
 
 // serializationFailure is SQLSTATE 40001. Postgres raises it under serializable
@@ -130,7 +132,7 @@ func (s *Store) serializable(ctx context.Context, fn func(*db.Queries) error) er
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(time.Duration(attempt) * serializationBackoff):
+			case <-time.After(retryDelay(attempt)):
 			}
 		}
 
@@ -141,6 +143,14 @@ func (s *Store) serializable(ctx context.Context, fn func(*db.Queries) error) er
 	}
 
 	return fmt.Errorf("gave up after %d serialization failures: %w", serializationAttempts, err)
+}
+
+// retryDelay is a random wait up to the attempt's exponential ceiling. Full
+// jitter, so transactions that failed together do not retry together.
+func retryDelay(attempt int) time.Duration {
+	ceiling := min(serializationBackoff<<attempt, serializationBackoffMax)
+
+	return rand.N(ceiling) + 1 //nolint:gosec // jitter, not a secret
 }
 
 // transaction runs fn in one serializable transaction. Rollback after a commit

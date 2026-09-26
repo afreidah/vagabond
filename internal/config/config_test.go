@@ -356,6 +356,39 @@ func TestLoadPathRejectsAStoreDeclaredTwice(t *testing.T) {
 	}
 }
 
+// Two server blocks would leave file order deciding where the server listens.
+func TestLoadPathRejectsAServerDeclaredTwice(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	write(t, dir, "a.hcl", `server { bind = "127.0.0.1:1" }`)
+	write(t, dir, "b.hcl", `server { bind = "127.0.0.1:2" }`)
+
+	_, diags := LoadPath(dir)
+	if !diags.HasErrors() || !strings.Contains(diags.Error(), "Duplicate server") {
+		t.Errorf("diagnostics = %v, want a duplicate server", diags)
+	}
+}
+
+// With no server block, or one naming no bind, the server listens on
+// localhost only.
+func TestServerAddress(t *testing.T) {
+	t.Parallel()
+
+	if got := load(t, `provider "p" { type = "fake-container" }`).Server.Address(); got != DefaultBind {
+		t.Errorf("no block: Address() = %q, want %q", got, DefaultBind)
+	}
+
+	if got := load(t, `server {}`).Server.Address(); got != DefaultBind {
+		t.Errorf("empty block: Address() = %q, want %q", got, DefaultBind)
+	}
+
+	if got := load(t, `server { bind = "0.0.0.0:9000" }`).Server.Address(); got != "0.0.0.0:9000" {
+		t.Errorf("Address() = %q, want 0.0.0.0:9000", got)
+	}
+}
+
 // A store beside the providers, in a file of its own, is the layout a
 // directory exists for.
 func TestLoadPathMergesAStore(t *testing.T) {

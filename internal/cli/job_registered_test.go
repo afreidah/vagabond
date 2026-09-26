@@ -46,6 +46,19 @@ func TestRegisteredJobCommandsNeedAStore(t *testing.T) {
 	}
 }
 
+// The server keeps jobs and executions in the database, so it refuses to start
+// without a store block.
+func TestServer_NeedsAStore(t *testing.T) {
+	t.Setenv("VAGABOND_CONFIG", "")
+	t.Chdir(t.TempDir())
+
+	code, _, stderr := run("server", "-config", writeConfig(t, planConfig))
+
+	if code != ExitFailure || !strings.Contains(stderr, "needs a store block") {
+		t.Errorf("exit %d, stderr:\n%s", code, stderr)
+	}
+}
+
 // A path that does not exist is still a file, so a typo reads as a missing file
 // rather than a missing registered job.
 func TestJobPlan_MissingFileIsAFile(t *testing.T) {

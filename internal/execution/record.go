@@ -5,7 +5,7 @@
 //
 // What is persisted about one attempt: its status, where it came from, and what
 // it produced. One record per execution ID, so a rerouted task is several
-// records linked by Previous, as Nomad links rescheduled allocations.
+// records linked by Previous.
 // -------------------------------------------------------------------------------
 
 package execution

@@ -137,12 +137,12 @@ func (c *JobPlanCommand) Run(args []string) int {
 		return code
 	}
 
-	reg, store, code := c.loadRegistry(ctx, configPath)
+	reg, cfg, code := c.loadRegistry(ctx, configPath)
 	if reg == nil {
 		return code
 	}
 
-	s, finish, code := c.loadStores(ctx, store, reg, untracked, "plan")
+	s, finish, code := c.loadStores(ctx, cfg.Store, reg, untracked, "plan")
 	if s == nil {
 		return code
 	}
@@ -254,17 +254,16 @@ func (c *JobPlanCommand) planTask(
 	j *job.Job, task *job.Task, req *scheduler.Request,
 	inputs []scheduler.Input, verbose bool,
 ) bool {
-	result := scheduler.Admit(req, inputs)
-	ranking := scheduler.Rank(req, result.Candidates)
+	plan := scheduler.PlanTask(req, inputs)
 
 	c.Ui.Output(fmt.Sprintf("%s.%s (%s)", j.Name, task.Name, task.Driver))
-	c.Ui.Output(c.table(ranking, result.Rejections, verbose))
+	c.Ui.Output(c.table(plan.Ranking, plan.Rejections, verbose))
 
-	selected, ok := ranking.Selected()
+	selected, ok := plan.Ranking.Selected()
 	if !ok {
 		c.Ui.Output("No provider can run this task.")
 
-		if result.Retryable() {
+		if plan.Retryable {
 			c.Ui.Output("At least one rejection is transient, so this may be admitted later.")
 		}
 

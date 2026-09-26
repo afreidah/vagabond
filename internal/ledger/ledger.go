@@ -123,21 +123,15 @@ const (
 type Resolver func(ctx context.Context, h Held) (Verdict, time.Duration)
 
 // Store is where reservations and settled usage live.
+//
+// Reserve records a reservation only if every charge fits, and otherwise
+// returns the usage it was refused against. Settle replaces a reservation with
+// what the run cost; one with none settles to nothing. Reap hands each
+// reservation created before the cutoff to settle and settles those it accepts.
 type Store interface {
-	// Reserve records r only if every charge fits. When it does not, the
-	// usage it was refused against comes back so the refusal can name a
-	// pool.
 	Reserve(ctx context.Context, r *Reservation) (bool, Usage, error)
-
-	// Settle replaces an execution's reservation with actual. An execution
-	// with none settles to nothing.
 	Settle(ctx context.Context, id execution.ID, actual map[PoolRef]int64) error
-
-	// ReadUsage returns settled plus reserved usage in the given periods.
 	ReadUsage(ctx context.Context, periods []string) (Usage, error)
-
-	// Reap hands each reservation created before the cutoff to settle, and
-	// settles those it returns true for. Returns how many were settled.
 	Reap(ctx context.Context, before time.Time,
 		settle func(context.Context, Held) (map[PoolRef]int64, bool)) (int, error)
 }

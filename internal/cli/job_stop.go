@@ -51,7 +51,8 @@ Stop Options:
 	return strings.TrimSpace(text)
 }
 
-// Run stops the named job.
+// Run stops the named job in the namespace. Its executions already running are
+// left alone.
 func (c *JobStopCommand) Run(args []string) int {
 	var configPath, namespace string
 

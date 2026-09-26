@@ -12,6 +12,7 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,7 +156,7 @@ func TestRecord_TasksShareTheDispatch(t *testing.T) {
 	j := &job.Job{Name: "ci", Tasks: []job.Task{*containerTask(t, nil), *containerTask(t, nil)}}
 	j.Tasks[1].Name = "second"
 
-	outcome, err := newDispatcher(t, reg).Run(t.Context(), Origin{Namespace: ns, JobVersion: 4}, j, nil)
+	outcome, err := runJob(t, newDispatcher(t, reg), Origin{Namespace: ns, JobVersion: 4}, j)
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -176,12 +177,123 @@ func TestRecord_TasksShareTheDispatch(t *testing.T) {
 // failingStore records nothing.
 type failingStore struct{}
 
+// CreateDispatch fails, as every write to a store that is down does.
+func (failingStore) CreateDispatch(context.Context, *execution.Dispatch) error {
+	return errors.New("store down")
+}
+
+// FinishDispatch fails, as every write to a store that is down does.
+func (failingStore) FinishDispatch(context.Context, *execution.Dispatch) error {
+	return errors.New("store down")
+}
+
+// Create fails, so no attempt can be recorded before Submit.
 func (failingStore) Create(context.Context, *execution.Record) error {
 	return errors.New("store down")
 }
 
+// Update fails, as every write to a store that is down does.
 func (failingStore) Update(context.Context, *execution.Record, execution.State) error {
 	return errors.New("store down")
+}
+
+// -------------------------------------------------------------------------
+// DISPATCH RECORDS
+// -------------------------------------------------------------------------
+
+// dispatchRecord reads back the record of one run.
+func dispatchRecord(t *testing.T, reg *fakeRegistry, id execution.ID) *execution.Dispatch {
+	t.Helper()
+
+	d, err := reg.executions.GetDispatch(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetDispatch(%s) = %v", id, err)
+	}
+
+	return d
+}
+
+// How a run ended is recorded on its dispatch: succeeded, failed on a task's
+// verdict, or unanswered with the reason.
+func TestDispatchRecord_Outcomes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		provider  *scriptedProvider
+		want      execution.DispatchState
+		wantError bool
+	}{
+		{
+			name:     "succeeded",
+			provider: &scriptedProvider{name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded},
+			want:     execution.DispatchSucceeded,
+		},
+		{
+			name:     "task failed",
+			provider: &scriptedProvider{name: "a", pollsToFinish: 1, finalState: execution.StateFailed, exitCode: 1},
+			want:     execution.DispatchFailed,
+		},
+		{
+			name:      "no answer",
+			provider:  &scriptedProvider{name: "a", submitErr: plugin.Infrastructure(errors.New("503"))},
+			want:      execution.DispatchUnanswered,
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			reg := newRegistry(tt.provider)
+			j := &job.Job{Name: "ci", Tasks: []job.Task{*containerTask(t, nil)}}
+
+			outcome, _ := runJob(t, newDispatcher(t, reg), origin, j)
+			d := dispatchRecord(t, reg, outcome.Dispatch)
+
+			if d.State != tt.want || (d.Error != "") != tt.wantError || d.Ended.IsZero() {
+				t.Errorf("dispatch = %+v, want %s", d, tt.want)
+			}
+		})
+	}
+}
+
+// A run refused before any task was submitted has no executions, and its
+// dispatch record is what says why.
+func TestDispatchRecord_RefusedRunHasOnlyItsRecord(t *testing.T) {
+	t.Parallel()
+
+	reg := newRegistry(&scriptedProvider{name: "a"})
+	j := &job.Job{Name: "ci", Tasks: []job.Task{*containerTask(t, nil)}}
+	j.Tasks[0].Driver = job.DriverWorker
+
+	outcome, err := runJob(t, newDispatcher(t, reg), origin, j)
+	if !errors.Is(err, ErrNoCandidates) {
+		t.Fatalf("Run() = %v, want ErrNoCandidates", err)
+	}
+
+	d := dispatchRecord(t, reg, outcome.Dispatch)
+
+	if d.State != execution.DispatchUnanswered || !strings.Contains(d.Error, "no provider") {
+		t.Errorf("dispatch = %+v, want unanswered with the reason", d)
+	}
+
+	runs, _ := reg.executions.DispatchExecutions(t.Context(), outcome.Dispatch)
+	if len(runs) != 0 {
+		t.Errorf("a refused run recorded %d executions", len(runs))
+	}
+}
+
+// Run refuses a dispatch Begin never recorded.
+func TestRun_NeedsBegin(t *testing.T) {
+	t.Parallel()
+
+	j := &job.Job{Name: "ci", Tasks: []job.Task{*containerTask(t, nil)}}
+
+	if _, err := newDispatcher(t, newRegistry()).Run(t.Context(), origin, j, nil); err == nil {
+		t.Error("Run() started a dispatch that was never begun")
+	}
 }
 
 // The record must exist before Submit, so one that cannot be written stops the

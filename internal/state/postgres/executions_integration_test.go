@@ -160,6 +160,45 @@ func TestExecutions_CreateTwiceFails(t *testing.T) {
 	}
 }
 
+// A run's record round-trips, finishes once, and keeps why it got no answer.
+func TestDispatches_FinishOnce(t *testing.T) {
+	for _, e := range engines() {
+		t.Run(e.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := open(ctx, t, e)
+
+			d := &execution.Dispatch{
+				ID: newID(t), Namespace: "ci", Job: "go-test", JobVersion: 2,
+				State: execution.DispatchRunning, Created: time.Now().UTC().Truncate(time.Microsecond),
+			}
+
+			if err := store.CreateDispatch(ctx, d); err != nil {
+				t.Fatalf("CreateDispatch() = %v", err)
+			}
+
+			d.State, d.Error, d.Ended = execution.DispatchUnanswered, "no provider", time.Now().UTC().Truncate(time.Microsecond)
+
+			if err := store.FinishDispatch(ctx, d); err != nil {
+				t.Fatalf("FinishDispatch() = %v", err)
+			}
+
+			if err := store.FinishDispatch(ctx, d); !errors.Is(err, execution.ErrStale) {
+				t.Errorf("second FinishDispatch() = %v, want ErrStale", err)
+			}
+
+			got, err := store.GetDispatch(ctx, d.ID)
+			if err != nil {
+				t.Fatalf("GetDispatch() = %v", err)
+			}
+
+			if diff := cmp.Diff(d, got); diff != "" {
+				t.Errorf("round trip (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestExecutions_GetUnknown reads an ID nothing recorded.
 func TestExecutions_GetUnknown(t *testing.T) {
 	for _, e := range engines() {
 		t.Run(e.name, func(t *testing.T) {

@@ -149,8 +149,7 @@ func sourceName(cfg Config) string {
 // -------------------------------------------------------------------------
 
 // bindTasks gives every task what its undecoded blocks are evaluated against
-// and its metadata: the job's meta block, overridden by what was supplied, as
-// Nomad merges job meta with dispatch meta.
+// and its metadata: the job's meta block, overridden by what was supplied.
 func bindTasks(file *job.File, ctx *hcl.EvalContext, supplied map[string]string) hcl.Diagnostics {
 	var diags hcl.Diagnostics
 

@@ -67,8 +67,11 @@ func (s *Store) Reserve(ctx context.Context, r *ledger.Reservation) (bool, ledge
 
 		return nil
 	})
+	if err != nil {
+		return false, nil, err
+	}
 
-	return fits, standing, err
+	return fits, standing, nil
 }
 
 // Settle replaces id's reservation with actual, by pool.

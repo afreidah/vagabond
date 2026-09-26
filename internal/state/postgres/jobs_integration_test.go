@@ -49,8 +49,8 @@ func mustRegister(ctx context.Context, t *testing.T, s *postgres.Store, source s
 	return version, changed
 }
 
-// A version is made only when the job changed, as Nomad does, and formatting
-// alone is not a change.
+// A version is made only when the job changed, and formatting alone is not a
+// change.
 func TestJobs_RegisterVersionsOnlyOnChange(t *testing.T) {
 	for _, e := range engines() {
 		t.Run(e.name, func(t *testing.T) {

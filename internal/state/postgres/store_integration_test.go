@@ -537,8 +537,8 @@ func TestReap_SettlesWhatTheCallbackAccepts(t *testing.T) {
 			now := time.Now()
 			old := now.Add(-2 * time.Hour)
 
-			dropped := fnReservation(t, old, 900*gbSeconds)
-			kept := fnReservation(t, old, 900*gbSeconds)
+			dropped := fnReservation(t, old, 400*gbSeconds)
+			kept := fnReservation(t, old, 400*gbSeconds)
 			fresh := fnReservation(t, now, 0)
 
 			for _, r := range []*ledger.Reservation{dropped, kept, fresh} {
@@ -565,13 +565,13 @@ func TestReap_SettlesWhatTheCallbackAccepts(t *testing.T) {
 				t.Errorf("offered %d reservations, want the two old ones", len(offered))
 			}
 
-			if h := offered[kept.ID]; h.CPU != 1000 || h.Memory != 1024 || h.Amounts[totalPool("compute")] != 900*gbSeconds {
+			if h := offered[kept.ID]; h.CPU != 1000 || h.Memory != 1024 || h.Amounts[totalPool("compute")] != 400*gbSeconds {
 				t.Errorf("held = %+v, want the reservation's shape and amounts", h)
 			}
 
 			usage := readSeptember(ctx, t, store)
 
-			if usage[fnRequests] != 2 || usage[fnCompute] != 900*gbSeconds {
+			if usage[fnRequests] != 2 || usage[fnCompute] != 400*gbSeconds {
 				t.Errorf("usage = %v, want the kept and fresh reservations only", usage)
 			}
 		})

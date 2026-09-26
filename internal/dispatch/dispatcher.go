@@ -38,10 +38,7 @@ import (
 // of a configured registry, and so dispatch does not depend on how providers
 // happen to be constructed.
 type Registry interface {
-	// Inputs is what admission reads for a job in namespace.
 	Inputs(namespace string, usage func(namespace, provider string) (total, share quota.PoolUsage)) []scheduler.Input
-
-	// Provider is the plugin registered under a name.
 	Provider(name string) (plugin.Provider, bool)
 }
 
@@ -58,19 +55,22 @@ type Ledger interface {
 	PoolUsage(namespace, provider string) (total, share quota.PoolUsage)
 }
 
-// Executions is where every attempt is recorded, declared here for the same
-// reason as Registry.
+// Executions is where every run and attempt is recorded, declared here for the
+// same reason as Registry.
 //
 // Update writes the record only if the stored one is still in from, and fails
-// with execution.ErrStale otherwise.
+// with execution.ErrStale otherwise. FinishDispatch changes only a dispatch
+// still running.
 type Executions interface {
+	CreateDispatch(ctx context.Context, d *execution.Dispatch) error
+	FinishDispatch(ctx context.Context, d *execution.Dispatch) error
 	Create(ctx context.Context, r *execution.Record) error
 	Update(ctx context.Context, r *execution.Record, from execution.State) error
 }
 
 // Origin is what a task runs for: the job, the namespace it runs in, and the
-// dispatch it belongs to. JobVersion is 0 for a job run from a file. Run mints
-// the dispatch ID when it is zero.
+// dispatch it belongs to. JobVersion is 0 for a job run from a file. Begin
+// mints the dispatch ID when it is zero.
 type Origin struct {
 	Namespace  string
 	Job        string
@@ -150,7 +150,63 @@ func New(registry Registry, ledger Ledger, executions Executions, opts ...Option
 // RUNNING A JOB
 // -------------------------------------------------------------------------
 
-// Run executes every task in a job, in declaration order.
+// Begin records a run of job as running and returns origin with its dispatch
+// ID, minting one when it has none. A run that cannot be recorded must not
+// start, so the error is the caller's to stop on.
+func (d *Dispatcher) Begin(ctx context.Context, origin Origin, jobName string) (Origin, error) {
+	origin.Job = jobName
+
+	if origin.Dispatch.IsZero() {
+		id, err := execution.NewID()
+		if err != nil {
+			return origin, plugin.Internal(fmt.Errorf("generating a dispatch id: %w", err))
+		}
+
+		origin.Dispatch = id
+	}
+
+	err := d.executions.CreateDispatch(ctx, &execution.Dispatch{
+		ID:         origin.Dispatch,
+		Namespace:  origin.Namespace,
+		Job:        jobName,
+		JobVersion: origin.JobVersion,
+		State:      execution.DispatchRunning,
+		Created:    d.now(),
+	})
+	if err != nil {
+		return origin, fmt.Errorf("recording dispatch %s: %w", origin.Dispatch, err)
+	}
+
+	return origin, nil
+}
+
+// Finish records how a begun run ended: succeeded or failed on the tasks'
+// verdicts, or unanswered with runErr. Best effort, since the run is over.
+func (d *Dispatcher) Finish(ctx context.Context, origin Origin, outcome *JobOutcome, runErr error) {
+	rec := &execution.Dispatch{
+		ID:         origin.Dispatch,
+		Namespace:  origin.Namespace,
+		Job:        origin.Job,
+		JobVersion: origin.JobVersion,
+		State:      execution.DispatchFailed,
+		Ended:      d.now(),
+	}
+
+	switch {
+	case runErr != nil:
+		rec.State, rec.Error = execution.DispatchUnanswered, runErr.Error()
+	case outcome.Succeeded():
+		rec.State = execution.DispatchSucceeded
+	}
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer cancel()
+
+	_ = d.executions.FinishDispatch(ctx, rec)
+}
+
+// Run executes every task in a job, in declaration order, under the dispatch
+// Begin recorded.
 //
 // Sequential and fail-fast. The specification has no dependency graph, so a
 // job's tasks read as steps, and running step two after step one failed is
@@ -160,24 +216,14 @@ func New(registry Registry, ledger Ledger, executions Executions, opts ...Option
 //
 // The outcome is populated even when the error is non-nil, so a caller can
 // report what did run before the failure.
-//
-// origin names the namespace the caller resolved, whose share of each provider
-// is charged alongside the provider's total, and the job version when the job
-// is registered.
 func (d *Dispatcher) Run(
 	ctx context.Context, origin Origin, j *job.Job, eval *hcl.EvalContext,
 ) (*JobOutcome, error) {
-	origin.Job = j.Name
-
 	if origin.Dispatch.IsZero() {
-		id, err := execution.NewID()
-		if err != nil {
-			return nil, plugin.Internal(fmt.Errorf("generating a dispatch id: %w", err))
-		}
-
-		origin.Dispatch = id
+		return nil, plugin.Internal(errors.New("run of a dispatch that was never begun"))
 	}
 
+	origin.Job = j.Name
 	outcome := &JobOutcome{Job: j.Name, Dispatch: origin.Dispatch}
 
 	for i := range j.Tasks {

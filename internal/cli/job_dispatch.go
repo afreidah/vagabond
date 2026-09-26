@@ -4,9 +4,9 @@
 // Author: Alex Freidah
 //
 // Runs a registered job's current version by name, and waits for it, reporting
-// as job run does. Metadata is checked as Nomad checks it: a job that is not
-// parameterized takes none, and a parameterized one refuses keys it did not
-// declare and requires the ones it marked required.
+// as job run does. A job that is not parameterized takes no metadata, and a
+// parameterized one refuses keys it did not declare and requires the ones it
+// marked required.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -68,7 +68,8 @@ Dispatch Options:
 	return strings.TrimSpace(text)
 }
 
-// Run dispatches the named job.
+// Run dispatches the named job's current version, printing its dispatch ID
+// before anything runs, and waits for it.
 func (c *JobDispatchCommand) Run(args []string) int {
 	var (
 		meta       metaFlags

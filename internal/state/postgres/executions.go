@@ -101,6 +101,21 @@ func (s *Store) JobExecutions(ctx context.Context, namespace, job string, limit 
 		return nil, fmt.Errorf("list executions of %s: %w", job, err)
 	}
 
+	return recordsOf(rows)
+}
+
+// DispatchExecutions returns every execution of one dispatch, oldest first.
+func (s *Store) DispatchExecutions(ctx context.Context, dispatch execution.ID) ([]*execution.Record, error) {
+	rows, err := s.queries.ListDispatchExecutions(ctx, dispatch.String())
+	if err != nil {
+		return nil, fmt.Errorf("list executions of dispatch %s: %w", dispatch, err)
+	}
+
+	return recordsOf(rows)
+}
+
+// recordsOf maps a list of rows.
+func recordsOf(rows []db.Execution) ([]*execution.Record, error) {
 	records := make([]*execution.Record, 0, len(rows))
 
 	for i := range rows {

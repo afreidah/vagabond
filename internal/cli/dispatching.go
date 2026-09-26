@@ -28,6 +28,10 @@ import (
 	"github.com/afreidah/vagabond/internal/scheduler"
 )
 
+// -------------------------------------------------------------------------
+// DISPATCH
+// -------------------------------------------------------------------------
+
 // newDispatcher builds a dispatcher over the configured providers and stores,
 // and first resolves reservations a killed run left behind: they hold quota
 // this one may need. Failing to resolve them costs headroom, not correctness,
@@ -51,12 +55,19 @@ func (m *Meta) newDispatcher(
 	return d
 }
 
-// runJob dispatches one job and reports what happened.
+// runJob dispatches one job, reports each task as it finished, and returns the
+// exit code for the whole.
 func (m *Meta) runJob(
 	ctx context.Context, d *dispatch.Dispatcher, origin dispatch.Origin, j *job.Job,
 	eval *hcl.EvalContext, noLogs bool,
 ) int {
+	origin, err := d.Begin(ctx, origin, j.Name)
+	if err != nil {
+		return m.Errorf("Job %q did not start: %s", j.Name, err)
+	}
+
 	outcome, err := d.Run(ctx, origin, j, eval)
+	d.Finish(ctx, origin, outcome, err)
 
 	if outcome != nil {
 		for i := range outcome.Tasks {
@@ -75,7 +86,12 @@ func (m *Meta) runJob(
 	return ExitSuccess
 }
 
-// reportFailure renders a job that never produced a result.
+// -------------------------------------------------------------------------
+// REPORTING
+// -------------------------------------------------------------------------
+
+// reportFailure renders a job that never produced a result, and picks the exit
+// code that says whether the work ran.
 func (m *Meta) reportFailure(j *job.Job, err error) int {
 	switch {
 	case errors.Is(err, context.Canceled):
@@ -94,7 +110,8 @@ func (m *Meta) reportFailure(j *job.Job, err error) int {
 	}
 }
 
-// reportTask renders one task's result.
+// reportTask renders one task's result: its output unless it was streamed,
+// then its verdict.
 func (m *Meta) reportTask(outcome *dispatch.TaskOutcome, noLogs bool) {
 	if outcome.Result == nil {
 		m.renderRejections(outcome)
@@ -121,7 +138,8 @@ func (m *Meta) reportTask(outcome *dispatch.TaskOutcome, noLogs bool) {
 	m.renderRefusals(outcome)
 }
 
-// renderRejections explains a task that had nowhere to go.
+// renderRejections explains a task that had nowhere to go, one line per
+// provider that turned it away.
 func (m *Meta) renderRejections(outcome *dispatch.TaskOutcome) {
 	for i := range outcome.Rejections {
 		r := &outcome.Rejections[i]
@@ -146,7 +164,8 @@ func (m *Meta) renderRefusals(outcome *dispatch.TaskOutcome) {
 	}
 }
 
-// verdict renders whether the task itself passed.
+// verdict renders whether the task itself passed, with its exit code when it
+// failed and has one.
 func verdict(outcome *dispatch.TaskOutcome) string {
 	if outcome.Succeeded() {
 		return "succeeded"
@@ -159,7 +178,8 @@ func verdict(outcome *dispatch.TaskOutcome) string {
 	return "failed"
 }
 
-// progress reports a state change to stderr as it happens.
+// progress reports a state change to stderr as it happens, naming the attempt
+// after the first.
 func (m *Meta) progress(e dispatch.Event) {
 	line := fmt.Sprintf("==> %s %s on %s", e.Task, e.State, e.Provider)
 

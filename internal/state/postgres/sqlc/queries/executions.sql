@@ -41,6 +41,12 @@ WHERE id = @id AND state = @from_state::text;
 -- name: GetExecution :one
 SELECT * FROM executions WHERE id = @id;
 
+-- name: ListDispatchExecutions :many
+-- Every execution of one dispatch, in the order they were created.
+SELECT * FROM executions
+WHERE dispatch_id = @dispatch_id
+ORDER BY created_at;
+
 -- name: ListJobExecutions :many
 -- A job's most recent executions, newest first.
 SELECT * FROM executions

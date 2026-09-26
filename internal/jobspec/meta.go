@@ -266,8 +266,8 @@ func Declared(filename string, source []byte) (Declaration, hcl.Diagnostics) {
 
 // References binds every declared key to its own reference, so a job can be
 // parsed and validated at register with ${meta.version} standing as the text
-// "${meta.version}". Nomad leaves runtime references intact the same way. A
-// reference to an undeclared key still fails, which catches a typo at register.
+// "${meta.version}". A reference to an undeclared key still fails, which
+// catches a typo at register.
 func (d Declaration) References() map[string]string {
 	refs := make(map[string]string, len(d.Required)+len(d.Optional))
 
@@ -278,9 +278,9 @@ func (d Declaration) References() map[string]string {
 	return refs
 }
 
-// CheckDispatch refuses metadata a dispatch may not supply, as Nomad does: any
-// at all for a job that is not parameterized, keys declared in neither list,
-// and required keys left out.
+// CheckDispatch refuses metadata a dispatch may not supply: any at all for a
+// job that is not parameterized, keys declared in neither list, and required
+// keys left out.
 func (d Declaration) CheckDispatch(supplied map[string]string) error {
 	if !d.Parameterized {
 		if len(supplied) > 0 {

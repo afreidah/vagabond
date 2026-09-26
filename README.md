@@ -161,6 +161,7 @@ job "go-test" {
 | Admission checks and reason codes | [admission.md](docs/admission.md) |
 | Scoring and strategies | [scheduling.md](docs/scheduling.md) |
 | Retries, rerouting, streaming, cleanup | [dispatch.md](docs/dispatch.md) |
+| HTTP API served by `vagabond server` | [api.md](docs/api.md) |
 | Google Cloud Run Jobs | [providers/cloud-run.md](docs/providers/cloud-run.md) |
 | AWS Lambda | [providers/lambda.md](docs/providers/lambda.md) |
 | Writing a provider plugin | [writing-a-provider.md](docs/writing-a-provider.md) |
