@@ -4,7 +4,7 @@
 // Author: Alex Freidah
 //
 // With no name, the jobs registered in a namespace. With one, that job's
-// versions and its most recent executions, grouped by dispatch.
+// versions and its most recent executions with the dispatch each belongs to.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -13,16 +13,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
 
-	"github.com/afreidah/vagabond/internal/jobs"
+	"github.com/afreidah/vagabond/internal/api"
+	"github.com/afreidah/vagabond/internal/job"
 )
-
-// statusExecutions is how many recent executions job status shows.
-const statusExecutions = 20
 
 // JobStatusCommand implements `vagabond job status`.
 type JobStatusCommand struct {
@@ -42,12 +39,11 @@ Usage: vagabond job status [options] [name]
   With no name, lists the jobs registered in the namespace. With a name, shows
   that job's versions and its most recent executions.
 
-  Requires a store block.
-
 Status Options:
 
-  -config <path>
-    Configuration file or directory. Defaults as for job run.
+  -address <addr>
+    The server to read. Defaults to $VAGABOND_ADDR, then
+    http://127.0.0.1:4747.
 
   -namespace <name>
     Defaults to $VAGABOND_NAMESPACE, then "default".
@@ -59,11 +55,8 @@ Status Options:
 // Run lists the namespace's jobs with no argument, or shows the one job it
 // names.
 func (c *JobStatusCommand) Run(args []string) int {
-	var configPath, namespace string
-
 	flags := c.FlagSet("job status")
-	flags.StringVar(&configPath, "config", "", "provider configuration file or directory")
-	flags.StringVar(&namespace, "namespace", os.Getenv(namespaceEnv), "namespace to read")
+	c.clientFlags(flags)
 
 	if err := flags.Parse(args); err != nil {
 		return ExitFailure
@@ -74,25 +67,16 @@ func (c *JobStatusCommand) Run(args []string) int {
 		return c.Errorf("This command takes at most one argument: [name]\n\n%s", c.Help())
 	}
 
-	ctx := context.Background()
-
-	reg, s, finish, code := c.loadJobStores(ctx, configPath, "job status")
-	if reg == nil {
-		return code
-	}
-
-	defer finish()
-
-	ns, err := namespaceOf(namespace, reg)
+	client, err := c.client()
 	if err != nil {
 		return c.Errorf("%s", err)
 	}
 
 	if len(names) == 0 {
-		return c.list(ctx, s, ns)
+		return c.list(context.Background(), client)
 	}
 
-	return c.show(ctx, s, ns, names[0])
+	return c.show(context.Background(), client, names[0])
 }
 
 // -------------------------------------------------------------------------
@@ -101,14 +85,19 @@ func (c *JobStatusCommand) Run(args []string) int {
 
 // list prints every job in the namespace as a table, stopped ones included, or
 // says there are none.
-func (c *JobStatusCommand) list(ctx context.Context, s *stores, namespace string) int {
-	all, err := s.jobs.Jobs(ctx, namespace)
+func (c *JobStatusCommand) list(ctx context.Context, client *api.Client) int {
+	all, err := client.Jobs(ctx, c.namespace)
 	if err != nil {
-		return c.Errorf("%s", err)
+		return c.apiFailure(err)
 	}
 
 	if len(all) == 0 {
-		c.Ui.Output(fmt.Sprintf("No jobs are registered in namespace %q.", namespace))
+		ns := c.namespace
+		if ns == "" {
+			ns = job.DefaultNamespace
+		}
+
+		c.Ui.Output(fmt.Sprintf("No jobs are registered in namespace %q.", ns))
 
 		return ExitSuccess
 	}
@@ -118,7 +107,8 @@ func (c *JobStatusCommand) list(ctx context.Context, s *stores, namespace string
 	w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w, "NAME\tVERSION\tSTATUS\tUPDATED")
 
-	for _, j := range all {
+	for i := range all {
+		j := &all[i]
 		_, _ = fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", j.Name, j.Version, standing(j), stamp(j.Updated))
 	}
 
@@ -130,47 +120,38 @@ func (c *JobStatusCommand) list(ctx context.Context, s *stores, namespace string
 
 // show prints one job's standing, its versions, and its recent executions with
 // the dispatch each belongs to.
-func (c *JobStatusCommand) show(ctx context.Context, s *stores, namespace, name string) int {
-	j, err := s.jobs.Job(ctx, namespace, name)
+func (c *JobStatusCommand) show(ctx context.Context, client *api.Client, name string) int {
+	status, err := client.JobStatus(ctx, c.namespace, name)
 	if err != nil {
-		return c.Errorf("%s", err)
-	}
-
-	versions, err := s.jobs.Versions(ctx, namespace, name)
-	if err != nil {
-		return c.Errorf("%s", err)
-	}
-
-	runs, err := s.jobs.JobExecutions(ctx, namespace, name, statusExecutions)
-	if err != nil {
-		return c.Errorf("%s", err)
+		return c.apiFailure(err)
 	}
 
 	var b bytes.Buffer
 
 	_, _ = fmt.Fprintf(&b, "Name      = %s\nNamespace = %s\nVersion   = %d\nStatus    = %s\n\nVersions\n",
-		j.Name, j.Namespace, j.Version, standing(j))
+		status.Name, status.Namespace, status.Version, standing(&status.Job))
 
 	w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w, "VERSION\tREGISTERED")
 
-	for _, v := range versions {
-		_, _ = fmt.Fprintf(w, "%d\t%s\n", v.Version, stamp(v.Created))
+	for _, v := range status.Versions {
+		_, _ = fmt.Fprintf(w, "%d\t%s\n", v.Version, stamp(v.Registered))
 	}
 
 	_ = w.Flush()
 
 	b.WriteString("\nRecent executions\n")
 
-	if len(runs) == 0 {
+	if len(status.Executions) == 0 {
 		b.WriteString("None.\n")
 	} else {
 		w = tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 		_, _ = fmt.Fprintln(w, "DISPATCH\tVERSION\tTASK\tPROVIDER\tSTATE\tCREATED")
 
-		for _, r := range runs {
+		for i := range status.Executions {
+			e := &status.Executions[i]
 			_, _ = fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\t%s\n",
-				short(r.Dispatch.String()), r.JobVersion, r.Task, r.Provider, r.State, stamp(r.ID.Created()))
+				short(e.DispatchID), e.JobVersion, e.Task, e.Provider, e.State, stamp(e.Created))
 		}
 
 		_ = w.Flush()
@@ -183,7 +164,7 @@ func (c *JobStatusCommand) show(ctx context.Context, s *stores, namespace, name 
 
 // standing renders whether a job can be dispatched: registered, or stopped
 // until registered again.
-func standing(j *jobs.Job) string {
+func standing(j *api.Job) string {
 	if j.Stopped {
 		return "stopped"
 	}

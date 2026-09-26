@@ -29,7 +29,7 @@ scheduler of their own.
   on free capacity unless a job opts in to paying.
 - Ranking: survivors are scored and one is selected. `job plan` prints every
   provider with its score or the rule it failed.
-- Dispatch: submit, stream output where the provider can, reroute around
+- Dispatch: submit, watch, collect output, reroute around
   providers that fail to answer, release what the execution left behind.
 - Quota ledger: free-tier pools per provider, with optional per-namespace
   shares. Reservations are atomic across processes; settlement uses what the
@@ -51,25 +51,26 @@ Providers:
 
 The `worker` driver is modeled and admitted; no plugin implements it yet.
 
-## Modes
+## Server and CLI
 
-| | Local | Server |
-|---|---|---|
-| Started by | `vagabond job run` | `vagabond server` |
-| Store | Optional; in-memory without one | Required |
-| Registered jobs | Needs a store | Yes |
-| Runs | Synchronous, output to the terminal | Background; read over the API |
-| Upkeep | Once per command | Capabilities, usage, reaping and claims on timers |
+- `vagabond server` holds the providers, stores and scheduling, and serves the
+  [HTTP API](docs/api.md).
+- Every other command is an API client, finding the server with `-address` or
+  `$VAGABOND_ADDR` (default `http://127.0.0.1:4747`). Runners need an address,
+  not cloud or database credentials.
+- `vagabond server -dev` keeps every store in memory, for development and
+  single-machine use.
+- `job validate` is local, and job files are validated locally before they are
+  sent.
 
 ## Quickstart
 
 ```bash
 make build
 
-./vagabond job plan \
-  -config examples/config.hcl \
-  -meta version=1.2.3 \
-  examples/go-test.vagabond.hcl
+./vagabond server -dev -config examples/config.hcl &
+
+./vagabond job plan -meta version=1.2.3 examples/go-test.vagabond.hcl
 ```
 
 ```
@@ -82,7 +83,7 @@ Selected: ibm-code-engine
 Estimated cost: free
 ```
 
-The example config uses in-memory providers, so this needs no cloud account.
+The example config uses fake providers, so this needs no cloud account.
 See [quickstart.md](docs/quickstart.md).
 
 ## Commands
@@ -96,6 +97,8 @@ See [quickstart.md](docs/quickstart.md).
 | `job dispatch <name>` | Run a registered job's current version |
 | `job status <name>` | Versions and recent executions |
 | `job stop <name>` | Stop a registered job from being dispatched |
+| `execution status <id>` | One execution's record and result |
+| `execution logs <id>` | One execution's stored output |
 | `server` | Serve the [HTTP API](docs/api.md) |
 
 ## Job file
@@ -195,10 +198,10 @@ Details: [architecture.md](docs/architecture.md).
 
 Not implemented yet. Tracked in [issues](https://github.com/afreidah/vagabond/issues).
 
-- Server: API authentication, the CLI as an API client, a ledger that degrades
-  when the store is unreachable.
-- Operations: periodic jobs, an event stream, blocking queries, disabling a
-  provider at runtime.
+- Server: API authentication, a ledger that degrades when the store is
+  unreachable.
+- Operations: periodic jobs, an event stream with live log streaming, blocking
+  queries, disabling a provider at runtime.
 - Jobs: submission hooks, variables and workload identity, execution garbage
   collection.
 - Providers: a `worker` plugin; a container backend with a different execution

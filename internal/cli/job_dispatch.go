@@ -3,25 +3,20 @@
 //
 // Author: Alex Freidah
 //
-// Runs a registered job's current version by name, and waits for it, reporting
-// as job run does. A job that is not parameterized takes no metadata, and a
-// parameterized one refuses keys it did not declare and requires the ones it
-// marked required.
+// Runs a registered job's current version by name on the server, and waits for
+// it, reporting as job run does. A job that is not parameterized takes no
+// metadata, and a parameterized one refuses keys it did not declare and
+// requires the ones it marked required.
 // -------------------------------------------------------------------------------
 
 package cli
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
-
-	"github.com/afreidah/vagabond/internal/dispatch"
-	"github.com/afreidah/vagabond/internal/execution"
-	"github.com/afreidah/vagabond/internal/jobspec"
 )
 
 // JobDispatchCommand implements `vagabond job dispatch`.
@@ -47,12 +42,13 @@ Usage: vagabond job dispatch [options] <name>
   refuses keys in neither meta_required nor meta_optional, and requires every
   key in meta_required. Each task receives VAGABOND_META_<KEY>.
 
-  Requires a store block. Exit codes are those of job run.
+  Exit codes are those of job run.
 
 Dispatch Options:
 
-  -config <path>
-    Configuration file or directory. Defaults as for job run.
+  -address <addr>
+    The server to dispatch on. Defaults to $VAGABOND_ADDR, then
+    http://127.0.0.1:4747.
 
   -meta <key>=<value>
     Supply job metadata, repeatable.
@@ -68,20 +64,17 @@ Dispatch Options:
 	return strings.TrimSpace(text)
 }
 
-// Run dispatches the named job's current version, printing its dispatch ID
-// before anything runs, and waits for it.
+// Run dispatches the named job's current version and follows the run to its
+// end.
 func (c *JobDispatchCommand) Run(args []string) int {
 	var (
-		meta       metaFlags
-		configPath string
-		namespace  string
-		noLogs     bool
+		meta   metaFlags
+		noLogs bool
 	)
 
 	flags := c.FlagSet("job dispatch")
+	c.clientFlags(flags)
 	flags.Var(&meta, "meta", "job metadata as key=value, repeatable")
-	flags.StringVar(&configPath, "config", "", "provider configuration file or directory")
-	flags.StringVar(&namespace, "namespace", os.Getenv(namespaceEnv), "namespace the job is registered in")
 	flags.BoolVar(&noLogs, "no-logs", false, "do not print the task's output")
 
 	if err := flags.Parse(args); err != nil {
@@ -93,37 +86,18 @@ func (c *JobDispatchCommand) Run(args []string) int {
 		return c.Errorf("This command takes one argument: <name>\n\n%s", c.Help())
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	reg, s, finish, code := c.loadJobStores(ctx, configPath, "job dispatch")
-	if reg == nil {
-		return code
-	}
-
-	defer finish()
-
-	ns, err := namespaceOf(namespace, reg)
+	client, err := c.client()
 	if err != nil {
 		return c.Errorf("%s", err)
 	}
 
-	spec, version, code := c.loadRegistered(ctx, s, ns, names[0], meta)
-	if spec == nil {
-		return code
-	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	// Minted here rather than by Run, so it can be printed before anything
-	// runs and the dispatch found again in job status.
-	id, err := execution.NewID()
+	started, err := client.Dispatch(ctx, c.namespace, names[0], meta)
 	if err != nil {
-		return c.Errorf("Generating a dispatch ID: %s", err)
+		return c.apiFailure(err)
 	}
 
-	c.Ui.Error(fmt.Sprintf("==> dispatch %s of %q version %d", id, version.Name, version.Version))
-
-	d := c.newDispatcher(ctx, reg, s, noLogs)
-	origin := dispatch.Origin{Namespace: ns, JobVersion: version.Version, Dispatch: id}
-
-	return c.runJob(ctx, d, origin, &spec.Jobs[0], jobspec.EvalContext(meta), noLogs)
+	return c.follow(ctx, client, started, noLogs)
 }

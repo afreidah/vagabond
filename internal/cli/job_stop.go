@@ -13,9 +13,7 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
-	"time"
 )
 
 // JobStopCommand implements `vagabond job stop`.
@@ -36,12 +34,13 @@ Usage: vagabond job stop [options] <name>
   Deregisters a registered job. It can no longer be dispatched; its versions and
   executions are kept, and registering it again makes it dispatchable.
 
-  Executions already running are not affected. Requires a store block.
+  Executions already running are not affected.
 
 Stop Options:
 
-  -config <path>
-    Configuration file or directory. Defaults as for job run.
+  -address <addr>
+    The server the job is registered with. Defaults to $VAGABOND_ADDR, then
+    http://127.0.0.1:4747.
 
   -namespace <name>
     The namespace the job is registered in. Defaults to $VAGABOND_NAMESPACE,
@@ -51,14 +50,10 @@ Stop Options:
 	return strings.TrimSpace(text)
 }
 
-// Run stops the named job in the namespace. Its executions already running are
-// left alone.
+// Run stops the named job. Its executions already running are left alone.
 func (c *JobStopCommand) Run(args []string) int {
-	var configPath, namespace string
-
 	flags := c.FlagSet("job stop")
-	flags.StringVar(&configPath, "config", "", "provider configuration file or directory")
-	flags.StringVar(&namespace, "namespace", os.Getenv(namespaceEnv), "namespace the job is registered in")
+	c.clientFlags(flags)
 
 	if err := flags.Parse(args); err != nil {
 		return ExitFailure
@@ -69,25 +64,17 @@ func (c *JobStopCommand) Run(args []string) int {
 		return c.Errorf("This command takes one argument: <name>\n\n%s", c.Help())
 	}
 
-	ctx := context.Background()
-
-	reg, s, finish, code := c.loadJobStores(ctx, configPath, "job stop")
-	if reg == nil {
-		return code
-	}
-
-	defer finish()
-
-	ns, err := namespaceOf(namespace, reg)
+	client, err := c.client()
 	if err != nil {
 		return c.Errorf("%s", err)
 	}
 
-	if err := s.jobs.Stop(ctx, ns, names[0], time.Now()); err != nil {
-		return c.Errorf("%s", err)
+	stopped, err := client.StopJob(context.Background(), c.namespace, names[0])
+	if err != nil {
+		return c.apiFailure(err)
 	}
 
-	c.Ui.Output(fmt.Sprintf("Job %q stopped in namespace %q.", names[0], ns))
+	c.Ui.Output(fmt.Sprintf("Job %q stopped in namespace %q.", stopped.Name, stopped.Namespace))
 
 	return ExitSuccess
 }

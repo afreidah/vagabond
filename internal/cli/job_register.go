@@ -3,12 +3,12 @@
 //
 // Author: Alex Freidah
 //
-// Stores a job so it can be dispatched by name. Nothing runs. A new version is
-// made only when the job changed.
+// Stores a job on the server so it can be dispatched by name. Nothing runs. A
+// new version is made only when the job changed.
 //
-// Validated in full, with each declared ${meta.key} standing as its own text:
-// the values arrive at dispatch, and a reference to an undeclared key is
-// caught here rather than then.
+// Validated in full before sending, with each declared ${meta.key} standing as
+// its own text: the values arrive at dispatch, and a reference to an undeclared
+// key is caught here rather than then.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -16,11 +16,7 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
-	"time"
-
-	"github.com/afreidah/vagabond/internal/jobs"
 )
 
 // JobRegisterCommand implements `vagabond job register`.
@@ -38,7 +34,8 @@ func (c *JobRegisterCommand) Help() string {
 	text := `
 Usage: vagabond job register [options] <path>
 
-  Stores the job in the file so it can be dispatched by name. Nothing runs.
+  Stores the job in the file on the server so it can be dispatched by name.
+  Nothing runs.
 
   A new version is made only when the job changed. Registering a stopped job
   makes a new version and makes it dispatchable again.
@@ -46,12 +43,13 @@ Usage: vagabond job register [options] <path>
   The job is validated in full. Its declared metadata stands as written, since
   the values are supplied at dispatch.
 
-  Requires a store block. Reads from standard input when the path is "-".
+  Reads from standard input when the path is "-".
 
 Register Options:
 
-  -config <path>
-    Configuration file or directory. Defaults as for job run.
+  -address <addr>
+    The server to register with. Defaults to $VAGABOND_ADDR, then
+    http://127.0.0.1:4747.
 
   -namespace <name>
     The namespace to register in, for a job that names none. Defaults to
@@ -61,14 +59,11 @@ Register Options:
 	return strings.TrimSpace(text)
 }
 
-// Run validates the named specification and registers it, reporting whether it
-// made a new version.
+// Run validates the job file and registers it, reporting whether it made a new
+// version.
 func (c *JobRegisterCommand) Run(args []string) int {
-	var configPath, namespace string
-
 	flags := c.FlagSet("job register")
-	flags.StringVar(&configPath, "config", "", "provider configuration file or directory")
-	flags.StringVar(&namespace, "namespace", os.Getenv(namespaceEnv), "namespace for a job that names none")
+	c.clientFlags(flags)
 
 	if err := flags.Parse(args); err != nil {
 		return ExitFailure
@@ -79,48 +74,27 @@ func (c *JobRegisterCommand) Run(args []string) int {
 		return c.Errorf("This command takes one argument: <path>\n\n%s", c.Help())
 	}
 
-	src, err := c.readSource(paths[0])
+	src, code := c.checkRegister(paths[0])
+	if src == nil {
+		return code
+	}
+
+	client, err := c.client()
 	if err != nil {
 		return c.Errorf("%s", err)
 	}
 
-	parsed, diags := jobs.ForRegister(paths[0], src)
-	if parsed == nil {
-		renderDiagnostics(c.Ui, nil, diags, c.color())
-
-		return ExitFailure
-	}
-
-	spec, code := c.loaded(parsed, diags)
-	if spec == nil {
-		return code
-	}
-
-	ctx := context.Background()
-
-	reg, s, finish, code := c.loadJobStores(ctx, configPath, "job register")
-	if reg == nil {
-		return code
-	}
-
-	defer finish()
-
-	j := &spec.Jobs[0]
-
-	ns, err := resolveNamespace(namespace, j, reg)
+	registered, err := client.Register(context.Background(), c.namespace, string(src))
 	if err != nil {
-		return c.Errorf("%s", err)
+		return c.apiFailure(err)
 	}
 
-	version, changed, err := s.jobs.Register(ctx, ns, j.Name, src, time.Now())
-	if err != nil {
-		return c.Errorf("Registering job %q: %s", j.Name, err)
-	}
-
-	if changed {
-		c.Ui.Output(fmt.Sprintf("Job %q registered as version %d in namespace %q.", j.Name, version, ns))
+	if registered.Changed {
+		c.Ui.Output(fmt.Sprintf("Job %q registered as version %d in namespace %q.",
+			registered.Name, registered.Version, registered.Namespace))
 	} else {
-		c.Ui.Output(fmt.Sprintf("Job %q is unchanged at version %d in namespace %q.", j.Name, version, ns))
+		c.Ui.Output(fmt.Sprintf("Job %q is unchanged at version %d in namespace %q.",
+			registered.Name, registered.Version, registered.Namespace))
 	}
 
 	return ExitSuccess

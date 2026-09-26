@@ -11,12 +11,16 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/hashicorp/cli"
+
+	"github.com/afreidah/vagabond/internal/api"
 )
 
 // Meta carries the state shared by every command.
@@ -28,16 +32,69 @@ import (
 // Stdin is held separately because a command reading a specification from a
 // pipe needs the reader itself, not the line-oriented prompting a cli.Ui
 // offers. ErrStream is held only to ask whether it is a terminal, which decides
-// colour; nothing writes to it directly.
+// colour, and for the server's log.
+//
+// address and namespace are set by clientFlags for commands that talk to a
+// server.
 type Meta struct {
 	Ui        cli.Ui
 	Stdin     io.Reader
 	ErrStream io.Writer
+
+	address   string
+	namespace string
 }
+
+// Environment variables supplying -address and -namespace when the flags are
+// not given.
+const (
+	addressEnv   = "VAGABOND_ADDR"
+	namespaceEnv = "VAGABOND_NAMESPACE"
+)
 
 // color reports whether diagnostics should carry escape sequences.
 func (m *Meta) color() bool {
 	return useColor(m.ErrStream)
+}
+
+// -------------------------------------------------------------------------
+// SERVER CLIENT
+// -------------------------------------------------------------------------
+
+// clientFlags registers -address and -namespace, which every command that
+// talks to a server takes.
+func (m *Meta) clientFlags(fs *flag.FlagSet) {
+	fs.StringVar(&m.address, "address", os.Getenv(addressEnv), "server address")
+	fs.StringVar(&m.namespace, "namespace", os.Getenv(namespaceEnv), "namespace")
+}
+
+// client returns a client for the server -address names.
+func (m *Meta) client() (*api.Client, error) {
+	return api.NewClient(m.address, nil)
+}
+
+// apiFailure reports an error from the server and returns the failure exit
+// code. A job the server found invalid is reported one diagnostic at a time.
+func (m *Meta) apiFailure(err error) int {
+	var failure *api.ResponseError
+	if !errors.As(err, &failure) || len(failure.Body.Diagnostics) == 0 {
+		return m.Errorf("Error: %s", err)
+	}
+
+	for _, d := range failure.Body.Diagnostics {
+		line := fmt.Sprintf("Error: %s", d.Summary)
+		if d.Range != "" {
+			line += fmt.Sprintf("\n\n  on %s", d.Range)
+		}
+
+		if d.Detail != "" {
+			line += "\n\n" + d.Detail
+		}
+
+		m.Ui.Error(line)
+	}
+
+	return ExitFailure
 }
 
 // FlagSet returns a flag set that reports errors through the UI rather than

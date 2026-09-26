@@ -115,9 +115,10 @@ did happen before the failure.
 
 ## Live output
 
-Where a provider implements `plugin.LogStreamer`, output is streamed while the
-execution runs. Providers that do not implement it print nothing until the
-result arrives.
+Where a provider implements `plugin.LogStreamer` and the dispatcher is given a
+writer, output is streamed while the execution runs. The server gives it none
+yet: clients read output when each task finishes, until the event stream
+(chunk 7).
 
 The stream is a view, never the record. A broken stream never fails an
 execution, and `Result` remains the authoritative fetch for the exit code and

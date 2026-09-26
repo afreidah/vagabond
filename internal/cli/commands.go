@@ -13,12 +13,8 @@ package cli
 
 import "github.com/hashicorp/cli"
 
-// Commands returns the command set, keyed by the words a user types.
-//
-// The README's target surface is job validate, plan, run, and status. Run and
-// status are absent, because a command that exists and refuses to work is
-// worse than one that does not exist: the first looks like a bug and the
-// second looks like a roadmap.
+// Commands returns the command set, keyed by the words a user types. Every
+// command but job validate and server talks to a server.
 func Commands(meta *Meta) map[string]cli.CommandFactory {
 	return map[string]cli.CommandFactory{
 		"job": func() (cli.Command, error) {
@@ -44,6 +40,15 @@ func Commands(meta *Meta) map[string]cli.CommandFactory {
 		},
 		"job stop": func() (cli.Command, error) {
 			return &JobStopCommand{Meta: meta}, nil
+		},
+		"execution": func() (cli.Command, error) {
+			return &ExecutionCommand{Meta: meta}, nil
+		},
+		"execution status": func() (cli.Command, error) {
+			return &ExecutionStatusCommand{Meta: meta}, nil
+		},
+		"execution logs": func() (cli.Command, error) {
+			return &ExecutionLogsCommand{Meta: meta}, nil
 		},
 		"server": func() (cli.Command, error) {
 			return &ServerCommand{Meta: meta}, nil

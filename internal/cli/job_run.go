@@ -3,10 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// Dispatches a job from a file and waits for it. The selection is the same one
-// job plan prints, because both call the same admission and ranking. Nothing is
-// registered; job register and job dispatch are the path for a job that runs
-// again by name.
+// Runs a job file on the server and waits for it. The selection is the same one
+// job plan prints, because the server calls the same admission and ranking for
+// both. Nothing is registered; job register and job dispatch are the path for a
+// job that runs again by name.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -17,11 +17,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-
-	"github.com/afreidah/vagabond/internal/dispatch"
-	"github.com/afreidah/vagabond/internal/job"
-	"github.com/afreidah/vagabond/internal/jobspec"
-	"github.com/afreidah/vagabond/internal/registry"
 )
 
 // JobRunCommand implements `vagabond job run`.
@@ -39,8 +34,8 @@ func (c *JobRunCommand) Help() string {
 	text := `
 Usage: vagabond job run [options] <path>
 
-  Admits a job against the configured providers, dispatches it to the best one,
-  and waits for it to finish. The job is not registered.
+  Sends a job to the server, which dispatches it to the best provider, and
+  waits for it to finish. The job is not registered.
 
   Tasks run in the order they are declared, and the job stops at the first one
   that fails. A provider that fails to give an answer is abandoned and the next
@@ -48,9 +43,8 @@ Usage: vagabond job run [options] <path>
   ran and exited non-zero is an answer, not an outage, and is never retried
   elsewhere.
 
-  Where the provider supports it, the task's output is streamed as it arrives.
-  Output goes to stdout and progress to stderr, so redirecting stdout captures
-  the build alone.
+  Each task's output is printed when it finishes. Output goes to stdout and
+  progress to stderr, so redirecting stdout captures the build alone.
 
   Interrupting the command stops the execution on the provider before exiting.
 
@@ -58,17 +52,14 @@ Usage: vagabond job run [options] <path>
 
   Run will return one of the following exit codes:
     * 0: Every task ran and exited zero.
-    * 1: A task ran and failed, or the job could not be read.
+    * 1: A task ran and failed, or the job could not be sent.
     * 2: The work never ran: nothing was eligible, or every provider failed.
 
 Run Options:
 
-  -config <path>
-    Configuration file or directory describing the providers to run against.
-    A directory loads every .hcl file inside it.
-
-    Defaults to $VAGABOND_CONFIG, then the first of these that exists:
-    ./vagabond.hcl, the user configuration directory, /etc/vagabond.d.
+  -address <addr>
+    The server to run on. Defaults to $VAGABOND_ADDR, then
+    http://127.0.0.1:4747.
 
   -meta <key>=<value>
     Supply job metadata, repeatable. Values are substituted into the job before
@@ -81,32 +72,22 @@ Run Options:
 
   -no-logs
     Do not print the task's output. The exit status is still reported.
-
-  -untracked
-    Dispatch even when the configured usage store cannot be reached. Usage is
-    then kept in memory only, so this run is not charged against the quota
-    other runs see. A store that can be reached is always used.
 `
 
 	return strings.TrimSpace(text)
 }
 
-// Run dispatches the named specification.
+// Run validates the job file, sends it, and follows the run to its end.
 func (c *JobRunCommand) Run(args []string) int {
 	var (
-		meta       metaFlags
-		configPath string
-		namespace  string
-		noLogs     bool
-		untracked  bool
+		meta   metaFlags
+		noLogs bool
 	)
 
 	flags := c.FlagSet("job run")
+	c.clientFlags(flags)
 	flags.Var(&meta, "meta", "job metadata as key=value, repeatable")
-	flags.StringVar(&namespace, "namespace", os.Getenv(namespaceEnv), "namespace for a job that names none")
-	flags.StringVar(&configPath, "config", "", "provider configuration file or directory")
 	flags.BoolVar(&noLogs, "no-logs", false, "do not print the task's output")
-	flags.BoolVar(&untracked, "untracked", false, "dispatch even when the usage store is unreachable")
 
 	if err := flags.Parse(args); err != nil {
 		return ExitFailure
@@ -117,66 +98,25 @@ func (c *JobRunCommand) Run(args []string) int {
 		return c.Errorf("This command takes one argument: <path>\n\n%s", c.Help())
 	}
 
-	spec, code := c.loadJob(paths[0], meta)
-	if spec == nil {
+	src, code := c.checkJob(paths[0], meta)
+	if src == nil {
 		return code
 	}
 
-	// Interrupt stops the execution rather than the process alone, so that a
-	// container is not left running and billing after ctrl-C.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	reg, cfg, code := c.loadRegistry(ctx, configPath)
-	if reg == nil {
-		return code
-	}
-
-	if cfg.Store == nil {
-		c.Ui.Warn("No store is configured, so this run's usage is not recorded.")
-	}
-
-	s, finish, code := c.loadStores(ctx, cfg.Store, reg, untracked, "run")
-	if s == nil {
-		return code
-	}
-
-	defer finish()
-
-	return c.run(ctx, spec, meta, namespace, reg, s, noLogs)
-}
-
-// -------------------------------------------------------------------------
-// DISPATCH
-// -------------------------------------------------------------------------
-
-// run dispatches every job in the specification, resolving every namespace
-// first, and returns the worst exit code.
-func (c *JobRunCommand) run(
-	ctx context.Context, spec *job.File, meta metaFlags, namespaceFlag string,
-	reg *registry.Registry, s *stores, noLogs bool,
-) int {
-	if len(reg.Names()) == 0 {
-		return c.Errorf("No providers are configured, so there is nothing to run on.")
-	}
-
-	namespaces, err := resolveNamespaces(namespaceFlag, spec, reg)
+	client, err := c.client()
 	if err != nil {
 		return c.Errorf("%s", err)
 	}
 
-	d := c.newDispatcher(ctx, reg, s, noLogs)
-	eval := jobspec.EvalContext(meta)
+	// Interrupt stops the execution rather than the command alone, so that a
+	// container is not left running and billing after ctrl-C.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	worst := ExitSuccess
-
-	for i := range spec.Jobs {
-		origin := dispatch.Origin{Namespace: namespaces[i]}
-
-		if code := c.runJob(ctx, d, origin, &spec.Jobs[i], eval, noLogs); code > worst {
-			worst = code
-		}
+	started, err := client.Run(ctx, c.namespace, string(src), meta)
+	if err != nil {
+		return c.apiFailure(err)
 	}
 
-	return worst
+	return c.follow(ctx, client, started, noLogs)
 }

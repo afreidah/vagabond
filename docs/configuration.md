@@ -32,8 +32,9 @@ provider "gcp-cloud-run" {
 
 ## Discovery
 
-`-config <path>` accepts a file or a directory. A directory loads every `.hcl`
-file inside it and merges the results.
+Configuration is read by `vagabond server`; other commands only need the
+server's address. `-config <path>` accepts a file or a directory. A directory
+loads every `.hcl` file inside it and merges the results.
 
 Resolution order:
 
@@ -258,11 +259,14 @@ server {
 
 - The API has no authentication yet. Keep the default localhost bind unless the
   network in front of it is trusted.
-- The server requires a `store` block.
+- The server requires a `store` block, unless started with `-dev`.
+- Clients find the server with `-address` or `$VAGABOND_ADDR`, defaulting to
+  `http://127.0.0.1:4747`.
 
 ## `store` block
 
-Where the usage ledger persists. Top level, at most one per deployment.
+Where jobs, executions and the usage ledger persist. Top level, at most one per
+deployment. Read only by `vagabond server`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
@@ -274,10 +278,9 @@ store {
 }
 ```
 
-- Migrations apply on every command that opens the store.
-- Without a `store` block the ledger is in memory and starts empty every run.
-- A store that cannot be opened fails `job plan` and `job run`. `-untracked`
-  proceeds with an in-memory ledger instead.
+- Migrations apply when the server starts.
+- `server -dev` ignores the block and keeps everything in memory, empty at
+  every start.
 - The password can stay out of the DSN: `PGPASSWORD` and `~/.pgpass` are read.
 
 Ledger behavior:
@@ -285,8 +288,8 @@ Ledger behavior:
 - Reserve on dispatch, in one statement: the reservation is written only if
   every pool has room for it.
 - Settle on completion: the reservation is replaced by what the run cost.
-- A reservation left by a killed process holds its amount until it is reaped:
-  at the start of `job run`, and by the server at startup and every 5 minutes.
+- A reservation left by a killed process holds its amount until it is reaped,
+  by the server at startup and every 5 minutes.
   The reaper asks the provider about reservations older than an hour:
   - finished: charged for how long it ran
   - never ran: dropped
