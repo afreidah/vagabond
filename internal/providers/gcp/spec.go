@@ -158,13 +158,10 @@ func taskTimeout(task *job.Task) (time.Duration, error) {
 // THE DRIVER CONFIG
 // -------------------------------------------------------------------------
 
-// environment renders a task's env block the way Cloud Run wants it.
-//
-// Evaluated against no context because job metadata was already substituted
-// when the specification was parsed; anything still unresolved here is a bug
-// upstream rather than something to interpolate now.
+// environment renders a task's environment the way Cloud Run wants it: its env
+// block plus the VAGABOND_META_* variables.
 func environment(task *job.Task) []map[string]string {
-	attrs, diags := task.Env.Attributes(nil)
+	attrs, diags := task.Environment()
 	if diags.HasErrors() {
 		return nil
 	}

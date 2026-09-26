@@ -68,12 +68,14 @@ type Executions interface {
 	Update(ctx context.Context, r *execution.Record, from execution.State) error
 }
 
-// Origin is what a task runs for: the job and the namespace it runs in.
-// JobVersion is 0 for a job run from a file.
+// Origin is what a task runs for: the job, the namespace it runs in, and the
+// dispatch it belongs to. JobVersion is 0 for a job run from a file. Run mints
+// the dispatch ID when it is zero.
 type Origin struct {
 	Namespace  string
 	Job        string
 	JobVersion int64
+	Dispatch   execution.ID
 }
 
 // Dispatcher runs jobs against the providers a registry holds.
@@ -159,13 +161,24 @@ func New(registry Registry, ledger Ledger, executions Executions, opts ...Option
 // The outcome is populated even when the error is non-nil, so a caller can
 // report what did run before the failure.
 //
-// namespace is the one the caller resolved for the job; its share of each
-// provider is charged alongside the provider's total.
+// origin names the namespace the caller resolved, whose share of each provider
+// is charged alongside the provider's total, and the job version when the job
+// is registered.
 func (d *Dispatcher) Run(
-	ctx context.Context, namespace string, j *job.Job, eval *hcl.EvalContext,
+	ctx context.Context, origin Origin, j *job.Job, eval *hcl.EvalContext,
 ) (*JobOutcome, error) {
-	outcome := &JobOutcome{Job: j.Name}
-	origin := Origin{Namespace: namespace, Job: j.Name}
+	origin.Job = j.Name
+
+	if origin.Dispatch.IsZero() {
+		id, err := execution.NewID()
+		if err != nil {
+			return nil, plugin.Internal(fmt.Errorf("generating a dispatch id: %w", err))
+		}
+
+		origin.Dispatch = id
+	}
+
+	outcome := &JobOutcome{Job: j.Name, Dispatch: origin.Dispatch}
 
 	for i := range j.Tasks {
 		task := &j.Tasks[i]
@@ -331,6 +344,7 @@ func (d *Dispatcher) prepare(
 			Namespace:  origin.Namespace,
 			Job:        origin.Job,
 			JobVersion: origin.JobVersion,
+			Dispatch:   origin.Dispatch,
 			Task:       req.Task.Name,
 			Provider:   name,
 			Attempt:    attempt,

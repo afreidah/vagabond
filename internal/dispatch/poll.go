@@ -123,7 +123,12 @@ func (d *Dispatcher) execute(
 	run.submitted(ctx, &submission)
 
 	event.State = submission.State
-	d.report(event)
+
+	// A terminal state is left to the caller, which reports it with the
+	// result, as watch does; reporting it here prints the verdict twice.
+	if !submission.State.Terminal() {
+		d.report(event)
+	}
 
 	// A function or worker finished inside Submit and has nothing to poll.
 	if submission.Synchronous() {

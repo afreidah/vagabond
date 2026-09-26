@@ -76,9 +76,24 @@ meta {
 | Name | Type | Description |
 |---|---|---|
 | `meta_required` | list(string) | Metadata keys the caller must supply |
+| `meta_optional` | list(string) | Metadata keys the caller may supply |
 
 A missing key is rejected before any provider is contacted. Supply values with
 `-meta <key>=<value>`, repeatable. Passing the same key twice is an error.
+
+`job dispatch` of a registered job checks metadata as Nomad does:
+
+- A job without a `parameterized` block takes no metadata.
+- A key in neither list is refused.
+- Every `meta_required` key must be supplied.
+
+`job register` validates the job with each declared `${meta.key}` standing as
+its literal text; a reference to an undeclared key fails at register.
+
+Every task receives `VAGABOND_META_<KEY>` for each metadata key: the job's
+`meta` block, overridden by supplied values. Keys are upper-cased, and any
+character outside `[A-Z0-9_]` becomes `_`. An `env` entry of the same name
+wins.
 
 ## `routing` block
 
@@ -187,7 +202,9 @@ For `container`:
 
 ### `env` block
 
-Environment variables, as free-form key/value pairs.
+Environment variables, as free-form key/value pairs. Values may reference
+`${meta.key}`. `VAGABOND_META_<KEY>` variables are added for every metadata
+key; see [`parameterized`](#parameterized-block).
 
 ```hcl
 env {

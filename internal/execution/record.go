@@ -28,6 +28,7 @@ var ErrStale = errors.New("execution changed since it was read")
 // Record is one execution as stored.
 //
 // JobVersion is 0 for a job that was run from a file rather than registered.
+// Dispatch groups the records of one run of a job, every task and attempt.
 // Previous is the zero ID on a task's first attempt. Failure is the class of
 // the error that ended the attempt without an answer, empty when none did.
 type Record struct {
@@ -36,6 +37,7 @@ type Record struct {
 	Namespace  string
 	Job        string
 	JobVersion int64
+	Dispatch   ID
 	Task       string
 	Provider   string
 	Attempt    int

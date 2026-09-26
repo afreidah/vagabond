@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/afreidah/vagabond/internal/execution"
+	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 )
 
@@ -140,6 +141,35 @@ func TestRecord_RerouteLinksAttempts(t *testing.T) {
 
 	if r.Previous != outcome.Attempts[0].ID || r.Attempt != 2 {
 		t.Errorf("record = %+v, want attempt 2 after %s", r, outcome.Attempts[0].ID)
+	}
+}
+
+// Every task of one run shares the dispatch ID the outcome reports, and the
+// run records the version it was given.
+func TestRecord_TasksShareTheDispatch(t *testing.T) {
+	t.Parallel()
+
+	p := &scriptedProvider{name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded}
+	reg := newRegistry(p)
+
+	j := &job.Job{Name: "ci", Tasks: []job.Task{*containerTask(t, nil), *containerTask(t, nil)}}
+	j.Tasks[1].Name = "second"
+
+	outcome, err := newDispatcher(t, reg).Run(t.Context(), Origin{Namespace: ns, JobVersion: 4}, j, nil)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	if outcome.Dispatch.IsZero() || len(outcome.Tasks) != 2 {
+		t.Fatalf("outcome = %+v, want a dispatch ID and two tasks", outcome)
+	}
+
+	for _, task := range outcome.Tasks {
+		r := record(t, reg, task.ID)
+
+		if r.Dispatch != outcome.Dispatch || r.JobVersion != 4 || r.Job != "ci" {
+			t.Errorf("record = %+v, want dispatch %s at version 4", r, outcome.Dispatch)
+		}
 	}
 }
 

@@ -102,10 +102,12 @@ func (o *TaskOutcome) Tried() int {
 // JobOutcome is what became of every task in a job.
 //
 // Tasks are in the order they ran, which is the order they were declared. A
-// job that stopped early has fewer outcomes than it has tasks.
+// job that stopped early has fewer outcomes than it has tasks. Dispatch is the
+// ID every task's execution records carry.
 type JobOutcome struct {
-	Job   string
-	Tasks []TaskOutcome
+	Job      string
+	Dispatch execution.ID
+	Tasks    []TaskOutcome
 }
 
 // Succeeded reports whether every task ran and reported success.

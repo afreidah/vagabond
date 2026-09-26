@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/afreidah/vagabond/internal/job"
+	"github.com/afreidah/vagabond/internal/jobspec"
 	"github.com/afreidah/vagabond/internal/ptr"
 )
 
@@ -99,6 +100,55 @@ func TestTaskTimeoutReadsTheTask(t *testing.T) {
 
 	if want := 90 * time.Minute; got != want {
 		t.Errorf("timeout = %s, want %s", got, want)
+	}
+}
+
+// Submission metadata reaches Cloud Run: substituted into the config and set
+// as VAGABOND_META_* in the container's environment.
+func TestJobSpecCarriesMetadata(t *testing.T) {
+	t.Parallel()
+
+	_, p := newFakeGoogle(t)
+
+	parsed, diags := jobspec.Parse(jobspec.Config{
+		Source: []byte(`
+job "ci" {
+  type = "batch"
+
+  parameterized {
+    meta_required = ["version"]
+  }
+
+  task "test" {
+    driver = "container"
+
+    config {
+      image = "golang:${meta.version}"
+    }
+  }
+}
+`),
+		Meta: map[string]string{"version": "1.27"},
+	})
+	if diags.HasErrors() {
+		t.Fatalf("Parse() = %s", diags.Error())
+	}
+
+	spec, err := p.jobSpec(&parsed.Spec.Jobs[0].Tasks[0])
+	if err != nil {
+		t.Fatalf("jobSpec() = %v", err)
+	}
+
+	template := spec["template"].(map[string]any)["template"].(map[string]any)
+	container := template["containers"].([]map[string]any)[0]
+
+	if container["image"] != "golang:1.27" {
+		t.Errorf("image = %v, want golang:1.27", container["image"])
+	}
+
+	env := container["env"].([]map[string]string)
+	if len(env) != 1 || env[0]["name"] != "VAGABOND_META_VERSION" || env[0]["value"] != "1.27" {
+		t.Errorf("env = %v, want VAGABOND_META_VERSION=1.27", env)
 	}
 }
 

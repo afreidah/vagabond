@@ -53,9 +53,7 @@ func invocation(id execution.ID, task *job.Task) (string, []byte, error) {
 		}
 	}
 
-	// Metadata was substituted when the specification was parsed, so nothing
-	// here is left to interpolate.
-	env, diags := task.Env.Attributes(nil)
+	env, diags := task.Environment()
 	if diags.HasErrors() {
 		return "", nil, plugin.Internal(fmt.Errorf("task %q env: %s", task.Name, diags.Error()))
 	}
@@ -87,7 +85,7 @@ func configValue(task *job.Task, name string, want cty.Type) (cty.Value, bool) {
 		return cty.NilVal, false
 	}
 
-	value, diags := attr.Expr.Value(nil)
+	value, diags := attr.Expr.Value(task.Vars)
 	if diags.HasErrors() || value.IsNull() || !value.IsKnown() {
 		return cty.NilVal, false
 	}

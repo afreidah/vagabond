@@ -322,6 +322,27 @@ func TestRunTaskSkipsPollingWhenSynchronous(t *testing.T) {
 	}
 }
 
+// The verdict of a synchronous run is the caller's to report with its result,
+// so progress carries no terminal state and nothing prints twice.
+func TestSynchronousRunReportsNoTerminalProgress(t *testing.T) {
+	t.Parallel()
+
+	var events []Event
+
+	p := &scriptedProvider{name: "a", synchronous: true}
+	d := over(newRegistry(p), WithSleeper(noWait), WithProgress(func(e Event) { events = append(events, e) }))
+
+	if _, err := d.RunTask(t.Context(), origin, containerTask(t, nil), nil, nil); err != nil {
+		t.Fatalf("RunTask failed: %v", err)
+	}
+
+	for _, e := range events {
+		if e.State.Terminal() {
+			t.Errorf("progress reported terminal state %s", e.State)
+		}
+	}
+}
+
 // -------------------------------------------------------------------------
 // THE RULE
 // -------------------------------------------------------------------------
@@ -749,7 +770,7 @@ func TestRunStopsAtTheFirstFailingTask(t *testing.T) {
 	j.Tasks[0].Name = "first"
 	j.Tasks[1].Name = "second"
 
-	outcome, err := newDispatcher(t, newRegistry(p)).Run(t.Context(), ns, j, nil)
+	outcome, err := newDispatcher(t, newRegistry(p)).Run(t.Context(), origin, j, nil)
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -779,7 +800,7 @@ func TestRunExecutesEveryTaskInOrder(t *testing.T) {
 	j.Tasks[0].Name = "first"
 	j.Tasks[1].Name = "second"
 
-	outcome, err := newDispatcher(t, newRegistry(p)).Run(t.Context(), ns, j, nil)
+	outcome, err := newDispatcher(t, newRegistry(p)).Run(t.Context(), origin, j, nil)
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -803,7 +824,7 @@ func TestRunReportsPartialProgress(t *testing.T) {
 
 	j := &job.Job{Name: "j", Tasks: []job.Task{*containerTask(t, nil)}}
 
-	outcome, err := newDispatcher(t, reg).Run(t.Context(), ns, j, nil)
+	outcome, err := newDispatcher(t, reg).Run(t.Context(), origin, j, nil)
 	if err == nil {
 		t.Fatal("expected an error")
 	}

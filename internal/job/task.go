@@ -19,6 +19,7 @@ package job
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
@@ -46,6 +47,51 @@ type Task struct {
 	Network          *Network               `hcl:"network,block"`
 	Execution        *ExecutionRequirements `hcl:"execution,block"`
 	Retry            *Retry                 `hcl:"retry,block"`
+
+	// Vars is what the undecoded config and env blocks are evaluated against,
+	// and Meta the job's metadata as the task sees it. Both are set by the
+	// parser; a provider reads config with Vars and env through Environment.
+	Vars *hcl.EvalContext
+	Meta map[string]string
+}
+
+// MetaEnvPrefix names the environment variables every task receives for its
+// metadata, as Nomad sets NOMAD_META_<key>.
+const MetaEnvPrefix = "VAGABOND_META_"
+
+// Environment returns the task's env block evaluated against its Vars, plus
+// VAGABOND_META_<KEY> for each metadata key. An env entry the author wrote
+// wins over a metadata variable of the same name.
+func (t *Task) Environment() (map[string]string, hcl.Diagnostics) {
+	env, diags := t.Env.Attributes(t.Vars)
+	if env == nil {
+		env = make(map[string]string, len(t.Meta))
+	}
+
+	for key, value := range t.Meta {
+		name := MetaEnvPrefix + envName(key)
+
+		if _, ok := env[name]; !ok {
+			env[name] = value
+		}
+	}
+
+	return env, diags
+}
+
+// envName upper-cases key and replaces anything outside [A-Z0-9_], so any
+// metadata key is a valid variable name.
+func envName(key string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r - 'a' + 'A'
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}, key)
 }
 
 // ConfigImage is the driver config key naming a container image.
