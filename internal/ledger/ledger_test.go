@@ -67,11 +67,21 @@ func computeShare(limit int64) quota.Limits {
 	return limits
 }
 
-// total reads a provider's total usage in ns.
+// total re-reads the store and returns a provider's total usage in ns.
 func total(l *Ledger, provider string) quota.PoolUsage {
-	usage, _ := l.PoolUsage(ns, provider)
+	got, _ := usage(l, ns, provider)
 
-	return usage
+	return got
+}
+
+// usage re-reads the store and returns a provider's total and namespace's
+// share, as admission would see them.
+func usage(l *Ledger, namespace, provider string) (total, share quota.PoolUsage) {
+	if err := l.Refresh(context.Background()); err != nil {
+		panic(err)
+	}
+
+	return l.PoolUsage(namespace, provider)
 }
 
 // newLedger builds a ledger over the fixtures and a memory store holding used,
@@ -95,8 +105,8 @@ func onStore(t *testing.T, at time.Time, store Store) *Ledger {
 		snapshot: make(Usage),
 	}
 
-	if err := l.refresh(t.Context()); err != nil {
-		t.Fatalf("refresh() = %v", err)
+	if err := l.Refresh(t.Context()); err != nil {
+		t.Fatalf("Refresh() = %v", err)
 	}
 
 	return l
@@ -346,7 +356,7 @@ func TestReserve_ChargesTheTotalAndTheShare(t *testing.T) {
 		t.Fatalf("Reserve() = %v", err)
 	}
 
-	totalUsage, share := l.PoolUsage("ci", "fn")
+	totalUsage, share := usage(l, "ci", "fn")
 
 	if totalUsage["compute"] != 10*gbSeconds || share["compute"] != 10*gbSeconds {
 		t.Errorf("total = %v, share = %v; want 10 GB-seconds in both", totalUsage, share)
@@ -405,7 +415,7 @@ func TestSettle_CorrectsTheShareToo(t *testing.T) {
 		t.Fatalf("Settle() = %v", err)
 	}
 
-	totalUsage, share := l.PoolUsage("ci", "fn")
+	totalUsage, share := usage(l, "ci", "fn")
 
 	if totalUsage["compute"] != 10*gbSeconds || share["compute"] != 10*gbSeconds {
 		t.Errorf("total = %v, share = %v; want 10 GB-seconds in both", totalUsage, share)
@@ -429,7 +439,7 @@ func TestReap_FinishedChargesTheShareToo(t *testing.T) {
 		t.Fatalf("Reap() = %v", err)
 	}
 
-	totalUsage, share := l.PoolUsage("ci", "fn")
+	totalUsage, share := usage(l, "ci", "fn")
 
 	if totalUsage["compute"] != 10*gbSeconds || share["compute"] != 10*gbSeconds {
 		t.Errorf("total = %v, share = %v; want 10 GB-seconds in both", totalUsage, share)

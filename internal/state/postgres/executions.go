@@ -146,6 +146,8 @@ func rowOf(r *execution.Record) db.Execution {
 		Task:       r.Task,
 		Provider:   r.Provider,
 		Attempt:    int64(r.Attempt),
+		Cpu:        int64(r.CPU),
+		Memory:     int64(r.Memory),
 		State:      string(r.State),
 		ProviderID: r.ProviderID,
 		Failure:    r.Failure,
@@ -208,6 +210,8 @@ func recordOf(row *db.Execution) (*execution.Record, error) {
 		Task:       row.Task,
 		Provider:   row.Provider,
 		Attempt:    int(row.Attempt),
+		CPU:        int(row.Cpu),
+		Memory:     int(row.Memory),
 		Failure:    row.Failure,
 	}
 

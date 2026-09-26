@@ -11,12 +11,12 @@ INSERT INTO executions (
     id, namespace, job, job_version, task, provider, attempt, previous_id,
     state, provider_id, failure, created_at, started_at, ended_at, updated_at,
     exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated,
-    dispatch_id
+    dispatch_id, cpu, memory
 ) VALUES (
     @id, @namespace, @job, @job_version, @task, @provider, @attempt, @previous_id,
     @state, @provider_id, @failure, @created_at, @started_at, @ended_at, @updated_at,
     @exit_code, @duration_ms, @billed_cpu, @billed_memory, @billed_ms, @logs, @logs_truncated,
-    @dispatch_id
+    @dispatch_id, @cpu, @memory
 );
 
 -- name: UpdateExecution :execrows

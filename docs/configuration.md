@@ -285,8 +285,9 @@ Ledger behavior:
 - Reserve on dispatch, in one statement: the reservation is written only if
   every pool has room for it.
 - Settle on completion: the reservation is replaced by what the run cost.
-- A reservation left by a killed process holds its amount until `job run` reaps
-  it. The reaper asks the provider about reservations older than an hour:
+- A reservation left by a killed process holds its amount until it is reaped:
+  at the start of `job run`, and by the server at startup and every 5 minutes.
+  The reaper asks the provider about reservations older than an hour:
   - finished: charged for how long it ran
   - never ran: dropped
   - still running, or the provider could not answer: kept

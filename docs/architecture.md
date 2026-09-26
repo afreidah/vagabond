@@ -87,8 +87,9 @@ Admission reads capability and quota snapshots. It does not call providers.
   observation time.
 - Planning reserves nothing. Planning the same job twice changes nothing.
 
-Capability snapshots come from `Provider.Capabilities`, called by a refresh loop
-rather than on the request path.
+Capability snapshots come from `Provider.Capabilities`, called at startup and
+by the server every minute, never on the request path. Quota snapshots are
+re-read before each task and by the server every 15 seconds.
 
 ## Plugin responsibilities
 

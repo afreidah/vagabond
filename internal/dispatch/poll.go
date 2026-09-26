@@ -97,8 +97,6 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 func (d *Dispatcher) execute(
 	ctx context.Context, provider plugin.Provider, task *job.Task, run *tracked,
 ) (*execution.Result, bool, error) {
-	var streamed bool
-
 	id := run.rec.ID
 
 	event := Event{
@@ -117,7 +115,7 @@ func (d *Dispatcher) execute(
 	if err != nil {
 		run.failed(ctx, err)
 
-		return nil, streamed, err
+		return nil, false, err
 	}
 
 	run.submitted(ctx, &submission)
@@ -134,8 +132,19 @@ func (d *Dispatcher) execute(
 	if submission.Synchronous() {
 		d.release(provider, id)
 
-		return submission.Result, streamed, nil
+		return submission.Result, false, nil
 	}
+
+	return d.follow(ctx, provider, run, event)
+}
+
+// follow watches a submitted execution to its end, streaming its output, and
+// collects its result. Shared by a fresh submission and one resumed after a
+// restart, which differ only in how they got here.
+func (d *Dispatcher) follow(
+	ctx context.Context, provider plugin.Provider, run *tracked, event Event,
+) (*execution.Result, bool, error) {
+	id := run.rec.ID
 
 	stream := d.startStream(ctx, provider, id)
 	defer stream.stop()
@@ -146,7 +155,7 @@ func (d *Dispatcher) execute(
 	// underneath the result.
 	d.settle(ctx, stream)
 
-	streamed = stream.wrote()
+	streamed := stream.wrote()
 
 	if err != nil {
 		// The caller gave up rather than the provider failing, so the work is

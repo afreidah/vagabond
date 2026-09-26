@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/hashicorp/hcl/v2"
 
@@ -38,11 +40,17 @@ import (
 // Registry is every provider a deployment can dispatch to.
 //
 // namespaces holds every declared namespace, each with its compiled shares by
-// provider; a namespace with none maps to an empty map.
+// provider; a namespace with none maps to an empty map. mu guards what Refresh
+// changes on the entries, since a server refreshes while serving plans.
 type Registry struct {
+	mu         sync.RWMutex
 	entries    []*entry
 	namespaces map[string]map[string]quota.Limits
 }
+
+// refreshTimeout bounds one provider's answer during Refresh, so one that
+// hangs does not hold the others' snapshots back.
+const refreshTimeout = 30 * time.Second
 
 // entry is one provider and everything last known about it.
 //
@@ -193,9 +201,8 @@ func newEntry(ctx context.Context, cfg *config.Provider) (*entry, hcl.Diagnostic
 		limits:   limits,
 		enabled:  cfg.IsEnabled(),
 
-		// Healthy until something says otherwise. Health checking arrives with
-		// the refresh loop that can observe a provider failing; assuming the
-		// worst before then would make every provider unusable.
+		// Healthy until a refresh says otherwise; assuming the worst before
+		// the first would make every provider unusable.
 		healthy: true,
 	}, diags
 }
@@ -212,25 +219,53 @@ func newEntry(ctx context.Context, cfg *config.Provider) (*entry, hcl.Diagnostic
 // and the stale snapshot carries ObservedAt so admission can decide for itself
 // how old is too old.
 //
-// Errors are collected rather than returned on the first one: a refresh that
-// stops at the first unreachable provider leaves the rest stale for no reason.
+// Providers are asked in parallel, each under refreshTimeout, and every answer
+// is applied at once. Errors are collected rather than returned on the first
+// one: a refresh that stops at the first unreachable provider leaves the rest
+// stale for no reason.
 func (r *Registry) Refresh(ctx context.Context) error {
-	var failures []error
+	type answer struct {
+		caps plugin.Capabilities
+		err  error
+	}
 
-	for _, e := range r.entries {
+	answers := make([]answer, len(r.entries))
+
+	var wg sync.WaitGroup
+
+	for i, e := range r.entries {
 		if !e.enabled {
 			continue
 		}
 
-		caps, err := e.provider.Capabilities(ctx)
-		if err != nil {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(ctx, refreshTimeout)
+			defer cancel()
+
+			answers[i].caps, answers[i].err = e.provider.Capabilities(ctx)
+		})
+	}
+
+	wg.Wait()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var failures []error
+
+	for i, e := range r.entries {
+		if !e.enabled {
+			continue
+		}
+
+		if err := answers[i].err; err != nil {
 			e.healthy = false
 			failures = append(failures, fmt.Errorf("provider %q: %w", e.name, err))
 
 			continue
 		}
 
-		e.capabilities = caps
+		e.capabilities = answers[i].caps
 		e.healthy = true
 	}
 
@@ -254,6 +289,9 @@ func (r *Registry) Inputs(
 	namespace string, usage func(namespace, provider string) (total, share quota.PoolUsage),
 ) []scheduler.Input {
 	inputs := make([]scheduler.Input, 0, len(r.entries))
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
 	for _, e := range r.entries {
 		in := scheduler.Input{

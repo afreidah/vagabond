@@ -43,8 +43,9 @@ type. One deployment can register the same plugin twice against two accounts.
 
 ### `Capabilities`
 
-What the provider can currently do. Called by a refresh loop, never on the
-request path, so implementations may call their platform here.
+What the provider can currently do. Called at startup and by the server every
+minute, never on the request path, so implementations may call their platform
+here.
 
 Set `ObservedAt`. Admission reads an unobserved snapshot as a provider nothing
 is known about.

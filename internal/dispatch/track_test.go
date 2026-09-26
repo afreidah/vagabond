@@ -187,6 +187,16 @@ func (failingStore) FinishDispatch(context.Context, *execution.Dispatch) error {
 	return errors.New("store down")
 }
 
+// RenewDispatch fails, as every write to a store that is down does.
+func (failingStore) RenewDispatch(context.Context, execution.ID, string, time.Time) error {
+	return errors.New("store down")
+}
+
+// DispatchExecutions fails, as every read from a store that is down does.
+func (failingStore) DispatchExecutions(context.Context, execution.ID) ([]*execution.Record, error) {
+	return nil, errors.New("store down")
+}
+
 // Create fails, so no attempt can be recorded before Submit.
 func (failingStore) Create(context.Context, *execution.Record) error {
 	return errors.New("store down")

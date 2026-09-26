@@ -44,20 +44,22 @@ const (
 //go:generate mockgen -source=server.go -destination=mocks_test.go -package=server
 
 // serverRegistry is the part of the provider registry the server reads:
-// admission inputs, plugins by name, and which namespaces exist.
+// admission inputs, plugins by name, which namespaces exist, and refreshing
+// what providers can do.
 type serverRegistry interface {
 	Inputs(namespace string, usage func(namespace, provider string) (total, share quota.PoolUsage)) []scheduler.Input
 	Provider(name string) (plugin.Provider, bool)
 	HasNamespace(namespace string) bool
+	Refresh(ctx context.Context) error
 }
 
-// serverExecutions is where runs and attempts are recorded and read back: a
-// run's record, an attempt by ID, or every attempt of a run.
+// serverExecutions is where runs and attempts are recorded and read back, and
+// where dispatches a dead owner left are claimed.
 type serverExecutions interface {
 	dispatch.Executions
 	GetDispatch(ctx context.Context, id execution.ID) (*execution.Dispatch, error)
 	Get(ctx context.Context, id execution.ID) (*execution.Record, error)
-	DispatchExecutions(ctx context.Context, dispatch execution.ID) ([]*execution.Record, error)
+	ClaimDispatches(ctx context.Context, owner string, now, until time.Time) ([]*execution.Dispatch, error)
 }
 
 // serverJobs is where registered jobs live: storing versions, reading them
@@ -76,13 +78,14 @@ type serverJobs interface {
 // -------------------------------------------------------------------------
 
 // Server serves the API over one set of stores. running holds the cancel
-// function of every dispatch this process is running.
+// function of every dispatch this process is running, started or resumed.
 type Server struct {
 	registry   serverRegistry
 	ledger     dispatch.Ledger
 	executions serverExecutions
 	jobs       serverJobs
 	dispatcher *dispatch.Dispatcher
+	owner      string // who this server's dispatches are leased to
 	logger     *slog.Logger
 	now        func() time.Time
 
@@ -99,12 +102,15 @@ type Server struct {
 func New(
 	reg serverRegistry, ledger dispatch.Ledger, executions serverExecutions, jobStore serverJobs, logger *slog.Logger,
 ) *Server {
+	owner := dispatch.ProcessOwner("server")
+
 	return &Server{
 		registry:   reg,
 		ledger:     ledger,
 		executions: executions,
 		jobs:       jobStore,
-		dispatcher: dispatch.New(reg, ledger, executions),
+		dispatcher: dispatch.New(reg, ledger, executions, dispatch.WithOwner(owner)),
+		owner:      owner,
 		logger:     logger,
 		now:        time.Now,
 		running:    make(map[execution.ID]context.CancelFunc),
@@ -148,14 +154,18 @@ func (s *Server) Serve(ctx context.Context, addr string, tlsConfig *tls.Config) 
 	return s.ServeListener(ctx, listener, tlsConfig)
 }
 
-// ServeListener serves on an existing listener until ctx is done. Stale quota
-// reservations are reaped first, since they hold quota this server needs.
+// ServeListener serves on an existing listener until ctx is done. Dispatches a
+// dead owner left are claimed and stale reservations reaped before serving,
+// then upkeep runs on its timers until the server stops.
 func (s *Server) ServeListener(ctx context.Context, listener net.Listener, tlsConfig *tls.Config) error {
-	if reaped, err := s.dispatcher.Reap(ctx); err != nil {
-		s.logger.WarnContext(ctx, "resolving abandoned quota reservations", "error", err)
-	} else if reaped > 0 {
-		s.logger.InfoContext(ctx, "resolved abandoned quota reservations", "count", reaped)
-	}
+	s.claim(ctx)
+	s.reap(ctx)
+
+	upkeepCtx, stopUpkeep := context.WithCancel(ctx)
+	upkeep := s.startUpkeep(upkeepCtx)
+
+	defer upkeep.Wait()
+	defer stopUpkeep()
 
 	httpServer := &http.Server{
 		Handler:           s.Handler(),
@@ -184,8 +194,8 @@ func (s *Server) ServeListener(ctx context.Context, listener net.Listener, tlsCo
 	return s.shutdown(ctx, httpServer, errs)
 }
 
-// shutdown drains in-flight requests. Running dispatches are left alone; their
-// executions stay recorded as they were.
+// shutdown drains in-flight requests. Running dispatches are left alone: their
+// leases lapse when the process exits, and the next server resumes them.
 func (s *Server) shutdown(ctx context.Context, httpServer *http.Server, errs <-chan error) error {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()

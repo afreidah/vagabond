@@ -10,10 +10,61 @@ import (
 	"time"
 )
 
+const claimDispatches = `-- name: ClaimDispatches :many
+UPDATE dispatches SET owner = $1, lease_until = $2
+WHERE state = 'running' AND lease_until < $3::timestamptz
+RETURNING dispatch_id, namespace, job, job_version, state, error, created_at, ended_at, tasks, owner, lease_until
+`
+
+type ClaimDispatchesParams struct {
+	Owner      string
+	LeaseUntil time.Time
+	Now        time.Time
+}
+
+// Takes over every running dispatch whose lease lapsed before now. One
+// statement, so two servers claiming at once never both get the same one.
+func (q *Queries) ClaimDispatches(ctx context.Context, arg ClaimDispatchesParams) ([]Dispatch, error) {
+	rows, err := q.db.Query(ctx, claimDispatches, arg.Owner, arg.LeaseUntil, arg.Now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Dispatch{}
+	for rows.Next() {
+		var i Dispatch
+		if err := rows.Scan(
+			&i.DispatchID,
+			&i.Namespace,
+			&i.Job,
+			&i.JobVersion,
+			&i.State,
+			&i.Error,
+			&i.CreatedAt,
+			&i.EndedAt,
+			&i.Tasks,
+			&i.Owner,
+			&i.LeaseUntil,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createDispatch = `-- name: CreateDispatch :exec
 
-INSERT INTO dispatches (dispatch_id, namespace, job, job_version, state, error, created_at, ended_at)
-VALUES ($1, $2, $3, $4, $5, '', $6, NULL)
+INSERT INTO dispatches (
+    dispatch_id, namespace, job, job_version, state, error, created_at, ended_at,
+    tasks, owner, lease_until
+) VALUES (
+    $1, $2, $3, $4, $5, '', $6, NULL,
+    $7, $8, $9
+)
 `
 
 type CreateDispatchParams struct {
@@ -23,13 +74,17 @@ type CreateDispatchParams struct {
 	JobVersion int64
 	State      string
 	CreatedAt  time.Time
+	Tasks      int64
+	Owner      string
+	LeaseUntil time.Time
 }
 
 // -----------------------------------------------------------------------------
 // Dispatch records.
 //
-// Finishing changes only a dispatch still running, so a late or repeated
-// finish cannot overwrite how a run ended.
+// Finishing and renewing change only a dispatch still running and still held
+// by the caller, so a late finish, or one from an owner whose lease was taken
+// over, cannot overwrite how a run ended.
 // -----------------------------------------------------------------------------
 func (q *Queries) CreateDispatch(ctx context.Context, arg CreateDispatchParams) error {
 	_, err := q.db.Exec(ctx, createDispatch,
@@ -39,13 +94,16 @@ func (q *Queries) CreateDispatch(ctx context.Context, arg CreateDispatchParams) 
 		arg.JobVersion,
 		arg.State,
 		arg.CreatedAt,
+		arg.Tasks,
+		arg.Owner,
+		arg.LeaseUntil,
 	)
 	return err
 }
 
 const finishDispatch = `-- name: FinishDispatch :execrows
 UPDATE dispatches SET state = $1, error = $2, ended_at = $3
-WHERE dispatch_id = $4 AND state = 'running'
+WHERE dispatch_id = $4 AND state = 'running' AND owner = $5
 `
 
 type FinishDispatchParams struct {
@@ -53,6 +111,7 @@ type FinishDispatchParams struct {
 	Error      string
 	EndedAt    *time.Time
 	DispatchID string
+	Owner      string
 }
 
 func (q *Queries) FinishDispatch(ctx context.Context, arg FinishDispatchParams) (int64, error) {
@@ -61,6 +120,7 @@ func (q *Queries) FinishDispatch(ctx context.Context, arg FinishDispatchParams) 
 		arg.Error,
 		arg.EndedAt,
 		arg.DispatchID,
+		arg.Owner,
 	)
 	if err != nil {
 		return 0, err
@@ -69,7 +129,7 @@ func (q *Queries) FinishDispatch(ctx context.Context, arg FinishDispatchParams) 
 }
 
 const getDispatch = `-- name: GetDispatch :one
-SELECT dispatch_id, namespace, job, job_version, state, error, created_at, ended_at FROM dispatches WHERE dispatch_id = $1
+SELECT dispatch_id, namespace, job, job_version, state, error, created_at, ended_at, tasks, owner, lease_until FROM dispatches WHERE dispatch_id = $1
 `
 
 func (q *Queries) GetDispatch(ctx context.Context, dispatchID string) (Dispatch, error) {
@@ -84,6 +144,28 @@ func (q *Queries) GetDispatch(ctx context.Context, dispatchID string) (Dispatch,
 		&i.Error,
 		&i.CreatedAt,
 		&i.EndedAt,
+		&i.Tasks,
+		&i.Owner,
+		&i.LeaseUntil,
 	)
 	return i, err
+}
+
+const renewDispatch = `-- name: RenewDispatch :execrows
+UPDATE dispatches SET lease_until = $1
+WHERE dispatch_id = $2 AND state = 'running' AND owner = $3
+`
+
+type RenewDispatchParams struct {
+	LeaseUntil time.Time
+	DispatchID string
+	Owner      string
+}
+
+func (q *Queries) RenewDispatch(ctx context.Context, arg RenewDispatchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, renewDispatch, arg.LeaseUntil, arg.DispatchID, arg.Owner)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

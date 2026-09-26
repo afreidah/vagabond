@@ -102,6 +102,46 @@ func TestExecutions_DispatchFinishesOnce(t *testing.T) {
 	}
 }
 
+// Only the owner renews or finishes a dispatch, and a claim takes only lapsed
+// leases, after which the old owner holds nothing.
+func TestExecutions_DispatchLeases(t *testing.T) {
+	s := NewExecutions()
+	now := time.Now()
+
+	lapsed := &execution.Dispatch{State: execution.DispatchRunning, Owner: "cli", LeaseUntil: now.Add(-time.Second)}
+	held := &execution.Dispatch{State: execution.DispatchRunning, Owner: "cli", LeaseUntil: now.Add(time.Minute)}
+
+	for _, d := range []*execution.Dispatch{lapsed, held} {
+		d.ID, _ = execution.NewID()
+		if err := s.CreateDispatch(t.Context(), d); err != nil {
+			t.Fatalf("CreateDispatch() = %v", err)
+		}
+	}
+
+	if err := s.RenewDispatch(t.Context(), held.ID, "other", now); !errors.Is(err, execution.ErrStale) {
+		t.Errorf("RenewDispatch() by another owner = %v, want ErrStale", err)
+	}
+
+	claimed, err := s.ClaimDispatches(t.Context(), "server", now, now.Add(time.Minute))
+	if err != nil || len(claimed) != 1 || claimed[0].ID != lapsed.ID || claimed[0].Owner != "server" {
+		t.Fatalf("ClaimDispatches() = %+v, %v; want only the lapsed one, now the server's", claimed, err)
+	}
+
+	if err := s.RenewDispatch(t.Context(), lapsed.ID, "cli", now); !errors.Is(err, execution.ErrStale) {
+		t.Errorf("RenewDispatch() by the old owner = %v, want ErrStale", err)
+	}
+
+	lapsed.State, lapsed.Ended = execution.DispatchSucceeded, now
+	if err := s.FinishDispatch(t.Context(), lapsed); !errors.Is(err, execution.ErrStale) {
+		t.Errorf("FinishDispatch() by the old owner = %v, want ErrStale", err)
+	}
+
+	lapsed.Owner = "server"
+	if err := s.FinishDispatch(t.Context(), lapsed); err != nil {
+		t.Errorf("FinishDispatch() by the new owner = %v", err)
+	}
+}
+
 // TestExecutions_GetUnknown reads an ID nothing recorded.
 func TestExecutions_GetUnknown(t *testing.T) {
 	id, _ := execution.NewID()

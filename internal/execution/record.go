@@ -31,6 +31,8 @@ var ErrStale = errors.New("execution changed since it was read")
 // Dispatch groups the records of one run of a job, every task and attempt.
 // Previous is the zero ID on a task's first attempt. Failure is the class of
 // the error that ended the attempt without an answer, empty when none did.
+// CPU and Memory are the task's declared shape, which a result without a bill
+// is charged at.
 type Record struct {
 	Status
 
@@ -42,6 +44,8 @@ type Record struct {
 	Provider   string
 	Attempt    int
 	Previous   ID
+	CPU        int
+	Memory     int
 
 	Result  *Result
 	Failure string

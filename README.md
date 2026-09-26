@@ -12,47 +12,54 @@
 <br>
 
 Vagabond is a multi-cloud compute broker for short-lived, stateless workloads.
-Describe a workload once; Vagabond decides which backend can run it and which
-one should.
+A job is described once in Nomad-style HCL; Vagabond decides which cloud
+backend can run it, which one should, runs it there, and charges it against
+that provider's free-tier quota.
 
-It is an homage to HashiCorp Nomad. Vagabond borrows Nomad's scheduling model,
-its HCL ergonomics, and its habit of explaining every placement decision it
-makes — job files and plan output should read as familiar if you have used it.
-Vagabond does not depend on Nomad and does not reproduce it; the backends here
-are cloud services with no scheduler of their own.
+It is an homage to HashiCorp Nomad: the job file, `plan` output, registered and
+parameterized jobs, and namespaces should read as familiar to a Nomad user.
+Vagabond does not depend on Nomad. Its backends are cloud services with no
+scheduler of their own.
 
-Routing is policy-driven. A job can require a driver, an architecture, a region,
-a resource envelope, or a cost ceiling. `max_cost_usd` defaults to 0, so jobs
-stay on free capacity unless they opt in to paying — which makes Vagabond good
-at spreading work across free tiers. Cost is one routing dimension among
-several, not the premise.
+## Features
 
-If no backend satisfies a job's constraints, Vagabond rejects it. Fallback is
-the client's decision.
+- Nomad-style HCL job files, validated with line-and-column diagnostics.
+- Admission: 13 checks across policy, availability, capability and quota decide
+  which providers can run a task. `max_cost_usd` defaults to 0, so work stays
+  on free capacity unless a job opts in to paying.
+- Ranking: survivors are scored and one is selected. `job plan` prints every
+  provider with its score or the rule it failed.
+- Dispatch: submit, stream output where the provider can, reroute around
+  providers that fail to answer, release what the execution left behind.
+- Quota ledger: free-tier pools per provider, with optional per-namespace
+  shares. Reservations are atomic across processes; settlement uses what the
+  platform billed when it reports it.
+- Registered jobs: versioned on change, dispatched by name, parameterized with
+  `meta_required` and `meta_optional`. Tasks receive `VAGABOND_META_<KEY>`.
+- Namespaces, declared in configuration.
+- Execution history: every dispatch and attempt recorded, with output.
+- Server: an HTTP API over the same operations. Dispatches are leased, so a
+  server resumes the ones a dead process left running.
+- Postgres or CockroachDB as the store.
 
-## Who this is for
+Providers:
 
-- Running CI or batch work across more than one cloud without writing per-cloud
-  submission logic.
-- Keeping stateless work on free tiers deliberately, with an accounting of what
-  is left.
-- Anyone who wants Nomad-style job files against cloud backends that have no
-  scheduler of their own.
+| Provider | Driver | Doc |
+|---|---|---|
+| Google Cloud Run Jobs | `container` | [cloud-run.md](docs/providers/cloud-run.md) |
+| AWS Lambda | `function` | [lambda.md](docs/providers/lambda.md) |
 
-## What it does
+The `worker` driver is modeled and admitted; no plugin implements it yet.
 
-- Parses Nomad-style HCL job files with diagnostics that name a line and column.
-- Decides which providers can run a task: 13 admission checks across policy,
-  availability, capability and capacity.
-- Scores the survivors and selects one.
-- Explains itself. `vagabond job plan` prints every provider, its score or the
-  rule it failed, and how stale the data was.
-- Runs it. `vagabond job run` dispatches to the winner, streams the output where
-  the provider supports it, reroutes around providers that fail to answer, and
-  deletes what the execution left behind.
-- Dispatches `container` tasks to Google Cloud Run Jobs and returns the exit
-  code and output.
-- Invokes `function` tasks on AWS Lambda and settles quota at what AWS billed.
+## Modes
+
+| | Local | Server |
+|---|---|---|
+| Started by | `vagabond job run` | `vagabond server` |
+| Store | Optional; in-memory without one | Required |
+| Registered jobs | Needs a store | Yes |
+| Runs | Synchronous, output to the terminal | Background; read over the API |
+| Upkeep | Once per command | Capabilities, usage, reaping and claims on timers |
 
 ## Quickstart
 
@@ -75,46 +82,21 @@ Selected: ibm-code-engine
 Estimated cost: free
 ```
 
-The example config uses in-memory providers, so this runs with no cloud account
-configured. See [docs/quickstart.md](docs/quickstart.md).
+The example config uses in-memory providers, so this needs no cloud account.
+See [quickstart.md](docs/quickstart.md).
 
-## Architecture
+## Commands
 
-```
-  job file (HCL)
-        |
-        v
-  +-----------+   parse, validate, substitute meta.*
-  |  jobspec  |
-  +-----------+
-        |
-        v  job.Job
-  +-----------+   which providers can run this task
-  | admission |   13 checkers, 4 tiers
-  +-----------+
-        |
-        +--> rejections: provider, reason, detail
-        |
-        v  candidates
-  +-----------+   which candidate should take it
-  |  ranking  |   scorers in [0,1], score is their mean
-  +-----------+
-        |
-        v  selection
-  +-----------+   submit, watch, collect, release
-  | dispatch  |   reroute on infrastructure failure
-  +-----------+
-```
-
-Admission never calls a provider. It reads capability and quota snapshots
-gathered by a refresh loop, which is why a plan works offline and reserves
-nothing.
-
-Provider plugins are translation plus failure classification. Scheduling, retry
-and accounting stay in the control plane. Three architectural boundaries are
-enforced by `depguard` rather than by convention.
-
-Details: [docs/architecture.md](docs/architecture.md).
+| Command | Does |
+|---|---|
+| `job validate <file>` | Parse and validate |
+| `job plan <file or name>` | Show where each task would run, and why |
+| `job run <file>` | Run a job file without registering it |
+| `job register <file>` | Store a job as a new version when it changed |
+| `job dispatch <name>` | Run a registered job's current version |
+| `job status <name>` | Versions and recent executions |
+| `job stop <name>` | Stop a registered job from being dispatched |
+| `server` | Serve the [HTTP API](docs/api.md) |
 
 ## Job file
 
@@ -150,41 +132,80 @@ job "go-test" {
 }
 ```
 
+## Architecture
+
+```
+  job file (HCL)
+        |
+        v
+  +-----------+   parse, validate, substitute meta.*
+  |  jobspec  |
+  +-----------+
+        |
+        v  job.Job
+  +-----------+   which providers can run this task
+  | admission |   13 checkers, 4 tiers
+  +-----------+
+        |
+        +--> rejections: provider, reason, detail
+        |
+        v  candidates
+  +-----------+   which candidate should take it
+  |  ranking  |   scorers in [0,1], score is their mean
+  +-----------+
+        |
+        v  selection
+  +-----------+   reserve, submit, watch, collect, settle, release
+  | dispatch  |   reroute on infrastructure failure
+  +-----------+
+        |
+        v
+  +-----------+   dispatches, executions, jobs, quota
+  |   store   |   Postgres or CockroachDB
+  +-----------+
+```
+
+- Admission never calls a provider. It reads capability and quota snapshots
+  gathered ahead of time, so a plan works offline and reserves nothing.
+- Provider plugins translate a task to their platform's API and classify its
+  failures. Scheduling, retry and accounting stay in the control plane.
+- Three architectural boundaries are enforced by `depguard`.
+
+Details: [architecture.md](docs/architecture.md).
+
 ## Documentation
 
 | Topic | Doc |
 |---|---|
-| First run | [Quickstart](docs/quickstart.md) |
+| First run | [quickstart.md](docs/quickstart.md) |
 | Architecture and boundaries | [architecture.md](docs/architecture.md) |
 | Job file syntax | [job-specification.md](docs/job-specification.md) |
-| Provider config, credentials, discovery | [configuration.md](docs/configuration.md) |
+| Providers, namespaces, quotas, store, server | [configuration.md](docs/configuration.md) |
 | Admission checks and reason codes | [admission.md](docs/admission.md) |
 | Scoring and strategies | [scheduling.md](docs/scheduling.md) |
-| Retries, rerouting, streaming, cleanup | [dispatch.md](docs/dispatch.md) |
-| HTTP API served by `vagabond server` | [api.md](docs/api.md) |
+| Records, leases, retries, streaming, cleanup | [dispatch.md](docs/dispatch.md) |
+| HTTP API | [api.md](docs/api.md) |
 | Google Cloud Run Jobs | [providers/cloud-run.md](docs/providers/cloud-run.md) |
 | AWS Lambda | [providers/lambda.md](docs/providers/lambda.md) |
 | Writing a provider plugin | [writing-a-provider.md](docs/writing-a-provider.md) |
 | Coding conventions | [style-guide.md](docs/style-guide.md) |
-| Build / test / contribute | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| Build, test, contribute | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## Roadmap
 
-Not implemented. Everything above this line is.
+Not implemented yet. Tracked in [issues](https://github.com/afreidah/vagabond/issues).
 
-- **Persistence.** Execution state. Quota state is persisted already.
-- **More providers.** The `worker` driver is modeled, admitted and scored, but
-  no plugin implements it. The next container backend should
-  have a meaningfully different execution model, to prove the plugin boundary
-  rather than add another similar API.
-- **Free-tier guide.** A walkthrough of running real CI across several
-  providers' free tiers, with the numbers.
-- **Nomad task driver.** Dispatch to Vagabond from a Nomad job.
-- **Image distribution.** Vagabond assumes the image a task names is available
-  to the selected provider. Prebaking images in a registry near the provider is
-  the largest known cost optimisation.
+- Server: API authentication, the CLI as an API client, a ledger that degrades
+  when the store is unreachable.
+- Operations: periodic jobs, an event stream, blocking queries, disabling a
+  provider at runtime.
+- Jobs: submission hooks, variables and workload identity, execution garbage
+  collection.
+- Providers: a `worker` plugin; a container backend with a different execution
+  model; provider pools.
+- A Nomad task driver that dispatches to Vagabond.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the build and test workflow, and
-[docs/style-guide.md](docs/style-guide.md) for the codebase's conventions.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the build and test workflow and
+[style-guide.md](docs/style-guide.md) for conventions.

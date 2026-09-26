@@ -39,6 +39,8 @@ func pendingRecord(t *testing.T) *execution.Record {
 		Task:      "test",
 		Provider:  "gcp-cloud-run",
 		Attempt:   1,
+		CPU:       1000,
+		Memory:    512,
 	}
 }
 
@@ -167,9 +169,10 @@ func TestDispatches_FinishOnce(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
+			now := time.Now().UTC().Truncate(time.Microsecond)
 			d := &execution.Dispatch{
-				ID: newID(t), Namespace: "ci", Job: "go-test", JobVersion: 2,
-				State: execution.DispatchRunning, Created: time.Now().UTC().Truncate(time.Microsecond),
+				ID: newID(t), Namespace: "ci", Job: "go-test", JobVersion: 2, Tasks: 3,
+				State: execution.DispatchRunning, Owner: "cli", LeaseUntil: now.Add(time.Minute), Created: now,
 			}
 
 			if err := store.CreateDispatch(ctx, d); err != nil {
@@ -193,6 +196,76 @@ func TestDispatches_FinishOnce(t *testing.T) {
 
 			if diff := cmp.Diff(d, got); diff != "" {
 				t.Errorf("round trip (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// A claim takes only lapsed leases, once, and afterwards only the new owner
+// can renew or finish the dispatch.
+func TestDispatches_LeaseClaim(t *testing.T) {
+	for _, e := range engines() {
+		t.Run(e.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := open(ctx, t, e)
+			now := time.Now().UTC().Truncate(time.Microsecond)
+
+			lapsed := &execution.Dispatch{
+				ID: newID(t), Namespace: "ci", Job: "go-test", Tasks: 2, State: execution.DispatchRunning,
+				Owner: "cli", LeaseUntil: now.Add(-time.Second), Created: now,
+			}
+			held := &execution.Dispatch{
+				ID: newID(t), Namespace: "ci", Job: "go-test", Tasks: 1, State: execution.DispatchRunning,
+				Owner: "cli", LeaseUntil: now.Add(time.Minute), Created: now,
+			}
+
+			for _, d := range []*execution.Dispatch{lapsed, held} {
+				if err := store.CreateDispatch(ctx, d); err != nil {
+					t.Fatalf("CreateDispatch() = %v", err)
+				}
+			}
+
+			until := now.Add(time.Minute)
+
+			claimed, err := store.ClaimDispatches(ctx, "server", now, until)
+			if err != nil {
+				t.Fatalf("ClaimDispatches() = %v", err)
+			}
+
+			want := *lapsed
+			want.Owner, want.LeaseUntil = "server", until
+
+			if len(claimed) != 1 {
+				t.Fatalf("claimed %d dispatches, want the lapsed one", len(claimed))
+			}
+
+			if diff := cmp.Diff(&want, claimed[0]); diff != "" {
+				t.Errorf("claimed (-want +got):\n%s", diff)
+			}
+
+			if again, _ := store.ClaimDispatches(ctx, "other", now, until); len(again) != 0 {
+				t.Errorf("a second claim took %d dispatches", len(again))
+			}
+
+			if err := store.RenewDispatch(ctx, lapsed.ID, "cli", until); !errors.Is(err, execution.ErrStale) {
+				t.Errorf("RenewDispatch() by the old owner = %v, want ErrStale", err)
+			}
+
+			if err := store.RenewDispatch(ctx, lapsed.ID, "server", until.Add(time.Minute)); err != nil {
+				t.Errorf("RenewDispatch() by the new owner = %v", err)
+			}
+
+			finished := want
+			finished.State, finished.Ended = execution.DispatchSucceeded, now
+
+			finished.Owner = "cli"
+			if err := store.FinishDispatch(ctx, &finished); !errors.Is(err, execution.ErrStale) {
+				t.Errorf("FinishDispatch() by the old owner = %v, want ErrStale", err)
+			}
+
+			finished.Owner = "server"
+			if err := store.FinishDispatch(ctx, &finished); err != nil {
+				t.Errorf("FinishDispatch() by the new owner = %v", err)
 			}
 		})
 	}

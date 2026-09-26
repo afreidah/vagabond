@@ -166,7 +166,7 @@ var origin = Origin{Namespace: ns, Job: "ci"}
 func runJob(t *testing.T, d *Dispatcher, o Origin, j *job.Job) (*JobOutcome, error) {
 	t.Helper()
 
-	o, err := d.Begin(t.Context(), o, j.Name)
+	o, err := d.Begin(t.Context(), o, j)
 	if err != nil {
 		t.Fatalf("Begin() = %v", err)
 	}
@@ -189,8 +189,9 @@ func record(t *testing.T, reg *fakeRegistry, id execution.ID) *execution.Record 
 	return r
 }
 
-// usageOf reads a provider's total usage from the registry's ledger.
+// usageOf re-reads the registry's ledger and returns a provider's total usage.
 func usageOf(reg *fakeRegistry, provider string) quota.PoolUsage {
+	_ = reg.ledger.Refresh(context.Background())
 	usage, _ := reg.ledger.PoolUsage(ns, provider)
 
 	return usage
