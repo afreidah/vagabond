@@ -15,11 +15,13 @@ const createExecution = `-- name: CreateExecution :exec
 INSERT INTO executions (
     id, namespace, job, job_version, task, provider, attempt, previous_id,
     state, provider_id, failure, created_at, started_at, ended_at, updated_at,
-    exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated
+    exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated,
+    dispatch_id
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8,
     $9, $10, $11, $12, $13, $14, $15,
-    $16, $17, $18, $19, $20, $21, $22
+    $16, $17, $18, $19, $20, $21, $22,
+    $23
 )
 `
 
@@ -46,6 +48,7 @@ type CreateExecutionParams struct {
 	BilledMs      *int64
 	Logs          []byte
 	LogsTruncated bool
+	DispatchID    string
 }
 
 // -----------------------------------------------------------------------------
@@ -54,6 +57,7 @@ type CreateExecutionParams struct {
 // An update names the state the caller read the record in and changes nothing
 // if it has moved since, so two writers cannot silently overwrite each other.
 // -----------------------------------------------------------------------------
+// Columns in table order, so the parameters convert from the row type.
 func (q *Queries) CreateExecution(ctx context.Context, arg CreateExecutionParams) error {
 	_, err := q.db.Exec(ctx, createExecution,
 		arg.ID,
@@ -78,12 +82,13 @@ func (q *Queries) CreateExecution(ctx context.Context, arg CreateExecutionParams
 		arg.BilledMs,
 		arg.Logs,
 		arg.LogsTruncated,
+		arg.DispatchID,
 	)
 	return err
 }
 
 const getExecution = `-- name: GetExecution :one
-SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated FROM executions WHERE id = $1
+SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated, dispatch_id FROM executions WHERE id = $1
 `
 
 func (q *Queries) GetExecution(ctx context.Context, id string) (Execution, error) {
@@ -112,8 +117,67 @@ func (q *Queries) GetExecution(ctx context.Context, id string) (Execution, error
 		&i.BilledMs,
 		&i.Logs,
 		&i.LogsTruncated,
+		&i.DispatchID,
 	)
 	return i, err
+}
+
+const listJobExecutions = `-- name: ListJobExecutions :many
+SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated, dispatch_id FROM executions
+WHERE namespace = $1 AND job = $2
+ORDER BY created_at DESC
+LIMIT $3
+`
+
+type ListJobExecutionsParams struct {
+	Namespace string
+	Job       string
+	MaxRows   int32
+}
+
+// A job's most recent executions, newest first.
+func (q *Queries) ListJobExecutions(ctx context.Context, arg ListJobExecutionsParams) ([]Execution, error) {
+	rows, err := q.db.Query(ctx, listJobExecutions, arg.Namespace, arg.Job, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Execution{}
+	for rows.Next() {
+		var i Execution
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Job,
+			&i.JobVersion,
+			&i.Task,
+			&i.Provider,
+			&i.Attempt,
+			&i.PreviousID,
+			&i.State,
+			&i.ProviderID,
+			&i.Failure,
+			&i.CreatedAt,
+			&i.StartedAt,
+			&i.EndedAt,
+			&i.UpdatedAt,
+			&i.ExitCode,
+			&i.DurationMs,
+			&i.BilledCpu,
+			&i.BilledMemory,
+			&i.BilledMs,
+			&i.Logs,
+			&i.LogsTruncated,
+			&i.DispatchID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateExecution = `-- name: UpdateExecution :execrows

@@ -173,6 +173,26 @@ args     = ["go", "test", "./..."]
 	}
 }
 
+// The task's metadata reaches the function as VAGABOND_META_* in the event's
+// env.
+func TestSubmit_EventCarriesMetadata(t *testing.T) {
+	t.Parallel()
+
+	f := &fakeLambda{logs: reportLine}
+	p := newTestProvider(t, f)
+
+	task := functionTask(t, `function = "f"`, "")
+	task.Meta = map[string]string{"commit": "abc123"}
+
+	if _, err := p.Submit(t.Context(), newID(t), task); err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+
+	if got := f.event.Env["VAGABOND_META_COMMIT"]; got != "abc123" {
+		t.Errorf("event env = %v, want VAGABOND_META_COMMIT", f.event.Env)
+	}
+}
+
 // The REPORT line's bill supersedes the estimate, at the memory the function is
 // configured with rather than what the task declared.
 func TestSubmit_ReportsWhatAWSBilled(t *testing.T) {

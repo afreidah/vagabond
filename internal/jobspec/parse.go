@@ -120,6 +120,7 @@ func Parse(cfg Config) (*Parsed, hcl.Diagnostics) {
 
 	diags = append(diags, gohcl.DecodeBody(source.Body, ctx, &spec)...)
 	diags = append(diags, checkConfigBlocks(&spec)...)
+	diags = append(diags, bindTasks(&spec, ctx, cfg.Meta)...)
 
 	parsed.Spec = &spec
 
@@ -141,6 +142,68 @@ func sourceName(cfg Config) string {
 	}
 
 	return cfg.Filename
+}
+
+// -------------------------------------------------------------------------
+// BINDING
+// -------------------------------------------------------------------------
+
+// bindTasks gives every task what its undecoded blocks are evaluated against
+// and its metadata: the job's meta block, overridden by what was supplied, as
+// Nomad merges job meta with dispatch meta.
+func bindTasks(file *job.File, ctx *hcl.EvalContext, supplied map[string]string) hcl.Diagnostics {
+	var diags hcl.Diagnostics
+
+	for i := range file.Jobs {
+		j := &file.Jobs[i]
+
+		meta, metaDiags := j.Meta.Attributes(ctx)
+		diags = append(diags, metaDiags...)
+
+		if meta == nil {
+			meta = make(map[string]string, len(supplied))
+		}
+
+		for key, value := range supplied {
+			meta[key] = value
+		}
+
+		for k := range j.Tasks {
+			j.Tasks[k].Vars = ctx
+			j.Tasks[k].Meta = meta
+
+			diags = append(diags, checkReferences(&j.Tasks[k])...)
+		}
+	}
+
+	return diags
+}
+
+// checkReferences evaluates every attribute of a task's config and env blocks
+// against its Vars. Both are left undecoded for the driver, so without this a
+// misspelled ${meta.key} in either would surface only when a provider read it.
+func checkReferences(task *job.Task) hcl.Diagnostics {
+	var diags hcl.Diagnostics
+
+	for _, block := range []*job.RawBlock{task.Config, task.Env} {
+		if block == nil || block.Body == nil {
+			continue
+		}
+
+		attrs, attrDiags := block.Body.JustAttributes()
+		if attrDiags.HasErrors() {
+			// Nested config blocks are reported by checkConfigBlocks.
+			continue
+		}
+
+		for _, attr := range attrs {
+			if _, valueDiags := attr.Expr.Value(task.Vars); valueDiags.HasErrors() {
+				diags = append(diags, valueDiags...)
+			}
+		}
+	}
+
+	return diags
 }
 
 // -------------------------------------------------------------------------

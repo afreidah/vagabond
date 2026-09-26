@@ -150,6 +150,10 @@ func unknownType(name string) error {
 // required, and the caller supplies the value per submission. A missing
 // required key is a submission error, caught before any provider is contacted
 // and any free-tier capacity is spent.
+//
+// MetaOptional names keys a submission may supply. A dispatch supplying a key
+// in neither list is refused, as Nomad refuses unpermitted metadata.
 type Parameterized struct {
 	MetaRequired []string `hcl:"meta_required,optional"`
+	MetaOptional []string `hcl:"meta_optional,optional"`
 }

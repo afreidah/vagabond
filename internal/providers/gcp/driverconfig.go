@@ -41,7 +41,7 @@ func containerString(task *job.Task, name string) (string, bool) {
 		return "", false
 	}
 
-	value, diags := attr.Expr.Value(nil)
+	value, diags := attr.Expr.Value(task.Vars)
 	if diags.HasErrors() || value.IsNull() || !value.IsKnown() {
 		return "", false
 	}
@@ -65,7 +65,7 @@ func containerArgs(task *job.Task) ([]string, bool) {
 		return nil, false
 	}
 
-	value, diags := attr.Expr.Value(nil)
+	value, diags := attr.Expr.Value(task.Vars)
 	if diags.HasErrors() || value.IsNull() || !value.IsKnown() {
 		return nil, false
 	}

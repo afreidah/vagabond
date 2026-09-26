@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
@@ -46,7 +47,7 @@ func (c *JobPlanCommand) Synopsis() string {
 // Help returns the full usage text.
 func (c *JobPlanCommand) Help() string {
 	text := `
-Usage: vagabond job plan [options] <path>
+Usage: vagabond job plan [options] <path or name>
 
   Admits a job against the configured providers and shows the result: which
   could run it, how each scored, and for every one that could not, the reason.
@@ -54,7 +55,10 @@ Usage: vagabond job plan [options] <path>
   Nothing is dispatched and nothing is reserved. Planning the same job twice
   changes nothing and costs nothing.
 
-  Reads from standard input when the path is "-".
+  An argument that exists as a file is read as one, and "-" reads standard
+  input. Anything else names a registered job, whose current version is
+  planned with its metadata checked as dispatch checks it; that needs a store
+  block.
 
   No provider is contacted. Admission reads capability snapshots gathered
   earlier, so a plan is only as current as its data and can be wrong by the
@@ -119,15 +123,19 @@ func (c *JobPlanCommand) Run(args []string) int {
 
 	paths := flags.Args()
 	if len(paths) != 1 {
-		return c.Errorf("This command takes one argument: <path>\n\n%s", c.Help())
+		return c.Errorf("This command takes one argument: <path or name>\n\n%s", c.Help())
+	}
+
+	ctx := context.Background()
+
+	if !isFile(paths[0]) {
+		return c.planRegistered(ctx, paths[0], meta, configPath, namespace, verbose)
 	}
 
 	spec, code := c.loadJob(paths[0], meta)
 	if spec == nil {
 		return code
 	}
-
-	ctx := context.Background()
 
 	reg, store, code := c.loadRegistry(ctx, configPath)
 	if reg == nil {
@@ -142,6 +150,44 @@ func (c *JobPlanCommand) Run(args []string) int {
 	defer finish()
 
 	return c.plan(spec, meta, namespace, reg, s.ledger, verbose)
+}
+
+// planRegistered plans a registered job's current version, with its metadata
+// checked as a dispatch would check it.
+func (c *JobPlanCommand) planRegistered(
+	ctx context.Context, name string, meta metaFlags, configPath, namespace string, verbose bool,
+) int {
+	reg, s, finish, code := c.loadJobStores(ctx, configPath, "job plan of a registered job")
+	if reg == nil {
+		return code
+	}
+
+	defer finish()
+
+	ns, err := namespaceOf(namespace, reg)
+	if err != nil {
+		return c.Errorf("%s", err)
+	}
+
+	spec, _, code := c.loadRegistered(ctx, s, ns, name, meta)
+	if spec == nil {
+		return code
+	}
+
+	return c.plan(spec, meta, ns, reg, s.ledger, verbose)
+}
+
+// isFile reports whether arg names a job file rather than a registered job:
+// standard input, anything shaped like a path, or a path that exists. A
+// mistyped file name is then reported as a missing file, not a missing job.
+func isFile(arg string) bool {
+	if arg == stdinPath || strings.ContainsRune(arg, os.PathSeparator) || filepath.Ext(arg) == ".hcl" {
+		return true
+	}
+
+	_, err := os.Stat(arg)
+
+	return err == nil
 }
 
 // -------------------------------------------------------------------------

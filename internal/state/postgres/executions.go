@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -88,6 +89,32 @@ func (s *Store) Get(ctx context.Context, id execution.ID) (*execution.Record, er
 	return recordOf(&row)
 }
 
+// JobExecutions returns a job's most recent executions, newest first, at most
+// limit of them.
+func (s *Store) JobExecutions(ctx context.Context, namespace, job string, limit int) ([]*execution.Record, error) {
+	rows, err := s.queries.ListJobExecutions(ctx, db.ListJobExecutionsParams{
+		Namespace: namespace,
+		Job:       job,
+		MaxRows:   int32(min(limit, math.MaxInt32)), //nolint:gosec // bounded above
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list executions of %s: %w", job, err)
+	}
+
+	records := make([]*execution.Record, 0, len(rows))
+
+	for i := range rows {
+		r, err := recordOf(&rows[i])
+		if err != nil {
+			return nil, err
+		}
+
+		records = append(records, r)
+	}
+
+	return records, nil
+}
+
 // -------------------------------------------------------------------------
 // MAPPING
 // -------------------------------------------------------------------------
@@ -115,6 +142,10 @@ func rowOf(r *execution.Record) db.Execution {
 
 	if !r.Previous.IsZero() {
 		row.PreviousID = r.Previous.String()
+	}
+
+	if !r.Dispatch.IsZero() {
+		row.DispatchID = r.Dispatch.String()
 	}
 
 	result := r.Result.Bounded()
@@ -168,6 +199,12 @@ func recordOf(row *db.Execution) (*execution.Record, error) {
 	if row.PreviousID != "" {
 		if r.Previous, err = execution.ParseID(row.PreviousID); err != nil {
 			return nil, fmt.Errorf("execution row previous: %w", err)
+		}
+	}
+
+	if row.DispatchID != "" {
+		if r.Dispatch, err = execution.ParseID(row.DispatchID); err != nil {
+			return nil, fmt.Errorf("execution row dispatch: %w", err)
 		}
 	}
 

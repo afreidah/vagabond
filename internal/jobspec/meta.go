@@ -20,6 +20,7 @@ package jobspec
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
@@ -91,7 +92,7 @@ var parameterizedSchema = &hcl.BodySchema{
 }
 
 var metaRequiredSchema = &hcl.BodySchema{
-	Attributes: []hcl.AttributeSchema{{Name: "meta_required"}},
+	Attributes: []hcl.AttributeSchema{{Name: "meta_required"}, {Name: "meta_optional"}},
 }
 
 // Requirement is one job's declared metadata, and where it declared it.
@@ -187,7 +188,7 @@ func stringList(attr *hcl.Attribute, diags *hcl.Diagnostics) []string {
 			*diags = append(*diags, &hcl.Diagnostic{
 				Severity: hcl.DiagError,
 				Summary:  "Invalid metadata key",
-				Detail:   "Every entry in meta_required must be a string.",
+				Detail:   fmt.Sprintf("Every entry in %s must be a string.", attr.Name),
 				Subject:  attr.Expr.Range().Ptr(),
 			})
 
@@ -198,6 +199,118 @@ func stringList(attr *hcl.Attribute, diags *hcl.Diagnostics) []string {
 	}
 
 	return keys
+}
+
+// -------------------------------------------------------------------------
+// DECLARED METADATA
+// -------------------------------------------------------------------------
+
+// Declaration is what a job's parameterized block says a submission may
+// supply. Parameterized is false for a job with no such block, which takes no
+// metadata at dispatch at all.
+type Declaration struct {
+	Job           string
+	Parameterized bool
+	Required      []string
+	Optional      []string
+}
+
+// Declared reads the first job's declaration from source, before anything is
+// evaluated.
+func Declared(filename string, source []byte) (Declaration, hcl.Diagnostics) {
+	file, diags := parseSource(Config{Filename: filename, Source: source})
+	if file == nil {
+		return Declaration{}, diags
+	}
+
+	content, _, contentDiags := file.Body.PartialContent(requiredMetaSchema)
+	diags = append(diags, contentDiags...)
+
+	if content == nil || len(content.Blocks) == 0 {
+		return Declaration{}, diags
+	}
+
+	block := content.Blocks[0]
+	d := Declaration{}
+
+	if len(block.Labels) > 0 {
+		d.Job = block.Labels[0]
+	}
+
+	params, _, paramDiags := block.Body.PartialContent(parameterizedSchema)
+	diags = append(diags, paramDiags...)
+
+	if params == nil || len(params.Blocks) == 0 {
+		return d, diags
+	}
+
+	d.Parameterized = true
+
+	attrs, _, attrDiags := params.Blocks[0].Body.PartialContent(metaRequiredSchema)
+	diags = append(diags, attrDiags...)
+
+	if attrs == nil {
+		return d, diags
+	}
+
+	if attr, ok := attrs.Attributes["meta_required"]; ok {
+		d.Required = stringList(attr, &diags)
+	}
+
+	if attr, ok := attrs.Attributes["meta_optional"]; ok {
+		d.Optional = stringList(attr, &diags)
+	}
+
+	return d, diags
+}
+
+// References binds every declared key to its own reference, so a job can be
+// parsed and validated at register with ${meta.version} standing as the text
+// "${meta.version}". Nomad leaves runtime references intact the same way. A
+// reference to an undeclared key still fails, which catches a typo at register.
+func (d Declaration) References() map[string]string {
+	refs := make(map[string]string, len(d.Required)+len(d.Optional))
+
+	for _, key := range append(append([]string(nil), d.Required...), d.Optional...) {
+		refs[key] = "${" + MetaNamespace + "." + key + "}"
+	}
+
+	return refs
+}
+
+// CheckDispatch refuses metadata a dispatch may not supply, as Nomad does: any
+// at all for a job that is not parameterized, keys declared in neither list,
+// and required keys left out.
+func (d Declaration) CheckDispatch(supplied map[string]string) error {
+	if !d.Parameterized {
+		if len(supplied) > 0 {
+			return fmt.Errorf("job %q is not parameterized, so dispatch takes no metadata", d.Job)
+		}
+
+		return nil
+	}
+
+	var unpermitted []string
+
+	for key := range supplied {
+		if !slices.Contains(d.Required, key) && !slices.Contains(d.Optional, key) {
+			unpermitted = append(unpermitted, key)
+		}
+	}
+
+	if len(unpermitted) > 0 {
+		slices.Sort(unpermitted)
+
+		return fmt.Errorf("job %q does not declare metadata %s; declare it in meta_required or meta_optional",
+			d.Job, strings.Join(unpermitted, ", "))
+	}
+
+	if missing := missingKeys(d.Required, supplied); len(missing) > 0 {
+		return fmt.Errorf("job %q requires metadata that was not supplied: %s",
+			d.Job, strings.Join(missing, ", "))
+	}
+
+	return nil
 }
 
 // -------------------------------------------------------------------------

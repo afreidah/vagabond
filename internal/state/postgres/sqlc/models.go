@@ -31,6 +31,24 @@ type Execution struct {
 	BilledMs      *int64
 	Logs          []byte
 	LogsTruncated bool
+	DispatchID    string
+}
+
+type Job struct {
+	Namespace string
+	Name      string
+	Version   int64
+	Stopped   bool
+	UpdatedAt time.Time
+}
+
+type JobVersion struct {
+	Namespace   string
+	Name        string
+	Version     int64
+	Source      string
+	Fingerprint string
+	CreatedAt   time.Time
 }
 
 type QuotaReservation struct {

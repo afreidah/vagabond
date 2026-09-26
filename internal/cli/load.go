@@ -123,11 +123,13 @@ func (m *Meta) loadRegistry(
 	return reg, cfg.Store, ExitSuccess
 }
 
-// stores is what a command reads and writes: the quota ledger and the record
-// of every execution.
+// stores is what a command reads and writes: the quota ledger, the record of
+// every execution, and registered jobs. jobs is nil without a store block,
+// since a registered job must outlive the process.
 type stores struct {
 	ledger     dispatch.Ledger
 	executions dispatch.Executions
+	jobs       jobStore
 }
 
 // loadStores builds the ledger a command prices and charges against, the store
@@ -206,5 +208,5 @@ func openStores(
 		return nil, nil, err
 	}
 
-	return &stores{ledger: led, executions: db}, db.Close, nil
+	return &stores{ledger: led, executions: db, jobs: db}, db.Close, nil
 }

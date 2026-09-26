@@ -3,32 +3,25 @@
 //
 // Author: Alex Freidah
 //
-// Dispatches a job and waits for it. The selection is the same one job plan
-// prints, because both call the same admission and ranking.
-//
-// Output is split across streams: the task's own output goes to stdout and
-// everything Vagabond has to say goes to stderr, so that redirecting stdout
-// captures the build and leaves the progress on the terminal.
+// Dispatches a job from a file and waits for it. The selection is the same one
+// job plan prints, because both call the same admission and ranking. Nothing is
+// registered; job register and job dispatch are the path for a job that runs
+// again by name.
 // -------------------------------------------------------------------------------
 
 package cli
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
-	"github.com/hashicorp/hcl/v2"
-
 	"github.com/afreidah/vagabond/internal/dispatch"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobspec"
 	"github.com/afreidah/vagabond/internal/registry"
-	"github.com/afreidah/vagabond/internal/scheduler"
 )
 
 // JobRunCommand implements `vagabond job run`.
@@ -47,7 +40,7 @@ func (c *JobRunCommand) Help() string {
 Usage: vagabond job run [options] <path>
 
   Admits a job against the configured providers, dispatches it to the best one,
-  and waits for it to finish.
+  and waits for it to finish. The job is not registered.
 
   Tasks run in the order they are declared, and the job stops at the first one
   that fails. A provider that fails to give an answer is abandoned and the next
@@ -79,7 +72,7 @@ Run Options:
 
   -meta <key>=<value>
     Supply job metadata, repeatable. Values are substituted into the job before
-    it is dispatched.
+    it is dispatched, and each task receives VAGABOND_META_<KEY>.
 
   -namespace <name>
     The namespace to run in, for a job that names none. Defaults to
@@ -153,10 +146,6 @@ func (c *JobRunCommand) Run(args []string) int {
 	return c.run(ctx, spec, meta, namespace, reg, s, noLogs)
 }
 
-// -------------------------------------------------------------------------
-// DISPATCH
-// -------------------------------------------------------------------------
-
 // run dispatches every job in the specification.
 func (c *JobRunCommand) run(
 	ctx context.Context, spec *job.File, meta metaFlags, namespaceFlag string,
@@ -171,146 +160,18 @@ func (c *JobRunCommand) run(
 		return c.Errorf("%s", err)
 	}
 
-	opts := []dispatch.Option{dispatch.WithProgress(c.progress)}
-	if !noLogs {
-		opts = append(opts, dispatch.WithLogs(os.Stdout))
-	}
-
-	d := dispatch.New(reg, s.ledger, s.executions, opts...)
+	d := c.newDispatcher(ctx, reg, s, noLogs)
 	eval := jobspec.EvalContext(meta)
-
-	// Reservations a killed run left behind hold quota this run may need.
-	// Failing to resolve them costs headroom, not correctness, so it warns.
-	if reaped, err := d.Reap(ctx); err != nil {
-		c.Ui.Warn(fmt.Sprintf("Could not resolve abandoned quota reservations: %s", err))
-	} else if reaped > 0 {
-		c.Ui.Info(fmt.Sprintf("Resolved %d abandoned quota reservation(s).", reaped))
-	}
 
 	worst := ExitSuccess
 
 	for i := range spec.Jobs {
-		if code := c.runJob(ctx, d, namespaces[i], &spec.Jobs[i], eval, noLogs); code > worst {
+		origin := dispatch.Origin{Namespace: namespaces[i]}
+
+		if code := c.runJob(ctx, d, origin, &spec.Jobs[i], eval, noLogs); code > worst {
 			worst = code
 		}
 	}
 
 	return worst
-}
-
-// runJob dispatches one job and reports what happened.
-func (c *JobRunCommand) runJob(
-	ctx context.Context, d *dispatch.Dispatcher, namespace string, j *job.Job,
-	eval *hcl.EvalContext, noLogs bool,
-) int {
-	outcome, err := d.Run(ctx, namespace, j, eval)
-
-	for i := range outcome.Tasks {
-		c.reportTask(&outcome.Tasks[i], noLogs)
-	}
-
-	if err != nil {
-		return c.reportFailure(j, err)
-	}
-
-	if !outcome.Succeeded() {
-		return ExitFailure
-	}
-
-	return ExitSuccess
-}
-
-// reportFailure renders a job that never produced a result.
-func (c *JobRunCommand) reportFailure(j *job.Job, err error) int {
-	switch {
-	case errors.Is(err, context.Canceled):
-		c.Ui.Error(fmt.Sprintf("Job %q was interrupted. The execution was stopped.", j.Name))
-
-		return ExitNoCapacity
-
-	case errors.Is(err, dispatch.ErrNoCandidates),
-		errors.Is(err, dispatch.ErrExhausted):
-		c.Ui.Error(fmt.Sprintf("Job %q did not run: %s", j.Name, err))
-
-		return ExitNoCapacity
-
-	default:
-		return c.Errorf("Job %q failed: %s", j.Name, err)
-	}
-}
-
-// reportTask renders one task's result.
-func (c *JobRunCommand) reportTask(outcome *dispatch.TaskOutcome, noLogs bool) {
-	if outcome.Result == nil {
-		c.renderRejections(outcome)
-
-		return
-	}
-
-	// Only when nothing streamed it already, or a build prints twice.
-	if !noLogs && !outcome.Streamed && len(outcome.Result.Logs) > 0 {
-		c.Ui.Output(strings.TrimRight(string(outcome.Result.Logs), "\n"))
-
-		if outcome.Result.LogsTruncated {
-			c.Ui.Warn("Output was truncated.")
-		}
-	}
-
-	c.Ui.Error(fmt.Sprintf("==> %s %s on %s in %s",
-		outcome.Task, verdict(outcome), outcome.Provider, outcome.Result.Duration))
-
-	if outcome.Rerouted() {
-		c.Ui.Error(fmt.Sprintf("    rerouted after %d attempts", outcome.Tried()))
-	}
-
-	c.renderRefusals(outcome)
-}
-
-// renderRejections explains a task that had nowhere to go.
-func (c *JobRunCommand) renderRejections(outcome *dispatch.TaskOutcome) {
-	for i := range outcome.Rejections {
-		r := &outcome.Rejections[i]
-
-		c.Ui.Error(fmt.Sprintf("    %s: %s %s", r.Provider, r.Reason, r.Detail))
-	}
-
-	c.renderRefusals(outcome)
-}
-
-// renderRefusals explains providers the ledger turned away at dispatch.
-//
-// Worded as the admission rejection they are: the quota admission saw was
-// spent by the time dispatch got there.
-func (c *JobRunCommand) renderRefusals(outcome *dispatch.TaskOutcome) {
-	for i := range outcome.Attempts {
-		a := &outcome.Attempts[i]
-
-		if a.Refused {
-			c.Ui.Error(fmt.Sprintf("    %s: %s %s", a.Provider, scheduler.ReasonQuotaExhausted, a.Err))
-		}
-	}
-}
-
-// verdict renders whether the task itself passed.
-func verdict(outcome *dispatch.TaskOutcome) string {
-	if outcome.Succeeded() {
-		return "succeeded"
-	}
-
-	if code := outcome.Result.ExitCode; code != nil {
-		return fmt.Sprintf("failed (exit %d)", *code)
-	}
-
-	return "failed"
-}
-
-// progress reports a state change to stderr as it happens.
-func (c *JobRunCommand) progress(e dispatch.Event) {
-	line := fmt.Sprintf("==> %s %s on %s", e.Task, e.State, e.Provider)
-
-	if e.Attempt > 1 {
-		line += fmt.Sprintf(" (attempt %d)", e.Attempt)
-	}
-
-	c.Ui.Error(line)
 }

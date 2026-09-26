@@ -33,5 +33,17 @@ func Commands(meta *Meta) map[string]cli.CommandFactory {
 		"job run": func() (cli.Command, error) {
 			return &JobRunCommand{Meta: meta}, nil
 		},
+		"job register": func() (cli.Command, error) {
+			return &JobRegisterCommand{Meta: meta}, nil
+		},
+		"job dispatch": func() (cli.Command, error) {
+			return &JobDispatchCommand{Meta: meta}, nil
+		},
+		"job status": func() (cli.Command, error) {
+			return &JobStatusCommand{Meta: meta}, nil
+		},
+		"job stop": func() (cli.Command, error) {
+			return &JobStopCommand{Meta: meta}, nil
+		},
 	}
 }

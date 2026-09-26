@@ -6,14 +6,17 @@
 -- -----------------------------------------------------------------------------
 
 -- name: CreateExecution :exec
+-- Columns in table order, so the parameters convert from the row type.
 INSERT INTO executions (
     id, namespace, job, job_version, task, provider, attempt, previous_id,
     state, provider_id, failure, created_at, started_at, ended_at, updated_at,
-    exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated
+    exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated,
+    dispatch_id
 ) VALUES (
     @id, @namespace, @job, @job_version, @task, @provider, @attempt, @previous_id,
     @state, @provider_id, @failure, @created_at, @started_at, @ended_at, @updated_at,
-    @exit_code, @duration_ms, @billed_cpu, @billed_memory, @billed_ms, @logs, @logs_truncated
+    @exit_code, @duration_ms, @billed_cpu, @billed_memory, @billed_ms, @logs, @logs_truncated,
+    @dispatch_id
 );
 
 -- name: UpdateExecution :execrows
@@ -37,3 +40,10 @@ WHERE id = @id AND state = @from_state::text;
 
 -- name: GetExecution :one
 SELECT * FROM executions WHERE id = @id;
+
+-- name: ListJobExecutions :many
+-- A job's most recent executions, newest first.
+SELECT * FROM executions
+WHERE namespace = @namespace AND job = @job
+ORDER BY created_at DESC
+LIMIT @max_rows;

@@ -135,6 +135,28 @@ Exit codes:
 Expect roughly two minutes for a trivial Cloud Run job. Provisioning dominates;
 see [Cloud Run](providers/cloud-run.md#cost-characteristics).
 
+## Registering a job
+
+`job run` registers nothing. To keep a job and run it again by name, register
+it; this needs a [`store` block](configuration.md#store-block).
+
+| Command | Does |
+|---|---|
+| `job register <file>` | Stores a new version if the job changed. Runs nothing. |
+| `job dispatch <name> [-meta k=v]` | Runs the current version, reporting as `job run` |
+| `job status [name]` | Lists jobs, or one job's versions and recent executions |
+| `job stop <name>` | Deregisters; versions are kept, and registering again revives it |
+| `job plan <name>` | Plans the current version |
+
+```bash
+./vagabond job register -config vagabond.hcl examples/go-test.vagabond.hcl
+./vagabond job dispatch -config vagabond.hcl -meta version=1.2.3 go-test
+```
+
+A new version is made only when the job changed; formatting alone is not a
+change. Every execution records the version it ran and a dispatch ID shared by
+the run's tasks.
+
 ## Next
 
 - [Job specification](job-specification.md) — what goes in a job file

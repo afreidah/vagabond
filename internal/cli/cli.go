@@ -82,17 +82,18 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return normalizeExit(code)
 }
 
-// normalizeExit collapses the library's own codes into the two this CLI
-// documents.
+// normalizeExit passes the codes this CLI documents and collapses anything else
+// to failure.
 //
 // hashicorp/cli returns 127 when no command matched, which conventionally means
 // "command not found" at a shell and would be read as the binary being missing
 // rather than the argument being wrong. A caller branching on our exit code
-// should only ever see success or failure.
+// should only ever see the three documented ones.
 func normalizeExit(code int) int {
-	if code == ExitSuccess {
-		return ExitSuccess
+	switch code {
+	case ExitSuccess, ExitFailure, ExitNoCapacity:
+		return code
+	default:
+		return ExitFailure
 	}
-
-	return ExitFailure
 }
