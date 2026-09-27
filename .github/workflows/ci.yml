@@ -4,8 +4,8 @@
 # Author: Alex Freidah
 #
 # Runs on push to main and on pull requests. Formatting, vet, lint, and tests
-# are the same gates `make check` runs locally, so a change that passes locally
-# passes here. The golangci-lint version is pinned to match the Makefile; a
+# are the same gates `make check` runs locally, plus the integration suite, so
+# a change that passes locally passes here. The golangci-lint version is pinned to match the Makefile; a
 # mismatch would mean local lint and CI lint disagree.
 # -------------------------------------------------------------------------------
 
@@ -73,6 +73,25 @@ jobs:
 
       - name: Test
         run: make test
+
+  # ---------------------------------------------------------------------------
+  # INTEGRATION TESTS
+  #
+  # The store suite against Postgres and CockroachDB, and the server end to end.
+  # testcontainers drives the runner's Docker, so nothing is started by hand.
+  # ---------------------------------------------------------------------------
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Integration test
+        run: make integration-test
 
   # ---------------------------------------------------------------------------
   # VULNERABILITY SCANNING

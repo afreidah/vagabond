@@ -53,7 +53,7 @@ func mustRegister(ctx context.Context, t *testing.T, s *postgres.Store, source s
 // change.
 func TestJobs_RegisterVersionsOnlyOnChange(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -98,7 +98,7 @@ func TestJobs_RegisterVersionsOnlyOnChange(t *testing.T) {
 // revives it as a new version.
 func TestJobs_StopThenRevive(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -127,7 +127,7 @@ func TestJobs_StopThenRevive(t *testing.T) {
 // Namespaces keep same-named jobs apart, and missing jobs are reported as such.
 func TestJobs_NamespacesAndMissing(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -156,7 +156,7 @@ func TestJobs_NamespacesAndMissing(t *testing.T) {
 // A job's executions come back newest first, carrying their dispatch.
 func TestJobs_ExecutionsCarryTheirDispatch(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 

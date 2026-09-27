@@ -57,7 +57,7 @@ func advance(t *testing.T, r *execution.Record, next execution.State) {
 // from a fresh read.
 func TestExecutions_RoundTrip(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -108,7 +108,7 @@ func TestExecutions_RoundTrip(t *testing.T) {
 // An update written against a state the record has left changes nothing.
 func TestExecutions_UpdateIsConditional(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -145,7 +145,7 @@ func TestExecutions_UpdateIsConditional(t *testing.T) {
 // The ID is the idempotency key, so recording it twice fails.
 func TestExecutions_CreateTwiceFails(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -165,7 +165,7 @@ func TestExecutions_CreateTwiceFails(t *testing.T) {
 // A run's record round-trips, finishes once, and keeps why it got no answer.
 func TestDispatches_FinishOnce(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -205,7 +205,7 @@ func TestDispatches_FinishOnce(t *testing.T) {
 // can renew or finish the dispatch.
 func TestDispatches_LeaseClaim(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 			now := time.Now().UTC().Truncate(time.Microsecond)
@@ -274,7 +274,7 @@ func TestDispatches_LeaseClaim(t *testing.T) {
 // TestExecutions_GetUnknown reads an ID nothing recorded.
 func TestExecutions_GetUnknown(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
