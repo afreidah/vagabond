@@ -23,7 +23,6 @@ import (
 
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
-	"github.com/afreidah/vagabond/internal/ptr"
 )
 
 // observed is a fixed point in time, so that a snapshot counts as observed
@@ -93,7 +92,7 @@ func (tc reasonCase) apply() (*Request, Input) {
 func TestAdmitBaseline(t *testing.T) {
 	t.Parallel()
 
-	result := admitOnly(t, baseRequest(), ptr.Of(baseInput()))
+	result := admitOnly(t, baseRequest(), new(baseInput()))
 
 	if !result.Admitted() {
 		t.Fatalf("baseline was rejected: %+v", result.Rejections)
@@ -142,7 +141,7 @@ var reasonCases = map[string]reasonCase{
 	"architecture not offered": {
 		request: func(r *Request) {
 			r.Task.Execution = &job.ExecutionRequirements{
-				Architecture: ptr.Of(job.ArchARM64),
+				Architecture: new(job.ArchARM64),
 			}
 		},
 		want: ReasonArchUnsupported,
@@ -154,21 +153,21 @@ var reasonCases = map[string]reasonCase{
 	},
 	"private networking unavailable": {
 		request: func(r *Request) {
-			r.Task.Network = &job.Network{Private: ptr.Of(true)}
+			r.Task.Network = &job.Network{Private: new(true)}
 		},
 		input: func(in *Input) { in.Capabilities.PrivateNetwork = false },
 		want:  ReasonNetworkUnsupported,
 	},
 	"egress unavailable": {
 		request: func(r *Request) {
-			r.Task.Network = &job.Network{Internet: ptr.Of(true)}
+			r.Task.Network = &job.Network{Internet: new(true)}
 		},
 		input: func(in *Input) { in.Capabilities.InternetEgress = false },
 		want:  ReasonNetworkUnsupported,
 	},
 	"more memory than the provider allows": {
 		request: func(r *Request) {
-			r.Task.Resources = &job.Resources{Memory: ptr.Of(4096)}
+			r.Task.Resources = &job.Resources{Memory: new(4096)}
 		},
 		input: func(in *Input) {
 			in.Capabilities.MaxResources = plugin.Resources{Memory: 512}
@@ -177,7 +176,7 @@ var reasonCases = map[string]reasonCase{
 	},
 	"more cpu than the provider allows": {
 		request: func(r *Request) {
-			r.Task.Resources = &job.Resources{CPU: ptr.Of(4000)}
+			r.Task.Resources = &job.Resources{CPU: new(4000)}
 		},
 		input: func(in *Input) {
 			in.Capabilities.MaxResources = plugin.Resources{CPU: 1800}
@@ -186,7 +185,7 @@ var reasonCases = map[string]reasonCase{
 	},
 	"longer than the provider allows": {
 		request: func(r *Request) {
-			r.Task.Timeout = ptr.Of(job.Duration("20m"))
+			r.Task.Timeout = new(job.Duration("20m"))
 		},
 		input: func(in *Input) {
 			in.Capabilities.MaxDuration = 15 * time.Minute
@@ -294,7 +293,7 @@ func TestAdmitCollectsEveryReason(t *testing.T) {
 	t.Parallel()
 
 	req := baseRequest()
-	req.Task.Timeout = ptr.Of(job.Duration("20m"))
+	req.Task.Timeout = new(job.Duration("20m"))
 	req.Image = "golang:1.27"
 
 	in := baseInput()
@@ -355,10 +354,10 @@ func TestAdmitContainerTaskAcrossFixtures(t *testing.T) {
 		Task: &job.Task{
 			Name:      "test",
 			Driver:    job.DriverContainer,
-			Timeout:   ptr.Of(job.Duration("20m")),
-			Resources: &job.Resources{CPU: ptr.Of(2000), Memory: ptr.Of(2048)},
-			Execution: &job.ExecutionRequirements{Architecture: ptr.Of(job.ArchAMD64)},
-			Network:   &job.Network{Internet: ptr.Of(true)},
+			Timeout:   new(job.Duration("20m")),
+			Resources: &job.Resources{CPU: new(2000), Memory: new(2048)},
+			Execution: &job.ExecutionRequirements{Architecture: new(job.ArchAMD64)},
+			Network:   &job.Network{Internet: new(true)},
 		},
 		Image: "golang:1.27",
 	}

@@ -24,10 +24,12 @@ func pending(t *testing.T) *execution.Record {
 	}
 
 	return &execution.Record{
-		Status:  execution.Status{ID: id, State: execution.StatePending, UpdatedAt: time.Now()},
-		Job:     "ci",
-		Task:    "test",
-		Attempt: 1,
+		ID:        id,
+		State:     execution.StatePending,
+		UpdatedAt: time.Now(),
+		Job:       "ci",
+		Task:      "test",
+		Attempt:   1,
 	}
 }
 
@@ -122,7 +124,11 @@ func TestExecutions_DispatchLeases(t *testing.T) {
 		t.Errorf("RenewDispatch() by another owner = %v, want ErrStale", err)
 	}
 
-	claimed, err := s.ClaimDispatches(t.Context(), "server", now, now.Add(time.Minute))
+	if skipped, _ := s.ClaimDispatches(t.Context(), "server", now, now.Add(time.Minute), []execution.ID{lapsed.ID}); len(skipped) != 0 {
+		t.Errorf("ClaimDispatches() took %d dispatches it was told to skip", len(skipped))
+	}
+
+	claimed, err := s.ClaimDispatches(t.Context(), "server", now, now.Add(time.Minute), nil)
 	if err != nil || len(claimed) != 1 || claimed[0].ID != lapsed.ID || claimed[0].Owner != "server" {
 		t.Fatalf("ClaimDispatches() = %+v, %v; want only the lapsed one, now the server's", claimed, err)
 	}

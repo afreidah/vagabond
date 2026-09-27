@@ -52,7 +52,7 @@ func exampleJob(t *testing.T) Job {
 
 	return Job{
 		Name: "go-test",
-		Type: ptr.Of(TypeBatch),
+		Type: new(TypeBatch),
 		Meta: &RawBlock{Body: body(t, `
 			project = "example"
 			purpose = "ci"
@@ -61,9 +61,9 @@ func exampleJob(t *testing.T) Job {
 			MetaRequired: []string{"version"},
 		},
 		Routing: &Routing{
-			Strategy:  ptr.Of(StrategyFreeFirst),
+			Strategy:  new(StrategyFreeFirst),
 			Providers: []string{"ibm-code-engine", "gcp-cloud-run"},
-			MaxCost:   ptr.Of(Cost(0)),
+			MaxCost:   new(Cost(0)),
 			Constraints: []Constraint{{
 				Attribute: "provider.architecture",
 				Operator:  OperatorSetContains,
@@ -73,7 +73,7 @@ func exampleJob(t *testing.T) Job {
 				Attribute: "provider.free_quota_percent",
 				Operator:  OperatorGreater,
 				Value:     "50",
-				Weight:    ptr.Of(75),
+				Weight:    new(75),
 			}},
 		},
 		Tasks: []Task{{
@@ -91,23 +91,23 @@ func exampleJob(t *testing.T) Job {
 			Source: &Source{
 				Type:        "git",
 				Repository:  "https://git.example.com/example/service.git",
-				Ref:         ptr.Of("${meta.version}"),
-				Destination: ptr.Of("/workspace"),
+				Ref:         new("${meta.version}"),
+				Destination: new("/workspace"),
 			},
-			WorkingDirectory: ptr.Of("/workspace"),
-			Resources:        &Resources{CPU: ptr.Of(1000), Memory: ptr.Of(2048)},
-			Timeout:          ptr.Of(FromDuration(15 * time.Minute)),
-			Network:          &Network{Internet: ptr.Of(true), Private: ptr.Of(false)},
+			WorkingDirectory: new("/workspace"),
+			Resources:        &Resources{CPU: new(1000), Memory: new(2048)},
+			Timeout:          new(FromDuration(15 * time.Minute)),
+			Network:          &Network{Internet: new(true), Private: new(false)},
 			Execution: &ExecutionRequirements{
-				Architecture: ptr.Of(ArchAMD64),
-				Privileged:   ptr.Of(false),
+				Architecture: new(ArchAMD64),
+				Privileged:   new(false),
 			},
 			Retry: &Retry{
-				Attempts: ptr.Of(2),
-				Reroute:  ptr.Of(true),
+				Attempts: new(2),
+				Reroute:  new(true),
 				Backoff: &Backoff{
-					Initial: ptr.Of(FromDuration(5 * time.Second)),
-					Max:     ptr.Of(FromDuration(30 * time.Second)),
+					Initial: new(FromDuration(5 * time.Second)),
+					Max:     new(FromDuration(30 * time.Second)),
 				},
 			},
 		}},
@@ -280,7 +280,7 @@ func TestRawBlock_NilYieldsNothing(t *testing.T) {
 // A file is a container, so that a second job in one file is a schema error the
 // parser can report rather than something silently discarded.
 func TestFile_HoldsMultipleJobs(t *testing.T) {
-	f := File{Jobs: []Job{exampleJob(t), {Name: "second", Type: ptr.Of(TypeBatch)}}}
+	f := File{Jobs: []Job{exampleJob(t), {Name: "second", Type: new(TypeBatch)}}}
 
 	if len(f.Jobs) != 2 {
 		t.Errorf("len(Jobs) = %d, want 2", len(f.Jobs))

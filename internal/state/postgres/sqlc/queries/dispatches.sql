@@ -24,10 +24,12 @@ UPDATE dispatches SET lease_until = @lease_until
 WHERE dispatch_id = @dispatch_id AND state = 'running' AND owner = @owner;
 
 -- name: ClaimDispatches :many
--- Takes over every running dispatch whose lease lapsed before now. One
--- statement, so two servers claiming at once never both get the same one.
+-- Takes over every running dispatch whose lease lapsed before now, except
+-- those the caller is running itself. One statement, so two servers claiming
+-- at once never both get the same one.
 UPDATE dispatches SET owner = @owner, lease_until = @lease_until
 WHERE state = 'running' AND lease_until < @now::timestamptz
+  AND NOT (dispatch_id = ANY(@skip::text[]))
 RETURNING *;
 
 -- name: GetDispatch :one

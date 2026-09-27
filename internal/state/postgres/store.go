@@ -16,8 +16,10 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"math/rand/v2"
+	"net"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -26,6 +28,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver, for goose
 	"github.com/pressly/goose/v3"
 
+	"github.com/afreidah/vagabond/internal/state"
 	db "github.com/afreidah/vagabond/internal/state/postgres/sqlc"
 )
 
@@ -36,10 +39,9 @@ var migrationFS embed.FS
 // migration added.
 const SchemaVersion = 6
 
-// ErrUnavailable reports a database that could not be reached. The circuit
-// breaker that will stand in front of the store returns the same sentinel, so
-// callers that check for it now keep working when it arrives.
-var ErrUnavailable = errors.New("store unavailable")
+// connectTimeout bounds opening a connection when the DSN sets none, so an
+// unreachable database fails a request quickly rather than holding it.
+const connectTimeout = 5 * time.Second
 
 // Store holds the connection pool and the generated queries.
 type Store struct {
@@ -57,7 +59,16 @@ type Store struct {
 // Verified here rather than on first use, so a bad DSN is an error at startup
 // instead of a dispatch that fails for reasons nothing in the job explains.
 func Open(ctx context.Context, dsn string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse dsn: %w", err)
+	}
+
+	if cfg.ConnConfig.ConnectTimeout == 0 {
+		cfg.ConnConfig.ConnectTimeout = connectTimeout
+	}
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
 	}
@@ -65,7 +76,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 
-		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", state.ErrUnavailable, err)
 	}
 
 	return &Store{pool: pool, queries: db.New(pool), dsn: dsn}, nil
@@ -74,6 +85,12 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 // Close releases the pool.
 func (s *Store) Close() {
 	s.pool.Close()
+}
+
+// Ping reports whether the database answers, as state.ErrUnavailable when it
+// does not.
+func (s *Store) Ping(ctx context.Context) error {
+	return unavailable(s.pool.Ping(ctx))
 }
 
 // Migrate applies the embedded migrations, skipping the ones already recorded.
@@ -138,11 +155,29 @@ func (s *Store) serializable(ctx context.Context, fn func(*db.Queries) error) er
 
 		err = s.transaction(ctx, fn)
 		if !isSerializationFailure(err) {
-			return err
+			return unavailable(err)
 		}
 	}
 
 	return fmt.Errorf("gave up after %d serialization failures: %w", serializationAttempts, err)
+}
+
+// unavailable marks err as state.ErrUnavailable when it is the database not
+// answering: a connection that could not be opened, one that broke or that the
+// driver already closed, or a timeout. Anything else is returned unchanged.
+func unavailable(err error) error {
+	_, connect := errors.AsType[*pgconn.ConnectError](err)
+	_, network := errors.AsType[net.Error](err)
+
+	switch {
+	case err == nil:
+		return nil
+	case connect, network, pgconn.Timeout(err), errors.Is(err, pgconn.ErrConnClosed),
+		errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return fmt.Errorf("%w: %w", state.ErrUnavailable, err)
+	default:
+		return err
+	}
 }
 
 // retryDelay is a random wait up to the attempt's exponential ceiling. Full

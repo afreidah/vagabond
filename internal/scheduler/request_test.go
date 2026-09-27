@@ -22,7 +22,6 @@ import (
 
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
-	"github.com/afreidah/vagabond/internal/ptr"
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
@@ -144,7 +143,7 @@ func TestMaxCostDefaultsToFree(t *testing.T) {
 		t.Error("a job with no routing will pay")
 	}
 
-	req.Routing = &job.Routing{MaxCost: ptr.Of(job.Cost(5))}
+	req.Routing = &job.Routing{MaxCost: new(job.Cost(5))}
 
 	if got := req.MaxCost(); got != 5 {
 		t.Errorf("MaxCost() = %d, want 5", got)
@@ -170,7 +169,7 @@ func TestPayingJobSurvivesAnExhaustedFreeTier(t *testing.T) {
 	}
 
 	paying := baseRequest()
-	paying.Routing = &job.Routing{MaxCost: ptr.Of(job.Cost(5))}
+	paying.Routing = &job.Routing{MaxCost: new(job.Cost(5))}
 
 	if !admitOnly(t, paying, &spent).Admitted() {
 		t.Error("a job that budgeted for paid capacity was refused a spent provider")
@@ -187,7 +186,7 @@ func TestPayingJobStillHasACeiling(t *testing.T) {
 	expensive.Capabilities.EstimatedCost = 9
 
 	req := baseRequest()
-	req.Routing = &job.Routing{MaxCost: ptr.Of(job.Cost(5))}
+	req.Routing = &job.Routing{MaxCost: new(job.Cost(5))}
 
 	result := admitOnly(t, req, &expensive)
 	if result.Admitted() {
@@ -246,7 +245,7 @@ func TestUnparseableTimeoutIsNotAProviderRejection(t *testing.T) {
 	t.Parallel()
 
 	req := baseRequest()
-	req.Task.Timeout = ptr.Of(job.Duration("a fortnight"))
+	req.Task.Timeout = new(job.Duration("a fortnight"))
 
 	in := baseInput()
 	in.Capabilities.MaxDuration = time.Minute

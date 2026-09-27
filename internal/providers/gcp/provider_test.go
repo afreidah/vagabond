@@ -189,8 +189,8 @@ func containerTask(t *testing.T) *job.Task {
 		Driver:    job.DriverContainer,
 		Config:    rawBlock(t, "image = \"golang:1.27\"\ncommand = \"go\"\nargs = [\"test\", \"./...\"]\n"),
 		Env:       rawBlock(t, "CI = \"true\"\nCGO_ENABLED = \"0\"\n"),
-		Resources: &job.Resources{CPU: ptr.Of(1000), Memory: ptr.Of(2048)},
-		Timeout:   ptr.Of(job.Duration("15m")),
+		Resources: &job.Resources{CPU: new(1000), Memory: new(2048)},
+		Timeout:   new(job.Duration("15m")),
 	}
 }
 

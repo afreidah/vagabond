@@ -118,8 +118,8 @@ func TestJobPlan_IsRepeatable(t *testing.T) {
 func stripObserved(out string) string {
 	lines := strings.Split(out, "\n")
 	for i, line := range lines {
-		if idx := strings.Index(line, "observed "); idx >= 0 {
-			lines[i] = line[:idx]
+		if before, _, ok := strings.Cut(line, "observed "); ok {
+			lines[i] = before
 		}
 	}
 

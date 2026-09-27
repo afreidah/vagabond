@@ -233,8 +233,7 @@ func TestReserve_RefusedByAChargeTheSnapshotMissed(t *testing.T) {
 
 	err := second.Reserve(t.Context(), newID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second})
 
-	var refusal *Refusal
-	if !errors.As(err, &refusal) {
+	if _, ok := errors.AsType[*Refusal](err); !ok {
 		t.Errorf("Reserve() = %v, want a refusal from the other ledger's charge", err)
 	}
 }

@@ -26,11 +26,11 @@ import (
 // CONSTANTS
 // -------------------------------------------------------------------------
 
-// Leases run for LeaseTTL and are renewed every leaseRenew, so two renewals
-// can fail before another server may take the dispatch over.
+// Leases run for LeaseTTL and are renewed every LeaseRenew by default, so two
+// renewals can fail before another server may take the dispatch over.
 const (
 	LeaseTTL   = 60 * time.Second
-	leaseRenew = 20 * time.Second
+	LeaseRenew = 20 * time.Second
 )
 
 // ErrLeaseLost reports a run stopped because another process took its
@@ -73,7 +73,7 @@ func (d *Dispatcher) hold(ctx context.Context, id execution.ID) *lease {
 	go func() {
 		defer close(l.done)
 
-		ticker := time.NewTicker(leaseRenew)
+		ticker := time.NewTicker(d.leaseRenew)
 		defer ticker.Stop()
 
 		for {
@@ -100,7 +100,7 @@ func (d *Dispatcher) renew(ctx context.Context, id execution.ID) error {
 	ctx, cancel := context.WithTimeout(ctx, recordTimeout)
 	defer cancel()
 
-	return d.executions.RenewDispatch(ctx, id, d.owner, d.now().Add(LeaseTTL))
+	return d.executions.RenewDispatch(ctx, id, d.owner, d.now().Add(d.leaseTTL))
 }
 
 // release stops renewing and waits for the renewal goroutine to exit. Safe on

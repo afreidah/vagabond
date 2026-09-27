@@ -181,6 +181,19 @@ func (s *Server) untrack(id execution.ID) {
 	delete(s.running, id)
 }
 
+// runningIDs returns every dispatch running in this process.
+func (s *Server) runningIDs() []execution.ID {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ids := make([]execution.ID, 0, len(s.running))
+	for id := range s.running {
+		ids = append(ids, id)
+	}
+
+	return ids
+}
+
 // stopDispatch cancels a dispatch running in this process, and reports whether
 // there was one to cancel.
 func (s *Server) stopDispatch(id execution.ID) bool {

@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -33,6 +34,7 @@ import (
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/registry"
+	"github.com/afreidah/vagabond/internal/state"
 	"github.com/afreidah/vagabond/internal/state/memory"
 )
 
@@ -443,6 +445,59 @@ func TestNamespace_Undeclared(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
+// STORE OUTAGE
+// -------------------------------------------------------------------------
+
+// downStore is a memory store that cannot be reached: every dispatch it is
+// asked to record, and every ping, fails as the Postgres store does.
+type downStore struct {
+	*memory.Executions
+}
+
+// CreateDispatch fails, as a write to an unreachable store does.
+func (downStore) CreateDispatch(context.Context, *execution.Dispatch) error {
+	return fmt.Errorf("create dispatch: %w", state.ErrUnavailable)
+}
+
+// Ping fails, as asking an unreachable store does.
+func (downStore) Ping(context.Context) error {
+	return state.ErrUnavailable
+}
+
+// A dispatch refused because the store is unreachable is a 503, health says
+// so, and a plan still answers from the snapshot.
+func TestStoreOutage_RefusesNewWork(t *testing.T) {
+	reg, led := fixtures(t)
+	srv := httptest.NewServer(New(reg, led, downStore{memory.NewExecutions()},
+		NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler)).Handler())
+	t.Cleanup(srv.Close)
+
+	h := &harness{url: srv.URL}
+
+	if status := h.call(t, http.MethodPost, "/v1/jobs/run", api.RunRequest{Source: sleepyJob}, nil); status != http.StatusServiceUnavailable {
+		t.Errorf("run status = %d, want 503", status)
+	}
+
+	var health api.Health
+	if status := h.call(t, http.MethodGet, "/v1/health", nil, &health); status != http.StatusServiceUnavailable || health.Store != "unreachable" {
+		t.Errorf("health = %d %+v, want 503 unreachable", status, health)
+	}
+
+	if status := h.call(t, http.MethodPost, "/v1/jobs/plan", api.PlanRequest{Source: sleepyJob}, nil); status != http.StatusOK {
+		t.Errorf("plan status = %d, want 200", status)
+	}
+}
+
+// A server whose store answers is healthy.
+func TestHealth_Ok(t *testing.T) {
+	var health api.Health
+
+	if status := newHarness(t).call(t, http.MethodGet, "/v1/health", nil, &health); status != http.StatusOK || health.Store != "ok" {
+		t.Errorf("health = %d %+v, want 200 ok", status, health)
+	}
+}
+
+// -------------------------------------------------------------------------
 // LIFECYCLE
 // -------------------------------------------------------------------------
 
@@ -477,7 +532,7 @@ func TestServeListener_ResumesAnAbandonedDispatch(t *testing.T) {
 	}
 
 	err := executions.Create(ctx, &execution.Record{
-		Status:    execution.Status{ID: id, State: execution.StateRunning, UpdatedAt: lapsed},
+		ID: id, State: execution.StateRunning, UpdatedAt: lapsed,
 		Namespace: "default", Job: "sleepy", Dispatch: d.ID, Task: "wait", Provider: "box", Attempt: 1,
 	})
 	if err != nil {

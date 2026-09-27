@@ -84,7 +84,7 @@ func (h *harness) abandon() execution.ID {
 	}
 
 	err = h.store.Create(ctx, &execution.Record{
-		Status:    execution.Status{ID: id, State: execution.StateRunning, UpdatedAt: lapsed},
+		ID: id, State: execution.StateRunning, UpdatedAt: lapsed,
 		Namespace: job.DefaultNamespace, Job: "sleepy", Dispatch: dispatchID, Task: "wait",
 		Provider: "box", Attempt: 1, CPU: 1000, Memory: 512,
 	})

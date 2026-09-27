@@ -15,7 +15,6 @@ import (
 
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobspec"
-	"github.com/afreidah/vagabond/internal/ptr"
 )
 
 // Rounding up, because giving a task less CPU than it asked for produces a
@@ -64,7 +63,7 @@ func TestResourceLimitsIgnoresZeroes(t *testing.T) {
 
 	limits := resourceLimits(&job.Task{
 		Name:      "test",
-		Resources: &job.Resources{CPU: ptr.Of(0), Memory: ptr.Of(0)},
+		Resources: &job.Resources{CPU: new(0), Memory: new(0)},
 	})
 
 	if limits["cpu"] != "1" || limits["memory"] != "2048Mi" {
@@ -92,7 +91,7 @@ func TestTaskTimeoutReadsTheTask(t *testing.T) {
 
 	got, err := taskTimeout(&job.Task{
 		Name:    "test",
-		Timeout: ptr.Of(job.Duration("90m")),
+		Timeout: new(job.Duration("90m")),
 	})
 	if err != nil {
 		t.Fatalf("taskTimeout failed: %v", err)

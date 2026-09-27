@@ -16,6 +16,7 @@ import (
 
 	execution "github.com/afreidah/vagabond/internal/execution"
 	jobs "github.com/afreidah/vagabond/internal/jobs"
+	ledger "github.com/afreidah/vagabond/internal/ledger"
 	plugin "github.com/afreidah/vagabond/internal/plugin"
 	quota "github.com/afreidah/vagabond/internal/quota"
 	scheduler "github.com/afreidah/vagabond/internal/scheduler"
@@ -103,6 +104,116 @@ func (mr *MockserverRegistryMockRecorder) Refresh(ctx any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Refresh", reflect.TypeOf((*MockserverRegistry)(nil).Refresh), ctx)
 }
 
+// MockserverLedger is a mock of serverLedger interface.
+type MockserverLedger struct {
+	ctrl     *gomock.Controller
+	recorder *MockserverLedgerMockRecorder
+	isgomock struct{}
+}
+
+// MockserverLedgerMockRecorder is the mock recorder for MockserverLedger.
+type MockserverLedgerMockRecorder struct {
+	mock *MockserverLedger
+}
+
+// NewMockserverLedger creates a new mock instance.
+func NewMockserverLedger(ctrl *gomock.Controller) *MockserverLedger {
+	mock := &MockserverLedger{ctrl: ctrl}
+	mock.recorder = &MockserverLedgerMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockserverLedger) EXPECT() *MockserverLedgerMockRecorder {
+	return m.recorder
+}
+
+// PoolUsage mocks base method.
+func (m *MockserverLedger) PoolUsage(namespace, provider string) (quota.PoolUsage, quota.PoolUsage) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PoolUsage", namespace, provider)
+	ret0, _ := ret[0].(quota.PoolUsage)
+	ret1, _ := ret[1].(quota.PoolUsage)
+	return ret0, ret1
+}
+
+// PoolUsage indicates an expected call of PoolUsage.
+func (mr *MockserverLedgerMockRecorder) PoolUsage(namespace, provider any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PoolUsage", reflect.TypeOf((*MockserverLedger)(nil).PoolUsage), namespace, provider)
+}
+
+// Reap mocks base method.
+func (m *MockserverLedger) Reap(ctx context.Context, resolve ledger.Resolver) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Reap", ctx, resolve)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Reap indicates an expected call of Reap.
+func (mr *MockserverLedgerMockRecorder) Reap(ctx, resolve any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reap", reflect.TypeOf((*MockserverLedger)(nil).Reap), ctx, resolve)
+}
+
+// Refresh mocks base method.
+func (m *MockserverLedger) Refresh(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Refresh", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Refresh indicates an expected call of Refresh.
+func (mr *MockserverLedgerMockRecorder) Refresh(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Refresh", reflect.TypeOf((*MockserverLedger)(nil).Refresh), ctx)
+}
+
+// Refreshed mocks base method.
+func (m *MockserverLedger) Refreshed() time.Time {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Refreshed")
+	ret0, _ := ret[0].(time.Time)
+	return ret0
+}
+
+// Refreshed indicates an expected call of Refreshed.
+func (mr *MockserverLedgerMockRecorder) Refreshed() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Refreshed", reflect.TypeOf((*MockserverLedger)(nil).Refreshed))
+}
+
+// Reserve mocks base method.
+func (m *MockserverLedger) Reserve(ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Reserve", ctx, id, namespace, provider, e)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Reserve indicates an expected call of Reserve.
+func (mr *MockserverLedgerMockRecorder) Reserve(ctx, id, namespace, provider, e any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reserve", reflect.TypeOf((*MockserverLedger)(nil).Reserve), ctx, id, namespace, provider, e)
+}
+
+// Settle mocks base method.
+func (m *MockserverLedger) Settle(ctx context.Context, id execution.ID, namespace, provider string, actual quota.Execution) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Settle", ctx, id, namespace, provider, actual)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Settle indicates an expected call of Settle.
+func (mr *MockserverLedgerMockRecorder) Settle(ctx, id, namespace, provider, actual any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Settle", reflect.TypeOf((*MockserverLedger)(nil).Settle), ctx, id, namespace, provider, actual)
+}
+
 // MockserverExecutions is a mock of serverExecutions interface.
 type MockserverExecutions struct {
 	ctrl     *gomock.Controller
@@ -128,18 +239,18 @@ func (m *MockserverExecutions) EXPECT() *MockserverExecutionsMockRecorder {
 }
 
 // ClaimDispatches mocks base method.
-func (m *MockserverExecutions) ClaimDispatches(ctx context.Context, owner string, now, until time.Time) ([]*execution.Dispatch, error) {
+func (m *MockserverExecutions) ClaimDispatches(ctx context.Context, owner string, now, until time.Time, skip []execution.ID) ([]*execution.Dispatch, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ClaimDispatches", ctx, owner, now, until)
+	ret := m.ctrl.Call(m, "ClaimDispatches", ctx, owner, now, until, skip)
 	ret0, _ := ret[0].([]*execution.Dispatch)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ClaimDispatches indicates an expected call of ClaimDispatches.
-func (mr *MockserverExecutionsMockRecorder) ClaimDispatches(ctx, owner, now, until any) *gomock.Call {
+func (mr *MockserverExecutionsMockRecorder) ClaimDispatches(ctx, owner, now, until, skip any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClaimDispatches", reflect.TypeOf((*MockserverExecutions)(nil).ClaimDispatches), ctx, owner, now, until)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClaimDispatches", reflect.TypeOf((*MockserverExecutions)(nil).ClaimDispatches), ctx, owner, now, until, skip)
 }
 
 // Create mocks base method.
@@ -227,6 +338,20 @@ func (m *MockserverExecutions) GetDispatch(ctx context.Context, id execution.ID)
 func (mr *MockserverExecutionsMockRecorder) GetDispatch(ctx, id any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDispatch", reflect.TypeOf((*MockserverExecutions)(nil).GetDispatch), ctx, id)
+}
+
+// Ping mocks base method.
+func (m *MockserverExecutions) Ping(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Ping", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Ping indicates an expected call of Ping.
+func (mr *MockserverExecutionsMockRecorder) Ping(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ping", reflect.TypeOf((*MockserverExecutions)(nil).Ping), ctx)
 }
 
 // RenewDispatch mocks base method.

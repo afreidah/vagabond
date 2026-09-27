@@ -170,18 +170,18 @@ func rowOf(r *execution.Record) db.Execution {
 		return row
 	}
 
-	row.DurationMs = ptr.Of(result.Duration.Milliseconds())
+	row.DurationMs = new(result.Duration.Milliseconds())
 	row.Logs = result.Logs
 	row.LogsTruncated = result.LogsTruncated
 
 	if result.ExitCode != nil {
-		row.ExitCode = ptr.Of(int64(*result.ExitCode))
+		row.ExitCode = new(int64(*result.ExitCode))
 	}
 
 	if b := result.Billed; b != nil {
-		row.BilledCpu = ptr.Of(int64(b.CPU))
-		row.BilledMemory = ptr.Of(int64(b.Memory))
-		row.BilledMs = ptr.Of(b.Duration.Milliseconds())
+		row.BilledCpu = new(int64(b.CPU))
+		row.BilledMemory = new(int64(b.Memory))
+		row.BilledMs = new(b.Duration.Milliseconds())
 	}
 
 	return row
@@ -196,14 +196,12 @@ func recordOf(row *db.Execution) (*execution.Record, error) {
 	}
 
 	r := &execution.Record{
-		Status: execution.Status{
-			ID:         id,
-			State:      execution.State(row.State),
-			ProviderID: row.ProviderID,
-			StartedAt:  ptr.Deref(row.StartedAt),
-			EndedAt:    ptr.Deref(row.EndedAt),
-			UpdatedAt:  row.UpdatedAt,
-		},
+		ID:         id,
+		State:      execution.State(row.State),
+		ProviderID: row.ProviderID,
+		StartedAt:  ptr.Deref(row.StartedAt),
+		EndedAt:    ptr.Deref(row.EndedAt),
+		UpdatedAt:  row.UpdatedAt,
 		Namespace:  row.Namespace,
 		Job:        row.Job,
 		JobVersion: row.JobVersion,
@@ -239,7 +237,7 @@ func recordOf(row *db.Execution) (*execution.Record, error) {
 	}
 
 	if row.ExitCode != nil {
-		r.Result.ExitCode = ptr.Of(int(*row.ExitCode))
+		r.Result.ExitCode = new(int(*row.ExitCode))
 	}
 
 	if row.BilledMs != nil {

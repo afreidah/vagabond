@@ -62,6 +62,26 @@ A claimed dispatch is resumed:
 
 A dispatch left by a killed CLI is resumed by the next server that runs.
 
+## Store outage
+
+The server fails closed while its store is unreachable.
+
+| | During the outage |
+|---|---|
+| New dispatch or run | 503 |
+| Dispatch already running | Carries on; polling providers needs no store, record writes are best effort |
+| Plan | Answers from the last usage snapshot |
+| `GET /v1/health` | 503, `Store` is `unreachable` |
+
+What the outage kept from being written is repaired once the store returns:
+
+- A lost finish or execution update: the dispatch's lease lapsed, so it is
+  claimed and resumed, which asks the provider again, records the result and
+  settles it. A server never claims a dispatch it is still running.
+- A lost settle whose execution record was written: the reaper settles it.
+
+Keeping dispatch going through an outage is tracked in #86.
+
 ## The rule
 
 A workload failure is an answer. A task that ran and exited non-zero has told

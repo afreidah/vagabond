@@ -12,6 +12,7 @@ package ledger
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -143,9 +144,7 @@ func (m *Memory) settle(id execution.ID, actual map[PoolRef]int64) {
 func (m *Memory) standing() Usage {
 	usage := make(Usage, len(m.used))
 
-	for key, amount := range m.used {
-		usage[key] = amount
-	}
+	maps.Copy(usage, m.used)
 
 	for _, r := range m.held {
 		for i := range r.Charges {

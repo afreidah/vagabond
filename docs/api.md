@@ -21,6 +21,7 @@ namespace is a 400.
 | `GET /v1/execution/{id}` | | `Execution` |
 | `GET /v1/execution/{id}/logs` | | Stored output, `text/plain` |
 | `DELETE /v1/execution/{id}` | | `Execution` |
+| `GET /v1/health` | | `Health`: store reachability, usage snapshot age, running dispatches; 503 when the store is unreachable |
 
 ## Dispatch
 
@@ -54,6 +55,7 @@ namespace is a 400.
 | 404 | No such job or execution |
 | 409 | Stopped job dispatched; execution changed while being updated |
 | 500 | Anything else; logged by the server |
+| 503 | A write the store could not take because it is unreachable; retry once it is back |
 
 Errors are `{"Error": "...", "Diagnostics": [...]}`.
 

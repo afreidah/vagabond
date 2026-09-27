@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/afreidah/vagabond/internal/job"
-	"github.com/afreidah/vagabond/internal/ptr"
 )
 
 // -------------------------------------------------------------------------
@@ -107,11 +106,11 @@ func TestRetryPolicyReadsTheBlock(t *testing.T) {
 	p := retryPolicy(&job.Task{
 		Name: "test",
 		Retry: &job.Retry{
-			Attempts: ptr.Of(3),
-			Reroute:  ptr.Of(true),
+			Attempts: new(3),
+			Reroute:  new(true),
 			Backoff: &job.Backoff{
-				Initial: ptr.Of(job.Duration("1s")),
-				Max:     ptr.Of(job.Duration("4s")),
+				Initial: new(job.Duration("1s")),
+				Max:     new(job.Duration("4s")),
 			},
 		},
 	})
@@ -135,8 +134,8 @@ func TestRetryPolicyIgnoresUnusableDurations(t *testing.T) {
 		Name: "test",
 		Retry: &job.Retry{
 			Backoff: &job.Backoff{
-				Initial: ptr.Of(job.Duration("not a duration")),
-				Max:     ptr.Of(job.Duration("0s")),
+				Initial: new(job.Duration("not a duration")),
+				Max:     new(job.Duration("0s")),
 			},
 		},
 	})
@@ -153,7 +152,7 @@ func TestRetryPolicyIgnoresZeroAttempts(t *testing.T) {
 
 	p := retryPolicy(&job.Task{
 		Name:  "test",
-		Retry: &job.Retry{Attempts: ptr.Of(0)},
+		Retry: &job.Retry{Attempts: new(0)},
 	})
 
 	if p.attempts != 1 {

@@ -84,8 +84,7 @@ func staticCredential(raw []byte) (credentials.StaticCredentialsProvider, error)
 // response goes through the shared status mapping; one without never reached
 // AWS, so it is infrastructure.
 func classify(err error) error {
-	var resp *awshttp.ResponseError
-	if errors.As(err, &resp) {
+	if resp, ok := errors.AsType[*awshttp.ResponseError](err); ok {
 		return plugin.ClassifyHTTP(resp.HTTPStatusCode(), 0, err)
 	}
 
