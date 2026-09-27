@@ -1,7 +1,7 @@
 # Quickstart
 
-Plan a job against a set of providers. Nothing is dispatched and no credentials
-are required.
+Start a dev server over fake providers and plan a job against it. Nothing is
+dispatched to a cloud and no credentials are required.
 
 ## Build
 
@@ -12,6 +12,8 @@ make build
 ```
 
 ## Validate a job file
+
+Validation is local; it needs no server.
 
 ```bash
 ./vagabond job validate examples/go-test.vagabond.hcl
@@ -34,13 +36,23 @@ This job requires metadata that was not supplied: version. Pass each one with
 ./vagabond job validate -meta version=1.2.3 examples/go-test.vagabond.hcl
 ```
 
+## Start a server
+
+```bash
+./vagabond server -dev -config examples/config.hcl
+```
+
+- `-dev` keeps jobs, executions and quota usage in memory, empty at every start.
+- `examples/config.hcl` configures fake providers, so nothing reaches a cloud.
+- It listens on `127.0.0.1:4747`, where every other command looks by default.
+  Point them elsewhere with `-address` or `$VAGABOND_ADDR`.
+
+The commands below run in a second terminal.
+
 ## Plan it
 
 ```bash
-./vagabond job plan \
-  -config examples/config.hcl \
-  -meta version=1.2.3 \
-  examples/go-test.vagabond.hcl
+./vagabond job plan -meta version=1.2.3 examples/go-test.vagabond.hcl
 ```
 
 ```
@@ -69,8 +81,7 @@ Exit codes:
 failed rather than only the first.
 
 ```bash
-./vagabond job plan -config examples/config.hcl -meta version=1.2.3 \
-  -verbose examples/go-test.vagabond.hcl
+./vagabond job plan -meta version=1.2.3 -verbose examples/go-test.vagabond.hcl
 ```
 
 ```
@@ -95,20 +106,22 @@ above 50%.
 Pass `-` as the path:
 
 ```bash
-cat job.vagabond.hcl | ./vagabond job plan -config examples/config.hcl -
+cat job.vagabond.hcl | ./vagabond job plan -
 ```
 
 ## Running it
 
-`job plan` contacts nothing. `job run` dispatches to the selected provider and
-waits, which needs a real backend configured — see
-[Cloud Run](providers/cloud-run.md).
+`job run` sends the job to the server, which dispatches it to the selected
+provider; the command waits for it. A real backend is configured in the
+server's config; see [Cloud Run](providers/cloud-run.md).
 
 ```bash
-./vagabond job run -config vagabond.hcl job.vagabond.hcl
+./vagabond server -config vagabond.hcl
+./vagabond job run job.vagabond.hcl
 ```
 
 ```
+==> dispatch 01926f3a-8c1e-7b2d-9f00-3c4d5e6f7a8b of "hello"
 ==> greet accepted on gcp-cloud-run
 ==> greet running on gcp-cloud-run
 line-1
@@ -117,19 +130,17 @@ done
 ==> greet succeeded on gcp-cloud-run in 11.87s
 ```
 
-Progress goes to stderr and the task's output to stdout, so redirecting stdout
-captures the build alone:
-
-```bash
-./vagabond job run -config vagabond.hcl job.vagabond.hcl > build.log
-```
+- Progress goes to stderr and the task's output to stdout, so redirecting
+  stdout captures the build alone.
+- Output is printed when each task finishes.
+- Ctrl-C stops the execution on the provider.
 
 Exit codes:
 
 | Code | Meaning |
 |---|---|
 | 0 | Every task ran and exited zero |
-| 1 | A task ran and failed, or the job could not be read |
+| 1 | A task ran and failed, or the job could not be sent |
 | 2 | The work never ran: nothing was eligible, or every provider failed |
 
 Expect roughly two minutes for a trivial Cloud Run job. Provisioning dominates;
@@ -138,7 +149,7 @@ see [Cloud Run](providers/cloud-run.md#cost-characteristics).
 ## Registering a job
 
 `job run` registers nothing. To keep a job and run it again by name, register
-it; this needs a [`store` block](configuration.md#store-block).
+it.
 
 | Command | Does |
 |---|---|
@@ -149,17 +160,24 @@ it; this needs a [`store` block](configuration.md#store-block).
 | `job plan <name>` | Plans the current version |
 
 ```bash
-./vagabond job register -config vagabond.hcl examples/go-test.vagabond.hcl
-./vagabond job dispatch -config vagabond.hcl -meta version=1.2.3 go-test
+./vagabond job register examples/go-test.vagabond.hcl
+./vagabond job dispatch -meta version=1.2.3 go-test
 ```
 
 A new version is made only when the job changed; formatting alone is not a
 change. Every execution records the version it ran and a dispatch ID shared by
 the run's tasks.
 
+## Reading an execution
+
+| Command | Does |
+|---|---|
+| `execution status <id>` | The execution's record and result |
+| `execution logs <id>` | Its stored output, the last 64 KiB |
+
 ## Next
 
-- [Job specification](job-specification.md) — what goes in a job file
-- [Configuration](configuration.md) — what goes in the provider config
-- [Cloud Run provider](providers/cloud-run.md) — configuring a real backend
-- [Dispatch](dispatch.md) — retries, rerouting, streaming, cleanup
+- [Job specification](job-specification.md): what goes in a job file
+- [Configuration](configuration.md): providers, namespaces, quotas, store, server
+- [Cloud Run provider](providers/cloud-run.md): configuring a real backend
+- [Dispatch](dispatch.md): retries, rerouting, leases, cleanup

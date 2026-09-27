@@ -195,6 +195,28 @@ func (s *Executions) DispatchExecutions(_ context.Context, dispatch execution.ID
 	return out, nil
 }
 
+// jobExecutions returns copies of a job's most recent records, newest first,
+// at most limit of them.
+func (s *Executions) jobExecutions(namespace, job string, limit int) []*execution.Record {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var out []*execution.Record
+
+	for id := range s.records {
+		if stored := s.records[id]; stored.Namespace == namespace && stored.Job == job {
+			r := clone(&stored)
+			out = append(out, &r)
+		}
+	}
+
+	slices.SortFunc(out, func(a, b *execution.Record) int {
+		return strings.Compare(b.ID.String(), a.ID.String())
+	})
+
+	return out[:min(limit, len(out))]
+}
+
 // clone copies r so neither the caller nor the store can change the other's.
 func clone(r *execution.Record) execution.Record {
 	out := *r

@@ -41,8 +41,9 @@ capability and ignore price use the same machinery.
   +-----------+
 ```
 
-`vagabond job plan` stops at the selection and prints it. `vagabond job run`
-continues through dispatch.
+All of it runs in `vagabond server`. The CLI validates a job file locally and
+calls the [HTTP API](api.md): `job plan` stops at the selection and prints it,
+`job run` continues through dispatch and follows the run.
 
 ## Packages
 

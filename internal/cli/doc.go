@@ -8,7 +8,8 @@
 //
 // Commands write through a cli.Ui rather than printing directly, so that a
 // test can inject a buffer and assert on output instead of capturing streams.
-// Nothing in here decides anything: a command parses flags, calls into the
-// packages that hold the logic, and turns the answer into text and an exit
-// code.
+// Nothing in here decides anything: a command parses flags, validates a job
+// file locally, calls the server through internal/api, and turns the answer
+// into text and an exit code. server is the one command that runs the logic
+// in-process.
 package cli

@@ -3,13 +3,8 @@
 //
 // Author: Alex Freidah
 //
-// Exercised through Run against real files, because the whole claim of this
-// command is that a job file and a configuration file produce a plan with
-// nothing else standing up. A test that reached past Run would not be testing
-// that claim.
-//
-// Nothing here has credentials and nothing contacts anything, which is the
-// property the chunk exists to demonstrate rather than a convenience.
+// Exercised through Run against a job file and a server over the fixture
+// configuration, so what is asserted is what an operator would read.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -71,31 +66,11 @@ provider "aws-lambda" {
 }
 `
 
-// writeConfig puts provider configuration in a temporary file.
-func writeConfig(t *testing.T, src string) string {
-	t.Helper()
-
-	path := filepath.Join(t.TempDir(), "vagabond.hcl")
-
-	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
-		t.Fatalf("writing the configuration: %v", err)
-	}
-
-	return path
-}
-
-// plan runs the command with a job and a configuration, both temporary.
+// plan runs the command with a job file against a server over cfg.
 func plan(t *testing.T, job, cfg string, extra ...string) (int, string, string) {
 	t.Helper()
 
-	// Nothing may be discovered from the environment or the working directory,
-	// or a developer's own config would change what these tests assert.
-	t.Setenv("VAGABOND_CONFIG", "")
-	t.Chdir(t.TempDir())
-
-	args := append([]string{"job", "plan", "-config", writeConfig(t, cfg)}, extra...)
-
-	return run(append(args, writeJob(t, job))...)
+	return serve(t, cfg).at([]string{"job", "plan"}, append(extra, writeJob(t, job))...)
 }
 
 // -------------------------------------------------------------------------
@@ -396,67 +371,54 @@ job "ci" {
 }
 
 // -------------------------------------------------------------------------
-// CONFIGURATION
+// THE SERVER
 // -------------------------------------------------------------------------
 
-// A plan against providers nobody configured would be a demonstration wearing
-// a plan's output. Terraform does not invent providers either.
-func TestJobPlan_NoConfiguration(t *testing.T) {
-	t.Setenv("VAGABOND_CONFIG", "")
-	t.Chdir(t.TempDir())
-
-	code, _, stderr := run("job", "plan", writeJob(t, planJob))
-
-	if code != ExitFailure {
-		t.Errorf("exit code = %d, want %d", code, ExitFailure)
-	}
-
-	// The error teaches the search path rather than leaving someone guessing.
-	for _, want := range []string{"no configuration found", "VAGABOND_CONFIG", "vagabond.hcl"} {
-		if !strings.Contains(stderr, want) {
-			t.Errorf("error is missing %q:\n%s", want, stderr)
-		}
-	}
-}
-
-func TestJobPlan_ConfigFromEnvironment(t *testing.T) {
-	t.Chdir(t.TempDir())
-	t.Setenv("VAGABOND_CONFIG", writeConfig(t, planConfig))
+// The address comes from VAGABOND_ADDR when the flag is not given.
+func TestJobPlan_AddressFromEnvironment(t *testing.T) {
+	s := serve(t, planConfig)
+	t.Setenv(addressEnv, s.address)
 
 	code, stdout, stderr := run("job", "plan", writeJob(t, planJob))
 
-	if code != ExitSuccess {
-		t.Fatalf("exit code = %d, want %d\n%s%s", code, ExitSuccess, stdout, stderr)
-	}
-
-	if !strings.Contains(stdout, "Selected: gcp-cloud-run") {
-		t.Errorf("plan did not use the configuration from the environment:\n%s", stdout)
+	if code != ExitSuccess || !strings.Contains(stdout, "Selected: gcp-cloud-run") {
+		t.Errorf("exit %d, the plan did not reach the server:\n%s%s", code, stdout, stderr)
 	}
 }
 
-// A configuration that parses and registers nothing is a different thing from
-// no configuration, and the two must not read alike.
-func TestJobPlan_ConfigWithNoProviders(t *testing.T) {
-	code, stdout, stderr := plan(t, planJob, "# nothing here\n")
+// No server at the address is an error that names where it looked.
+func TestJobPlan_NoServer(t *testing.T) {
+	t.Setenv(addressEnv, "")
 
-	if code != ExitFailure {
-		t.Errorf("exit code = %d, want %d\n%s", code, ExitFailure, stdout)
-	}
+	code, _, stderr := run("job", "plan", "-address", "127.0.0.1:1", writeJob(t, planJob))
 
-	if !strings.Contains(stderr, "No providers are configured") {
-		t.Errorf("unexpected error:\n%s", stderr)
+	if code != ExitFailure || !strings.Contains(stderr, "http://127.0.0.1:1") {
+		t.Errorf("exit %d, stderr:\n%s", code, stderr)
 	}
 }
 
-func TestJobPlan_BadConfiguration(t *testing.T) {
-	code, _, stderr := plan(t, planJob, `provider "broken" { type = }`)
+// A registered job is planned by name.
+func TestJobPlan_RegisteredJob(t *testing.T) {
+	s := serve(t, planConfig)
 
-	if code != ExitFailure {
-		t.Errorf("exit code = %d, want %d", code, ExitFailure)
+	if code, _, stderr := s.at([]string{"job", "register"}, writeJob(t, planJob)); code != ExitSuccess {
+		t.Fatalf("register: exit %d\n%s", code, stderr)
 	}
 
-	if stderr == "" {
-		t.Error("a malformed configuration reported nothing")
+	code, stdout, stderr := s.at([]string{"job", "plan"}, "ci")
+
+	if code != ExitSuccess || !strings.Contains(stdout, "Selected: gcp-cloud-run") {
+		t.Errorf("exit %d:\n%s%s", code, stdout, stderr)
+	}
+}
+
+// A name shaped like a file is read as one, so a typo reads as a missing file
+// rather than a missing job.
+func TestJobPlan_MissingFileIsAFile(t *testing.T) {
+	code, _, stderr := serve(t, planConfig).at([]string{"job", "plan"}, "missing.hcl")
+
+	if code != ExitFailure || !strings.Contains(stderr, "reading missing.hcl") {
+		t.Errorf("exit %d, stderr:\n%s", code, stderr)
 	}
 }
 
@@ -541,12 +503,11 @@ job "ci" {
 }
 
 func TestJobPlan_ReadsStdin(t *testing.T) {
-	t.Setenv("VAGABOND_CONFIG", "")
-	t.Chdir(t.TempDir())
+	s := serve(t, planConfig)
 
 	var out, errOut bytes.Buffer
 
-	args := []string{"job", "plan", "-config", writeConfig(t, planConfig), "-"}
+	args := []string{"job", "plan", "-address", s.address, "-"}
 
 	code := Run(args, strings.NewReader(planJob), &out, &errOut)
 	if code != ExitSuccess {
@@ -563,8 +524,6 @@ func TestJobPlan_ReadsStdin(t *testing.T) {
 // -------------------------------------------------------------------------
 
 func TestJobPlan_WrongArgumentCount(t *testing.T) {
-	t.Setenv("VAGABOND_CONFIG", "")
-
 	for _, args := range [][]string{
 		{"job", "plan"},
 		{"job", "plan", "one.hcl", "two.hcl"},
@@ -589,16 +548,15 @@ func TestJobPlan_WrongArgumentCount(t *testing.T) {
 // examples that each parse and cannot be used with each other are worse than
 // one, because the first thing anyone does is run them side by side.
 func TestJobPlan_ShippedExamples(t *testing.T) {
-	t.Setenv("VAGABOND_CONFIG", "")
-
 	examples := filepath.Join("..", "..", "examples")
 
-	code, stdout, stderr := run(
-		"job", "plan",
-		"-config", filepath.Join(examples, "config.hcl"),
-		"-meta", "version=1.2.3",
-		filepath.Join(examples, "go-test.vagabond.hcl"),
-	)
+	cfg, err := os.ReadFile(filepath.Join(examples, "config.hcl"))
+	if err != nil {
+		t.Fatalf("reading the example configuration: %v", err)
+	}
+
+	code, stdout, stderr := serve(t, string(cfg)).at([]string{"job", "plan"},
+		"-meta", "version=1.2.3", filepath.Join(examples, "go-test.vagabond.hcl"))
 
 	if code != ExitSuccess {
 		t.Fatalf("the shipped examples do not plan: exit %d\n%s%s", code, stdout, stderr)
