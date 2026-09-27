@@ -92,7 +92,9 @@ type Dispatcher struct {
 	registry   Registry
 	ledger     Ledger
 	executions Executions
-	owner      string // who this process's dispatches are leased to
+	owner      string        // who this process's dispatches are leased to
+	leaseTTL   time.Duration // how long a lease runs unrenewed
+	leaseRenew time.Duration // how often a held lease is renewed
 	now        func() time.Time
 	poll       Poll
 	linger     time.Duration // how long to keep a stream open past the last poll
@@ -135,6 +137,13 @@ func WithOwner(owner string) Option {
 	return func(d *Dispatcher) { d.owner = owner }
 }
 
+// WithLease replaces how long a lease runs and how often it is renewed, in
+// place of LeaseTTL and LeaseRenew. For tests that cannot wait a minute for one
+// to lapse.
+func WithLease(ttl, renew time.Duration) Option {
+	return func(d *Dispatcher) { d.leaseTTL, d.leaseRenew = ttl, renew }
+}
+
 // New builds a dispatcher over a registry, charging ledger for what it runs and
 // recording every attempt in executions.
 //
@@ -146,6 +155,8 @@ func New(registry Registry, ledger Ledger, executions Executions, opts ...Option
 		ledger:     ledger,
 		executions: executions,
 		owner:      ProcessOwner("vagabond"),
+		leaseTTL:   LeaseTTL,
+		leaseRenew: LeaseRenew,
 		now:        time.Now,
 		poll:       DefaultPoll,
 		linger:     DefaultLinger,
@@ -188,7 +199,7 @@ func (d *Dispatcher) Begin(ctx context.Context, origin Origin, j *job.Job) (Orig
 		Tasks:      len(j.Tasks),
 		State:      execution.DispatchRunning,
 		Owner:      d.owner,
-		LeaseUntil: now.Add(LeaseTTL),
+		LeaseUntil: now.Add(d.leaseTTL),
 		Created:    now,
 	})
 	if err != nil {

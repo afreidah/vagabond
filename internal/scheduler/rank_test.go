@@ -18,7 +18,6 @@ import (
 
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
-	"github.com/afreidah/vagabond/internal/ptr"
 )
 
 // candidate is a provider admitted with a stated free-tier standing.
@@ -89,7 +88,7 @@ func TestRankDefaultsToFreeFirst(t *testing.T) {
 	}
 
 	stated := baseRequest()
-	stated.Routing = &job.Routing{Strategy: ptr.Of(job.StrategyFreeFirst)}
+	stated.Routing = &job.Routing{Strategy: new(job.StrategyFreeFirst)}
 
 	if diff := cmp.Diff(
 		Rank(req, []Candidate{candidate("a", 20), candidate("b", 80)}).Providers(),
@@ -106,7 +105,7 @@ func TestRankUnknownStrategyFallsBack(t *testing.T) {
 	t.Parallel()
 
 	req := baseRequest()
-	req.Routing = &job.Routing{Strategy: ptr.Of(job.Strategy("cheapest-tuesday"))}
+	req.Routing = &job.Routing{Strategy: new(job.Strategy("cheapest-tuesday"))}
 
 	ranking := Rank(req, []Candidate{candidate("a", 20), candidate("b", 80)})
 
@@ -148,7 +147,7 @@ func TestRankAffinityRaisesAMatch(t *testing.T) {
 		Attribute: plugin.MetaPrefix + "tier",
 		Operator:  job.OperatorEqual,
 		Value:     "paid",
-		Weight:    ptr.Of(75),
+		Weight:    new(75),
 	}}}
 
 	matching := candidate("matching", 50)
@@ -185,13 +184,13 @@ func TestRankAffinityWeightsAreRelative(t *testing.T) {
 			Attribute: plugin.MetaPrefix + "tier",
 			Operator:  job.OperatorEqual,
 			Value:     "paid",
-			Weight:    ptr.Of(75),
+			Weight:    new(75),
 		},
 		{
 			Attribute: plugin.MetaPrefix + "region",
 			Operator:  job.OperatorEqual,
 			Value:     "us-south",
-			Weight:    ptr.Of(25),
+			Weight:    new(25),
 		},
 	}}
 
@@ -287,7 +286,7 @@ func TestRankExampleAffinityChangesTheOutcome(t *testing.T) {
 		Attribute: plugin.AttrFreeQuotaPercent,
 		Operator:  job.OperatorGreater,
 		Value:     "50",
-		Weight:    ptr.Of(75),
+		Weight:    new(75),
 	}}}
 
 	withAffinity := Rank(req, candidates)

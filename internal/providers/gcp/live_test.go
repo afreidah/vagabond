@@ -97,8 +97,8 @@ command = "sh"
 args    = ["-c", "echo hello-stdout; echo hello-stderr >&2; exit 3"]
 `),
 		Env:       rawBlock(t, "VAGABOND_LIVE = \"1\"\n"),
-		Resources: &job.Resources{CPU: ptr.Of(1000), Memory: ptr.Of(512)},
-		Timeout:   ptr.Of(job.Duration("5m")),
+		Resources: &job.Resources{CPU: new(1000), Memory: new(512)},
+		Timeout:   new(job.Duration("5m")),
 	}
 
 	submission, err := p.Submit(t.Context(), id, task)

@@ -53,13 +53,24 @@ type serverRegistry interface {
 	Refresh(ctx context.Context) error
 }
 
-// serverExecutions is where runs and attempts are recorded and read back, and
-// where dispatches a dead owner left are claimed.
+// serverLedger is the account dispatch charges, and when its usage snapshot
+// was last read, which health reports.
+type serverLedger interface {
+	dispatch.Ledger
+	Refreshed() time.Time
+}
+
+// serverExecutions is where runs and attempts are recorded and read back,
+// where dispatches a dead owner left are claimed, and whose reachability
+// health reports.
 type serverExecutions interface {
 	dispatch.Executions
 	GetDispatch(ctx context.Context, id execution.ID) (*execution.Dispatch, error)
 	Get(ctx context.Context, id execution.ID) (*execution.Record, error)
-	ClaimDispatches(ctx context.Context, owner string, now, until time.Time) ([]*execution.Dispatch, error)
+	ClaimDispatches(
+		ctx context.Context, owner string, now, until time.Time, skip []execution.ID,
+	) ([]*execution.Dispatch, error)
+	Ping(ctx context.Context) error
 }
 
 // serverJobs is where registered jobs live: storing versions, reading them
@@ -81,11 +92,14 @@ type serverJobs interface {
 // function of every dispatch this process is running, started or resumed.
 type Server struct {
 	registry   serverRegistry
-	ledger     dispatch.Ledger
+	ledger     serverLedger
 	executions serverExecutions
 	jobs       serverJobs
 	dispatcher *dispatch.Dispatcher
-	owner      string // who this server's dispatches are leased to
+	owner      string        // who this server's dispatches are leased to
+	leaseTTL   time.Duration // how long a claimed lease runs unrenewed
+	leaseRenew time.Duration // how often held leases are renewed
+	claimEvery time.Duration // how often lapsed leases are claimed
 	logger     *slog.Logger
 	now        func() time.Time
 
@@ -107,10 +121,17 @@ func WithOwner(owner string) Option {
 	return func(s *Server) { s.owner = owner }
 }
 
+// WithLeases replaces how long leases run, how often they are renewed, and how
+// often lapsed ones are claimed. For tests that cannot wait a minute for a
+// lease to lapse.
+func WithLeases(ttl, renew, claim time.Duration) Option {
+	return func(s *Server) { s.leaseTTL, s.leaseRenew, s.claimEvery = ttl, renew, claim }
+}
+
 // New builds a server over its stores, with a dispatcher that records to
 // executions and charges ledger.
 func New(
-	reg serverRegistry, ledger dispatch.Ledger, executions serverExecutions, jobStore serverJobs,
+	reg serverRegistry, ledger serverLedger, executions serverExecutions, jobStore serverJobs,
 	logger *slog.Logger, opts ...Option,
 ) *Server {
 	s := &Server{
@@ -119,6 +140,9 @@ func New(
 		executions: executions,
 		jobs:       jobStore,
 		owner:      dispatch.ProcessOwner("server"),
+		leaseTTL:   dispatch.LeaseTTL,
+		leaseRenew: dispatch.LeaseRenew,
+		claimEvery: claimInterval,
 		logger:     logger,
 		now:        time.Now,
 		running:    make(map[execution.ID]context.CancelFunc),
@@ -128,7 +152,8 @@ func New(
 		opt(s)
 	}
 
-	s.dispatcher = dispatch.New(reg, ledger, executions, dispatch.WithOwner(s.owner))
+	s.dispatcher = dispatch.New(reg, ledger, executions,
+		dispatch.WithOwner(s.owner), dispatch.WithLease(s.leaseTTL, s.leaseRenew))
 
 	return s
 }
@@ -149,6 +174,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/execution/{id}", s.wrap(s.executionStatus))
 	mux.HandleFunc("GET /v1/execution/{id}/logs", s.executionLogs)
 	mux.HandleFunc("DELETE /v1/execution/{id}", s.wrap(s.cancelExecution))
+	mux.HandleFunc("GET /v1/health", s.health)
 
 	return s.logRequests(mux)
 }

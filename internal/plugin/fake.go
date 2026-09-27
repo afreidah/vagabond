@@ -22,7 +22,6 @@ import (
 
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
-	"github.com/afreidah/vagabond/internal/ptr"
 )
 
 // -------------------------------------------------------------------------
@@ -148,7 +147,7 @@ func (p *FakeContainerProvider) Result(
 
 	return &execution.Result{
 		ID:       id,
-		ExitCode: ptr.Of(p.ExitCode),
+		ExitCode: new(p.ExitCode),
 		Duration: time.Second,
 		Logs:     []byte("fake execution output\n"),
 	}, nil
@@ -201,7 +200,7 @@ func NewFakeFunctionProvider(name string) *FakeSyncProvider {
 	return &FakeSyncProvider{
 		ProviderName: name,
 		Caps:         FixtureFunction(time.Now()),
-		ExitCode:     ptr.Of(0),
+		ExitCode:     new(0),
 	}
 }
 

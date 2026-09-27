@@ -25,7 +25,6 @@ import (
 	"github.com/afreidah/vagabond/internal/api"
 	"github.com/afreidah/vagabond/internal/cli"
 	"github.com/afreidah/vagabond/internal/plugin"
-	"github.com/afreidah/vagabond/internal/ptr"
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
@@ -73,7 +72,7 @@ var dispatchID = regexp.MustCompile(`==> dispatch ([0-9a-f-]{36})`)
 // exitWith makes the harness's function provider exit with code.
 func (h *harness) exitWith(code int) {
 	p, _ := h.registry.Provider("fn")
-	p.(*plugin.FakeSyncProvider).ExitCode = ptr.Of(code)
+	p.(*plugin.FakeSyncProvider).ExitCode = new(code)
 }
 
 // A job run through the CLI exits with the task's result, and the run, its

@@ -55,9 +55,7 @@ func (p *streamingProvider) StreamLogs(
 
 func newStreamer(name, output string) *streamingProvider {
 	return &streamingProvider{
-		scriptedProvider: scriptedProvider{
-			name: name, pollsToFinish: 2, finalState: execution.StateSucceeded,
-		},
+		name: name, pollsToFinish: 2, finalState: execution.StateSucceeded,
 		output: output,
 	}
 }
@@ -280,9 +278,7 @@ func TestReleaseIsCalledOnSuccess(t *testing.T) {
 	t.Parallel()
 
 	p := &releasingProvider{
-		scriptedProvider: scriptedProvider{
-			name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded,
-		},
+		name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded,
 	}
 
 	d := newDispatcher(t, newRegistry(&p.scriptedProvider))
@@ -307,9 +303,7 @@ func TestReleaseIsCalledOnAFailedWorkload(t *testing.T) {
 	t.Parallel()
 
 	p := &releasingProvider{
-		scriptedProvider: scriptedProvider{
-			name: "a", pollsToFinish: 1, finalState: execution.StateFailed, exitCode: 1,
-		},
+		name: "a", pollsToFinish: 1, finalState: execution.StateFailed, exitCode: 1,
 	}
 
 	d := newDispatcher(t, newRegistry(&p.scriptedProvider))

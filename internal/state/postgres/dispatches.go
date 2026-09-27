@@ -94,15 +94,21 @@ func (s *Store) RenewDispatch(ctx context.Context, id execution.ID, owner string
 }
 
 // ClaimDispatches takes over every running dispatch whose lease lapsed before
-// now, leasing each to owner until until, and returns them.
+// now, except those in skip, leasing each to owner until until, and returns
+// them.
 func (s *Store) ClaimDispatches(
-	ctx context.Context, owner string, now, until time.Time,
+	ctx context.Context, owner string, now, until time.Time, skip []execution.ID,
 ) ([]*execution.Dispatch, error) {
 	var claimed []*execution.Dispatch
 
+	skipped := make([]string, 0, len(skip))
+	for _, id := range skip {
+		skipped = append(skipped, id.String())
+	}
+
 	err := s.serializable(ctx, func(q *db.Queries) error {
 		rows, err := q.ClaimDispatches(ctx, db.ClaimDispatchesParams{
-			Owner: owner, LeaseUntil: until, Now: now,
+			Owner: owner, LeaseUntil: until, Now: now, Skip: skipped,
 		})
 		if err != nil {
 			return fmt.Errorf("claim dispatches: %w", err)

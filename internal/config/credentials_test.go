@@ -46,7 +46,7 @@ func TestResolveFile(t *testing.T) {
 		t.Fatalf("writing the key: %s", err)
 	}
 
-	got := resolve(t, &CredentialsBlock{File: ptr.Of(path)})
+	got := resolve(t, &CredentialsBlock{File: new(path)})
 	if got != `{"type":"service_account"}` {
 		t.Errorf("secret = %q, want the file's contents", got)
 	}
@@ -55,7 +55,7 @@ func TestResolveFile(t *testing.T) {
 func TestResolveEnv(t *testing.T) {
 	t.Setenv("VAGABOND_TEST_SECRET", "a-secret")
 
-	got := resolve(t, &CredentialsBlock{Env: ptr.Of("VAGABOND_TEST_SECRET")})
+	got := resolve(t, &CredentialsBlock{Env: new("VAGABOND_TEST_SECRET")})
 	if got != "a-secret" {
 		t.Errorf("secret = %q, want a-secret", got)
 	}
@@ -125,11 +125,11 @@ func TestResolveFailures(t *testing.T) {
 		want  string
 	}{
 		"missing file": {
-			block: &CredentialsBlock{File: ptr.Of("/nowhere/key.json")},
+			block: &CredentialsBlock{File: new("/nowhere/key.json")},
 			want:  "/nowhere/key.json",
 		},
 		"unset variable": {
-			block: &CredentialsBlock{Env: ptr.Of("VAGABOND_DEFINITELY_UNSET")},
+			block: &CredentialsBlock{Env: new("VAGABOND_DEFINITELY_UNSET")},
 			want:  "VAGABOND_DEFINITELY_UNSET",
 		},
 		"command that fails": {

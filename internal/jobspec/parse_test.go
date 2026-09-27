@@ -564,16 +564,16 @@ func blockValues(b *job.RawBlock) (map[string]cty.Value, bool) {
 func expectedFixtureJob() job.Job {
 	return job.Job{
 		Name: "go-test",
-		Type: ptr.Of(job.TypeBatch),
+		Type: new(job.TypeBatch),
 		Meta: rawBlock(`
 			project = "example"
 			purpose = "ci"
 		`),
 		Parameterized: &job.Parameterized{MetaRequired: []string{"version"}},
 		Routing: &job.Routing{
-			Strategy:  ptr.Of(job.StrategyFreeFirst),
+			Strategy:  new(job.StrategyFreeFirst),
 			Providers: []string{"ibm-code-engine", "gcp-cloud-run"},
-			MaxCost:   ptr.Of(job.Cost(0)),
+			MaxCost:   new(job.Cost(0)),
 			Constraints: []job.Constraint{{
 				Attribute: "provider.architecture",
 				Operator:  job.OperatorSetContains,
@@ -583,7 +583,7 @@ func expectedFixtureJob() job.Job {
 				Attribute: "provider.free_quota_percent",
 				Operator:  job.OperatorGreater,
 				Value:     "50",
-				Weight:    ptr.Of(75),
+				Weight:    new(75),
 			}},
 		},
 		Tasks: []job.Task{{
@@ -601,23 +601,23 @@ func expectedFixtureJob() job.Job {
 			Source: &job.Source{
 				Type:        "git",
 				Repository:  "https://git.example.com/example/service.git",
-				Ref:         ptr.Of("abc123"),
-				Destination: ptr.Of("/workspace"),
+				Ref:         new("abc123"),
+				Destination: new("/workspace"),
 			},
-			WorkingDirectory: ptr.Of("/workspace"),
-			Resources:        &job.Resources{CPU: ptr.Of(1000), Memory: ptr.Of(2048)},
-			Timeout:          ptr.Of(job.Duration("15m")),
-			Network:          &job.Network{Internet: ptr.Of(true), Private: ptr.Of(false)},
+			WorkingDirectory: new("/workspace"),
+			Resources:        &job.Resources{CPU: new(1000), Memory: new(2048)},
+			Timeout:          new(job.Duration("15m")),
+			Network:          &job.Network{Internet: new(true), Private: new(false)},
 			Execution: &job.ExecutionRequirements{
-				Architecture: ptr.Of(job.ArchAMD64),
-				Privileged:   ptr.Of(false),
+				Architecture: new(job.ArchAMD64),
+				Privileged:   new(false),
 			},
 			Retry: &job.Retry{
-				Attempts: ptr.Of(2),
-				Reroute:  ptr.Of(true),
+				Attempts: new(2),
+				Reroute:  new(true),
 				Backoff: &job.Backoff{
-					Initial: ptr.Of(job.Duration("5s")),
-					Max:     ptr.Of(job.Duration("30s")),
+					Initial: new(job.Duration("5s")),
+					Max:     new(job.Duration("30s")),
 				},
 			},
 		}},

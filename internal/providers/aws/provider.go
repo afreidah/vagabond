@@ -24,7 +24,6 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
-	"github.com/afreidah/vagabond/internal/ptr"
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
@@ -118,14 +117,14 @@ func (p *Provider) Submit(
 
 	result := &execution.Result{
 		ID:       id,
-		ExitCode: ptr.Of(0),
+		ExitCode: new(0),
 		Duration: time.Since(started),
 	}
 
 	state := execution.StateSucceeded
 	if out.FunctionError != nil {
 		state = execution.StateFailed
-		result.ExitCode = ptr.Of(1)
+		result.ExitCode = new(1)
 	}
 
 	if logs, err := base64.StdEncoding.DecodeString(sdkaws.ToString(out.LogResult)); err == nil {

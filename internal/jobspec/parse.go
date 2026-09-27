@@ -16,6 +16,7 @@ package jobspec
 
 import (
 	"fmt"
+	"maps"
 	"os"
 
 	"github.com/hashicorp/hcl/v2"
@@ -163,9 +164,7 @@ func bindTasks(file *job.File, ctx *hcl.EvalContext, supplied map[string]string)
 			meta = make(map[string]string, len(supplied))
 		}
 
-		for key, value := range supplied {
-			meta[key] = value
-		}
+		maps.Copy(meta, supplied)
 
 		for k := range j.Tasks {
 			j.Tasks[k].Vars = ctx

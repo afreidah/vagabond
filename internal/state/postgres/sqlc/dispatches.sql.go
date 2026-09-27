@@ -13,6 +13,7 @@ import (
 const claimDispatches = `-- name: ClaimDispatches :many
 UPDATE dispatches SET owner = $1, lease_until = $2
 WHERE state = 'running' AND lease_until < $3::timestamptz
+  AND NOT (dispatch_id = ANY($4::text[]))
 RETURNING dispatch_id, namespace, job, job_version, state, error, created_at, ended_at, tasks, owner, lease_until
 `
 
@@ -20,12 +21,19 @@ type ClaimDispatchesParams struct {
 	Owner      string
 	LeaseUntil time.Time
 	Now        time.Time
+	Skip       []string
 }
 
-// Takes over every running dispatch whose lease lapsed before now. One
-// statement, so two servers claiming at once never both get the same one.
+// Takes over every running dispatch whose lease lapsed before now, except
+// those the caller is running itself. One statement, so two servers claiming
+// at once never both get the same one.
 func (q *Queries) ClaimDispatches(ctx context.Context, arg ClaimDispatchesParams) ([]Dispatch, error) {
-	rows, err := q.db.Query(ctx, claimDispatches, arg.Owner, arg.LeaseUntil, arg.Now)
+	rows, err := q.db.Query(ctx, claimDispatches,
+		arg.Owner,
+		arg.LeaseUntil,
+		arg.Now,
+		arg.Skip,
+	)
 	if err != nil {
 		return nil, err
 	}

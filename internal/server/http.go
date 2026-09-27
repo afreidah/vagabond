@@ -23,6 +23,7 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobs"
+	"github.com/afreidah/vagabond/internal/state"
 )
 
 // -------------------------------------------------------------------------
@@ -94,6 +95,10 @@ func (s *Server) failure(r *http.Request, err error) (int, api.Error) {
 		return http.StatusNotFound, api.Error{Error: err.Error()}
 	case errors.Is(err, jobs.ErrStopped), errors.Is(err, execution.ErrStale):
 		return http.StatusConflict, api.Error{Error: err.Error()}
+	case errors.Is(err, state.ErrUnavailable):
+		s.logger.WarnContext(r.Context(), "store unreachable", "method", r.Method, "path", r.URL.Path, "error", err)
+
+		return http.StatusServiceUnavailable, api.Error{Error: err.Error()}
 	default:
 		s.logger.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 

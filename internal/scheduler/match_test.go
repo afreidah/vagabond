@@ -17,7 +17,6 @@ import (
 
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
-	"github.com/afreidah/vagabond/internal/ptr"
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
@@ -327,14 +326,14 @@ func TestAffinityWeight(t *testing.T) {
 		Attribute: plugin.AttrFreeQuotaPercent,
 		Operator:  job.OperatorGreater,
 		Value:     "50",
-		Weight:    ptr.Of(75),
+		Weight:    new(75),
 	}
 
 	unsatisfied := job.Affinity{
 		Attribute: plugin.AttrFreeQuotaPercent,
 		Operator:  job.OperatorGreater,
 		Value:     "90",
-		Weight:    ptr.Of(40),
+		Weight:    new(40),
 	}
 
 	if got := AffinityWeight(attrs, []job.Affinity{satisfied}); got != 75 {

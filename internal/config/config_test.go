@@ -20,7 +20,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/hashicorp/hcl/v2"
 
-	"github.com/afreidah/vagabond/internal/ptr"
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
@@ -90,7 +89,7 @@ store {
 		t.Errorf("type = %q, want fake-container", ibm.Type)
 	}
 
-	if diff := cmp.Diff(ptr.Of(false), ibm.Enabled); diff != "" {
+	if diff := cmp.Diff(new(false), ibm.Enabled); diff != "" {
 		t.Errorf("enabled mismatch (-want +got):\n%s", diff)
 	}
 

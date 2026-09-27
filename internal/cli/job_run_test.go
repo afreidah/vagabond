@@ -16,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/afreidah/vagabond/internal/plugin"
-	"github.com/afreidah/vagabond/internal/ptr"
 )
 
 // functionConfig is one synchronous provider.
@@ -42,7 +41,7 @@ func (s *testServer) exitWith(t *testing.T, code int) {
 	t.Helper()
 
 	p, _ := s.registry.Provider("fn")
-	p.(*plugin.FakeSyncProvider).ExitCode = ptr.Of(code)
+	p.(*plugin.FakeSyncProvider).ExitCode = new(code)
 }
 
 // -------------------------------------------------------------------------

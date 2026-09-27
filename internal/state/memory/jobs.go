@@ -162,8 +162,7 @@ func (s *Jobs) Versions(_ context.Context, namespace, name string) ([]*jobs.Vers
 	stored := s.versions[jobKey{namespace, name}]
 	out := make([]*jobs.Version, 0, len(stored))
 
-	for i := len(stored) - 1; i >= 0; i-- {
-		v := stored[i]
+	for _, v := range slices.Backward(stored) {
 		v.Source = nil
 		out = append(out, &v)
 	}

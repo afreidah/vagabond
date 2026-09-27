@@ -142,8 +142,9 @@ type Ledger struct {
 	store   Store
 	now     func() time.Time
 
-	mu       sync.Mutex
-	snapshot Usage
+	mu        sync.Mutex
+	snapshot  Usage
+	refreshed time.Time // when snapshot was last read from the store
 }
 
 // Refusal is a reservation that would have taken a pool past its limit.
@@ -363,9 +364,18 @@ func (l *Ledger) Refresh(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.snapshot = usage
+	l.snapshot, l.refreshed = usage, l.now()
 
 	return nil
+}
+
+// Refreshed reports when the snapshot plans read was last read from the store.
+// It ages while the store is unreachable.
+func (l *Ledger) Refreshed() time.Time {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.refreshed
 }
 
 // periods returns the distinct calendar keys every pool of both layers is

@@ -68,6 +68,11 @@ func (s *Executions) FinishDispatch(_ context.Context, d *execution.Dispatch) er
 	return nil
 }
 
+// Ping reports the store reachable, which memory always is.
+func (s *Executions) Ping(context.Context) error {
+	return nil
+}
+
 // RenewDispatch extends owner's lease on a running dispatch to until.
 func (s *Executions) RenewDispatch(_ context.Context, id execution.ID, owner string, until time.Time) error {
 	s.mu.Lock()
@@ -85,9 +90,9 @@ func (s *Executions) RenewDispatch(_ context.Context, id execution.ID, owner str
 }
 
 // ClaimDispatches takes over every running dispatch whose lease lapsed before
-// now, leasing each to owner until until.
+// now, except those in skip, leasing each to owner until until.
 func (s *Executions) ClaimDispatches(
-	_ context.Context, owner string, now, until time.Time,
+	_ context.Context, owner string, now, until time.Time, skip []execution.ID,
 ) ([]*execution.Dispatch, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -96,7 +101,7 @@ func (s *Executions) ClaimDispatches(
 
 	for id := range s.dispatches {
 		stored := s.dispatches[id]
-		if stored.State != execution.DispatchRunning || !stored.LeaseUntil.Before(now) {
+		if stored.State != execution.DispatchRunning || !stored.LeaseUntil.Before(now) || slices.Contains(skip, id) {
 			continue
 		}
 

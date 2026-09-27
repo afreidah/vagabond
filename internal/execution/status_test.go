@@ -14,8 +14,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/afreidah/vagabond/internal/ptr"
 )
 
 func newStatus(t *testing.T, state State) *Status {
@@ -199,9 +197,9 @@ func TestResult_Succeeded(t *testing.T) {
 		exitCode *int
 		want     bool
 	}{
-		{name: "exit zero", exitCode: ptr.Of(0), want: true},
-		{name: "exit one", exitCode: ptr.Of(1), want: false},
-		{name: "exit 127", exitCode: ptr.Of(127), want: false},
+		{name: "exit zero", exitCode: new(0), want: true},
+		{name: "exit one", exitCode: new(1), want: false},
+		{name: "exit 127", exitCode: new(127), want: false},
 		{name: "no exit code at all", exitCode: nil, want: true},
 	}
 
@@ -219,7 +217,7 @@ func TestResult_Succeeded(t *testing.T) {
 // worker execution reaching a result at all is its success.
 func TestResult_NilExitCodeIsNotZero(t *testing.T) {
 	worker := &Result{ExitCode: nil}
-	explicit := &Result{ExitCode: ptr.Of(0)}
+	explicit := &Result{ExitCode: new(0)}
 
 	if !worker.Succeeded() || !explicit.Succeeded() {
 		t.Fatal("both should report success")

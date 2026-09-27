@@ -88,7 +88,7 @@ func match(attrs map[string]string, name string, op job.Operator, want string) b
 func setContains(set, want string) bool {
 	want = strings.TrimSpace(want)
 
-	for _, member := range strings.Split(set, ",") {
+	for member := range strings.SplitSeq(set, ",") {
 		if strings.TrimSpace(member) == want {
 			return true
 		}

@@ -74,15 +74,11 @@ func (d *Dispatcher) startStream(
 	ctx, cancel := context.WithCancel(ctx)
 	s := &stream{cancel: cancel, writer: &countingWriter{w: d.logs}}
 
-	s.done.Add(1)
-
-	go func() {
-		defer s.done.Done()
-
+	s.done.Go(func() {
 		// Deliberately discarded. The execution is what matters, and a caller
 		// who stopped watching is the common reason this returns at all.
 		_ = streamer.StreamLogs(ctx, id, s.writer)
-	}()
+	})
 
 	return s
 }

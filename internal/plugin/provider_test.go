@@ -165,7 +165,7 @@ func TestProvider_WorkerResultHasNoExitCode(t *testing.T) {
 
 func TestProvider_NonZeroExitFailsTheSubmission(t *testing.T) {
 	p := NewFakeFunctionProvider("fake-function")
-	p.ExitCode = ptr.Of(1)
+	p.ExitCode = new(1)
 
 	sub, err := p.Submit(t.Context(), newID(t), &job.Task{})
 	if err != nil {

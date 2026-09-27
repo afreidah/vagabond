@@ -40,7 +40,7 @@ func (s *Server) startUpkeep(ctx context.Context) *sync.WaitGroup {
 	wg.Go(func() { every(ctx, capabilitiesInterval, s.refreshCapabilities) })
 	wg.Go(func() { every(ctx, usageInterval, s.refreshUsage) })
 	wg.Go(func() { every(ctx, reapInterval, s.reap) })
-	wg.Go(func() { every(ctx, claimInterval, s.claim) })
+	wg.Go(func() { every(ctx, s.claimEvery, s.claim) })
 
 	return &wg
 }

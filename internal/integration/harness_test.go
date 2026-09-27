@@ -67,6 +67,13 @@ type harness struct {
 func newHarness(t *testing.T, cfg string) *harness {
 	t.Helper()
 
+	return &harness{t: t, registry: providers(t, cfg), store: pgtest.Open(t, pgtest.Postgres())}
+}
+
+// providers builds the providers cfg declares and refreshes them.
+func providers(t *testing.T, cfg string) *registry.Registry {
+	t.Helper()
+
 	ctx := context.Background()
 
 	file, diags := config.Load("test.hcl", []byte(cfg))
@@ -83,7 +90,7 @@ func newHarness(t *testing.T, cfg string) *harness {
 		t.Fatalf("Refresh() = %v", err)
 	}
 
-	return &harness{t: t, registry: reg, store: pgtest.Open(t, pgtest.Postgres())}
+	return reg
 }
 
 // serve starts a server on the harness's providers and store, points the CLI

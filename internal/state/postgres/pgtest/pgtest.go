@@ -204,14 +204,12 @@ func startPostgres(ctx context.Context) (string, testcontainers.Container, error
 // line, because the SQL port accepts connections before the node will serve.
 func startCockroach(ctx context.Context) (string, testcontainers.Container, error) {
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        cockroachImage,
-			Cmd:          []string{"start-single-node", "--insecure"},
-			ExposedPorts: []string{"26257/tcp", "8080/tcp"},
-			WaitingFor: wait.ForHTTP("/health?ready=1").
-				WithPort("8080/tcp").
-				WithStartupTimeout(2 * time.Minute),
-		},
+		Image:        cockroachImage,
+		Cmd:          []string{"start-single-node", "--insecure"},
+		ExposedPorts: []string{"26257/tcp", "8080/tcp"},
+		WaitingFor: wait.ForHTTP("/health?ready=1").
+			WithPort("8080/tcp").
+			WithStartupTimeout(2 * time.Minute),
 		Started: true,
 	})
 	if err != nil {

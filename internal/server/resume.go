@@ -13,16 +13,16 @@ package server
 import (
 	"context"
 
-	"github.com/afreidah/vagabond/internal/dispatch"
 	"github.com/afreidah/vagabond/internal/execution"
 )
 
 // claim takes over every dispatch whose lease lapsed and resumes each in the
-// background.
+// background. Dispatches this server is running are skipped: their leases
+// lapse while the store is unreachable, and the process running them is alive.
 func (s *Server) claim(ctx context.Context) {
 	now := s.now()
 
-	claimed, err := s.executions.ClaimDispatches(ctx, s.owner, now, now.Add(dispatch.LeaseTTL))
+	claimed, err := s.executions.ClaimDispatches(ctx, s.owner, now, now.Add(s.leaseTTL), s.runningIDs())
 	if err != nil {
 		s.logger.WarnContext(ctx, "claiming abandoned dispatches", "error", err)
 

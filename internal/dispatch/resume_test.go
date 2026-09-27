@@ -18,7 +18,6 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
-	"github.com/afreidah/vagabond/internal/ptr"
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
@@ -60,13 +59,13 @@ func abandon(
 		}
 
 		rec := &execution.Record{
-			Status:    execution.Status{ID: id, State: state, UpdatedAt: lapsed},
+			ID: id, State: state, UpdatedAt: lapsed,
 			Namespace: ns, Job: "ci", Dispatch: d.ID, Task: string(rune('a' + i)),
 			Provider: "a", Attempt: 1, CPU: declared.CPU, Memory: declared.Memory,
 		}
 
 		if state.Terminal() {
-			rec.Result = &execution.Result{ID: id, ExitCode: ptr.Of(0), Duration: time.Second}
+			rec.Result = &execution.Result{ID: id, ExitCode: new(0), Duration: time.Second}
 		}
 
 		if err := reg.executions.Create(ctx, rec); err != nil {
@@ -74,7 +73,7 @@ func abandon(
 		}
 	}
 
-	claimed, err := reg.executions.ClaimDispatches(ctx, "server", time.Now(), time.Now().Add(LeaseTTL))
+	claimed, err := reg.executions.ClaimDispatches(ctx, "server", time.Now(), time.Now().Add(LeaseTTL), nil)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("ClaimDispatches() = %v, %v; want the abandoned one", claimed, err)
 	}
@@ -192,12 +191,12 @@ func TestResume_LeavesFinishedExecutionsAlone(t *testing.T) {
 func TestEnded(t *testing.T) {
 	t.Parallel()
 
-	passed := &execution.Result{ExitCode: ptr.Of(0)}
-	exited := &execution.Result{ExitCode: ptr.Of(1)}
+	passed := &execution.Result{ExitCode: new(0)}
+	exited := &execution.Result{ExitCode: new(1)}
 
 	rec := func(task string, state execution.State, result *execution.Result, failure string) *execution.Record {
 		return &execution.Record{
-			Status: execution.Status{State: state}, Task: task, Result: result, Failure: failure,
+			State: state, Task: task, Result: result, Failure: failure,
 		}
 	}
 
@@ -261,7 +260,7 @@ func TestLease_TakenOverRunStops(t *testing.T) {
 		t.Fatalf("Begin() = %v", err)
 	}
 
-	if _, err := reg.executions.ClaimDispatches(t.Context(), "server", time.Now(), time.Now().Add(LeaseTTL)); err != nil {
+	if _, err := reg.executions.ClaimDispatches(t.Context(), "server", time.Now(), time.Now().Add(LeaseTTL), nil); err != nil {
 		t.Fatalf("ClaimDispatches() = %v", err)
 	}
 

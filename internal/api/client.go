@@ -187,6 +187,39 @@ func (c *Client) Cancel(ctx context.Context, id string) (*Execution, error) {
 }
 
 // -------------------------------------------------------------------------
+// HEALTH
+// -------------------------------------------------------------------------
+
+// Health reads whether the server can take new work. A degraded server answers
+// 503 with its health as the body, which comes back beside the error.
+func (c *Client) Health(ctx context.Context) (*Health, error) {
+	target := c.base.JoinPath("/v1/health")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("GET /v1/health: %w", err)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("contacting the server at %s: %w", c.base, err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	var out Health
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("GET /v1/health: decoding the answer: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return &out, &ResponseError{Status: resp.StatusCode, Body: Error{Error: out.StoreError}}
+	}
+
+	return &out, nil
+}
+
+// -------------------------------------------------------------------------
 // TRANSPORT
 // -------------------------------------------------------------------------
 

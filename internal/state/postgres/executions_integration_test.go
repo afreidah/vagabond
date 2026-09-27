@@ -20,7 +20,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/afreidah/vagabond/internal/execution"
-	"github.com/afreidah/vagabond/internal/ptr"
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
@@ -29,11 +28,9 @@ func pendingRecord(t *testing.T) *execution.Record {
 	t.Helper()
 
 	return &execution.Record{
-		Status: execution.Status{
-			ID:        newID(t),
-			State:     execution.StatePending,
-			UpdatedAt: time.Now().UTC().Truncate(time.Microsecond),
-		},
+		ID:        newID(t),
+		State:     execution.StatePending,
+		UpdatedAt: time.Now().UTC().Truncate(time.Microsecond),
 		Namespace: "ci",
 		Job:       "go-test",
 		Task:      "test",
@@ -81,7 +78,7 @@ func TestExecutions_RoundTrip(t *testing.T) {
 			r.ProviderID = "vagabond-abc"
 			r.Result = &execution.Result{
 				ID:       r.ID,
-				ExitCode: ptr.Of(3),
+				ExitCode: new(3),
 				Duration: 12 * time.Second,
 				Billed:   &quota.Execution{Memory: 512, Duration: 13 * time.Second},
 				Logs:     []byte("ok\x00\xff\xfe done\n"),
@@ -227,7 +224,11 @@ func TestDispatches_LeaseClaim(t *testing.T) {
 
 			until := now.Add(time.Minute)
 
-			claimed, err := store.ClaimDispatches(ctx, "server", now, until)
+			if skipped, _ := store.ClaimDispatches(ctx, "server", now, until, []execution.ID{lapsed.ID}); len(skipped) != 0 {
+				t.Errorf("ClaimDispatches() took %d dispatches it was told to skip", len(skipped))
+			}
+
+			claimed, err := store.ClaimDispatches(ctx, "server", now, until, nil)
 			if err != nil {
 				t.Fatalf("ClaimDispatches() = %v", err)
 			}
@@ -243,7 +244,7 @@ func TestDispatches_LeaseClaim(t *testing.T) {
 				t.Errorf("claimed (-want +got):\n%s", diff)
 			}
 
-			if again, _ := store.ClaimDispatches(ctx, "other", now, until); len(again) != 0 {
+			if again, _ := store.ClaimDispatches(ctx, "other", now, until, nil); len(again) != 0 {
 				t.Errorf("a second claim took %d dispatches", len(again))
 			}
 

@@ -3,18 +3,11 @@
 //
 // Author: Alex Freidah
 //
-// Of takes the address of a value of any type, which Go does not permit for a
-// literal. Optional specification fields are pointers so that unset is
-// distinguishable from zero, and without this every such field would need a
-// named temporary at every construction site.
+// Reading optional specification fields, which are pointers so that unset is
+// distinguishable from zero. Setting one is new(value).
 // -------------------------------------------------------------------------------
 
 package ptr
-
-// Of returns a pointer to v.
-func Of[T any](v T) *T {
-	return &v
-}
 
 // Deref returns the value v points at, or zero if v is nil.
 //

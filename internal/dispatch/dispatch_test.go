@@ -25,7 +25,6 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/ledger"
 	"github.com/afreidah/vagabond/internal/plugin"
-	"github.com/afreidah/vagabond/internal/ptr"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/scheduler"
 	"github.com/afreidah/vagabond/internal/state/memory"
@@ -80,7 +79,7 @@ func (p *scriptedProvider) Submit(
 		return plugin.Submission{
 			ProviderID: p.name + "-" + id.String(),
 			State:      execution.StateSucceeded,
-			Result:     &execution.Result{ID: id, ExitCode: ptr.Of(p.exitCode)},
+			Result:     &execution.Result{ID: id, ExitCode: new(p.exitCode)},
 		}, nil
 	}
 
@@ -118,7 +117,7 @@ func (p *scriptedProvider) Result(
 
 	return &execution.Result{
 		ID:       id,
-		ExitCode: ptr.Of(p.exitCode),
+		ExitCode: new(p.exitCode),
 		Duration: time.Second,
 		Billed:   p.billed,
 		Logs:     []byte("scripted output\n"),
@@ -272,15 +271,15 @@ func containerTask(t *testing.T, retry *job.Retry) *job.Task {
 		Name:      "test",
 		Driver:    job.DriverContainer,
 		Config:    rawBlock(t, "image = \"alpine:3.20\"\n"),
-		Resources: &job.Resources{CPU: ptr.Of(1000), Memory: ptr.Of(512)},
-		Timeout:   ptr.Of(job.Duration("5m")),
+		Resources: &job.Resources{CPU: new(1000), Memory: new(512)},
+		Timeout:   new(job.Duration("5m")),
 		Retry:     retry,
 	}
 }
 
 // reroutingRetry allows n attempts across providers.
 func reroutingRetry(n int) *job.Retry {
-	return &job.Retry{Attempts: ptr.Of(n), Reroute: ptr.Of(true)}
+	return &job.Retry{Attempts: new(n), Reroute: new(true)}
 }
 
 // -------------------------------------------------------------------------
@@ -509,7 +508,7 @@ func TestAttemptsWithoutRerouteStaysPut(t *testing.T) {
 	b := &scriptedProvider{name: "b", pollsToFinish: 1, finalState: execution.StateSucceeded}
 
 	outcome, err := newDispatcher(t, newRegistry(a, b)).
-		RunTask(t.Context(), origin, containerTask(t, &job.Retry{Attempts: ptr.Of(3)}), nil, nil)
+		RunTask(t.Context(), origin, containerTask(t, &job.Retry{Attempts: new(3)}), nil, nil)
 	if !errors.Is(err, ErrExhausted) {
 		t.Fatalf("error = %v, want ErrExhausted", err)
 	}
@@ -736,8 +735,7 @@ func TestEveryProviderRefusedIsNoCandidates(t *testing.T) {
 		t.Fatalf("error = %v, want ErrNoCandidates", err)
 	}
 
-	var refusal *ledger.Refusal
-	if !errors.As(err, &refusal) {
+	if _, ok := errors.AsType[*ledger.Refusal](err); !ok {
 		t.Errorf("error = %v, want it to carry the refusal", err)
 	}
 

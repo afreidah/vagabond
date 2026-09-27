@@ -186,6 +186,20 @@ type Billed struct {
 }
 
 // -------------------------------------------------------------------------
+// HEALTH
+// -------------------------------------------------------------------------
+
+// Health is GET /v1/health. Store is "ok" or "unreachable", with StoreError
+// saying why. UsageRefreshed is when plans' usage was last read, which ages
+// while the store is unreachable. Running counts dispatches in this server.
+type Health struct {
+	Store          string
+	StoreError     string `json:",omitempty"`
+	UsageRefreshed time.Time
+	Running        int
+}
+
+// -------------------------------------------------------------------------
 // ERRORS
 // -------------------------------------------------------------------------
 

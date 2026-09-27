@@ -75,8 +75,7 @@ func (t *tracked) finish(ctx context.Context, state execution.State, result *exe
 func (t *tracked) failed(ctx context.Context, err error) {
 	t.rec.Failure = string(plugin.ClassInternal)
 
-	var classified *plugin.Error
-	if errors.As(err, &classified) {
+	if classified, ok := errors.AsType[*plugin.Error](err); ok {
 		t.rec.Failure = string(classified.Class)
 	}
 
