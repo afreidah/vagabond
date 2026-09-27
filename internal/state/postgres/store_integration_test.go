@@ -15,120 +15,36 @@ package postgres_test
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/testcontainers/testcontainers-go"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/ledger"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/state/postgres"
+	"github.com/afreidah/vagabond/internal/state/postgres/pgtest"
 )
 
-const (
-	postgresImage  = "postgres:17"
-	cockroachImage = "cockroachdb/cockroach:latest-v24.3"
+const gbSeconds = 1024 * 1000
 
-	gbSeconds = 1024 * 1000
-)
-
-// engine is one database to run the whole suite against.
-type engine struct {
-	name  string
-	start func(context.Context, *testing.T) string
+// TestMain starts each engine once for the whole package and stops it after.
+func TestMain(m *testing.M) {
+	pgtest.Main(m)
 }
 
-func engines() []engine {
-	return []engine{
-		{name: "postgres", start: startPostgres},
-		{name: "cockroach", start: startCockroach},
-	}
+// engines is every database the suite runs each case against.
+func engines() []*pgtest.Engine {
+	return pgtest.Engines()
 }
 
-// startPostgres brings up Postgres and returns its DSN.
-func startPostgres(ctx context.Context, t *testing.T) string {
+// open hands back a store on e's shared database with every table emptied.
+func open(_ context.Context, t *testing.T, e *pgtest.Engine) *postgres.Store {
 	t.Helper()
 
-	container, err := tcpostgres.Run(ctx, postgresImage,
-		tcpostgres.WithDatabase("vagabond"),
-		tcpostgres.WithUsername("vagabond"),
-		tcpostgres.WithPassword("vagabond"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-
-	t.Cleanup(func() { _ = testcontainers.TerminateContainer(container) })
-
-	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("postgres dsn: %v", err)
-	}
-
-	return dsn
-}
-
-// startCockroach brings up a single insecure node and returns its DSN.
-//
-// No testcontainers module for it, so the generic container API drives the
-// image directly. The readiness probe is the HTTP endpoint rather than a log
-// line, because the SQL port accepts connections before the node will serve.
-func startCockroach(ctx context.Context, t *testing.T) string {
-	t.Helper()
-
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        cockroachImage,
-			Cmd:          []string{"start-single-node", "--insecure"},
-			ExposedPorts: []string{"26257/tcp", "8080/tcp"},
-			WaitingFor: wait.ForHTTP("/health?ready=1").
-				WithPort("8080/tcp").
-				WithStartupTimeout(2 * time.Minute),
-		},
-		Started: true,
-	})
-	if err != nil {
-		t.Fatalf("start cockroach: %v", err)
-	}
-
-	t.Cleanup(func() { _ = testcontainers.TerminateContainer(container) })
-
-	host, err := container.Host(ctx)
-	if err != nil {
-		t.Fatalf("cockroach host: %v", err)
-	}
-
-	port, err := container.MappedPort(ctx, "26257/tcp")
-	if err != nil {
-		t.Fatalf("cockroach port: %v", err)
-	}
-
-	return fmt.Sprintf("postgres://root@%s:%s/defaultdb?sslmode=disable", host, port.Port())
-}
-
-// open brings up the engine, migrates it, and hands back a ready store.
-func open(ctx context.Context, t *testing.T, e engine) *postgres.Store {
-	t.Helper()
-
-	store, err := postgres.Open(ctx, e.start(ctx, t))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-
-	t.Cleanup(store.Close)
-
-	if err := store.Migrate(ctx); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-
-	return store
+	return pgtest.Open(t, e)
 }
 
 // -------------------------------------------------------------------------
@@ -216,7 +132,7 @@ func readSeptember(ctx context.Context, t *testing.T, s *postgres.Store) ledger.
 // already-applied migration has to be a no-op rather than an error.
 func TestMigrate_IsIdempotent(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -231,7 +147,7 @@ func TestMigrate_IsIdempotent(t *testing.T) {
 // a migration added without it.
 func TestVerifySchema_MatchesAfterMigrating(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -249,7 +165,7 @@ func TestVerifySchema_MatchesAfterMigrating(t *testing.T) {
 // A reservation counts as usage before it settles.
 func TestReserve_CountsAsUsage(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -267,7 +183,7 @@ func TestReserve_CountsAsUsage(t *testing.T) {
 // A refusal inserts nothing, and hands back the usage it was decided against.
 func TestReserve_RefusesPastTheLimit(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -296,7 +212,7 @@ func TestReserve_RefusesPastTheLimit(t *testing.T) {
 // A pool the execution charges nothing cannot refuse it, however full.
 func TestReserve_ZeroChargeIgnoresAFullPool(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -310,7 +226,7 @@ func TestReserve_ZeroChargeIgnoresAFullPool(t *testing.T) {
 // with room for ten, and exactly ten win.
 func TestReserve_ConcurrentReservationsStopAtTheLimit(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -363,7 +279,7 @@ func TestReserve_ConcurrentReservationsStopAtTheLimit(t *testing.T) {
 // and no other, while the provider's total still counts everything.
 func TestReserve_ShareIsCountedApart(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -398,7 +314,7 @@ func TestReserve_ShareIsCountedApart(t *testing.T) {
 // times it is called.
 func TestSettle_ReplacesTheReservationOnce(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -425,7 +341,7 @@ func TestSettle_ReplacesTheReservationOnce(t *testing.T) {
 // Settled in the period it was reserved in, whatever the date is now.
 func TestSettle_ChargesTheReservedPeriod(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -451,7 +367,7 @@ func TestSettle_ChargesTheReservedPeriod(t *testing.T) {
 // No amounts is a drop: the reservation goes and nothing is charged.
 func TestSettle_NothingDrops(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -477,7 +393,7 @@ func TestSettle_NothingDrops(t *testing.T) {
 // not ask for.
 func TestReadUsage_IsScopedToTheRequestedPeriods(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -506,7 +422,7 @@ func TestReadUsage_IsScopedToTheRequestedPeriods(t *testing.T) {
 
 func TestReadUsage_NoPeriodsIsNotAQuery(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -530,7 +446,7 @@ func TestReadUsage_NoPeriodsIsNotAQuery(t *testing.T) {
 // those the callback accepts are settled.
 func TestReap_SettlesWhatTheCallbackAccepts(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -586,7 +502,7 @@ func TestReap_SettlesWhatTheCallbackAccepts(t *testing.T) {
 // back as the same standing, or a restart forgets what was spent.
 func TestLedgerSurvivesARestart(t *testing.T) {
 	for _, e := range engines() {
-		t.Run(e.name, func(t *testing.T) {
+		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
@@ -609,6 +525,10 @@ func TestLedgerSurvivesARestart(t *testing.T) {
 
 			if err := before.Reserve(ctx, newID(t), "ci", "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}); err != nil {
 				t.Fatalf("Reserve() = %v", err)
+			}
+
+			if err := before.Refresh(ctx); err != nil {
+				t.Fatalf("Refresh() = %v", err)
 			}
 
 			wantTotal, wantShare := before.PoolUsage("ci", "fn")

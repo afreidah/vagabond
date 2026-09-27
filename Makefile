@@ -109,7 +109,7 @@ cover: ## Run tests and report total coverage
 # the store's tests are in internal/state/postgres. The build tag is what marks
 # them, not their location.
 integration-test: ## Run integration tests (requires Docker)
-	$(GO) test -race -tags=integration -timeout 20m ./...
+	$(GO) test -race -tags=integration -timeout 10m ./...
 
 # -------------------------------------------------------------------------
 # SECURITY

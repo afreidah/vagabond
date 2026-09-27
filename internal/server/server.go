@@ -97,24 +97,40 @@ type Server struct {
 // CONSTRUCTOR
 // -------------------------------------------------------------------------
 
+// Option configures a Server.
+type Option func(*Server)
+
+// WithOwner names who this server's dispatches are leased to, in place of
+// dispatch.ProcessOwner("server"). Two servers in one process need different
+// owners to tell their leases apart.
+func WithOwner(owner string) Option {
+	return func(s *Server) { s.owner = owner }
+}
+
 // New builds a server over its stores, with a dispatcher that records to
 // executions and charges ledger.
 func New(
-	reg serverRegistry, ledger dispatch.Ledger, executions serverExecutions, jobStore serverJobs, logger *slog.Logger,
+	reg serverRegistry, ledger dispatch.Ledger, executions serverExecutions, jobStore serverJobs,
+	logger *slog.Logger, opts ...Option,
 ) *Server {
-	owner := dispatch.ProcessOwner("server")
-
-	return &Server{
+	s := &Server{
 		registry:   reg,
 		ledger:     ledger,
 		executions: executions,
 		jobs:       jobStore,
-		dispatcher: dispatch.New(reg, ledger, executions, dispatch.WithOwner(owner)),
-		owner:      owner,
+		owner:      dispatch.ProcessOwner("server"),
 		logger:     logger,
 		now:        time.Now,
 		running:    make(map[execution.ID]context.CancelFunc),
 	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	s.dispatcher = dispatch.New(reg, ledger, executions, dispatch.WithOwner(s.owner))
+
+	return s
 }
 
 // Handler returns the route table. Every route takes ?namespace=, defaulting to

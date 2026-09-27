@@ -55,6 +55,14 @@ Integration tests are gated behind the `integration` build tag and use
 `testcontainers-go`, so the test process manages container lifecycle itself.
 Docker must be running, but nothing needs starting by hand.
 
+- `internal/state/postgres`: every store query against Postgres and CockroachDB.
+- `internal/integration`: a real server on Postgres with fake providers, driven
+  through the API client and the CLI.
+- `pgtest` starts each database once per test binary and empties every table
+  before each test, so these tests must not call `t.Parallel`.
+- Use `-v` to watch progress; without it a package prints nothing until it
+  finishes.
+
 ### Vulnerability scanning
 
 ```bash
