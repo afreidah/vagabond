@@ -25,7 +25,8 @@ them, dispatches to the best, and records what the run used.
 **Connections:**
 
 - CLI to server: HTTP/JSON under `/v1`, plain or TLS per the `server` block.
-- Agent to server: the agent opens one TCP connection, multiplexed with yamux.
+- Agent to server: the agent opens one TCP connection, mutual TLS beyond
+  loopback, multiplexed with yamux.
   Each side serves gRPC on the streams the other opens, so the server calls the
   agent over a connection the agent dialed. The connection closing is the
   liveness signal.

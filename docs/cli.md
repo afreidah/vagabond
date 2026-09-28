@@ -692,7 +692,9 @@ next server, which resumes them once their leases lapse (see
 | `The server needs a store block, or -dev to keep everything in memory.` | No `store` block and no `-dev` |
 | `could not open the store: ...` / `could not prepare the store: ...` | Store unreachable, migration or schema check failed |
 | `loading the server certificate: ...` | TLS certificate or key unreadable |
-| `Listening for agents on <addr>: ...` | Agent address in use or not bindable |
+| `agent_bind <addr> is reachable beyond this machine: add an agent_tls block ...` | Non-loopback `agent_bind` with no `agent_tls` |
+| `loading the agent listener's certificate: ...` / `loading the CA from <path>: ...` | `agent_tls` files unreadable or not PEM |
+| `listening for agents on <addr>: ...` | Agent address in use or not bindable |
 | `Invalid -log-level "<value>": use debug, info, warn or error.` | Bad log level |
 
 With `-dev` and a `store` block present, the server warns
@@ -726,7 +728,11 @@ writable in a container).
 |---|---|---|
 | `-server <addr>` | `127.0.0.1:4748` | Server's agent address (`agent_bind`), not its API address |
 | `-pool <name>` | `default` | Pool the node joins. Jobs reach it through a `pool` provider of this name |
-| `-name <name>` | hostname | Node name, shown in `node status` and as the execution's provider ID |
+| `-name <name>` | certificate's common name with TLS, else hostname | Node name, shown in `node status` and as the execution's provider ID. With TLS it must match the certificate |
+| `-tls-ca <path>` | none | CA the server's certificate chains to. With `-tls-cert` and `-tls-key`: all three or none |
+| `-tls-cert <path>` | none | This agent's certificate; its common name is the node's name |
+| `-tls-key <path>` | none | This agent's private key |
+| `-tls-server-name <name>` | host part of `-server` | Name the server's certificate must carry |
 | `-label <key>=<value>` | none | Node label, repeatable. Published as `node.label.<key>` for [constraints](job-specification.md#attributes). Same rules as `-meta`: a key twice is an error |
 | `-cpu <millicores>` | `0` (no cap) | Cap on CPU the agent offers |
 | `-memory <MiB>` | `0` (no cap) | Cap on memory the agent offers |
@@ -747,6 +753,9 @@ namespace `vagabond`.
 | Cgroup delegation error | No `-cgroup-parent` and the agent's cgroup cannot be delegated |
 | containerd error | Socket missing or not reachable |
 | `Finding workloads from before: ...` | Recovering existing workloads failed |
+| `-tls-ca, -tls-cert and -tls-key go together: set all three or none` | Some TLS flags without the others |
+| `-name "<name>" does not match the certificate's common name "<cn>"` | `-name` disagrees with the certificate |
+| `loading the agent's certificate: ...` / `loading the CA from <path>: ...` | TLS files unreadable or not PEM |
 | `Invalid -log-level "<value>": use debug, info, warn or error.` | Bad log level |
 
 ```bash
@@ -754,7 +763,10 @@ vagabond agent \
   -server 10.0.4.2:4748 \
   -pool homelab \
   -label disk=ssd \
-  -cpu 4000 -memory 15872
+  -cpu 4000 -memory 15872 \
+  -tls-ca /etc/vagabond/ca.pem \
+  -tls-cert /etc/vagabond/box1.pem \
+  -tls-key /etc/vagabond/box1-key.pem
 ```
 
 On start the agent logs one `msg=node` line on stderr with the node's name,

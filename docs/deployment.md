@@ -118,31 +118,35 @@ Details: [database](database.md#in-memory-store--dev).
 | Listener | Default | Protocol | TLS | Authentication |
 |---|---|---|---|---|
 | API, `bind` | `127.0.0.1:4747` | HTTP, JSON | Optional, `server { tls { ... } }` | None |
-| Agents, `agent_bind` | `127.0.0.1:4748` | gRPC over a multiplexed TCP session | None | None |
+| Agents, `agent_bind` | `127.0.0.1:4748` | gRPC over a multiplexed TCP session | Mutual, `server { agent_tls { ... } }`; required beyond loopback | Agent certificate; node name is its common name |
 
 **The API has no authentication and no authorization.** Anyone who can reach
 `bind` can register, run, stop and cancel jobs in any namespace, and spend
-every configured provider's quota. Anyone who can reach `agent_bind` can
-register a node into any pool and receive workloads, including their
-environment.
+every configured provider's quota.
 
-- Keep both on localhost, or bind them to an interface only trusted hosts
+- Keep the API on localhost, or bind it to an interface only trusted hosts
   reach: a private network, a VPN, or firewall rules.
 - `tls` encrypts the API and lets clients verify the server. It does not
   authenticate clients. Clients use `-address https://host:4747` and verify
   against the system trust store.
-- Agent traffic is plaintext. Put it on a network you trust.
+- The agent listener binds beyond loopback only with `agent_tls`: every agent
+  presents a certificate from its CA and registers under that certificate's
+  common name. See [agent](agent.md#security).
 - A reverse proxy in front of the API can add authentication. The server
   itself does not read any identity from requests.
 
 ## Running agents
 
 Agents run on the nodes that execute `pool` workloads, not on the server host
-(though they can). Each dials one server's `agent_bind` address:
+(though they can). Each dials one server's `agent_bind` address, over mutual
+TLS unless both are on the same host:
 
 ```bash
-vagabond agent -server 10.0.0.5:4748 -pool homelab
+vagabond agent -server 10.0.0.5:4748 -pool homelab \
+  -tls-ca /etc/vagabond/ca.pem -tls-cert /etc/vagabond/box1.pem -tls-key /etc/vagabond/box1-key.pem
 ```
+
+Certificates: [agent](agent.md#certificates).
 
 The server needs a `provider "homelab" { type = "pool" }` block for anything
 to schedule there. Requirements, systemd unit, capacity and flags:

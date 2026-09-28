@@ -65,7 +65,8 @@ familiar to a Nomad user, but it does not depend on Nomad.
   `GET /v1/health` reports it.
 - Postgres or CockroachDB as the store.
 - Agent nodes: `vagabond agent` registers a node into a pool and runs workloads
-  on its containerd, held to the agent's cgroup.
+  on its containerd, held to the agent's cgroup. Beyond loopback, agents
+  connect over mutual TLS and register under their certificate's name.
 
 Backends:
 
@@ -227,7 +228,7 @@ Details: [architecture.md](docs/architecture.md).
 Not implemented yet. Tracked in [issues](https://github.com/afreidah/vagabond/issues).
 
 - Own nodes: how nodes rank against cloud backends, log streaming from agents,
-  a Firecracker runtime, TLS on the agent connection.
+  a Firecracker runtime.
 - Server: API authentication, degraded mode that keeps dispatching through a
   store outage.
 - Operations: periodic jobs, an event stream with live log streaming, blocking

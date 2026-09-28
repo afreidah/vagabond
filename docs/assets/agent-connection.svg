@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
   <title id="title">The agent connection</title>
-  <desc id="desc">The agent dials one TCP connection to the server, multiplexed with yamux. The agent calls the server's Node service to register; the server calls the agent's AgentExecutions service to run workloads. The agent starts workloads on the node's containerd, inside the agent's cgroup.</desc>
+  <desc id="desc">The agent dials one mutual TLS connection to the server, multiplexed with yamux, and presents a certificate whose common name is its node name. The agent calls the server's Node service to register under that name; the server calls the agent's AgentExecutions service to run workloads. The agent starts workloads on the node's containerd, inside the agent's cgroup.</desc>
   <defs>
     <style>
       .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:20px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:13px;fill:#c9ccd3}.micro{font-size:13px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}.frame{fill:none;stroke:#9a9ea6;stroke-width:2;stroke-dasharray:7 6}.box{fill:#0d0e12;stroke:#9a9ea6;stroke-width:1.5}
@@ -13,13 +13,14 @@
     <text x="170" y="196" text-anchor="middle" class="label" style="font-size:25px">vagabond server</text>
     <text x="170" y="226" text-anchor="middle" class="micro">AGENT_BIND :4748</text>
     <g class="small" text-anchor="middle" style="fill:#f8fafc">
-      <text x="170" y="276">serves Node</text>
-      <text x="170" y="304">calls AgentExecutions</text>
+      <text x="170" y="266">serves Node</text>
+      <text x="170" y="292">calls AgentExecutions</text>
+      <text x="170" y="318">node name = cert CN</text>
     </g>
 
     <!-- Connection -->
     <rect x="330" y="160" width="390" height="180" rx="24" class="frame"/>
-    <text x="525" y="148" text-anchor="middle" class="micro">ONE TCP CONNECTION · YAMUX · AGENT DIALS</text>
+    <text x="525" y="148" text-anchor="middle" class="micro">MUTUAL TLS · YAMUX · AGENT DIALS</text>
     <path class="line" marker-end="url(#arrow)" d="M712 215H338"/>
     <text x="525" y="200" text-anchor="middle" class="mono">Node.Register</text>
     <text x="525" y="240" text-anchor="middle" class="small" style="fill:#9a9ea6">on connect, on change, every 10s</text>
@@ -32,8 +33,9 @@
     <text x="770" y="62" class="micro">NODE</text>
 
     <rect x="770" y="80" width="370" height="96" rx="20" class="card"/>
-    <text x="800" y="120" class="label">vagabond agent</text>
-    <text x="800" y="146" class="small">refuses what does not fit</text>
+    <text x="800" y="114" class="label">vagabond agent</text>
+    <text x="800" y="140" class="small">presents its node certificate</text>
+    <text x="800" y="162" class="small">refuses what does not fit</text>
 
     <path class="line" marker-end="url(#arrow)" d="M955 176V208"/>
 

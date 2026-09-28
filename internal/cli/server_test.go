@@ -64,6 +64,60 @@ func TestServer_BadConfiguration(t *testing.T) {
 	}
 }
 
+// An agent listener reachable beyond this machine needs agent_tls, since an
+// agent without a certificate could register as any node.
+func TestServer_AgentBindBeyondLoopbackNeedsTLS(t *testing.T) {
+	code, stderr := startServer(t, `
+provider "fn" { type = "fake-function" }
+server { agent_bind = "0.0.0.0:0" }
+`, "-dev")
+
+	if code != ExitFailure || !strings.Contains(stderr, "agent_tls") {
+		t.Errorf("exit %d, stderr:\n%s", code, stderr)
+	}
+}
+
+// Only addresses that accept connections from this machine alone count as
+// loopback.
+func TestLoopback(t *testing.T) {
+	tests := map[string]bool{
+		"127.0.0.1:4748": true,
+		"[::1]:4748":     true,
+		"localhost:4748": true,
+		"0.0.0.0:4748":   false,
+		":4748":          false,
+		"10.0.0.5:4748":  false,
+		"not an address": false,
+	}
+
+	for addr, want := range tests {
+		if got := loopback(addr); got != want {
+			t.Errorf("loopback(%q) = %v, want %v", addr, got, want)
+		}
+	}
+}
+
+// The agent's CA, certificate and key come together or not at all.
+func TestAgentCerts_AllOrNone(t *testing.T) {
+	tests := map[string]agentCerts{
+		"only a CA":               {ca: "ca.pem"},
+		"a certificate, no key":   {ca: "ca.pem", cert: "agent.pem"},
+		"a server name, no certs": {serverName: "vagabond"},
+	}
+
+	for name, certs := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := certs.config("10.0.0.5:4748"); err == nil {
+				t.Error("config() = nil error, want the flags refused")
+			}
+		})
+	}
+
+	if cfg, err := (&agentCerts{}).config("10.0.0.5:4748"); cfg != nil || err != nil {
+		t.Errorf("no flags: config() = %v, %v; want no TLS", cfg, err)
+	}
+}
+
 // Without -dev the server keeps everything in the store, so it needs one.
 func TestServer_NeedsAStore(t *testing.T) {
 	code, stderr := startServer(t, `provider "fn" { type = "fake-function" }`)

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/config"
 	"github.com/afreidah/vagabond/internal/ledger"
 	"github.com/afreidah/vagabond/internal/nodes"
@@ -51,7 +52,8 @@ Usage: vagabond server [options]
 
   Listens on the server block's bind address, 127.0.0.1:4747 by default, with
   TLS when the block names a certificate and key, and for agents on its
-  agent_bind address, 127.0.0.1:4748 by default.
+  agent_bind address, 127.0.0.1:4748 by default. An agent_bind beyond loopback
+  requires an agent_tls block, so every agent presents a certificate.
 
   Stopping the server drains requests and leaves running dispatches to the
   next server, which resumes them once their leases lapse.
@@ -151,11 +153,9 @@ func (c *ServerCommand) Run(args []string) int {
 		return c.Errorf("%s", err)
 	}
 
-	var lc net.ListenConfig
-
-	agents, err := lc.Listen(ctx, "tcp", cfg.Server.AgentAddress())
+	agents, err := agentListener(ctx, cfg.Server)
 	if err != nil {
-		return c.Errorf("Listening for agents on %s: %s", cfg.Server.AgentAddress(), err)
+		return c.Errorf("%s", err)
 	}
 
 	go func() { _ = srv.ServeAgents(ctx, agents) }()
@@ -251,6 +251,57 @@ func storeServer(
 	}
 
 	return server.New(reg, led, db, db, logger, server.WithNodes(conns)), db.Close, nil
+}
+
+// agentListener listens where agents connect: over mutual TLS when the server
+// block has agent_tls, and in plain TCP only on a loopback address, since an
+// unauthenticated agent could register as, and replace, any node.
+func agentListener(ctx context.Context, block *config.ServerBlock) (net.Listener, error) {
+	addr := block.AgentAddress()
+
+	var tlsConfig *tls.Config
+
+	if block != nil && block.AgentTLS != nil {
+		var err error
+
+		t := block.AgentTLS
+		if tlsConfig, err = agentrpc.ServerTLS(t.Cert, t.Key, t.CA); err != nil {
+			return nil, err
+		}
+	} else if !loopback(addr) {
+		return nil, fmt.Errorf("agent_bind %s is reachable beyond this machine: add an agent_tls block "+
+			"to the server block so agents must present a certificate, or bind to 127.0.0.1", addr)
+	}
+
+	var lc net.ListenConfig
+
+	listener, err := lc.Listen(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("listening for agents on %s: %w", addr, err)
+	}
+
+	if tlsConfig != nil {
+		listener = tls.NewListener(listener, tlsConfig)
+	}
+
+	return listener, nil
+}
+
+// loopback reports whether addr only accepts connections from this machine.
+// An empty host listens on every interface.
+func loopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return false
+	}
+
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsLoopback()
 }
 
 // serverTLS loads the certificate and key the server block names, or returns
