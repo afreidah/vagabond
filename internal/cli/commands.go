@@ -14,7 +14,7 @@ package cli
 import "github.com/hashicorp/cli"
 
 // Commands returns the command set, keyed by the words a user types. Every
-// command but job validate and server talks to a server.
+// command but job validate, server and agent talks to a server's API.
 func Commands(meta *Meta) map[string]cli.CommandFactory {
 	return map[string]cli.CommandFactory{
 		"job": func() (cli.Command, error) {
@@ -40,6 +40,15 @@ func Commands(meta *Meta) map[string]cli.CommandFactory {
 		},
 		"job stop": func() (cli.Command, error) {
 			return &JobStopCommand{Meta: meta}, nil
+		},
+		"agent": func() (cli.Command, error) {
+			return &AgentCommand{Meta: meta}, nil
+		},
+		"node": func() (cli.Command, error) {
+			return &NodeCommand{Meta: meta}, nil
+		},
+		"node status": func() (cli.Command, error) {
+			return &NodeStatusCommand{Meta: meta}, nil
 		},
 		"execution": func() (cli.Command, error) {
 			return &ExecutionCommand{Meta: meta}, nil

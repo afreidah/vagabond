@@ -186,6 +186,27 @@ type Billed struct {
 }
 
 // -------------------------------------------------------------------------
+// NODES
+// -------------------------------------------------------------------------
+
+// NodeListStub is one connected node as GET /v1/nodes lists it. CPU is
+// millicores and Memory MiB, what the client may use; Executions counts the
+// workloads it reported holding when it registered.
+type NodeListStub struct {
+	Name         string
+	Pool         string
+	Address      string
+	Labels       map[string]string
+	Architecture string
+	CPU          int64
+	Memory       int64
+	Runtimes     []string
+	Version      string
+	Executions   int
+	Connected    time.Time
+}
+
+// -------------------------------------------------------------------------
 // HEALTH
 // -------------------------------------------------------------------------
 

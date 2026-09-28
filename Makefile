@@ -111,6 +111,12 @@ cover: ## Run tests and report total coverage
 integration-test: ## Run integration tests (requires Docker)
 	$(GO) test -race -tags=integration -timeout 10m ./...
 
+# The executor drives the host's containerd, which needs root. Built as the
+# user and run with sudo, so the build cache stays the user's.
+containerd-test: ## Run the containerd executor tests (requires root and containerd)
+	$(GO) test -c -race -tags=containerd -o bin/executor.test ./internal/client/executor
+	sudo ./bin/executor.test -test.v -test.timeout 5m
+
 # -------------------------------------------------------------------------
 # SECURITY
 # -------------------------------------------------------------------------
@@ -130,8 +136,9 @@ check: fmt-check vet lint test govulncheck ## Everything CI runs
 # CODE GENERATION
 # -------------------------------------------------------------------------
 
-generate: $(MOCKGEN) ## Generate interface mocks
+generate: $(MOCKGEN) ## Generate interface mocks and the agent protocol bindings
 	@if $(HAVE_GO_PKGS); then $(GO) generate ./...; else echo "$(NO_PKGS_MSG) generate"; fi
+	$(GO) tool buf generate
 
 # CI runs this to catch a mock that was not regenerated after its interface
 # changed, which otherwise surfaces as a confusing compile failure later.
@@ -167,5 +174,6 @@ $(MOCKGEN):
 clean: ## Remove build and coverage artifacts
 	$(GO) clean
 	rm -f $(COVERPROFILE) vagabond
+	rm -rf bin
 
-.PHONY: help build fmt fmt-check vet lint test test-fast cover integration-test govulncheck check generate generate-check tools clean
+.PHONY: help build fmt fmt-check vet lint test test-fast cover integration-test containerd-test govulncheck check generate generate-check tools clean

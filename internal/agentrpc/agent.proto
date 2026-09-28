@@ -1,0 +1,116 @@
+// -----------------------------------------------------------------------------
+// Agent Protocol
+//
+// Author: Alex Freidah
+//
+// What a server and its clients say to each other. The client dials the server
+// and both sides run gRPC over streams of that one multiplexed connection:
+// Node is served by the server and called by the client, ClientExecutions is
+// served by the client and called by the server.
+// -----------------------------------------------------------------------------
+
+syntax = "proto3";
+
+package vagabond.agent.v1;
+
+option go_package = "github.com/afreidah/vagabond/internal/agentrpc";
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// -----------------------------------------------------------------------------
+// NODE: client to server
+// -----------------------------------------------------------------------------
+
+service Node {
+  // Register announces the node when the client connects, and again whenever
+  // what it reports changes.
+  rpc Register(NodeRegisterRequest) returns (NodeRegisterResponse);
+}
+
+// NodeRegisterRequest is one client's node as it reports itself. capacity is
+// the smallest of the host's resources, the client's cgroup limits, and its
+// flags. executions are the workloads it still holds, so a server can
+// reconcile after either side restarts.
+message NodeRegisterRequest {
+  string name = 1;
+  string pool = 2;
+  map<string, string> labels = 3;
+  string architecture = 4;
+  Resources capacity = 5;
+  repeated string runtimes = 6;
+  string version = 7;
+  repeated string executions = 8;
+}
+
+// Resources are millicores and MiB, matching job.Resources.
+message Resources {
+  int64 cpu = 1;
+  int64 memory = 2;
+}
+
+message NodeRegisterResponse {}
+
+// -----------------------------------------------------------------------------
+// CLIENT EXECUTIONS: server to client
+// -----------------------------------------------------------------------------
+
+service ClientExecutions {
+  rpc Submit(SubmitRequest) returns (Submission);
+  rpc Status(ExecutionRequest) returns (ExecutionStatus);
+  rpc Result(ExecutionRequest) returns (ExecutionResult);
+  rpc Cancel(ExecutionRequest) returns (Empty);
+  rpc Release(ExecutionRequest) returns (Empty);
+  rpc StreamLogs(ExecutionRequest) returns (stream LogChunk);
+}
+
+// Workload is a task already translated to what a container needs: the server
+// decodes the job, the client only runs it.
+message Workload {
+  string image = 1;
+  repeated string command = 2;
+  repeated string args = 3;
+  map<string, string> env = 4;
+  string working_dir = 5;
+  Resources resources = 6;
+  google.protobuf.Duration timeout = 7;
+  string runtime = 8;
+}
+
+message SubmitRequest {
+  string execution_id = 1;
+  Workload workload = 2;
+}
+
+// Submission and ExecutionStatus carry execution states by their names in
+// internal/execution.
+message Submission {
+  string state = 1;
+  string provider_id = 2;
+}
+
+message ExecutionRequest {
+  string execution_id = 1;
+}
+
+message ExecutionStatus {
+  string state = 1;
+  string provider_id = 2;
+  google.protobuf.Timestamp started_at = 3;
+  google.protobuf.Timestamp ended_at = 4;
+}
+
+// ExecutionResult's exit_code is unset when the workload never exited, and
+// logs are the stored tail.
+message ExecutionResult {
+  optional int32 exit_code = 1;
+  google.protobuf.Duration duration = 2;
+  bytes logs = 3;
+  bool logs_truncated = 4;
+}
+
+message LogChunk {
+  bytes data = 1;
+}
+
+message Empty {}
