@@ -207,17 +207,20 @@ Details: [architecture.md](docs/architecture.md).
 | First run | [quickstart.md](docs/quickstart.md) |
 | Architecture and boundaries | [architecture.md](docs/architecture.md) |
 | Job file syntax | [job-specification.md](docs/job-specification.md) |
-| Providers, namespaces, quotas, store, server | [configuration.md](docs/configuration.md) |
-| Admission checks and reason codes | [admission.md](docs/admission.md) |
-| Scoring and strategies | [scheduling.md](docs/scheduling.md) |
-| Records, leases, retries, streaming, cleanup | [dispatch.md](docs/dispatch.md) |
+| Commands and flags | [cli.md](docs/cli.md) |
 | HTTP API | [api.md](docs/api.md) |
+| Admission checks, reason codes, ranking | [scheduling.md](docs/scheduling.md) |
+| Meters, pools, namespace shares, the ledger | [quotas.md](docs/quotas.md) |
+| Records, leases, retries, reroute, release | [dispatch.md](docs/dispatch.md) |
+| Every configuration block | [configuration.md](docs/configuration.md) |
+| Running the server and agents | [deployment.md](docs/deployment.md) |
+| Postgres, CockroachDB, migrations, schema | [database.md](docs/database.md) |
+| Periodic loops in the server and agent | [background-services.md](docs/background-services.md) |
+| Running workloads on your own nodes | [agent.md](docs/agent.md) |
 | Google Cloud Run Jobs | [providers/cloud-run.md](docs/providers/cloud-run.md) |
 | AWS Lambda | [providers/lambda.md](docs/providers/lambda.md) |
 | Writing a provider plugin | [writing-a-provider.md](docs/writing-a-provider.md) |
-| Running workloads on your own nodes | [agent.md](docs/agent.md) |
-| Coding conventions | [style-guide.md](docs/style-guide.md) |
-| Build, test, contribute | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| Coding conventions | [style-guide.md](docs/style-guide.md) || Build, test, contribute | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## Roadmap
 

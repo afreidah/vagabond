@@ -1,0 +1,19 @@
+{{- /*
+  Images, with the relative paths docs/ uses on GitHub, such as
+  "assets/pool.svg", resolved against the linking file. docs/assets is served
+  at /images, so those become /images/<name>.
+*/ -}}
+
+{{- $src := .Destination -}}
+{{- $url := urls.Parse $src -}}
+
+{{- if and (not $url.Scheme) (not (hasPrefix $src "/")) .PageInner.File -}}
+  {{- $target := path.Join (path.Dir .PageInner.File.Path) $url.Path -}}
+  {{- if hasPrefix $target "docs/assets/" -}}
+    {{- $src = printf "images/%s" (strings.TrimPrefix "docs/assets/" $target) | relURL -}}
+  {{- end -}}
+{{- end -}}
+
+<img src="{{ $src }}" alt="{{ .PlainText }}" loading="lazy" class="vb-doc-image"
+  {{- with .Title }} title="{{ . }}"{{ end }} />
+{{- /* No trailing newline, so an image inline with text stays inline. */ -}}

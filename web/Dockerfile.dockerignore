@@ -1,0 +1,6 @@
+.git
+.jj
+bin
+dist
+web/public
+web/resources

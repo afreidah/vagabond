@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
+  <title id="title">Quota layers</title>
+  <desc id="desc">An execution in namespace ci on aws-lambda charges the provider's pools and the namespace's share of them. It is admitted only if every pool it touches has room in both layers. Dispatch reserves the charge in one statement and settles it with what the execution used.</desc>
+  <defs>
+    <style>
+      .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:20px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:13px;fill:#c9ccd3}.micro{font-size:13px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}.used{fill:#fd7300}.free{fill:none;stroke:#9a9ea6;stroke-width:1.5}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#fd7300"/></marker>
+  </defs>
+  <g class="t">
+    <!-- Connections -->
+    <path class="line" marker-end="url(#arrow)" d="M250 250H290V140H330"/>
+    <path class="line" marker-end="url(#arrow)" d="M290 250V360H330"/>
+    <path class="line" d="M830 140H870V360H830"/>
+    <path class="line" marker-end="url(#arrow)" d="M870 250H910"/>
+
+    <!-- Execution -->
+    <rect x="30" y="180" width="220" height="140" rx="24" class="card"/>
+    <text x="140" y="214" text-anchor="middle" class="micro">EXECUTION</text>
+    <text x="140" y="248" text-anchor="middle" class="label">namespace ci</text>
+    <text x="140" y="274" text-anchor="middle" class="small">on aws-lambda</text>
+    <text x="140" y="298" text-anchor="middle" class="small">memory × timeout</text>
+
+    <!-- Provider pools -->
+    <rect x="330" y="50" width="500" height="180" rx="26" class="card"/>
+    <text x="360" y="84" class="micro">PROVIDER POOLS · aws-lambda</text>
+    <text x="360" y="126" class="label">requests</text><text x="360" y="148" class="mono">1,000,000 / month</text>
+    <rect x="560" y="112" width="240" height="16" rx="4" class="free"/><rect x="560" y="112" width="96" height="16" rx="4" class="used"/>
+    <text x="360" y="190" class="label">compute</text><text x="360" y="212" class="mono">400,000 GB-s / month</text>
+    <rect x="560" y="176" width="240" height="16" rx="4" class="free"/><rect x="560" y="176" width="168" height="16" rx="4" class="used"/>
+
+    <!-- Namespace share -->
+    <rect x="330" y="270" width="500" height="180" rx="26" class="card"/>
+    <text x="360" y="304" class="micro">NAMESPACE SHARE · ci</text>
+    <text x="360" y="346" class="label">compute</text><text x="360" y="368" class="mono">100,000 GB-s / month</text>
+    <rect x="560" y="332" width="240" height="16" rx="4" class="free"/><rect x="560" y="332" width="204" height="16" rx="4" class="used"/>
+    <text x="360" y="420" class="small" style="fill:#9a9ea6">no requests share: limited by the provider's pool only</text>
+
+    <!-- Ledger -->
+    <rect x="910" y="140" width="260" height="220" rx="30" class="core"/>
+    <text x="1040" y="178" text-anchor="middle" class="micro">LEDGER</text>
+    <text x="1040" y="212" text-anchor="middle" class="label">room in both?</text>
+    <g class="small" text-anchor="middle" style="fill:#f8fafc">
+      <text x="1040" y="254">reserve: all pools or none</text>
+      <text x="1040" y="284">settle: what it used</text>
+      <text x="1040" y="314">no room: quota-exhausted</text>
+    </g>
+  </g>
+</svg>

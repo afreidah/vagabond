@@ -1,0 +1,32 @@
+{{- /*
+  Structured data for search engines: the project as software on the home
+  page, each documentation page as a technical article.
+*/ -}}
+{{- $description := partial "utils/page-description.html" . | chomp -}}
+{{- if .IsHome -}}
+  {{- $data := dict
+    "@context" "https://schema.org"
+    "@type" "SoftwareSourceCode"
+    "name" site.Title
+    "description" $description
+    "url" .Permalink
+    "codeRepository" "https://github.com/afreidah/vagabond"
+    "programmingLanguage" "Go"
+    "image" ("og-card.png" | absURL)
+  -}}
+  <script type="application/ld+json">{{ $data | jsonify | safeJS }}</script>
+{{- else if and .IsPage (eq .Section "docs") -}}
+  {{- $data := dict
+    "@context" "https://schema.org"
+    "@type" "TechArticle"
+    "headline" (.Params.seoTitle | default .Title)
+    "description" $description
+    "url" .Permalink
+    "image" ("og-card.png" | absURL)
+    "isPartOf" (dict "@type" "WebSite" "name" site.Title "url" site.Home.Permalink)
+  -}}
+  {{- with .Lastmod -}}
+    {{- $data = merge $data (dict "dateModified" (.Format "2006-01-02T15:04:05Z07:00")) -}}
+  {{- end -}}
+  <script type="application/ld+json">{{ $data | jsonify | safeJS }}</script>
+{{- end -}}

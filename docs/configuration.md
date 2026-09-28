@@ -1,9 +1,32 @@
-# Configuration
+---
+title: "Configuration"
+seoTitle: "Server Configuration Reference"
+description: "Syntax reference for the server configuration: discovery, providers, credentials, quota pools, namespaces, the server block and the store."
+weight: 410
+---
 
-The operator's file: which backends exist and how to reach them. Job files say
-what to run; this says what is available to run it on.
+The server configuration declares which providers exist, how to reach them, how
+much of each may be spent, and where the server listens and persists state. It
+is HCL, read once by `vagabond server` at startup. Job files say what to run;
+this file says what is available to run it on.
+
+Every other command talks to a running server and reads no configuration; it
+needs only `-address` or `$VAGABOND_ADDR` (default `http://127.0.0.1:4747`). See
+the [CLI reference](cli.md).
 
 ```hcl
+# Where the API and the agent listener bind.
+server {
+  bind       = "127.0.0.1:4747"
+  agent_bind = "127.0.0.1:4748"
+}
+
+# Required unless the server runs with -dev.
+store {
+  dsn = "postgres://vagabond@db.internal:5432/vagabond"
+}
+
+# One backend. The label is what a job's providers list names.
 provider "gcp-cloud-run" {
   type = "cloud-run"
 
@@ -19,7 +42,6 @@ provider "gcp-cloud-run" {
 
   meta {
     region = "us-central1"
-    tier   = "free"
   }
 
   pool "compute" {
@@ -30,76 +52,196 @@ provider "gcp-cloud-run" {
 }
 ```
 
+## Top-level blocks
+
+| Block | Label | Repeatable | Required | Section |
+|---|---|---|---|---|
+| `server` | none | no | no | [`server` block](#server-block) |
+| `store` | none | no | yes, unless `-dev` | [`store` block](#store-block) |
+| `provider` | provider name | yes | at least one | [`provider` block](#provider-block) |
+| `namespace` | namespace name | yes | no | [`namespace` block](#namespace-block) |
+
+Any other block or attribute at the top level is an error (`Unsupported block
+type`, `Unsupported argument`), reported with its line and column.
+
 ## Discovery
 
-Configuration is read by `vagabond server`; other commands only need the
-server's address. `-config <path>` accepts a file or a directory. A directory
-loads every `.hcl` file inside it and merges the results.
+`vagabond server -config <path>` names a file or a directory. Without the flag,
+the first of these is used:
 
-Resolution order:
+| Order | Location | If it does not exist |
+|---|---|---|
+| 1 | `-config <path>` | Error; does not fall through |
+| 2 | `$VAGABOND_CONFIG` | Error; does not fall through |
+| 3 | `./vagabond.hcl` | Next entry |
+| 4 | `<user config dir>/vagabond/config.hcl`, e.g. `~/.config/vagabond/config.hcl` | Next entry |
+| 5 | `/etc/vagabond.d` | Error listing every path tried |
 
-1. `-config <path>`
-2. `$VAGABOND_CONFIG`
-3. `./vagabond.hcl`
-4. `<user config dir>/vagabond/config.hcl`, e.g. `~/.config/vagabond/config.hcl`
-5. `/etc/vagabond.d`
+The user config dir is Go's `os.UserConfigDir`: `$XDG_CONFIG_HOME`, else
+`~/.config` on Linux. It is skipped when it cannot be determined.
 
-`-config` and `$VAGABOND_CONFIG` fail if the path does not exist; they do not
-fall through to the search path. The search path itself takes the first entry
-that exists.
+Errors:
+
+```text
+configuration not found: -config names /etc/vagabond.hcl, which cannot be read: stat /etc/vagabond.hcl: no such file or directory
+```
+
+```text
+no configuration found. Looked in vagabond.hcl, /home/me/.config/vagabond/config.hcl, /etc/vagabond.d. Pass -config or set VAGABOND_CONFIG
+```
+
+### Directories
+
+A directory loads every `*.hcl` file directly inside it, sorted by name, and
+merges them into one configuration. Subdirectories and files with other
+extensions are ignored.
+
+```text
+/etc/vagabond.d/
+  00-server.hcl      # server and store
+  aws-lambda.hcl     # provider "aws-lambda"
+  gcp-cloud-run.hcl  # provider "gcp-cloud-run"
+  homelab.hcl        # provider "homelab" { type = "pool" }
+  namespaces.hcl     # namespace blocks
+```
+
+Merge rules:
+
+| Block | Across files |
+|---|---|
+| `provider` | Concatenated. The same name in two files is `Duplicate provider`. |
+| `namespace` | Concatenated. The same name in two files is `Duplicate namespace`. |
+| `store` | At most one across all files. A second is `Duplicate store`. |
+| `server` | At most one across all files. A second is `Duplicate server`. |
+
+- Validation runs on the merged result, so a cross-file duplicate is reported
+  once.
+- A namespace `quota` may name a provider declared in another file.
+- A directory with no `.hcl` files is `Empty configuration directory`.
+
+### Reloading
+
+Configuration is read at startup only. There is no reload signal; `SIGINT` and
+`SIGTERM` stop the server. Restart it to apply a change. Credentials are also
+resolved once at startup (see [`credentials` block](#credentials-block)).
 
 ## `provider` block
 
-One backend Vagabond can dispatch to. The label is the routing identifier a
-job's `providers` list refers to.
+One backend the server can dispatch to. The label is the routing identifier a
+job's `providers` list and a namespace `quota` refer to.
 
-| Name | Type | Required | Description |
-|---|---|---|---|
-| label | string | yes | Routing identifier, e.g. `gcp-cloud-run` |
-| `type` | string | yes | Which plugin implements it |
-| `enabled` | bool | no | Defaults to true |
+```hcl
+provider "aws-lambda" {
+  type    = "lambda"   # which plugin implements it
+  enabled = true       # default; false keeps it configured but unused
 
-Name and type are separate so one deployment can register the same plugin twice
-against two accounts or regions, and a job can name them apart.
+  config {             # plugin-specific settings
+    region = "us-east-1"
+  }
 
-A disabled provider stays in the registry. A plan reports it as
-`provider-disabled` rather than omitting it silently.
+  credentials {        # where the plugin's secret comes from
+    exec = ["aws", "configure", "export-credentials", "--format", "process"]
+  }
+
+  meta {               # labels a job can constrain on
+    region = "us-east-1"
+  }
+
+  pool "requests" {    # usage budgets, repeatable
+    meter  = "executions"
+    limit  = 1000000
+    period = "monthly"
+  }
+}
+```
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| label | string | yes | | Provider name; unique across the configuration |
+| `type` | string | yes | | Plugin, from [Types](#types) |
+| `enabled` | bool | no | `true` | `false` keeps the provider registered but never selected |
+| `config` | block | per type | | [`config` block](#config-block) |
+| `credentials` | block | no | | [`credentials` block](#credentials-block) |
+| `meta` | block | no | | [`meta` block](#meta-block) |
+| `pool` | block, repeatable | no | none | [`pool` block](#pool-block) |
+
+The name and the type are separate so one deployment can register the same
+plugin twice, against two accounts or regions, and a job can tell them apart
+(see [Multiple accounts](#multiple-accounts)).
+
+**Disabled providers:** `enabled = false` still builds the provider at startup,
+resolves its credentials and decodes its `config`, but it is never asked for
+capabilities. A plan lists it rejected as `provider-disabled` rather than
+omitting it.
+
+**Health:** the server asks every enabled provider for its capabilities at
+startup and every minute. One that does not answer within 30 seconds is marked
+unhealthy and rejected as `provider-unhealthy` until a later refresh succeeds.
+At startup this prints `Some providers did not answer: ...` and the server
+starts anyway. See [background services](background-services.md).
 
 ### Types
 
-| Type | Plugin |
-|---|---|
-| `cloud-run` | [Google Cloud Run Jobs](providers/cloud-run.md) |
-| `lambda` | [AWS Lambda](providers/lambda.md) |
-| `pool` | The [agent](agent.md#pools) nodes that joined the pool named by the label |
-| `fake-container` | In-memory container provider |
-| `fake-function` | In-memory function provider |
-| `fake-worker` | In-memory worker provider |
+| Type | Plugin | `config` block | `credentials` |
+|---|---|---|---|
+| `cloud-run` | [Google Cloud Run Jobs](providers/cloud-run.md) | required: `project`, `region`, `runtime_service_account` | required: service account JSON key |
+| `lambda` | [AWS Lambda](providers/lambda.md) | required: `region` | optional: `credential_process` JSON; without it, the AWS SDK default chain |
+| `pool` | The [agent](agent.md#pools) nodes connected to this server that joined the pool named by the label | ignored | resolved, unused |
+| `fake-container` | In-memory container provider | ignored | resolved, unused |
+| `fake-function` | In-memory function provider | ignored | resolved, unused |
+| `fake-worker` | In-memory worker provider | ignored | resolved, unused |
 
-The fakes run admission, scheduling and planning with no cloud account
-configured. `examples/config.hcl` uses them.
+Any other value is `Unknown provider type`, listing the known types.
 
-A `pool` provider takes no `config` or `credentials` block. Its label is the
-name agents join with `-pool`, and quota pools, `enabled` and `meta` apply to
-the pool as a whole:
+The fakes run admission, ranking and dispatch with no cloud account.
+`examples/config.hcl` uses them.
+
+### `pool` provider
+
+A provider made of the agent nodes that joined the pool with `vagabond agent
+-pool <label>`:
 
 ```hcl
 provider "homelab" {
   type = "pool"
+
+  meta {
+    site = "basement"
+  }
 }
 ```
 
-- Only `vagabond server` can run a pool; it is a configuration error anywhere
-  else.
-- A pool with no connected nodes is unhealthy, and admission rejects it as
+- Only `vagabond server` can build a pool. Elsewhere it is `Pool without a
+  server`.
+- `enabled`, `meta` and `pool` quota blocks apply to the pool as a whole.
+- Its capabilities are read from the connected nodes on every plan, not on the
+  one-minute refresh, so a node that joins is schedulable at once.
+- A pool with no connected nodes is unhealthy and rejected as
   `provider-unhealthy`.
+- An agent joining a pool name that no `provider` declares connects, but
+  nothing schedules onto it.
 
 ## `config` block
 
-Plugin-specific settings, decoded by the plugin rather than by Vagabond. Each
-plugin documents its own fields; see [Cloud Run](providers/cloud-run.md).
+Plugin-specific settings. Vagabond passes the block to the plugin undecoded, so
+each plugin defines its own attributes and reports its own errors against the
+line they were written on. Attribute reference: [Cloud Run](providers/cloud-run.md),
+[Lambda](providers/lambda.md).
 
-An unknown attribute is reported against the line it was written on.
+```hcl
+config {
+  project                 = "my-project"
+  region                  = "us-central1"
+  runtime_service_account = "vagabond-run@my-project.iam.gserviceaccount.com"
+}
+```
+
+| Condition | Diagnostic |
+|---|---|
+| Block missing on `cloud-run` or `lambda` | `Missing provider configuration`, naming the attributes it needs |
+| Required attribute missing | `Missing required argument` |
+| Unknown attribute | `Unsupported argument` |
+| Attribute set to `""` or whitespace | `Empty provider setting` |
 
 ## `credentials` block
 
@@ -107,39 +249,56 @@ Where a provider's secret comes from. Exactly one source.
 
 | Name | Type | Description |
 |---|---|---|
-| `file` | string | Path to a file holding the credential |
+| `file` | string | Path to a file holding the credential; read as-is |
 | `env` | string | Name of an environment variable holding it |
-| `exec` | list(string) | Command to run; stdout is the credential |
+| `exec` | list(string) | Command and arguments; standard output is the credential |
 
 ```hcl
+# From a file only the server's user can read.
 credentials {
   file = "/etc/vagabond/gcp-dispatcher.json"
 }
 
+# From the server's environment.
 credentials {
   env = "VAGABOND_GCP_KEY"
 }
 
+# From any secret store with a CLI.
 credentials {
   exec = ["vault", "kv", "get", "-field=key", "secret/vagabond/gcp"]
 }
 ```
 
-Rules:
+**Resolution:** once, at startup, for every provider including disabled ones.
+The plugin receives bytes and never learns the source. A rotated secret takes
+effect on the next restart.
 
-- Naming no source is an error.
-- Naming more than one is an error, not a precedence rule.
-- Omitting the block entirely is valid. Most providers need no credential.
-- `exec` is bounded at 30 seconds.
-- `exec` output has trailing newlines trimmed. Stderr is captured for error
-  messages and never mixed into the secret.
+| Source | Behaviour |
+|---|---|
+| `file` | Read whole, byte for byte. Unreadable is an error. |
+| `env` | An unset variable is an error; set to empty yields an empty secret. |
+| `exec` | Run without a shell, bounded at 30 seconds. Trailing `\r` and `\n` are trimmed. Standard error is included in the failure message and never in the secret. Non-zero exit is an error. |
 
-There is no inline literal source. Use `file`.
+Validation:
+
+| Condition | Diagnostic |
+|---|---|
+| Block names no source | `Missing credential source` |
+| Block names more than one | `Ambiguous credential source`. Not a precedence rule. |
+| Source fails at startup | `Cannot resolve credentials`, e.g. `credential environment variable VAGABOND_GCP_KEY is not set` |
+| Plugin cannot use what was resolved | Plugin-specific, e.g. Lambda's `Unusable credential` |
+
+- Omitting the block is valid; fakes and pools need none.
+- There is no inline literal source.
+- `exec` runs an arbitrary command from the configuration file with the
+  server's privileges. Protect the file accordingly.
 
 ## `meta` block
 
-Operator-defined labels. They reach a job as `provider.meta.*` attributes,
-matchable by constraints and affinities.
+Operator-defined labels. They reach admission as `provider.meta.<key>`
+attributes, which a job's constraints and affinities can match. Vagabond
+attaches no meaning to them.
 
 ```hcl
 meta {
@@ -148,87 +307,68 @@ meta {
 }
 ```
 
-Vagabond never interprets these. Anything you want to route on that Vagabond has
-no opinion about belongs here.
+- Attributes only; any key is allowed.
+- Every value must be a string. `cores = 4` is `Invalid provider tag: The value
+  for "cores" must be a string.` Write `cores = "4"`.
+- Checked when the provider is built at startup, not at parse time.
+
+Matching them from a job: [job specification](job-specification.md).
 
 ## `pool` block
 
-One usage budget, in a unit the provider itself meters. Repeatable.
-
-| Name | Type | Required | Description |
-|---|---|---|---|
-| label | string | yes | Pool name; what its usage is counted under |
-| `meter` | string | yes | What the pool counts |
-| `limit` | number | yes | Ceiling, in the meter's unit |
-| `period` | string | yes | When the allowance resets |
-
-Meters:
-
-| Meter | Unit | Charged |
-|---|---|---|
-| `executions` | executions | One per execution |
-| `gb_seconds` | GB-seconds | Declared memory × declared timeout |
-| `cpu_seconds` | vCPU-seconds | Declared CPU × declared timeout |
-| `seconds` | seconds | Declared timeout |
-
-Periods:
-
-| Period | Resets |
-|---|---|
-| `daily` | UTC midnight |
-| `monthly` | First of the month, UTC |
-
-AWS Lambda's free tier, as two independent budgets:
+One usage budget for a provider, in a unit the provider meters. Repeatable
+inside `provider` and inside a namespace `quota`. How pools are charged,
+reserved and settled is covered in [Quotas](quotas.md).
 
 ```hcl
-pool "requests" {
-  meter  = "executions"
-  limit  = 1000000
-  period = "monthly"
-}
-
 pool "compute" {
-  meter  = "gb_seconds"
-  limit  = 400000
-  period = "monthly"
+  meter  = "gb_seconds"   # what the pool counts
+  limit  = 400000         # ceiling, in the meter's unit
+  period = "monthly"      # when usage resets
 }
 ```
 
-Rules:
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| label | string | yes | | Pool name; usage is recorded under it |
+| `meter` | string | yes | | One of the meters below |
+| `limit` | whole number | yes | | Ceiling in the meter's unit; must be positive |
+| `period` | string | yes | | `daily` or `monthly` |
 
-- Nothing ships a default. The limit is how much you are willing to spend on a
-  backend, not a published fact, so there is no correct number to supply.
-- Declare every quantity the platform meters. A provider metered on memory but
-  not CPU will keep admitting work after the CPU allowance is gone. The
-  provider's page under `docs/providers/` lists which apply.
-- A provider with no pools is unlimited. Capabilities still gate it.
-- Pools are additive. An execution charges every pool whose meter it touches and
-  needs headroom in all of them, so a daily cap can sit inside a monthly one.
-- Every attribute is required. A pool with no limit refuses nothing, and a daily
-  budget defaulted to monthly is enforced twelve times too loosely.
-- Charges come from what a task declares, not what it used, so `job plan` can
-  price a job without dispatching it.
-- A limit above the free tier is how you permit spending. Vagabond does not know
-  a provider's prices; do that arithmetic yourself and write the result.
+| Meter | Unit | Charge per execution |
+|---|---|---|
+| `executions` | executions | 1 |
+| `gb_seconds` | GB-seconds | declared memory × declared timeout |
+| `cpu_seconds` | vCPU-seconds | declared CPU × declared timeout |
+| `seconds` | seconds | declared timeout |
 
-`provider.free_quota_percent` is the tightest remaining pool the task charges,
-across the provider's pools and the job namespace's share. It drives the
-`headroom` scorer and the `quota-exhausted` check.
+| Period | Resets |
+|---|---|
+| `daily` | 00:00 UTC |
+| `monthly` | 00:00 UTC on the 1st |
+
+Validation, per owner (a provider, or one namespace's share of a provider):
+
+| Condition | Diagnostic detail |
+|---|---|
+| Attribute missing | `Missing required argument` |
+| Two pools with the same label | `Provider "x" pool "p" is declared twice. ...` |
+| Unknown meter | `... meters "gb_hours", which is not something Vagabond counts. Known meters are executions, gb_seconds, cpu_seconds, seconds.` |
+| Unknown period | `... resets "weekly". Known periods are daily, monthly.` |
+| `limit` zero or negative | `... has a limit of 0. A pool exists to refuse an execution, so its limit must be positive.` |
+| `limit` fractional | HCL decode error; limits are whole numbers |
+
+All carry the summary `Invalid quota pool`. No attribute has a default and no
+provider ships preset pools. A provider with no pools is not quota-limited.
 
 ## `namespace` block
 
-An owner of jobs, with an optional share of each provider's allowance. Top
-level, repeatable, and may sit in its own file.
-
-| Name | Type | Required | Description |
-|---|---|---|---|
-| label | string | yes | Namespace name |
-
-Contains zero or more `quota` blocks, each labelled with a provider name and
-holding `pool` blocks with the same attributes as a provider's.
+An owner of jobs, with an optional share of each provider's pools. How shares
+combine with provider pools: [Quotas](quotas.md).
 
 ```hcl
 namespace "ci" {
+  # ci's share of aws-lambda. The label is a provider name.
   quota "aws-lambda" {
     pool "compute" {
       meter  = "gb_seconds"
@@ -237,83 +377,102 @@ namespace "ci" {
     }
   }
 }
+
+# A namespace with no shares: jobs may run in it, limited by provider pools only.
+namespace "nightly" {}
 ```
 
-- `default` exists without being declared. A job naming no namespace runs there.
-- An execution charges the provider's pools and its namespace's share, and needs
-  room in both. Shares may add up past the provider's pools; the provider's
-  still bind.
-- A namespace with no share of a provider is limited only by the provider's
-  pools.
-- A job naming an undeclared namespace is refused.
+| Name | Type | Required | Description |
+|---|---|---|---|
+| label | string | yes | Namespace name; unique across the configuration |
+| `quota` | block, repeatable | no | One share per provider |
+
+### `quota` block
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| label | string | yes | Name of a configured provider |
+| `pool` | block, repeatable | no | Same syntax and validation as [`pool` block](#pool-block) |
+
+Validation:
+
+| Condition | Diagnostic |
+|---|---|
+| Two namespaces with the same name | `Duplicate namespace` |
+| `quota` names a provider that is not configured | `Unknown provider in namespace quota` |
+| Two `quota` blocks for one provider in one namespace | `Duplicate namespace quota` |
+
+- `default` exists without being declared. A job naming no namespace runs
+  there. Declaring `namespace "default"` gives it shares.
+- A job naming an undeclared namespace is refused: `namespace "x" is not
+  declared in the configuration`.
+- A namespace may sit in its own file in a configuration directory.
 
 ## `server` block
 
-Where `vagabond server` listens. Top level, at most one per deployment.
-
-| Name | Type | Required | Description |
-|---|---|---|---|
-| `bind` | string | no | Address and port; default `127.0.0.1:4747` |
-| `agent_bind` | string | no | Where [agents](agent.md) connect; default `127.0.0.1:4748` |
-
-Contains an optional `tls` block, which covers the API only:
-
-| Name | Type | Required | Description |
-|---|---|---|---|
-| `cert` | string | yes | PEM certificate path |
-| `key` | string | yes | PEM private key path |
+Where `vagabond server` listens. Omitting the block uses every default.
 
 ```hcl
 server {
-  bind       = "0.0.0.0:4747"
-  agent_bind = "0.0.0.0:4748"
+  bind       = "0.0.0.0:4747"   # HTTP API
+  agent_bind = "0.0.0.0:4748"   # agent connections
 
-  tls {
-    cert = "/etc/vagabond/server.crt"
-    key  = "/etc/vagabond/server.key"
+  tls {                         # API only
+    cert = "/etc/vagabond/tls/server.crt"
+    key  = "/etc/vagabond/tls/server.key"
   }
 }
 ```
 
-- The API has no authentication yet. Keep the default localhost bind unless the
-  network in front of it is trusted.
-- The server requires a `store` block, unless started with `-dev`.
-- Clients find the server with `-address` or `$VAGABOND_ADDR`, defaulting to
-  `http://127.0.0.1:4747`.
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `bind` | string | no | `127.0.0.1:4747` | `host:port` for the HTTP API |
+| `agent_bind` | string | no | `127.0.0.1:4748` | `host:port` [agents](agent.md) dial |
+| `tls` | block | no | plain HTTP | Certificate for the API |
 
-## `store` block
-
-Where jobs, executions and the usage ledger persist. Top level, at most one per
-deployment. Read only by `vagabond server`.
+### `tls` block
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `dsn` | string | yes | PostgreSQL or CockroachDB connection string |
+| `cert` | string | yes | PEM certificate (chain) path |
+| `key` | string | yes | PEM private key path |
+
+- Loaded at startup; a bad pair fails with `loading the server certificate:
+  ...`. Minimum TLS 1.2.
+- Covers the API listener only. The agent listener is plain TCP.
+- The API has no authentication. Anyone who can reach `bind` can register,
+  run and cancel jobs. See [Deployment](deployment.md#network-exposure).
+- Clients reach a TLS server with `-address https://host:4747`; the certificate
+  is verified against the system trust store.
+
+## `store` block
+
+The database holding jobs, dispatches, executions and quota usage. Schema,
+migrations and operations: [Database](database.md).
 
 ```hcl
 store {
-  dsn = "postgres://vagabond@localhost:5432/vagabond"
+  dsn = "postgres://vagabond@db.internal:5432/vagabond?sslmode=verify-full"
 }
 ```
 
-- Migrations apply when the server starts.
-- `server -dev` ignores the block and keeps everything in memory, empty at
-  every start.
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `dsn` | string | yes | PostgreSQL or CockroachDB connection string, URL or `key=value` form |
+
+| Condition | Result |
+|---|---|
+| Block absent | `vagabond server` exits: `The server needs a store block, or -dev to keep everything in memory.` |
+| `dsn = ""` | `Empty store DSN` |
+| Block present with `-dev` | Warning; the block is ignored and everything is kept in memory |
+| Database unreachable at startup | `could not open the store: ...`, exit 1 |
+
 - The password can stay out of the DSN: `PGPASSWORD` and `~/.pgpass` are read.
-
-Ledger behavior:
-
-- Reserve on dispatch, in one statement: the reservation is written only if
-  every pool has room for it.
-- Settle on completion: the reservation is replaced by what the run cost.
-- A reservation left by a killed process holds its amount until it is reaped,
-  by the server at startup and every 5 minutes.
-  The reaper asks the provider about reservations older than an hour:
-  - finished: charged for how long it ran
-  - never ran: dropped
-  - still running, or the provider could not answer: kept
+- Migrations apply at startup.
 
 ## Multiple accounts
+
+The same plugin registered twice, told apart by name and by `meta`:
 
 ```hcl
 provider "gcp-us" {
@@ -343,7 +502,7 @@ provider "gcp-eu" {
 }
 ```
 
-A job then selects between them with a constraint:
+A job selects between them with a constraint:
 
 ```hcl
 constraint {
@@ -353,8 +512,164 @@ constraint {
 }
 ```
 
+Each provider has its own pools; two providers on one account do not share a
+budget.
+
 ## Diagnostics
 
-Configuration is decoded with the same machinery job files use. Every problem in
-the file is reported in one run, with line and column. A provider that fails to
-build does not stop the others from being reported.
+Configuration is decoded with the same HCL machinery job files use.
+
+- Every problem is reported in one run, not the first only.
+- A provider that fails to build does not stop the others from being reported.
+- Parse and decode errors carry file, line and column. Validation errors
+  (duplicates, pools, credentials) name the provider, namespace or pool
+  instead.
+- Any error exits `vagabond server` with status 1 before it listens.
+
+```text
+Duplicate provider
+  Two providers are named "aws-lambda". The name is what a job's provider list refers to, so it must identify one.
+Invalid quota pool
+  Provider "aws-lambda" pool "compute" meters "gb_hours", which is not something Vagabond counts. Known meters are executions, gb_seconds, cpu_seconds, seconds.
+```
+
+Other startup errors:
+
+| Message | Cause |
+|---|---|
+| `No providers are configured, so there is nothing to run on.` | Configuration decoded with zero `provider` blocks |
+| `Listening for agents on <addr>: ...` | `agent_bind` in use or not bindable |
+| `listening on <addr>: ...` | `bind` in use or not bindable |
+
+## Complete example
+
+```hcl
+# /etc/vagabond.d/vagabond.hcl
+
+server {
+  bind       = "0.0.0.0:4747"
+  agent_bind = "10.0.0.5:4748"
+
+  tls {
+    cert = "/etc/vagabond/tls/server.crt"
+    key  = "/etc/vagabond/tls/server.key"
+  }
+}
+
+store {
+  # Password from PGPASSWORD or ~/.pgpass.
+  dsn = "postgres://vagabond@db.internal:5432/vagabond?sslmode=verify-full"
+}
+
+provider "gcp-cloud-run" {
+  type = "cloud-run"
+
+  config {
+    project                 = "my-project"
+    region                  = "us-central1"
+    runtime_service_account = "vagabond-run@my-project.iam.gserviceaccount.com"
+  }
+
+  credentials {
+    file = "/etc/vagabond/gcp-dispatcher.json"
+  }
+
+  meta {
+    region = "us-central1"
+    kind   = "cloud"
+  }
+
+  pool "cpu" {
+    meter  = "cpu_seconds"
+    limit  = 180000
+    period = "monthly"
+  }
+
+  pool "compute" {
+    meter  = "gb_seconds"
+    limit  = 360000
+    period = "monthly"
+  }
+}
+
+provider "aws-lambda" {
+  type = "lambda"
+
+  config {
+    region = "us-east-1"
+  }
+
+  # Prints credential_process JSON.
+  credentials {
+    exec = ["aws", "configure", "export-credentials", "--format", "process"]
+  }
+
+  meta {
+    region = "us-east-1"
+    kind   = "cloud"
+  }
+
+  pool "requests" {
+    meter  = "executions"
+    limit  = 1000000
+    period = "monthly"
+  }
+
+  pool "compute" {
+    meter  = "gb_seconds"
+    limit  = 400000
+    period = "monthly"
+  }
+
+  # A daily cap inside the monthly one.
+  pool "compute-daily" {
+    meter  = "gb_seconds"
+    limit  = 13000
+    period = "daily"
+  }
+}
+
+provider "homelab" {
+  type = "pool"
+
+  meta {
+    kind = "homelab"
+  }
+}
+
+# Kept configured, never selected.
+provider "gcp-eu" {
+  type    = "cloud-run"
+  enabled = false
+
+  config {
+    project                 = "my-project"
+    region                  = "europe-west1"
+    runtime_service_account = "vagabond-run@my-project.iam.gserviceaccount.com"
+  }
+
+  credentials {
+    file = "/etc/vagabond/gcp-dispatcher.json"
+  }
+}
+
+namespace "ci" {
+  quota "aws-lambda" {
+    pool "compute" {
+      meter  = "gb_seconds"
+      limit  = 200000
+      period = "monthly"
+    }
+  }
+
+  quota "gcp-cloud-run" {
+    pool "compute" {
+      meter  = "gb_seconds"
+      limit  = 180000
+      period = "monthly"
+    }
+  }
+}
+
+namespace "nightly" {}
+```

@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 460" role="img" aria-labelledby="title desc">
+  <title id="title">A task's path</title>
+  <desc id="desc">A job file is validated, admitted against every provider and ranked. Dispatch then reserves quota, submits to the selected provider, watches the execution, settles what it used and releases what it left behind. An infrastructure failure moves the task to the next ranked provider.</desc>
+  <defs>
+    <style>
+      .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:19px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.micro{font-size:14px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.dash{fill:none;stroke:#9a9ea6;stroke-width:2.5;stroke-dasharray:7 6;stroke-linecap:round;stroke-linejoin:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#fd7300"/></marker>
+    <marker id="arrow-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#9a9ea6"/></marker>
+  </defs>
+  <g class="t">
+    <!-- Plan -->
+    <text x="40" y="40" class="micro">PLAN · RESERVES NOTHING</text>
+    <path class="line" marker-end="url(#arrow)" d="M260 105H320"/>
+    <path class="line" marker-end="url(#arrow)" d="M540 105H600"/>
+    <path class="line" marker-end="url(#arrow)" d="M820 105H880"/>
+    <rect x="40" y="60" width="220" height="90" rx="20" class="card"/>
+    <rect x="320" y="60" width="220" height="90" rx="20" class="card"/>
+    <rect x="600" y="60" width="220" height="90" rx="20" class="card"/>
+    <rect x="880" y="60" width="220" height="90" rx="20" class="card"/>
+    <g text-anchor="middle">
+      <text x="150" y="100" class="label">Job file</text><text x="150" y="124" class="small">HCL, meta.* substituted</text>
+      <text x="430" y="100" class="label">Validate</text><text x="430" y="124" class="small">line and column</text>
+      <text x="710" y="100" class="label">Admission</text><text x="710" y="124" class="small">13 checks, 4 tiers</text>
+      <text x="990" y="100" class="label">Ranking</text><text x="990" y="124" class="small">scored, one selected</text>
+    </g>
+
+    <!-- Plan to dispatch -->
+    <path class="line" marker-end="url(#arrow)" d="M990 150V200H132V260"/>
+
+    <!-- Dispatch -->
+    <text x="1112" y="244" text-anchor="end" class="micro">DISPATCH · RECORDED AT EVERY STEP</text>
+    <path class="line" marker-end="url(#arrow)" d="M224 305H262"/>
+    <path class="line" marker-end="url(#arrow)" d="M446 305H484"/>
+    <path class="line" marker-end="url(#arrow)" d="M668 305H706"/>
+    <path class="line" marker-end="url(#arrow)" d="M890 305H928"/>
+    <rect x="40" y="260" width="184" height="90" rx="20" class="card"/>
+    <rect x="262" y="260" width="184" height="90" rx="20" class="card"/>
+    <rect x="484" y="260" width="184" height="90" rx="20" class="card"/>
+    <rect x="706" y="260" width="184" height="90" rx="20" class="card"/>
+    <rect x="928" y="260" width="184" height="90" rx="20" class="card"/>
+    <g text-anchor="middle">
+      <text x="132" y="300" class="label">Reserve</text><text x="132" y="324" class="small">every pool, or none</text>
+      <text x="354" y="300" class="label">Submit</text><text x="354" y="324" class="small">fresh execution ID</text>
+      <text x="576" y="300" class="label">Watch</text><text x="576" y="324" class="small">poll 2s, up to 15s</text>
+      <text x="798" y="300" class="label">Settle</text><text x="798" y="324" class="small">charge what it used</text>
+      <text x="1020" y="300" class="label">Release</text><text x="1020" y="324" class="small">provider cleanup</text>
+    </g>
+
+    <!-- Reroute -->
+    <path class="dash" marker-end="url(#arrow-grey)" d="M576 350V410H354V352"/>
+    <text x="465" y="438" text-anchor="middle" class="small" style="fill:#9a9ea6">infrastructure failure: next ranked provider</text>
+  </g>
+</svg>

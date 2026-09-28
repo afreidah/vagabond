@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
+  <title id="title">Vagabond architecture</title>
+  <desc id="desc">The vagabond CLI calls the server's HTTP API. The server admits, ranks, dispatches and accounts for each task, keeps its records in Postgres or CockroachDB, and runs work on Google Cloud Run Jobs, AWS Lambda, or agent nodes.</desc>
+  <defs>
+    <style>
+      .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:21px;font-weight:700;fill:#f8fafc}.small{font-size:15px;font-weight:600;fill:#c9ccd3}.micro{font-size:14px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}.icon{fill:none;stroke:#ff8a2b;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#fd7300"/></marker>
+  </defs>
+  <g class="t">
+    <!-- Connections -->
+    <path class="line" marker-end="url(#arrow)" d="M260 240H420"/>
+    <text x="340" y="226" text-anchor="middle" class="small">HTTP /v1</text>
+    <path class="line" marker-end="url(#arrow)" d="M780 240H835V90H890"/>
+    <path class="line" marker-end="url(#arrow)" d="M780 240H890"/>
+    <path class="line" marker-end="url(#arrow)" d="M835 240V390H890"/>
+    <path class="line" marker-end="url(#arrow)" d="M600 390V440"/>
+
+    <!-- CLI -->
+    <rect x="40" y="160" width="220" height="160" rx="26" class="card"/>
+    <g class="icon"><rect x="120" y="186" width="60" height="44" rx="7"/><path d="M132 200l10 8-10 8M150 218h16"/></g>
+    <text x="150" y="268" text-anchor="middle" class="label">vagabond CLI</text>
+    <text x="150" y="294" text-anchor="middle" class="small">plan · run · dispatch</text>
+
+    <!-- Server -->
+    <rect x="420" y="90" width="360" height="300" rx="36" class="core"/>
+    <path class="icon" style="stroke:#f8fafc" d="M600 116l26 15v30l-26 15-26-15v-30z"/>
+    <text x="600" y="214" text-anchor="middle" class="label" style="font-size:27px">vagabond server</text>
+    <text x="600" y="244" text-anchor="middle" class="micro">CONTROL PLANE</text>
+    <g class="small" text-anchor="middle" style="fill:#f8fafc">
+      <text x="520" y="298">admission</text><text x="680" y="298">ranking</text>
+      <text x="520" y="336">dispatch</text><text x="680" y="336">quotas</text>
+    </g>
+
+    <!-- Store -->
+    <rect x="440" y="440" width="320" height="96" rx="24" class="card"/>
+    <g class="icon"><ellipse cx="496" cy="468" rx="22" ry="8"/><path d="M474 468v38c0 4 10 8 22 8s22-4 22-8v-38M474 487c0 4 10 8 22 8s22-4 22-8"/></g>
+    <text x="540" y="482" class="label">Store</text>
+    <text x="540" y="508" class="small">Postgres / CockroachDB</text>
+
+    <!-- Backends -->
+    <rect x="890" y="35" width="280" height="110" rx="24" class="card"/>
+    <rect x="890" y="185" width="280" height="110" rx="24" class="card"/>
+    <rect x="890" y="335" width="280" height="110" rx="24" class="card"/>
+    <g class="icon">
+      <path d="M922 104h36a12 12 0 0 0 0-24 17 17 0 0 0-32-3 13 13 0 0 0-4 27z"/>
+      <path d="M922 254h36a12 12 0 0 0 0-24 17 17 0 0 0-32-3 13 13 0 0 0-4 27z"/>
+      <rect x="918" y="370" width="44" height="16" rx="4"/><rect x="918" y="394" width="44" height="16" rx="4"/><path d="M926 378h2M926 402h2"/>
+    </g>
+    <text x="980" y="86" class="label">Cloud Run Jobs</text><text x="980" y="112" class="small">Google Cloud</text>
+    <text x="980" y="236" class="label">AWS Lambda</text><text x="980" y="262" class="small">functions</text>
+    <text x="980" y="386" class="label">Agent nodes</text><text x="980" y="412" class="small">your containerd</text>
+  </g>
+</svg>

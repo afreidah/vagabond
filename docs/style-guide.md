@@ -1,5 +1,9 @@
 ---
+title: "Style Guide"
+seoTitle: "Go Style Guide for Contributors"
+linkTitle: "Style guide"
 description: "Vagabond's Go conventions: comment and file-header format, package layout, architectural boundaries, error handling, testing, and branch naming."
+weight: 710
 ---
 
 **Author:** Alex Freidah

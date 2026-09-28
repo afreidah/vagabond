@@ -6,6 +6,11 @@ coverage.out
 integration-coverage.out
 dist/
 
+# Hugo build output and caches
+/web/public/
+/web/resources/
+/web/.hugo_build.lock
+
 # Editor swap and backup files
 *.sw?
 *~

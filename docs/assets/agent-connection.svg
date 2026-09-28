@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
+  <title id="title">The agent connection</title>
+  <desc id="desc">The agent dials one TCP connection to the server, multiplexed with yamux. The agent calls the server's Node service to register; the server calls the agent's AgentExecutions service to run workloads. The agent starts workloads on the node's containerd, inside the agent's cgroup.</desc>
+  <defs>
+    <style>
+      .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:20px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:13px;fill:#c9ccd3}.micro{font-size:13px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}.frame{fill:none;stroke:#9a9ea6;stroke-width:2;stroke-dasharray:7 6}.box{fill:#0d0e12;stroke:#9a9ea6;stroke-width:1.5}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#fd7300"/></marker>
+  </defs>
+  <g class="t">
+    <!-- Server -->
+    <rect x="30" y="130" width="280" height="240" rx="34" class="core"/>
+    <text x="170" y="196" text-anchor="middle" class="label" style="font-size:25px">vagabond server</text>
+    <text x="170" y="226" text-anchor="middle" class="micro">AGENT_BIND :4748</text>
+    <g class="small" text-anchor="middle" style="fill:#f8fafc">
+      <text x="170" y="276">serves Node</text>
+      <text x="170" y="304">calls AgentExecutions</text>
+    </g>
+
+    <!-- Connection -->
+    <rect x="330" y="160" width="390" height="180" rx="24" class="frame"/>
+    <text x="525" y="148" text-anchor="middle" class="micro">ONE TCP CONNECTION · YAMUX · AGENT DIALS</text>
+    <path class="line" marker-end="url(#arrow)" d="M712 215H338"/>
+    <text x="525" y="200" text-anchor="middle" class="mono">Node.Register</text>
+    <text x="525" y="240" text-anchor="middle" class="small" style="fill:#9a9ea6">on connect, on change, every 10s</text>
+    <path class="line" marker-end="url(#arrow)" d="M338 285H712"/>
+    <text x="525" y="270" text-anchor="middle" class="mono">AgentExecutions</text>
+    <text x="525" y="312" text-anchor="middle" class="small" style="fill:#9a9ea6">Submit · Status · Result · Cancel · Release</text>
+
+    <!-- Node -->
+    <rect x="740" y="30" width="430" height="440" rx="30" class="frame"/>
+    <text x="770" y="62" class="micro">NODE</text>
+
+    <rect x="770" y="80" width="370" height="96" rx="20" class="card"/>
+    <text x="800" y="120" class="label">vagabond agent</text>
+    <text x="800" y="146" class="small">refuses what does not fit</text>
+
+    <path class="line" marker-end="url(#arrow)" d="M955 176V208"/>
+
+    <rect x="770" y="208" width="370" height="80" rx="20" class="card"/>
+    <text x="800" y="244" class="label">containerd</text>
+    <text x="800" y="268" class="small">namespace vagabond · runc</text>
+
+    <path class="line" marker-end="url(#arrow)" d="M955 288V320"/>
+
+    <rect x="770" y="320" width="370" height="124" rx="20" class="frame" style="stroke:#fd7300"/>
+    <text x="800" y="350" class="micro">AGENT'S CGROUP · ITS CAPACITY</text>
+    <rect x="800" y="366" width="96" height="56" rx="10" class="box"/><rect x="908" y="366" width="96" height="56" rx="10" class="box"/><rect x="1016" y="366" width="96" height="56" rx="10" class="box"/>
+    <g class="mono" text-anchor="middle"><text x="848" y="399">workload</text><text x="956" y="399">workload</text><text x="1064" y="399">workload</text></g>
+  </g>
+</svg>
