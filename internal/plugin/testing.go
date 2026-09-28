@@ -32,7 +32,7 @@ func FixtureContainer(observedAt time.Time) Capabilities {
 	return Capabilities{
 		Drivers:         []job.DriverName{job.DriverContainer},
 		Architectures:   []job.Arch{job.ArchAMD64, job.ArchARM64},
-		MaxResources:    Resources{CPU: 4000, Memory: 8192},
+		MaxResources:    Limits{CPU: new(4000), Memory: new(8192)},
 		InternetEgress:  true,
 		ArbitraryImages: true,
 		ObservedAt:      observedAt,
@@ -50,13 +50,13 @@ func FixtureContainer(observedAt time.Time) Capabilities {
 //
 // The CPU ceiling is derived rather than offered. Lambda gives no way to choose
 // CPU: it scales with the memory tier, and roughly six vCPU is what the largest
-// one implies. Advertising that beats leaving it zero, which this model reads
+// one implies. Advertising that beats leaving it nil, which this model reads
 // as no limit at all.
 func FixtureFunction(observedAt time.Time) Capabilities {
 	return Capabilities{
 		Drivers:         []job.DriverName{job.DriverFunction},
 		Architectures:   []job.Arch{job.ArchAMD64, job.ArchARM64},
-		MaxResources:    Resources{CPU: 6000, Memory: 10240},
+		MaxResources:    Limits{CPU: new(6000), Memory: new(10240)},
 		MaxDuration:     15 * time.Minute,
 		InternetEgress:  true,
 		ArbitraryImages: false,
@@ -73,7 +73,7 @@ func FixtureWorker(observedAt time.Time) Capabilities {
 	return Capabilities{
 		Drivers:         []job.DriverName{job.DriverWorker},
 		Architectures:   nil,
-		MaxResources:    Resources{Memory: 128},
+		MaxResources:    Limits{Memory: new(128)},
 		MaxDuration:     30 * time.Second,
 		InternetEgress:  true,
 		ArbitraryImages: false,

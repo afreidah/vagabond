@@ -27,20 +27,23 @@ import (
 // TYPES
 // -------------------------------------------------------------------------
 
-// Resources is the largest task a provider will accept.
-//
-// It mirrors job.Resources so the comparison reads directly, but does not reuse
-// it: that type uses pointers because an omitted HCL field has to stay
-// distinguishable from a zero one, and nothing here is optional in that sense.
-// Zero means the provider advertised no limit.
-//
-// Units match job.Resources, so CPU is millicores. A provider that does not let
-// a caller choose CPU at all, as Lambda does not, advertises the ceiling its
-// largest memory tier implies rather than leaving it zero, because zero here
-// means unlimited.
+// Resources is a task size in the units of job.Resources: CPU in millicores,
+// memory in MiB.
 type Resources struct {
 	CPU    int // millicores; 1000 is one vCPU
 	Memory int // MiB
+}
+
+// Limits is the largest task a provider will accept. A nil field advertises no
+// limit; zero is a real limit that admits nothing, which a full pool node
+// needs to say.
+//
+// A provider that does not let a caller choose CPU, as Lambda does not,
+// advertises the ceiling its largest memory tier implies rather than leaving
+// it nil.
+type Limits struct {
+	CPU    *int // millicores
+	Memory *int // MiB
 }
 
 // Capabilities is what a provider advertises so that admission can decide
@@ -68,8 +71,13 @@ type Capabilities struct {
 	Drivers       []job.DriverName
 	Architectures []job.Arch
 
-	MaxResources Resources
+	MaxResources Limits
 	MaxDuration  time.Duration // zero means the provider advertised no limit
+
+	// DefaultResources is what the provider sizes a task that declares no CPU or
+	// memory at, so admission checks the size it will run at. Zero where the
+	// provider sets no size of its own.
+	DefaultResources Resources
 
 	InternetEgress  bool
 	PrivateNetwork  bool
@@ -102,6 +110,15 @@ func (c *Capabilities) Clone() Capabilities {
 	out := *c
 	out.Drivers = slices.Clone(c.Drivers)
 	out.Architectures = slices.Clone(c.Architectures)
+
+	// The limits are pointers, so each gets its own copy.
+	if c.MaxResources.CPU != nil {
+		out.MaxResources.CPU = new(*c.MaxResources.CPU)
+	}
+
+	if c.MaxResources.Memory != nil {
+		out.MaxResources.Memory = new(*c.MaxResources.Memory)
+	}
 
 	// Members hold slices of their own, so each is cloned in turn.
 	if c.Members != nil {
@@ -142,14 +159,32 @@ func (c *Capabilities) WithinDuration(d time.Duration) bool {
 	return c.MaxDuration == 0 || d <= c.MaxDuration
 }
 
-// WithinResources reports whether the provider accepts the requested CPU and
-// memory. A zero limit means none was advertised.
+// Sized returns r with the provider's defaults in place of anything r leaves
+// zero: the size a task will actually run at here.
+func (c *Capabilities) Sized(r Resources) Resources {
+	if r.CPU == 0 {
+		r.CPU = c.DefaultResources.CPU
+	}
+
+	if r.Memory == 0 {
+		r.Memory = c.DefaultResources.Memory
+	}
+
+	return r
+}
+
+// WithinResources reports whether the provider accepts a task of size r, once
+// sized by its defaults. A nil limit admits anything.
 func (c *Capabilities) WithinResources(r Resources) bool {
-	if c.MaxResources.CPU != 0 && r.CPU > c.MaxResources.CPU {
+	r = c.Sized(r)
+
+	if limit := c.MaxResources.CPU; limit != nil && r.CPU > *limit {
 		return false
 	}
 
-	return c.MaxResources.Memory == 0 || r.Memory <= c.MaxResources.Memory
+	limit := c.MaxResources.Memory
+
+	return limit == nil || r.Memory <= *limit
 }
 
 // StaleAt reports whether the observation is older than maxAge as of now.

@@ -113,7 +113,11 @@ func (p *Provider) LiveCapabilities() (plugin.Capabilities, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	out := plugin.Capabilities{ObservedAt: p.now()}
+	out := plugin.Capabilities{
+		ObservedAt:       p.now(),
+		DefaultResources: defaultResources,
+		MaxResources:     plugin.Limits{CPU: new(0), Memory: new(0)},
+	}
 
 	for _, conn := range conns {
 		member := p.member(conn)
@@ -121,10 +125,11 @@ func (p *Provider) LiveCapabilities() (plugin.Capabilities, error) {
 
 		// The summary is what any node offers, for a plan's display; admission
 		// judges the members, not this.
+		room := member.Capabilities.MaxResources
 		out.Drivers = union(out.Drivers, member.Capabilities.Drivers)
 		out.Architectures = union(out.Architectures, member.Capabilities.Architectures)
-		out.MaxResources.CPU = max(out.MaxResources.CPU, member.Capabilities.MaxResources.CPU)
-		out.MaxResources.Memory = max(out.MaxResources.Memory, member.Capabilities.MaxResources.Memory)
+		out.MaxResources.CPU = new(max(*out.MaxResources.CPU, *room.CPU))
+		out.MaxResources.Memory = new(max(*out.MaxResources.Memory, *room.Memory))
 		out.InternetEgress, out.PrivateNetwork, out.ArbitraryImages = true, true, true
 	}
 
@@ -133,7 +138,7 @@ func (p *Provider) LiveCapabilities() (plugin.Capabilities, error) {
 
 // member describes one node as admission sees it. MaxResources is the room it
 // has left, not its size, so a busy node is rejected for a task that would fit
-// it empty. Called with mu held.
+// it empty, and a full one for any task. Called with mu held.
 func (p *Provider) member(conn *nodes.Conn) plugin.Member {
 	cpu, memory := p.free(conn)
 
@@ -143,7 +148,12 @@ func (p *Provider) member(conn *nodes.Conn) plugin.Member {
 		Capabilities: plugin.Capabilities{
 			Drivers:       []job.DriverName{job.DriverContainer},
 			Architectures: []job.Arch{job.Arch(conn.Node.GetArchitecture())},
-			MaxResources:  plugin.Resources{CPU: int(cpu), Memory: int(memory)},
+			// Reservations can take the room below zero; none left is zero.
+			MaxResources: plugin.Limits{
+				CPU:    new(int(max(cpu, 0))),
+				Memory: new(int(max(memory, 0))),
+			},
+			DefaultResources: defaultResources,
 			// Workloads share the node's network, so both are reachable.
 			InternetEgress:  true,
 			PrivateNetwork:  true,

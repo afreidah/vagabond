@@ -60,17 +60,25 @@ func TestCapabilities_CloneAppendIsIsolated(t *testing.T) {
 func TestCapabilities_CloneCopiesScalars(t *testing.T) {
 	observed := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
 	original := Capabilities{
-		MaxResources:    Resources{CPU: 2000, Memory: 4096},
-		MaxDuration:     15 * time.Minute,
-		InternetEgress:  true,
-		ArbitraryImages: true,
-		ObservedAt:      observed,
+		MaxResources:     Limits{CPU: new(2000), Memory: new(4096)},
+		MaxDuration:      15 * time.Minute,
+		DefaultResources: Resources{CPU: 1000, Memory: 1024},
+		InternetEgress:   true,
+		ArbitraryImages:  true,
+		ObservedAt:       observed,
 	}
 
 	clone := original.Clone()
 
-	if clone.MaxDuration != original.MaxDuration || clone.MaxResources != original.MaxResources {
+	if clone.MaxDuration != original.MaxDuration || clone.DefaultResources != original.DefaultResources ||
+		*clone.MaxResources.CPU != 2000 || *clone.MaxResources.Memory != 4096 {
 		t.Error("clone lost a limit")
+	}
+
+	// The limits are pointers; a clone must not share them.
+	*clone.MaxResources.CPU = 1
+	if *original.MaxResources.CPU != 2000 {
+		t.Error("changing the clone's CPU limit changed the original's")
 	}
 
 	if !clone.ObservedAt.Equal(observed) || clone.InternetEgress != true {
@@ -133,22 +141,27 @@ func TestCapabilities_WithinDuration(t *testing.T) {
 
 func TestCapabilities_WithinResources(t *testing.T) {
 	tests := []struct {
-		name      string
-		maxCPU    int
-		maxMemory int
-		cpu       int
-		memory    int
-		want      bool
+		name     string
+		limits   Limits
+		defaults Resources
+		cpu      int
+		memory   int
+		want     bool
 	}{
-		{name: "both under", maxCPU: 2000, maxMemory: 4096, cpu: 1000, memory: 2048, want: true},
-		{name: "cpu over", maxCPU: 2000, maxMemory: 4096, cpu: 4000, memory: 2048, want: false},
-		{name: "memory over", maxCPU: 2000, maxMemory: 4096, cpu: 1000, memory: 8192, want: false},
+		{name: "both under", limits: Limits{CPU: new(2000), Memory: new(4096)}, cpu: 1000, memory: 2048, want: true},
+		{name: "cpu over", limits: Limits{CPU: new(2000), Memory: new(4096)}, cpu: 4000, memory: 2048, want: false},
+		{name: "memory over", limits: Limits{CPU: new(2000), Memory: new(4096)}, cpu: 1000, memory: 8192, want: false},
 		{name: "no limits advertised", cpu: 99999, memory: 99999, want: true},
+		{name: "zero room admits nothing", limits: Limits{CPU: new(0), Memory: new(0)}, cpu: 1, memory: 1, want: false},
+		{
+			name: "an undeclared size is checked at the default", limits: Limits{CPU: new(500)},
+			defaults: Resources{CPU: 1000}, want: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := Capabilities{MaxResources: Resources{CPU: tt.maxCPU, Memory: tt.maxMemory}}
+			c := Capabilities{MaxResources: tt.limits, DefaultResources: tt.defaults}
 			if got := c.WithinResources(Resources{CPU: tt.cpu, Memory: tt.memory}); got != tt.want {
 				t.Errorf("WithinResources(%d, %d) = %v, want %v", tt.cpu, tt.memory, got, tt.want)
 			}

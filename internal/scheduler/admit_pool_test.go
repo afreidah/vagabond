@@ -24,7 +24,7 @@ import (
 func member(name string, arch job.Arch, memory int, labels map[string]string) plugin.Member {
 	caps := baseInput().Capabilities
 	caps.Architectures = []job.Arch{arch}
-	caps.MaxResources = plugin.Resources{CPU: 4000, Memory: memory}
+	caps.MaxResources = plugin.Limits{CPU: new(4000), Memory: new(memory)}
 
 	return plugin.Member{Name: name, Capabilities: caps, Labels: labels}
 }
@@ -87,6 +87,50 @@ func TestAdmit_PoolAdmitsTheNodesThatFit(t *testing.T) {
 
 	if got := result.Candidates[0].Members; !slices.Equal(got, []string{"arm-big"}) {
 		t.Errorf("members = %v, want only arm-big", got)
+	}
+}
+
+// A node with no room left admits nothing, so a pool whose nodes are all full
+// is rejected on resources, naming the closest node.
+func TestAdmit_PoolFullNodesAreRejected(t *testing.T) {
+	t.Parallel()
+
+	in := poolInput(
+		member("full-a", job.ArchAMD64, 0, nil),
+		member("full-b", job.ArchAMD64, 0, nil),
+	)
+
+	req := baseRequest()
+	req.Task.Resources = &job.Resources{Memory: new(256)}
+
+	result := admitOnly(t, req, &in)
+
+	if result.Admitted() {
+		t.Fatalf("admitted onto full nodes: %+v", result.Candidates)
+	}
+
+	rejection := result.Rejections[0]
+	if rejection.Reason != ReasonResourcesExceeded || !strings.Contains(rejection.Detail, "closest node") {
+		t.Errorf("rejection = %s %q, want resources-exceeded naming the closest node", rejection.Reason, rejection.Detail)
+	}
+}
+
+// A task that declares no size is admitted only where the node's default size
+// fits, which is the size it would be placed and run at.
+func TestAdmit_PoolUndeclaredSizeUsesTheDefault(t *testing.T) {
+	t.Parallel()
+
+	small := member("small", job.ArchAMD64, 512, nil)
+	big := member("big", job.ArchAMD64, 4096, nil)
+
+	for _, m := range []*plugin.Member{&small, &big} {
+		m.Capabilities.DefaultResources = plugin.Resources{CPU: 1000, Memory: 1024}
+	}
+
+	result := admitOnly(t, baseRequest(), new(poolInput(small, big)))
+
+	if !result.Admitted() || !slices.Equal(result.Candidates[0].Members, []string{"big"}) {
+		t.Errorf("result = %+v, want only the node with room for the default size", result)
 	}
 }
 
