@@ -19,6 +19,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/hashicorp/go-cleanhttp"
 )
 
 // -------------------------------------------------------------------------
@@ -55,7 +57,8 @@ func (e *ResponseError) Error() string {
 // -------------------------------------------------------------------------
 
 // NewClient returns a client for the server at address. An address without a
-// scheme is taken as http, and an empty one is DefaultAddress.
+// scheme is taken as http, and an empty one is DefaultAddress. A nil
+// httpClient is a pooled one of its own, not the process-wide default.
 func NewClient(address string, httpClient *http.Client) (*Client, error) {
 	if address == "" {
 		address = DefaultAddress
@@ -71,7 +74,7 @@ func NewClient(address string, httpClient *http.Client) (*Client, error) {
 	}
 
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = cleanhttp.DefaultPooledClient()
 	}
 
 	return &Client{base: base, http: httpClient}, nil
@@ -184,6 +187,21 @@ func (c *Client) Cancel(ctx context.Context, id string) (*Execution, error) {
 	var out Execution
 
 	return &out, c.do(ctx, http.MethodDelete, "/v1/execution/"+url.PathEscape(id), "", nil, &out)
+}
+
+// -------------------------------------------------------------------------
+// NODES
+// -------------------------------------------------------------------------
+
+// Nodes lists the client nodes connected to the server.
+func (c *Client) Nodes(ctx context.Context) ([]NodeListStub, error) {
+	var out []NodeListStub
+
+	if err := c.do(ctx, http.MethodGet, "/v1/nodes", "", nil, &out); err != nil {
+		return nil, err
+	}
+
+	return out, nil
 }
 
 // -------------------------------------------------------------------------

@@ -21,6 +21,7 @@ namespace is a 400.
 | `GET /v1/execution/{id}` | | `Execution` |
 | `GET /v1/execution/{id}/logs` | | Stored output, `text/plain` |
 | `DELETE /v1/execution/{id}` | | `Execution` |
+| `GET /v1/nodes` | | `[]NodeListStub`: connected agent nodes, by name |
 | `GET /v1/health` | | `Health`: store reachability, usage snapshot age, running dispatches; 503 when the store is unreachable |
 
 ## Dispatch

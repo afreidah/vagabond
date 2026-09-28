@@ -11,15 +11,35 @@
 
 <br>
 
-Vagabond is a multi-cloud compute broker for short-lived, stateless workloads.
-A job is described once in Nomad-style HCL; Vagabond decides which cloud
-backend can run it, which one should, runs it there, and charges it against
-that provider's free-tier quota.
+Vagabond is a compute broker for short-lived, stateless workloads. A job is
+described once in Nomad-style HCL, with parameters, constraints, and resources;
+Vagabond decides which backend can run it and which one should, runs it there,
+and reports the result.
 
-It is an homage to HashiCorp Nomad: the job file, `plan` output, registered and
-parameterized jobs, and namespaces should read as familiar to a Nomad user.
-Vagabond does not depend on Nomad. Its backends are cloud services with no
-scheduler of their own.
+Backends are provider plugins. Each translates a task into its platform's API
+and classifies that platform's failures; scheduling, retries and accounting
+stay in Vagabond. Google Cloud Run Jobs and AWS Lambda are implemented, and the
+plugin boundary is meant for more: IBM Code Engine, Azure Container Apps jobs,
+AWS Fargate, Fly Machines, or Cloudflare Workers for edge-sized tasks.
+
+Your own machines are a backend too. Run `vagabond agent` on one: a lightweight
+client, on bare metal or in a container, that connects to the server and joins
+a named pool of nodes. The server sends it workloads, which it runs on the
+machine's containerd, as plain containers or as Firecracker microVMs where
+stronger isolation is wanted, held to whatever CPU and memory you allow the
+agent.
+
+Every decision is explainable: `job plan` shows each backend with its score, or
+the rule it failed and why. Vagabond tracks what every run uses, so a backend
+the job would push past a configured quota is never chosen. Quotas can be set
+per backend and shared out per namespace, which makes it as useful for keeping
+work inside cloud free tiers as for capping spend.
+
+It runs as a server in the Nomad mould: a CLI and HTTP API for submitting,
+registering and dispatching jobs, agents on your nodes connecting back, and a
+Postgres or CockroachDB store, so executions survive restarts and a failed
+backend is routed around. It is an homage to HashiCorp Nomad, meant to feel
+familiar to a Nomad user, but it does not depend on Nomad.
 
 ## Features
 
@@ -40,14 +60,20 @@ scheduler of their own.
 - Execution history: every dispatch and attempt recorded, with output.
 - Server: an HTTP API over the same operations. Dispatches are leased, so a
   server resumes the ones a dead process left running.
+- Store outages fail closed: new work is refused with 503, running work
+  finishes, and what the outage lost is repaired when the store returns.
+  `GET /v1/health` reports it.
 - Postgres or CockroachDB as the store.
+- Agent nodes: `vagabond agent` registers a node into a pool and runs workloads
+  on its containerd, held to the agent's cgroup.
 
-Providers:
+Backends:
 
-| Provider | Driver | Doc |
+| Backend | Driver | Doc |
 |---|---|---|
 | Google Cloud Run Jobs | `container` | [cloud-run.md](docs/providers/cloud-run.md) |
 | AWS Lambda | `function` | [lambda.md](docs/providers/lambda.md) |
+| Your own nodes, via `vagabond agent` | `container` | [agent.md](docs/agent.md); registration only until pools (#90) |
 
 The `worker` driver is modeled and admitted; no plugin implements it yet.
 
@@ -62,6 +88,8 @@ The `worker` driver is modeled and admitted; no plugin implements it yet.
   single-machine use.
 - `job validate` is local, and job files are validated locally before they are
   sent.
+- `vagabond agent` dials the server's agent address (default
+  `127.0.0.1:4748`); the server calls back down that connection.
 
 ## Quickstart
 
@@ -95,11 +123,13 @@ See [quickstart.md](docs/quickstart.md).
 | `job run <file>` | Run a job file without registering it |
 | `job register <file>` | Store a job as a new version when it changed |
 | `job dispatch <name>` | Run a registered job's current version |
-| `job status <name>` | Versions and recent executions |
+| `job status [name]` | Registered jobs, or one job's versions and recent executions |
 | `job stop <name>` | Stop a registered job from being dispatched |
+| `node status` | Connected agent nodes |
+| `agent` | Run a client on a node that executes workloads ([agent.md](docs/agent.md)) |
 | `execution status <id>` | One execution's record and result |
 | `execution logs <id>` | One execution's stored output |
-| `server` | Serve the [HTTP API](docs/api.md) |
+| `server [-dev]` | Serve the [HTTP API](docs/api.md) and accept agents |
 
 ## Job file
 
@@ -138,36 +168,30 @@ job "go-test" {
 ## Architecture
 
 ```
-  job file (HCL)
-        |
-        v
-  +-----------+   parse, validate, substitute meta.*
-  |  jobspec  |
-  +-----------+
-        |
-        v  job.Job
-  +-----------+   which providers can run this task
-  | admission |   13 checkers, 4 tiers
-  +-----------+
-        |
-        +--> rejections: provider, reason, detail
-        |
-        v  candidates
-  +-----------+   which candidate should take it
-  |  ranking  |   scorers in [0,1], score is their mean
-  +-----------+
-        |
-        v  selection
-  +-----------+   reserve, submit, watch, collect, settle, release
-  | dispatch  |   reroute on infrastructure failure
-  +-----------+
-        |
-        v
-  +-----------+   dispatches, executions, jobs, quota
-  |   store   |   Postgres or CockroachDB
-  +-----------+
+  vagabond job ...          vagabond agent (per node)
+        |  HTTP /v1                 |  gRPC over yamux, agent dials
+        v                           v
+  +------------------------------------------------+
+  |                vagabond server                 |
+  |                                                |
+  |  jobspec   parse, validate, substitute meta.*  |
+  |     |                                          |
+  |  admission 13 checkers, 4 tiers                |
+  |     |      --> rejections: reason, detail      |
+  |  ranking   scorers in [0,1], score is the mean |
+  |     |                                          |
+  |  dispatch  reserve, submit, watch, settle,     |
+  |            release; reroute on outage          |
+  +------------------------------------------------+
+        |                  |                   |
+        v                  v                   v
+   cloud providers    agent nodes         store: jobs, dispatches,
+   Cloud Run, Lambda  containerd          executions, quota
+                                          (Postgres / CockroachDB)
 ```
 
+- The CLI holds no credentials; the server holds provider credentials and the
+  store.
 - Admission never calls a provider. It reads capability and quota snapshots
   gathered ahead of time, so a plan works offline and reserves nothing.
 - Provider plugins translate a task to their platform's API and classify its
@@ -191,6 +215,7 @@ Details: [architecture.md](docs/architecture.md).
 | Google Cloud Run Jobs | [providers/cloud-run.md](docs/providers/cloud-run.md) |
 | AWS Lambda | [providers/lambda.md](docs/providers/lambda.md) |
 | Writing a provider plugin | [writing-a-provider.md](docs/writing-a-provider.md) |
+| Running workloads on your own nodes | [agent.md](docs/agent.md) |
 | Coding conventions | [style-guide.md](docs/style-guide.md) |
 | Build, test, contribute | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
@@ -198,14 +223,16 @@ Details: [architecture.md](docs/architecture.md).
 
 Not implemented yet. Tracked in [issues](https://github.com/afreidah/vagabond/issues).
 
-- Server: API authentication, a ledger that degrades when the store is
-  unreachable.
+- Own nodes (chunk 8): pools that admission and placement use, fallback
+  ranking behind free cloud capacity, log streaming from agents, a Firecracker
+  runtime.
+- Server: API authentication, degraded mode that keeps dispatching through a
+  store outage.
 - Operations: periodic jobs, an event stream with live log streaming, blocking
   queries, disabling a provider at runtime.
 - Jobs: submission hooks, variables and workload identity, execution garbage
-  collection.
-- Providers: a `worker` plugin; a container backend with a different execution
-  model; provider pools.
+  collection, fetching a job's source on the node.
+- Providers: a `worker` plugin.
 - A Nomad task driver that dispatches to Vagabond.
 
 ## Contributing

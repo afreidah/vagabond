@@ -16,6 +16,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -48,7 +49,8 @@ Usage: vagabond server [options]
   and store, until interrupted. Requires a store block unless -dev is given.
 
   Listens on the server block's bind address, 127.0.0.1:4747 by default, with
-  TLS when the block names a certificate and key.
+  TLS when the block names a certificate and key, and for vagabond agent
+  clients on its agent_bind address, 127.0.0.1:4748 by default.
 
   Stopping the server drains requests and leaves running dispatches to the
   next server, which resumes them once their leases lapse.
@@ -143,6 +145,15 @@ func (c *ServerCommand) Run(args []string) int {
 	if err != nil {
 		return c.Errorf("%s", err)
 	}
+
+	var lc net.ListenConfig
+
+	clients, err := lc.Listen(ctx, "tcp", cfg.Server.AgentAddress())
+	if err != nil {
+		return c.Errorf("Listening for clients on %s: %s", cfg.Server.AgentAddress(), err)
+	}
+
+	go func() { _ = srv.ServeClients(ctx, clients) }()
 
 	if err := srv.Serve(ctx, cfg.Server.Address(), tlsConfig); err != nil {
 		return c.Errorf("%s", err)

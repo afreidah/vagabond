@@ -386,6 +386,14 @@ func TestServerAddress(t *testing.T) {
 	if got := load(t, `server { bind = "0.0.0.0:9000" }`).Server.Address(); got != "0.0.0.0:9000" {
 		t.Errorf("Address() = %q, want 0.0.0.0:9000", got)
 	}
+
+	if got := load(t, `server {}`).Server.AgentAddress(); got != DefaultAgentBind {
+		t.Errorf("empty block: AgentAddress() = %q, want %q", got, DefaultAgentBind)
+	}
+
+	if got := load(t, `server { agent_bind = "0.0.0.0:9001" }`).Server.AgentAddress(); got != "0.0.0.0:9001" {
+		t.Errorf("AgentAddress() = %q, want 0.0.0.0:9001", got)
+	}
 }
 
 // A store beside the providers, in a file of its own, is the layout a

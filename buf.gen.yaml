@@ -1,0 +1,21 @@
+# -------------------------------------------------------------------------------
+# buf Generation
+#
+# Author: Alex Freidah
+#
+# Generates the agent protocol's Go bindings beside the proto. The plugins run
+# through `go tool`, so their versions are pinned by go.mod.
+# -------------------------------------------------------------------------------
+
+version: v2
+plugins:
+  - local: ["go", "tool", "protoc-gen-go"]
+    out: .
+    opt: paths=source_relative
+  - local: ["go", "tool", "protoc-gen-go-grpc"]
+    out: .
+    opt: paths=source_relative
+inputs:
+  - directory: .
+    paths:
+      - internal/agentrpc

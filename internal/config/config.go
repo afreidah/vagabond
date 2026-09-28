@@ -38,14 +38,19 @@ type File struct {
 	Namespaces []Namespace  `hcl:"namespace,block"`
 }
 
-// DefaultBind is where the server listens when nothing says otherwise:
-// localhost only, until the API has authentication.
-const DefaultBind = "127.0.0.1:4747"
+// Where the server listens for API clients and for agents when nothing says
+// otherwise: localhost only, until the API has authentication.
+const (
+	DefaultBind      = "127.0.0.1:4747"
+	DefaultAgentBind = "127.0.0.1:4748"
+)
 
-// ServerBlock configures vagabond server. Absent means the defaults.
+// ServerBlock configures vagabond server. Absent means the defaults. AgentBind
+// is where agents connect; TLS covers the API only for now.
 type ServerBlock struct {
-	Bind *string   `hcl:"bind,optional"`
-	TLS  *TLSBlock `hcl:"tls,block"`
+	Bind      *string   `hcl:"bind,optional"`
+	AgentBind *string   `hcl:"agent_bind,optional"`
+	TLS       *TLSBlock `hcl:"tls,block"`
 }
 
 // TLSBlock names the certificate and key the server presents.
@@ -61,6 +66,16 @@ func (s *ServerBlock) Address() string {
 	}
 
 	return *s.Bind
+}
+
+// AgentAddress returns where the server listens for agents. A nil block is the
+// default.
+func (s *ServerBlock) AgentAddress() string {
+	if s == nil || s.AgentBind == nil {
+		return DefaultAgentBind
+	}
+
+	return *s.AgentBind
 }
 
 // Namespace is an owner of jobs and, optionally, of its own share of each

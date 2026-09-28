@@ -89,7 +89,8 @@ type serverJobs interface {
 // -------------------------------------------------------------------------
 
 // Server serves the API over one set of stores. running holds the cancel
-// function of every dispatch this process is running, started or resumed.
+// function of every dispatch this process is running, started or resumed, and
+// nodeConns every client node connected to it, by name.
 type Server struct {
 	registry   serverRegistry
 	ledger     serverLedger
@@ -105,6 +106,9 @@ type Server struct {
 
 	mu      sync.Mutex
 	running map[execution.ID]context.CancelFunc
+
+	nodeMu    sync.Mutex
+	nodeConns map[string]*nodeConnState
 }
 
 // -------------------------------------------------------------------------
@@ -146,6 +150,7 @@ func New(
 		logger:     logger,
 		now:        time.Now,
 		running:    make(map[execution.ID]context.CancelFunc),
+		nodeConns:  make(map[string]*nodeConnState),
 	}
 
 	for _, opt := range opts {
@@ -175,6 +180,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/execution/{id}/logs", s.executionLogs)
 	mux.HandleFunc("DELETE /v1/execution/{id}", s.wrap(s.cancelExecution))
 	mux.HandleFunc("GET /v1/health", s.health)
+	mux.HandleFunc("GET /v1/nodes", s.wrap(s.listNodes))
 
 	return s.logRequests(mux)
 }

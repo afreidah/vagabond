@@ -238,8 +238,9 @@ Where `vagabond server` listens. Top level, at most one per deployment.
 | Name | Type | Required | Description |
 |---|---|---|---|
 | `bind` | string | no | Address and port; default `127.0.0.1:4747` |
+| `agent_bind` | string | no | Where [agents](agent.md) connect; default `127.0.0.1:4748` |
 
-Contains an optional `tls` block:
+Contains an optional `tls` block, which covers the API only:
 
 | Name | Type | Required | Description |
 |---|---|---|---|
@@ -248,7 +249,8 @@ Contains an optional `tls` block:
 
 ```hcl
 server {
-  bind = "0.0.0.0:4747"
+  bind       = "0.0.0.0:4747"
+  agent_bind = "0.0.0.0:4748"
 
   tls {
     cert = "/etc/vagabond/server.crt"

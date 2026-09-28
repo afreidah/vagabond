@@ -1,12 +1,10 @@
 // -------------------------------------------------------------------------------
-// The -meta Flag
+// The -meta and -label Flags
 //
 // Author: Alex Freidah
 //
-// Collects repeated -meta key=value pairs into a map. Declared here rather than
-// inside a command because job validate, plan, and run all take it, and a
-// parameterized job is only useful if every one of them accepts the same
-// spelling.
+// Collects repeated key=value pairs into a map: -meta on the job commands, so
+// every one of them accepts the same spelling, and -label on the agent.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -16,7 +14,7 @@ import (
 	"strings"
 )
 
-// metaFlags accumulates repeated -meta key=value arguments.
+// metaFlags accumulates repeated key=value arguments.
 //
 // Implements flag.Value, which is what makes the flag repeatable: the standard
 // flag package calls Set once per occurrence rather than overwriting.
@@ -50,7 +48,7 @@ func (m *metaFlags) Set(value string) error {
 
 	key = strings.TrimSpace(key)
 	if key == "" {
-		return fmt.Errorf("metadata key is empty in %q", value)
+		return fmt.Errorf("key is empty in %q", value)
 	}
 
 	if *m == nil {
@@ -58,7 +56,7 @@ func (m *metaFlags) Set(value string) error {
 	}
 
 	if _, exists := (*m)[key]; exists {
-		return fmt.Errorf("metadata key %q was given more than once", key)
+		return fmt.Errorf("key %q was given more than once", key)
 	}
 
 	(*m)[key] = val
