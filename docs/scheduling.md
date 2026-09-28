@@ -71,9 +71,10 @@ Per-check behavior:
 - **image**: a task with no image passes everywhere.
 - **network**: only an explicit `true` is a requirement. An absent value or
   `false` passes everywhere.
-- **resources**: a provider maximum of 0 means no advertised limit and admits
-  any request. CPU is checked before memory; the detail names the first that
-  fails.
+- **resources**: a provider with no advertised maximum admits any size; a
+  maximum of 0 admits nothing. A task that declares no CPU or memory is checked
+  at the provider's default size where it publishes one (pools do), otherwise
+  at 0. CPU is checked before memory; the detail names the first that fails.
 - **duration**: skipped when the provider publishes no maximum, the task sets no
   `timeout`, or the timeout does not parse (job validation reports that).
 - **constraint**: evaluates constraints in declaration order and reports the
@@ -96,7 +97,7 @@ placeholders filled from the task and the provider:
 | `arch-unsupported` | `The task requires <arch> and this provider offers <architectures or none>.` |
 | `image-unsupported` | `The task runs <image> and this provider runs only its own images.` |
 | `network-unsupported` | `The task requires internet egress and this provider offers none.` or `The task requires private networking and this provider offers none.` |
-| `resources-exceeded` | `The task asks for <n> millicores and this provider allows <max>.` or `The task asks for <n> MiB and this provider allows <max>.` |
+| `resources-exceeded` | `The task asks for <n> millicores and this provider allows <max>.` or `The task asks for <n> MiB and this provider allows <max>.` A size taken from the provider's default reads `The task declares none and is sized at <n> ...` |
 | `duration-exceeded` | `The task's <timeout> timeout exceeds the <max> this provider allows.` |
 | `attribute-unknown` | `Nothing publishes "<attribute>". Provider attributes are <every published attribute>, and an operator's own tags live under provider.meta.` |
 | `constraint-unmet` | `The job requires <attribute> <operator> "<value>" and this provider publishes "<value>".` (or `publishes nothing for it.` when the attribute is absent) |

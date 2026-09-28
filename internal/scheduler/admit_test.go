@@ -170,7 +170,7 @@ var reasonCases = map[string]reasonCase{
 			r.Task.Resources = &job.Resources{Memory: new(4096)}
 		},
 		input: func(in *Input) {
-			in.Capabilities.MaxResources = plugin.Resources{Memory: 512}
+			in.Capabilities.MaxResources = plugin.Limits{Memory: new(512)}
 		},
 		want: ReasonResourcesExceeded,
 	},
@@ -179,7 +179,23 @@ var reasonCases = map[string]reasonCase{
 			r.Task.Resources = &job.Resources{CPU: new(4000)}
 		},
 		input: func(in *Input) {
-			in.Capabilities.MaxResources = plugin.Resources{CPU: 1800}
+			in.Capabilities.MaxResources = plugin.Limits{CPU: new(1800)}
+		},
+		want: ReasonResourcesExceeded,
+	},
+	"no room left": {
+		request: func(r *Request) {
+			r.Task.Resources = &job.Resources{CPU: new(1)}
+		},
+		input: func(in *Input) {
+			in.Capabilities.MaxResources = plugin.Limits{CPU: new(0)}
+		},
+		want: ReasonResourcesExceeded,
+	},
+	"an undeclared size over the limit at the provider's default": {
+		input: func(in *Input) {
+			in.Capabilities.MaxResources = plugin.Limits{Memory: new(512)}
+			in.Capabilities.DefaultResources = plugin.Resources{Memory: 1024}
 		},
 		want: ReasonResourcesExceeded,
 	},

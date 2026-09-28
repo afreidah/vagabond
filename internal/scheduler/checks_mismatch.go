@@ -107,25 +107,37 @@ type resourcesChecker struct{}
 // Name identifies the checker in traces and test failures.
 func (resourcesChecker) Name() string { return "resources" }
 
-// Check rejects a provider whose ceiling is below what the task asked for.
-//
-// A limit of zero means the provider advertised none, which admits any request.
-// Reading it as a real ceiling of zero would reject every task against a
-// provider that simply declined to state a bound.
+// Check rejects a provider whose ceiling is below the size the task would run
+// at there: what it declared, or the provider's default for what it did not.
+// A nil limit admits any size; zero admits nothing.
 func (resourcesChecker) Check(req *Request, in *Input) *Rejection {
-	max := in.Capabilities.MaxResources
+	declared := plugin.Resources{CPU: req.CPU(), Memory: req.Memory()}
+	sized := in.Capabilities.Sized(declared)
+	limits := in.Capabilities.MaxResources
 
-	if cpu := req.CPU(); max.CPU > 0 && cpu > max.CPU {
+	if limit := limits.CPU; limit != nil && sized.CPU > *limit {
 		return reject(ReasonResourcesExceeded, fmt.Sprintf(
-			"The task asks for %d millicores and this provider allows %d.", cpu, max.CPU))
+			"The task %s %d millicores and this provider allows %d.",
+			asks(declared.CPU), sized.CPU, *limit))
 	}
 
-	if memory := req.Memory(); max.Memory > 0 && memory > max.Memory {
+	if limit := limits.Memory; limit != nil && sized.Memory > *limit {
 		return reject(ReasonResourcesExceeded, fmt.Sprintf(
-			"The task asks for %d MiB and this provider allows %d.", memory, max.Memory))
+			"The task %s %d MiB and this provider allows %d.",
+			asks(declared.Memory), sized.Memory, *limit))
 	}
 
 	return nil
+}
+
+// asks words where a size came from: what the task declared, or the
+// provider's default for a task that declared none.
+func asks(declared int) string {
+	if declared == 0 {
+		return "declares none and is sized at"
+	}
+
+	return "asks for"
 }
 
 // durationChecker removes providers that would kill the task before its

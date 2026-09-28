@@ -250,8 +250,9 @@ decides without calling the provider.
 |---|---|---|---|---|
 | `Drivers` | `[]job.DriverName` | `provider.drivers` | `driver-unsupported` | Runs nothing |
 | `Architectures` | `[]job.Arch` | `provider.architecture` | `arch-unsupported` | Offers no architecture |
-| `MaxResources.CPU` | `int`, millicores | `provider.max_cpu` | `resources-exceeded` | No limit |
-| `MaxResources.Memory` | `int`, MiB | `provider.max_memory` | `resources-exceeded` | No limit |
+| `MaxResources.CPU` | `*int`, millicores | `provider.max_cpu` | `resources-exceeded` | nil: no limit. `0` admits nothing |
+| `MaxResources.Memory` | `*int`, MiB | `provider.max_memory` | `resources-exceeded` | nil: no limit. `0` admits nothing |
+| `DefaultResources` | `Resources`, millicores and MiB | none | Sizes a task that declares no CPU or memory before `resources-exceeded` compares it | The task is checked at 0 |
 | `MaxDuration` | `time.Duration` | `provider.max_duration` | `duration-exceeded` | No limit |
 | `InternetEgress` | `bool` | `provider.internet` | `network-unsupported` | No egress |
 | `PrivateNetwork` | `bool` | `provider.private_network` | `network-unsupported` | No private network |
@@ -541,7 +542,7 @@ func (p *Provider) Capabilities(context.Context) (plugin.Capabilities, error) {
 	return plugin.Capabilities{
 		Drivers:         []job.DriverName{job.DriverContainer},
 		Architectures:   []job.Arch{job.ArchAMD64},
-		MaxResources:    plugin.Resources{CPU: 4000, Memory: 8192},
+		MaxResources:    plugin.Limits{CPU: new(4000), Memory: new(8192)},
 		MaxDuration:     time.Hour,
 		InternetEgress:  true,
 		ArbitraryImages: true,

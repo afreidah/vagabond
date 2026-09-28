@@ -668,7 +668,8 @@ resources {
 
 **Admission:** a value above the provider's `provider.max_cpu` or
 `provider.max_memory` is rejected with `resources-exceeded`. An omitted value
-requests nothing and passes every provider.
+is checked at the provider's default size where it publishes one (a pool sizes
+it at 1000 millicores / 1024 MiB), and passes any provider that publishes none.
 
 **Quota:** the declared values (0 when omitted) are what the task charges
 against CPU- and memory-metered pools. See [quotas](quotas.md).

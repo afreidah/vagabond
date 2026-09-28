@@ -20,11 +20,10 @@ import (
 	"github.com/afreidah/vagabond/internal/plugin"
 )
 
-// What a task that declares nothing is sized at, in millicores and MiB.
-const (
-	defaultCPU    = 1000
-	defaultMemory = 1024
-)
+// defaultResources is what a task that declares no CPU or memory is sized at.
+// Published in the pool's capabilities, so admission checks the same size the
+// workload is placed and run at.
+var defaultResources = plugin.Resources{CPU: 1000, Memory: 1024}
 
 // workloadOf translates a task into the workload an agent runs. A task with no
 // image, or an unreadable timeout, is our failure to have admitted it, not the
@@ -69,7 +68,7 @@ func workloadOf(task *job.Task) (*agentrpc.Workload, error) {
 
 // resourcesOf is what the task declared, with defaults for what it did not.
 func resourcesOf(task *job.Task) *agentrpc.Resources {
-	out := &agentrpc.Resources{Cpu: defaultCPU, Memory: defaultMemory}
+	out := &agentrpc.Resources{Cpu: int64(defaultResources.CPU), Memory: int64(defaultResources.Memory)}
 
 	if r := task.Resources; r != nil {
 		if r.CPU != nil && *r.CPU > 0 {

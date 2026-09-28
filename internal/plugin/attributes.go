@@ -131,12 +131,12 @@ func (c *Capabilities) Attributes() map[string]string {
 		attrs[AttrMaxDuration] = c.MaxDuration.String()
 	}
 
-	if c.MaxResources.CPU > 0 {
-		attrs[AttrMaxCPU] = strconv.Itoa(c.MaxResources.CPU)
+	if c.MaxResources.CPU != nil {
+		attrs[AttrMaxCPU] = strconv.Itoa(*c.MaxResources.CPU)
 	}
 
-	if c.MaxResources.Memory > 0 {
-		attrs[AttrMaxMemory] = strconv.Itoa(c.MaxResources.Memory)
+	if c.MaxResources.Memory != nil {
+		attrs[AttrMaxMemory] = strconv.Itoa(*c.MaxResources.Memory)
 	}
 
 	return attrs

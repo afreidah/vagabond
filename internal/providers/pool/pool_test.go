@@ -257,7 +257,7 @@ func (h *harness) freeMemory(t *testing.T, name string) int {
 
 	for i := range caps.Members {
 		if caps.Members[i].Name == name {
-			return caps.Members[i].Capabilities.MaxResources.Memory
+			return *caps.Members[i].Capabilities.MaxResources.Memory
 		}
 	}
 
@@ -298,8 +298,35 @@ func TestPool_CapabilitiesFollowNodes(t *testing.T) {
 		t.Fatalf("LiveCapabilities() = %+v, %v; want box1 as a member", caps, err)
 	}
 
-	if !caps.Members[0].Capabilities.SupportsArch(job.ArchAMD64) || caps.Members[0].Capabilities.MaxResources.Memory != 4096 {
-		t.Errorf("member = %+v", caps.Members[0].Capabilities)
+	member := &caps.Members[0].Capabilities
+	if !member.SupportsArch(job.ArchAMD64) || *member.MaxResources.Memory != 4096 {
+		t.Errorf("member = %+v", member)
+	}
+
+	// Admission sizes an undeclared task as placement will.
+	if member.DefaultResources != defaultResources || caps.DefaultResources != defaultResources {
+		t.Errorf("default resources = %+v and %+v, want %+v", member.DefaultResources, caps.DefaultResources, defaultResources)
+	}
+}
+
+// A full node publishes zero room, a limit admission enforces, not an absent
+// one it would read as unlimited.
+func TestPool_FullNodePublishesZeroRoom(t *testing.T) {
+	h := newHarness(t)
+	h.join(t, "box1", 4096, newFakeExecutor())
+
+	if _, err := h.pool.Submit(t.Context(), newExecutionID(t), task(t, 4096)); err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+
+	caps, err := h.pool.LiveCapabilities()
+	if err != nil {
+		t.Fatalf("LiveCapabilities() = %v", err)
+	}
+
+	room := caps.Members[0].Capabilities.MaxResources
+	if room.Memory == nil || *room.Memory != 0 || caps.MaxResources.Memory == nil || *caps.MaxResources.Memory != 0 {
+		t.Errorf("room = %+v, summary = %+v; want memory limits of zero", room, caps.MaxResources)
 	}
 }
 

@@ -327,8 +327,8 @@ Each node is one member of the pool, with its own capability snapshot:
 |---|---|
 | `provider.drivers` | `container` |
 | `provider.architecture` | The agent binary's `GOARCH`, e.g. `amd64`, `arm64` |
-| `provider.max_cpu` | Room left, millicores (omitted when not positive) |
-| `provider.max_memory` | Room left, MiB (omitted when not positive) |
+| `provider.max_cpu` | Room left, millicores; `0` when full |
+| `provider.max_memory` | Room left, MiB; `0` when full |
 | `provider.internet` | `true` |
 | `provider.private_network` | `true` |
 | `provider.arbitrary_images` | `true` |
@@ -420,14 +420,10 @@ new.
 An infrastructure failure sends dispatch to the next ranked provider; see
 [Dispatch](dispatch.md).
 
-**Edge cases:**
-
-- A node with no room left publishes no `max_cpu` or `max_memory`, which
-  admission reads as no ceiling, so it passes admission. Placement then skips
-  it.
-- Admission compares the task's declared resources. A task declaring none is
-  admitted anywhere by resources, then sized at 1000 millicores and 1024 MiB
-  at placement, where a node with less room is skipped.
+**Sizing in admission:** each node publishes the 1000 millicore / 1024 MiB
+default as its default size, so admission checks a task that declares no
+resources at the size placement will use. A full node publishes zero room and
+is rejected with `resources-exceeded`.
 
 ### Node leaving mid-run
 

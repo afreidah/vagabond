@@ -81,7 +81,7 @@ func (p *Provider) Capabilities(context.Context) (plugin.Capabilities, error) {
 		Drivers:       []job.DriverName{job.DriverFunction},
 		Architectures: []job.Arch{job.ArchAMD64, job.ArchARM64},
 
-		MaxResources: plugin.Resources{CPU: maxCPU, Memory: maxMemory},
+		MaxResources: plugin.Limits{CPU: new(maxCPU), Memory: new(maxMemory)},
 		MaxDuration:  maxDuration,
 
 		InternetEgress:  true,
