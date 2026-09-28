@@ -1,0 +1,123 @@
+# -------------------------------------------------------------------------------
+# Hugo Site Configuration
+#
+# Author: Alex Freidah
+#
+# The project site: a landing page from web/content and the documentation from
+# the repository's docs/, mounted in place so the same Markdown renders on
+# GitHub and here. The Hextra theme is a Hugo module, pinned in web/go.mod.
+# -------------------------------------------------------------------------------
+
+baseURL = "https://vagabond.munchbox.cc/"
+languageCode = "en-us"
+title = "Vagabond"
+enableGitInfo = false
+# Nothing is filed under a tag or category; the listings would be empty pages.
+# No feeds either: docs change in place and are not a stream of posts.
+disableKinds = ["taxonomy", "term", "rss"]
+# robots.txt from layouts/robots.txt, pointing crawlers at the sitemap.
+enableRobotsTXT = true
+
+# Sitemap <lastmod> comes from each page's lastmod. With no git history in the
+# image build, the file's modification time is the one source that exists.
+[frontmatter]
+  lastmod = [":fileModTime", ":default"]
+
+[sitemap]
+  changeFreq = ""
+  priority = -1
+
+[module]
+  [[module.imports]]
+    path = "github.com/imfing/hextra"
+
+  [[module.mounts]]
+    source = "content"
+    target = "content"
+  [[module.mounts]]
+    source = "../docs"
+    target = "content/docs"
+    # Images are served from static/images instead, below.
+    files = ["! assets/**"]
+  [[module.mounts]]
+    source = "static"
+    target = "static"
+  [[module.mounts]]
+    source = "../docs/assets"
+    target = "static/images"
+  [[module.mounts]]
+    source = "assets"
+    target = "assets"
+  [[module.mounts]]
+    source = "layouts"
+    target = "layouts"
+
+[markup]
+  [markup.goldmark.renderer]
+    # The landing page is HTML around shortcodes.
+    unsafe = true
+  [markup.highlight]
+    noClasses = false
+
+[menu]
+  [[menu.main]]
+    name = "Docs"
+    pageRef = "/docs"
+    weight = 1
+  [[menu.main]]
+    name = "Search"
+    weight = 2
+    [menu.main.params]
+      type = "search"
+  [[menu.main]]
+    name = "GitHub"
+    url = "https://github.com/afreidah/vagabond"
+    weight = 3
+    [menu.main.params]
+      icon = "github"
+
+[params]
+  description = "Run serverless jobs across public clouds and your own infrastructure. An homage to HashiCorp Nomad."
+  homeTitle = "Vagabond: serverless jobs on clouds and your own nodes"
+  # Social card for pages with no image of their own. With one set, links
+  # shared to Slack, X or LinkedIn get the large-image card.
+  images = ["og-card.png"]
+
+  [params.navbar]
+    displayTitle = false
+    displayLogo = true
+    [params.navbar.logo]
+      path = "images/logo-light.png"
+      dark = "images/logo-dark.png"
+      # Both, in the image's 900x247 ratio; the theme defaults either to 20.
+      height = 40
+      width = 146
+
+  [params.theme]
+    default = "dark"
+    displayToggle = true
+
+  [params.page]
+    width = "wide"
+
+  [params.footer]
+    enable = true
+    displayCopyright = false
+    displayPoweredBy = false
+
+  # The theme builds edit links from the content directory, which docs/ is
+  # mounted from outside of, so the links it would build are wrong.
+  [params.editURL]
+    enable = false
+
+  [params.search]
+    enable = true
+    type = "flexsearch"
+    [params.search.flexsearch]
+      index = "content"
+
+  [params.highlight.copy]
+    enable = true
+    display = "hover"
+
+  externalLinkDecoration = true

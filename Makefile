@@ -149,6 +149,30 @@ generate-check: generate ## Fail if generated code is out of date
 		exit 1; \
 	fi
 
+##@ Website
+
+# -------------------------------------------------------------------------
+# WEBSITE
+# -------------------------------------------------------------------------
+
+REGISTRY       ?= $(or $(DOCKER_REGISTRY),registry.example.com)
+WEB_IMAGE      := $(REGISTRY)/vagabond-web
+WEB_TAG        ?= $(VERSION)
+PLATFORMS      := linux/amd64,linux/arm64
+
+web-serve: ## Serve the project site locally, rebuilding on change
+	cd web && hugo serve
+
+web-build: ## Build the project site into web/public
+	cd web && hugo --minify
+
+web-docker: ## Build the site image for the local architecture
+	docker build --pull -f web/Dockerfile -t $(WEB_IMAGE):$(WEB_TAG) .
+
+web-push: ## Build and push the multi-arch site image
+	docker buildx build --pull --platform $(PLATFORMS) -f web/Dockerfile \
+		-t $(WEB_IMAGE):$(WEB_TAG) --output type=image,push=true .
+
 ##@ Tools
 
 # -------------------------------------------------------------------------
@@ -176,4 +200,4 @@ clean: ## Remove build and coverage artifacts
 	rm -f $(COVERPROFILE) vagabond
 	rm -rf bin
 
-.PHONY: help build fmt fmt-check vet lint test test-fast cover integration-test containerd-test govulncheck check generate generate-check tools clean
+.PHONY: help build fmt fmt-check vet lint test test-fast cover integration-test containerd-test govulncheck check generate generate-check web-serve web-build web-docker web-push tools clean

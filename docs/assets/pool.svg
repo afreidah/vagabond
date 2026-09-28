@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
+  <title id="title">A pool of agent nodes</title>
+  <desc id="desc">A task needing amd64 and 4 GiB is admitted against each node of the homelab pool on its own. box2 is arm64 and is rejected. box1 and box3 are admitted, and the task is placed on box3, which has the most free memory.</desc>
+  <defs>
+    <style>
+      .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:20px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.micro{font-size:13px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.dash{fill:none;stroke:#9a9ea6;stroke-width:2.5;stroke-dasharray:7 6;stroke-linecap:round;stroke-linejoin:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}.muted{fill:#15171c;stroke:#9a9ea6;stroke-width:2;stroke-dasharray:7 6}.used{fill:#fd7300}.free{fill:none;stroke:#9a9ea6;stroke-width:1.5}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#fd7300"/></marker>
+    <marker id="arrow-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#9a9ea6"/></marker>
+  </defs>
+  <g class="t">
+    <!-- Connections -->
+    <path class="line" marker-end="url(#arrow)" d="M230 250H280"/>
+    <path class="dash" marker-end="url(#arrow-grey)" d="M580 250H630V95H680"/>
+    <path class="dash" marker-end="url(#arrow-grey)" d="M630 250H680"/>
+    <path class="line" marker-end="url(#arrow)" d="M580 250H630V405H680"/>
+
+    <!-- Task -->
+    <rect x="30" y="190" width="200" height="120" rx="24" class="card"/>
+    <text x="130" y="224" text-anchor="middle" class="micro">TASK</text>
+    <text x="130" y="258" text-anchor="middle" class="label">amd64</text>
+    <text x="130" y="284" text-anchor="middle" class="small">4 GiB memory</text>
+
+    <!-- Server -->
+    <rect x="280" y="110" width="300" height="280" rx="34" class="core"/>
+    <text x="430" y="156" text-anchor="middle" class="micro">POOL PROVIDER</text>
+    <text x="430" y="194" text-anchor="middle" class="label" style="font-size:25px">homelab</text>
+    <g class="small" text-anchor="middle" style="fill:#f8fafc">
+      <text x="430" y="248">admission per node</text>
+      <text x="430" y="280">most free memory wins</text>
+      <text x="430" y="312">room held until</text>
+      <text x="430" y="334">the node reports it</text>
+    </g>
+
+    <!-- Nodes -->
+    <rect x="680" y="40" width="490" height="110" rx="24" class="card"/>
+    <rect x="680" y="195" width="490" height="110" rx="24" class="muted"/>
+    <rect x="680" y="350" width="490" height="110" rx="24" class="card" style="stroke-width:3"/>
+
+    <text x="710" y="82" class="label">box1</text><text x="710" y="108" class="small">amd64 · 16 GiB</text>
+    <text x="710" y="130" class="small" style="fill:#9a9ea6">admitted · 4 GiB free</text>
+    <rect x="900" y="74" width="240" height="16" rx="4" class="free"/><rect x="900" y="74" width="180" height="16" rx="4" class="used"/>
+
+    <text x="710" y="237" class="label" style="fill:#c9ccd3">box2</text><text x="710" y="263" class="small">arm64 · 8 GiB</text>
+    <text x="710" y="285" class="small" style="fill:#9a9ea6">rejected · arch-unsupported</text>
+    <rect x="900" y="229" width="240" height="16" rx="4" class="free"/><rect x="900" y="229" width="60" height="16" rx="4" class="used" style="opacity:.45"/>
+
+    <text x="710" y="392" class="label">box3</text><text x="710" y="418" class="small">amd64 · 32 GiB</text>
+    <text x="710" y="440" class="small" style="fill:#ff8a2b">selected · 24 GiB free</text>
+    <rect x="900" y="384" width="240" height="16" rx="4" class="free"/><rect x="900" y="384" width="60" height="16" rx="4" class="used"/>
+
+    <g class="small" style="fill:#9a9ea6"><text x="1140" y="120" text-anchor="end">memory used</text></g>
+  </g>
+</svg>

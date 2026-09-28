@@ -1,0 +1,228 @@
+/* -------------------------------------------------------------------------------
+ * Site Palette
+ *
+ * Author: Alex Freidah
+ *
+ * The logo's orange (#FD7300) as Hextra's primary colour, near-black and
+ * cool-grey neutrals, and links in an orange that holds contrast on each
+ * background. Headings stay in the body text colour; orange marks what is
+ * interactive.
+ * ------------------------------------------------------------------------------- */
+
+:root {
+  --primary-hue: 27deg;
+  --primary-saturation: 100%;
+  --primary-lightness: 50%;
+
+  --vb-bg: #ffffff;
+  --vb-surface: #f7f8fa;
+  --vb-border: #dedfe3;
+  --vb-text: #0d0e12;
+  --vb-muted: #656a76;
+  --vb-link: #c24f00;
+}
+
+.dark {
+  --primary-hue: 27deg;
+  --primary-saturation: 100%;
+  --primary-lightness: 50%;
+
+  --vb-bg: #0d0e12;
+  --vb-surface: #15171c;
+  --vb-border: #2b2f37;
+  --vb-text: #efeff1;
+  --vb-muted: #9a9ea6;
+  --vb-link: #ff8a2b;
+
+  /* Hextra's own dark background, used by the page, navbar and sidebar. */
+  --hx-color-dark: #0d0e12;
+}
+
+/* -------------------------------------------------------------------------
+ * BASE
+ * ------------------------------------------------------------------------- */
+
+html,
+body {
+  background-color: var(--vb-bg);
+  color: var(--vb-text);
+}
+
+.content a:not(.not-prose a) {
+  color: var(--vb-link);
+  text-decoration-color: color-mix(in srgb, var(--vb-link) 40%, transparent);
+}
+
+.content :where(h1, h2, h3, h4, h5, h6) {
+  color: var(--vb-text);
+}
+
+/* Code blocks and tables sit on the surface colour, bordered. */
+.content pre,
+.content :not(pre) > code {
+  background-color: var(--vb-surface);
+  border: 1px solid var(--vb-border);
+}
+
+.content :not(pre) > code {
+  border-radius: 0.25rem;
+  padding: 0.1em 0.3em;
+}
+
+.content img.vb-doc-image {
+  width: 100%;
+  height: auto;
+  margin: 1.5rem 0;
+}
+
+.content table th {
+  background-color: var(--vb-surface);
+}
+
+.content table th,
+.content table td {
+  border-color: var(--vb-border);
+}
+
+/* -------------------------------------------------------------------------
+ * LANDING PAGE
+ * ------------------------------------------------------------------------- */
+
+.vb-hero {
+  padding: 3rem 0 1rem;
+}
+
+/* Solid, in place of the theme's gradient headline. */
+.vb-hero h1 {
+  background-image: none;
+  color: var(--vb-text);
+}
+
+.vb-homage {
+  color: var(--vb-muted);
+  font-size: 0.95rem;
+}
+
+.vb-homage a {
+  color: var(--vb-link);
+}
+
+.vb-hero-logo {
+  width: min(420px, 80vw);
+  height: auto;
+}
+
+.vb-diagram {
+  width: 100%;
+  max-width: 60rem;
+  margin: 3rem auto 0;
+}
+
+.vb-diagram img {
+  width: 100%;
+  height: auto;
+}
+
+/* Feature rows: text on one side, an example on the other, alternating. */
+.vb-sections {
+  width: 100%;
+  max-width: 72rem;
+  margin: 4rem auto 0;
+}
+
+.vb-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 3rem;
+  align-items: center;
+  padding: 3.5rem 0;
+  border-top: 1px solid var(--vb-border);
+}
+
+.vb-row.vb-flip .vb-text {
+  order: 2;
+}
+
+.vb-text h2 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--vb-text);
+  margin-bottom: 1rem;
+}
+
+.vb-text p {
+  color: var(--vb-muted);
+  line-height: 1.7;
+}
+
+.vb-more {
+  display: inline-block;
+  margin-top: 1.25rem;
+  color: var(--vb-link);
+  font-weight: 600;
+}
+
+.vb-more:hover {
+  text-decoration: underline;
+}
+
+.vb-example pre {
+  background-color: var(--vb-surface) !important;
+  border: 1px solid var(--vb-border);
+  border-radius: 0.5rem;
+  padding: 1.25rem 1.5rem;
+  overflow-x: auto;
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.vb-example .vb-ok {
+  color: #3fb950;
+}
+
+.vb-example .vb-no {
+  color: var(--vb-muted);
+}
+
+.vb-example .vb-pick {
+  color: var(--vb-link);
+  font-weight: 600;
+}
+
+/* The closing three-column list: plain text, no boxes. */
+.vb-more-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3rem;
+  width: 100%;
+  max-width: 72rem;
+  margin: 0 auto 4rem;
+  padding-top: 3.5rem;
+  border-top: 1px solid var(--vb-border);
+}
+
+.vb-more-list h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--vb-text);
+  margin-bottom: 0.5rem;
+}
+
+.vb-more-list p {
+  color: var(--vb-muted);
+  font-size: 0.95rem;
+  line-height: 1.7;
+}
+
+@media (max-width: 768px) {
+  .vb-row,
+  .vb-more-list {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.5rem;
+  }
+
+  .vb-row.vb-flip .vb-text {
+    order: 0;
+  }
+}
