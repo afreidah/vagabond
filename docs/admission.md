@@ -33,6 +33,20 @@ Every checker runs against every provider. The first rejection carries the
 detail string and is what `job plan` displays; the rest are collected as codes
 and shown under `-verbose`.
 
+## Pools
+
+A [pool](agent.md#pools) is judged node by node. Each node runs every checker
+as if it were the whole provider, using its own capability snapshot and labels
+with the pool's quota, allowlist and health.
+
+- At least one node passes every check: the pool is admitted, and placement
+  chooses only among the nodes that passed.
+- No node passes: the pool is rejected with the reason of the node that failed
+  the fewest checks, and the detail names it, as `closest node <name>: ...`.
+
+Judging the pool as a whole would combine properties no single node has: an
+arm64 node and a 16 GiB node would admit a task that needs both.
+
 ## Why the order matters
 
 The plan table gives each provider one line, so whichever checker rejects first
@@ -94,8 +108,9 @@ is rejected as `attribute-unknown`.
 The alternative is a job that silently matches no provider and reports as having
 no capacity, which is the most misleading failure this can produce.
 
-`provider.meta.*` is exempt. Those names are the operator's and are deliberately
-unchecked.
+`provider.meta.*` and `node.label.*` are exempt. Those names are the operator's
+and are deliberately unchecked. `node.label.*` is present only on a pool's
+nodes, from the agent's `-label` flags.
 
 ## Output ordering
 

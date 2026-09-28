@@ -22,9 +22,11 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 
+	"github.com/afreidah/vagabond/internal/nodes"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/providers/aws"
 	"github.com/afreidah/vagabond/internal/providers/gcp"
+	"github.com/afreidah/vagabond/internal/providers/pool"
 )
 
 // -------------------------------------------------------------------------
@@ -46,6 +48,7 @@ const (
 var providerTypes = []string{
 	gcp.Type,
 	aws.Type,
+	pool.Type,
 
 	TypeFakeContainer,
 	TypeFakeFunction,
@@ -72,11 +75,13 @@ func Types() []string {
 //
 // Credentials is already resolved to bytes, so a plugin never learns whether
 // its secret came from a file, an environment variable or a command. Nil for
-// providers that need none, which every fake does.
+// providers that need none, which every fake does. Nodes is the server's
+// connected agent nodes, which a pool is made of; nil outside a server.
 type Settings struct {
 	Name        string
 	Config      hcl.Body
 	Credentials []byte
+	Nodes       *nodes.Conns
 }
 
 // Build constructs the plugin for a configured type.
@@ -110,6 +115,19 @@ func Build(
 		}
 
 		return p, diags
+
+	case pool.Type:
+		// A pool is made of the nodes connected to a server, so only a server
+		// can have one.
+		if settings.Nodes == nil {
+			return nil, hcl.Diagnostics{{
+				Severity: hcl.DiagError,
+				Summary:  "Pool without a server",
+				Detail:   fmt.Sprintf("Provider %q is a pool, which only vagabond server can run.", settings.Name),
+			}}
+		}
+
+		return pool.New(settings.Name, settings.Nodes), nil
 
 	case TypeFakeContainer:
 		return plugin.NewFakeContainerProvider(settings.Name), nil

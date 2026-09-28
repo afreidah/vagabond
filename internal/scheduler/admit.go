@@ -17,6 +17,8 @@
 
 package scheduler
 
+import "fmt"
+
 // -------------------------------------------------------------------------
 // ORDER
 // -------------------------------------------------------------------------
@@ -95,7 +97,8 @@ func Admit(req *Request, inputs []Input) Result {
 	for i := range inputs {
 		in := &inputs[i]
 
-		if rejection := admitOne(req, in, rules); rejection != nil {
+		members, rejection := admitProvider(req, in, rules)
+		if rejection != nil {
 			result.Rejections = append(result.Rejections, *rejection)
 
 			continue
@@ -110,12 +113,60 @@ func Admit(req *Request, inputs []Input) Result {
 		result.Candidates = append(result.Candidates, Candidate{
 			Input:         admitted,
 			EstimatedCost: in.Capabilities.EstimatedCost,
+			Members:       members,
 		})
 	}
 
 	result.Sort()
 
 	return result
+}
+
+// admitProvider admits one provider. A pool is admitted when at least one of
+// its members passes every check on its own, and the members that passed come
+// back for placement to choose from; when none does, the rejection is the
+// closest member's, the one that failed the fewest checks.
+//
+// Per member rather than against the pool as a whole, because a pool's
+// properties are spread across its nodes: one node with arm64 and another with
+// 16 GB would otherwise admit a task that needs both, which no node can run.
+func admitProvider(req *Request, in *Input, rules []Checker) ([]string, *Rejection) {
+	if len(in.Capabilities.Members) == 0 {
+		return nil, admitOne(req, in, rules)
+	}
+
+	var (
+		passed  []string
+		closest *Rejection
+	)
+
+	for i := range in.Capabilities.Members {
+		member := &in.Capabilities.Members[i]
+
+		// Judged as if the member were the whole provider: its own snapshot and
+		// labels, with the pool's quota, tags, health and allowlist.
+		as := *in
+		as.Capabilities = member.Capabilities
+		as.Labels = member.Labels
+
+		rejection := admitOne(req, &as, rules)
+		if rejection == nil {
+			passed = append(passed, member.Name)
+
+			continue
+		}
+
+		if closest == nil || len(rejection.Also) < len(closest.Also) {
+			rejection.Detail = fmt.Sprintf("closest node %s: %s", member.Name, rejection.Detail)
+			closest = rejection
+		}
+	}
+
+	if len(passed) > 0 {
+		return passed, nil
+	}
+
+	return nil, closest
 }
 
 // admitOne runs every checker against one provider, or returns nil if it can

@@ -148,6 +148,67 @@ func (t *Task) Image(ctx *hcl.EvalContext) (string, hcl.Diagnostics) {
 	return str.AsString(), diags
 }
 
+// ConfigString reads one string attribute of the driver config against the
+// task's Vars, reporting false when it is absent or not a string.
+func (t *Task) ConfigString(name string) (string, bool) {
+	value, ok := t.configValue(name, cty.String)
+	if !ok {
+		return "", false
+	}
+
+	return value.AsString(), true
+}
+
+// ConfigStrings reads one list-of-strings attribute of the driver config, such
+// as args, reporting false when it is absent, empty, or not a list of strings.
+// A list rather than a string to split, so an argument with a space in it
+// stays one argument.
+func (t *Task) ConfigStrings(name string) ([]string, bool) {
+	value, ok := t.configValue(name, cty.List(cty.String))
+	if !ok {
+		return nil, false
+	}
+
+	var out []string
+
+	for it := value.ElementIterator(); it.Next(); {
+		_, element := it.Element()
+		out = append(out, element.AsString())
+	}
+
+	return out, len(out) > 0
+}
+
+// configValue evaluates one driver config attribute and converts it to want.
+// PartialContent rather than JustAttributes, so a config holding a nested
+// block or a field meant for another driver is read without complaint.
+func (t *Task) configValue(name string, want cty.Type) (cty.Value, bool) {
+	if t.Config == nil || t.Config.Body == nil {
+		return cty.NilVal, false
+	}
+
+	content, _, _ := t.Config.Body.PartialContent(&hcl.BodySchema{
+		Attributes: []hcl.AttributeSchema{{Name: name}},
+	})
+
+	attr, ok := content.Attributes[name]
+	if !ok {
+		return cty.NilVal, false
+	}
+
+	value, diags := attr.Expr.Value(t.Vars)
+	if diags.HasErrors() || value.IsNull() || !value.IsKnown() {
+		return cty.NilVal, false
+	}
+
+	converted, err := convert.Convert(value, want)
+	if err != nil {
+		return cty.NilVal, false
+	}
+
+	return converted, true
+}
+
 // -------------------------------------------------------------------------
 // UNDECODED CONFIG
 // -------------------------------------------------------------------------

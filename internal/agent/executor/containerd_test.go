@@ -108,9 +108,25 @@ func TestContainerd_RunsAWorkload(t *testing.T) {
 		t.Errorf("logs = %q", res.Logs)
 	}
 
-	ids, err := c.List(t.Context())
-	if err != nil || !strings.Contains(strings.Join(ids, ","), id) {
-		t.Errorf("List() = %v, %v; want %s", ids, err, id)
+	held, err := c.Held(t.Context())
+	if err != nil {
+		t.Fatalf("Held() = %v", err)
+	}
+
+	found := false
+
+	for _, h := range held {
+		if h.ID == id {
+			found = true
+
+			if h.Running || h.CPU != 250 || h.Memory != 64 {
+				t.Errorf("held = %+v, want finished with 250 millicores and 64 MiB", h)
+			}
+		}
+	}
+
+	if !found {
+		t.Errorf("Held() = %+v; want %s", held, id)
 	}
 
 	if err := c.Release(t.Context(), id); err != nil {

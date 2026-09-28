@@ -1,11 +1,10 @@
 # Agent
 
-`vagabond agent` runs a client on a node eligible for execution. It dials the
-server, registers the node into a pool, and runs the workloads the server sends
-it on the node's containerd.
-
-Scheduling onto nodes arrives with pools (#90). Until then a connected node is
-listed by `vagabond node status` and nothing is dispatched to it.
+`vagabond agent` runs on a node eligible for execution, apart from the server.
+It dials the server, registers the node into a pool, and runs the workloads the
+server sends it on the node's containerd. The server schedules onto the pool
+through a [`pool` provider](configuration.md#types); `vagabond node status`
+lists the connected nodes and how much of each is in use.
 
 ## Running it
 
@@ -17,7 +16,7 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=no
 |---|---|---|
 | `-server` | `127.0.0.1:4748` | The server's `agent_bind` address |
 | `-pool` | `default` | Pool the node joins |
-| `-name` | hostname | Node name; a client reconnecting under it replaces its old connection |
+| `-name` | hostname | Node name; an agent reconnecting under it replaces its old connection |
 | `-label k=v` | | Repeatable |
 | `-cpu`, `-memory` | | Caps, in millicores and MiB |
 | `-containerd` | `/run/containerd/containerd.sock` | containerd's socket |
@@ -67,14 +66,66 @@ In a container, the work runs on the host's containerd, so the container needs:
 
 A missing requirement fails at startup, naming the fix.
 
+## Pools
+
+A pool is declared on the server as a provider, and nodes join it by name:
+
+```hcl
+provider "homelab" {
+  type = "pool"
+}
+```
+
+```bash
+vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=yes
+```
+
+**Admission:** each node is judged on its own, as if it were the whole
+provider, with the pool's quota, allowlist and health. The pool is admitted
+when at least one node passes every check; otherwise it is rejected with the
+reason of the node that failed the fewest, as `closest node <name>: ...`. A task
+needing arm64 and 8 GiB is never admitted because one node has arm64 and
+another has 8 GiB.
+
+**Node attributes:** each node offers the `container` driver, its own
+architecture, and as its resource limit the CPU and memory it has left. Labels
+from `-label` are constraint attributes under `node.label.`:
+
+```hcl
+constraint {
+  attribute = "node.label.gpu"
+  value     = "yes"
+}
+```
+
+**Placement:** the task goes to the admitted node with the most free memory.
+The server holds the room it placed there until the node's next report
+accounts for the workload, or for 2 minutes at most, so two dispatches cannot
+both take the last room. A node that refuses for lack of room is passed over for
+the next; no node left is an infrastructure failure, and dispatch tries the next
+provider. The node's name is the execution's provider ID.
+
+**Room:** a node's room is its capacity less what its running workloads
+declared. Declared sizes rather than live usage: each workload is capped at what
+it declared, so their sum is what the node can be asked for at once. A task
+that declares no resources is sized at 1000 millicores and 1024 MiB.
+
+**A node leaving mid-run:** its executions report `lost` for 5 minutes while
+the agent may be restarting. A node that returns reports its workloads and they
+finish normally; after 5 minutes the pool gives up on them. For the first 5
+minutes after a server starts, an execution no node has reported yet is also
+`lost`, since the node holding it may not have reconnected.
+
 ## Workloads
 
 - One container per execution, in containerd namespace `vagabond`; the
   container ID is the execution ID
 - runc runtime; host network namespace, resolv.conf and hosts
 - Output is written to `<data-dir>/logs/<id>.log` by containerd
-- Timeouts, cancellation and start times are kept as container labels, so a
-  restarted agent finds its workloads and their timeouts where it left them
+- Timeouts, cancellation, start times and declared resources are kept as
+  container labels, so a restarted agent finds its workloads where it left them
+- The agent refuses a workload that does not fit what its running workloads
+  leave; the server then tries another node
 - Cancel sends SIGTERM, then SIGKILL after 10 seconds
 
 ## Protocol
@@ -84,11 +135,13 @@ serves gRPC on the streams the other opens:
 
 | Service | Served by | Calls |
 |---|---|---|
-| `Node` | server | `Register`: node, pool, labels, capacity, runtimes, workloads held |
-| `ClientExecutions` | agent | `Submit`, `Status`, `Result`, `Cancel`, `Release`, `StreamLogs` |
+| `Node` | server | `Register`: node, pool, labels, capacity, runtimes, and every workload held with its declared resources |
+| `AgentExecutions` | agent | `Submit`, `Status`, `Result`, `Cancel`, `Release`, `StreamLogs` |
 
-The connection dropping is the heartbeat: the node leaves `node status` and the
-agent dials again with backoff. TLS on this connection is not built yet.
+The agent registers when it connects, again whenever it starts, cancels or
+releases a workload, and every 10 seconds, which catches a workload finishing
+on its own. The connection dropping is the heartbeat: the node leaves
+`node status` and the agent dials again with backoff.
 
 Definitions: `internal/agentrpc/agent.proto`; regenerate with `make generate`.
 

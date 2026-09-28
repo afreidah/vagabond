@@ -383,7 +383,7 @@ func (d *Dispatcher) attempt(
 
 		tried++
 
-		result, streamed, err := d.execute(ctx, provider, task, run)
+		result, streamed, err := d.execute(ctx, provider, task, run, ranking[i].Members)
 		d.charge(ctx, &run.rec, result)
 
 		outcome.Attempts = append(outcome.Attempts, Attempt{

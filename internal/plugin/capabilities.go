@@ -16,6 +16,7 @@
 package plugin
 
 import (
+	"maps"
 	"slices"
 	"time"
 
@@ -77,6 +78,16 @@ type Capabilities struct {
 	EstimatedCost job.Cost // one execution, once free-tier no longer covers it
 
 	ObservedAt time.Time
+
+	Members []Member // a pool's nodes, each judged on its own; empty otherwise
+}
+
+// Member is one node of a pool: its name, what it alone can do, and the labels
+// its agent was started with.
+type Member struct {
+	Name         string
+	Capabilities Capabilities
+	Labels       map[string]string
 }
 
 // Clone returns a copy that shares nothing with the original.
@@ -91,6 +102,18 @@ func (c *Capabilities) Clone() Capabilities {
 	out := *c
 	out.Drivers = slices.Clone(c.Drivers)
 	out.Architectures = slices.Clone(c.Architectures)
+
+	// Members hold slices of their own, so each is cloned in turn.
+	if c.Members != nil {
+		out.Members = make([]Member, len(c.Members))
+		for i := range c.Members {
+			out.Members[i] = Member{
+				Name:         c.Members[i].Name,
+				Capabilities: c.Members[i].Capabilities.Clone(),
+				Labels:       maps.Clone(c.Members[i].Labels),
+			}
+		}
+	}
 
 	return out
 }

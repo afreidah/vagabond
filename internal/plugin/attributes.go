@@ -66,6 +66,10 @@ const AttrFreeQuotaPercent = Prefix + "free_quota_percent"
 // about.
 const MetaPrefix = Prefix + "meta."
 
+// NodeLabelPrefix is where a pool node's labels live, from the agent's -label
+// flags. Open like MetaPrefix, and only present when a pool's node is judged.
+const NodeLabelPrefix = "node.label."
+
 var setValuedAttributes = []string{AttrArchitecture, AttrDrivers}
 
 // knownAttributes is every name Vagabond publishes about a provider.
@@ -165,10 +169,11 @@ func KnownAttributes() []string {
 // Matchable reports whether a constraint may name this attribute.
 //
 // True for the attributes Vagabond publishes, and for anything under
-// MetaPrefix, which is an operator's own and deliberately unchecked. A name
-// that is neither is a mistake, not a preference nothing happens to satisfy.
+// MetaPrefix or NodeLabelPrefix, which are an operator's own and deliberately
+// unchecked. A name that is neither is a mistake, not a preference nothing
+// happens to satisfy.
 func Matchable(name string) bool {
-	if strings.HasPrefix(name, MetaPrefix) {
+	if strings.HasPrefix(name, MetaPrefix) || strings.HasPrefix(name, NodeLabelPrefix) {
 		return true
 	}
 

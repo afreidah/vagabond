@@ -42,6 +42,7 @@ func (s *Server) listNodes(_ http.ResponseWriter, _ *http.Request) (any, error) 
 
 	for _, conn := range conns {
 		node := conn.Node
+		usedCPU, usedMemory, running := conn.Used()
 
 		out = append(out, api.NodeListStub{
 			Name:         node.GetName(),
@@ -51,9 +52,11 @@ func (s *Server) listNodes(_ http.ResponseWriter, _ *http.Request) (any, error) 
 			Architecture: node.GetArchitecture(),
 			CPU:          node.GetCapacity().GetCpu(),
 			Memory:       node.GetCapacity().GetMemory(),
+			UsedCPU:      usedCPU,
+			UsedMemory:   usedMemory,
 			Runtimes:     node.GetRuntimes(),
 			Version:      node.GetVersion(),
-			Executions:   len(node.GetExecutions()),
+			Executions:   running,
 			Connected:    conn.Established.UTC(),
 		})
 	}

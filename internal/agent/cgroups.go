@@ -10,7 +10,7 @@
 // for the children its workloads will be.
 // -------------------------------------------------------------------------------
 
-package client
+package agent
 
 import (
 	"errors"

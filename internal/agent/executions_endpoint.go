@@ -1,19 +1,20 @@
 // -------------------------------------------------------------------------------
-// Client Executions Endpoint
+// Agent Executions Endpoint
 //
 // Author: Alex Freidah
 //
-// The client's side of ClientExecutions: the server's calls, translated to and
+// The agent's side of AgentExecutions: the server's calls, translated to and
 // from the executor. An execution the executor does not hold is NotFound, which
 // the server reads as a workload that never reached this node.
 // -------------------------------------------------------------------------------
 
-package client
+package agent
 
 import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -21,8 +22,8 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/afreidah/vagabond/internal/agent/executor"
 	"github.com/afreidah/vagabond/internal/agentrpc"
-	"github.com/afreidah/vagabond/internal/client/executor"
 	"github.com/afreidah/vagabond/internal/execution"
 )
 
@@ -30,16 +31,16 @@ import (
 // INTERFACE
 // -------------------------------------------------------------------------
 
-// clientExecutor runs the node's workloads. Anything it does not hold is
+// agentExecutor runs the node's workloads. Anything it does not hold is
 // executor.ErrUnknown.
-type clientExecutor interface {
+type agentExecutor interface {
 	Submit(ctx context.Context, id string, spec *executor.Spec) error
 	Status(ctx context.Context, id string) (execution.Status, error)
 	Result(ctx context.Context, id string) (*execution.Result, error)
 	Cancel(ctx context.Context, id string) error
 	Release(ctx context.Context, id string) error
 	Logs(ctx context.Context, id string, w io.Writer) error
-	List(ctx context.Context) ([]string, error)
+	Held(ctx context.Context) ([]executor.Held, error)
 	Runtimes() []string
 }
 
@@ -47,25 +48,90 @@ type clientExecutor interface {
 // ENDPOINT
 // -------------------------------------------------------------------------
 
-// executions serves the executor to the server.
+// executions serves the executor to the server. capacity is what the node may
+// use; mu makes checking room and starting a workload one step, and changed
+// tells the agent its workloads changed and it should report them.
 type executions struct {
-	agentrpc.UnimplementedClientExecutionsServer
+	agentrpc.UnimplementedAgentExecutionsServer
 
-	exec clientExecutor
+	exec     agentExecutor
+	capacity *agentrpc.Resources
+	changed  chan<- struct{}
+	mu       sync.Mutex
 }
 
-// Submit starts a workload and answers with the state it reached.
+// Submit starts a workload that fits in what the node has left, and answers
+// with the state it reached. One that does not fit is ResourceExhausted, which
+// the server takes as a reason to try elsewhere.
 func (e *executions) Submit(ctx context.Context, req *agentrpc.SubmitRequest) (*agentrpc.Submission, error) {
-	if err := e.exec.Submit(ctx, req.GetExecutionId(), specOf(req.GetWorkload())); err != nil {
+	id, spec := req.GetExecutionId(), specOf(req.GetWorkload())
+
+	// Held across the check and the start, so two submissions racing for the
+	// last room cannot both see it free.
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if err := e.fits(ctx, id, spec); err != nil {
+		return nil, err
+	}
+
+	if err := e.exec.Submit(ctx, id, spec); err != nil {
 		return nil, failure(err)
 	}
 
-	st, err := e.exec.Status(ctx, req.GetExecutionId())
+	// The server's picture of this node is now out of date.
+	e.notify()
+
+	st, err := e.exec.Status(ctx, id)
 	if err != nil {
 		return nil, failure(err)
 	}
 
 	return &agentrpc.Submission{State: string(st.State), ProviderId: st.ProviderID}, nil
+}
+
+// fits refuses a workload the node's running workloads leave no room for. A
+// workload already held under id is a resubmission and always fits.
+func (e *executions) fits(ctx context.Context, id string, spec *executor.Spec) error {
+	held, err := e.exec.Held(ctx)
+	if err != nil {
+		return failure(err)
+	}
+
+	var cpu, memory int64
+
+	for _, h := range held {
+		// Submitting the same execution twice starts nothing new.
+		if h.ID == id {
+			return nil
+		}
+
+		// A finished workload keeps its container until released, but no
+		// longer uses the node.
+		if h.Running {
+			cpu, memory = cpu+h.CPU, memory+h.Memory
+		}
+	}
+
+	// Declared sizes, not live usage: each workload is capped at what it
+	// declared, so their sum is what the node could be asked for at once.
+	if cpu+spec.CPU > e.capacity.GetCpu() || memory+spec.Memory > e.capacity.GetMemory() {
+		return status.Errorf(codes.ResourceExhausted,
+			"the node has %d millicores and %d MiB free; the workload needs %d and %d",
+			e.capacity.GetCpu()-cpu, e.capacity.GetMemory()-memory, spec.CPU, spec.Memory)
+	}
+
+	return nil
+}
+
+// notify tells the agent to report its workloads, without waiting.
+func (e *executions) notify() {
+	// One pending signal is enough: the report sends everything, so a second
+	// signal while one waits would add nothing.
+	select {
+	case e.changed <- struct{}{}:
+	default:
+	}
 }
 
 // Status answers with where a workload stands.
@@ -103,19 +169,24 @@ func (e *executions) Result(ctx context.Context, req *agentrpc.ExecutionRequest)
 	return out, nil
 }
 
-// Cancel stops a workload.
+// Cancel stops a workload, and has the agent report the room it frees.
 func (e *executions) Cancel(ctx context.Context, req *agentrpc.ExecutionRequest) (*agentrpc.Empty, error) {
+	defer e.notify()
+
 	return &agentrpc.Empty{}, failure(e.exec.Cancel(ctx, req.GetExecutionId()))
 }
 
-// Release deletes a finished workload.
+// Release deletes a finished workload, and has the agent report that it no
+// longer holds it.
 func (e *executions) Release(ctx context.Context, req *agentrpc.ExecutionRequest) (*agentrpc.Empty, error) {
+	defer e.notify()
+
 	return &agentrpc.Empty{}, failure(e.exec.Release(ctx, req.GetExecutionId()))
 }
 
 // StreamLogs sends a workload's output as it is written, until it ends or the
 // server stops listening.
-func (e *executions) StreamLogs(req *agentrpc.ExecutionRequest, stream agentrpc.ClientExecutions_StreamLogsServer) error {
+func (e *executions) StreamLogs(req *agentrpc.ExecutionRequest, stream agentrpc.AgentExecutions_StreamLogsServer) error {
 	return failure(e.exec.Logs(stream.Context(), req.GetExecutionId(), chunkWriter{stream}))
 }
 
@@ -162,7 +233,7 @@ func failure(err error) error {
 
 // chunkWriter sends each write as a log chunk.
 type chunkWriter struct {
-	stream agentrpc.ClientExecutions_StreamLogsServer
+	stream agentrpc.AgentExecutions_StreamLogsServer
 }
 
 // Write sends p, copied, since the stream may hold it past the call.

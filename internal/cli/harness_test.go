@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/afreidah/vagabond/internal/config"
+	"github.com/afreidah/vagabond/internal/nodes"
 	"github.com/afreidah/vagabond/internal/registry"
 )
 
@@ -42,7 +43,9 @@ func serve(t *testing.T, cfg string) *testServer {
 		t.Fatalf("config: %s", diags.Error())
 	}
 
-	reg, diags := registry.New(ctx, file)
+	conns := nodes.New()
+
+	reg, diags := registry.New(ctx, file, registry.WithNodes(conns))
 	if diags.HasErrors() {
 		t.Fatalf("registry: %s", diags.Error())
 	}
@@ -51,7 +54,7 @@ func serve(t *testing.T, cfg string) *testServer {
 		t.Fatalf("Refresh() = %v", err)
 	}
 
-	srv, err := devServer(ctx, reg, slog.New(slog.DiscardHandler))
+	srv, err := devServer(ctx, reg, conns, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("devServer() = %v", err)
 	}

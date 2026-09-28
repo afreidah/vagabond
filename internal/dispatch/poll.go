@@ -92,10 +92,23 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 // ONE ATTEMPT
 // -------------------------------------------------------------------------
 
+// submit hands the task to provider: to the members admission passed, for a
+// provider made of members, or plainly otherwise.
+func submit(
+	ctx context.Context, provider plugin.Provider, id execution.ID, task *job.Task, members []string,
+) (plugin.Submission, error) {
+	if ms, ok := provider.(plugin.MemberSubmitter); ok && len(members) > 0 {
+		return ms.SubmitTo(ctx, id, task, members)
+	}
+
+	return provider.Submit(ctx, id, task)
+}
+
 // execute runs a task on one provider under an id the caller reserved quota
-// for, and returns what it produced.
+// for, and returns what it produced. members are the provider's members
+// admission passed, empty for a provider without any.
 func (d *Dispatcher) execute(
-	ctx context.Context, provider plugin.Provider, task *job.Task, run *tracked,
+	ctx context.Context, provider plugin.Provider, task *job.Task, run *tracked, members []string,
 ) (*execution.Result, bool, error) {
 	id := run.rec.ID
 
@@ -103,7 +116,7 @@ func (d *Dispatcher) execute(
 		Task: task.Name, Provider: provider.Name(), ID: id, Attempt: run.rec.Attempt,
 	}
 
-	submission, err := provider.Submit(ctx, id, task)
+	submission, err := submit(ctx, provider, id, task, members)
 	if err == nil {
 		// A plugin describing its own submission incoherently is our bug to
 		// fix, not a provider outage, so it is not sent onward.

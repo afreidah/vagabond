@@ -23,7 +23,7 @@ plugin boundary is meant for more: IBM Code Engine, Azure Container Apps jobs,
 AWS Fargate, Fly Machines, or Cloudflare Workers for edge-sized tasks.
 
 Your own machines are a backend too. Run `vagabond agent` on one: a lightweight
-client, on bare metal or in a container, that connects to the server and joins
+process, on bare metal or in a container, that connects to the server and joins
 a named pool of nodes. The server sends it workloads, which it runs on the
 machine's containerd, as plain containers or as Firecracker microVMs where
 stronger isolation is wanted, held to whatever CPU and memory you allow the
@@ -73,7 +73,7 @@ Backends:
 |---|---|---|
 | Google Cloud Run Jobs | `container` | [cloud-run.md](docs/providers/cloud-run.md) |
 | AWS Lambda | `function` | [lambda.md](docs/providers/lambda.md) |
-| Your own nodes, via `vagabond agent` | `container` | [agent.md](docs/agent.md); registration only until pools (#90) |
+| Your own nodes, via `vagabond agent` and a `pool` provider | `container` | [agent.md](docs/agent.md) |
 
 The `worker` driver is modeled and admitted; no plugin implements it yet.
 
@@ -126,7 +126,7 @@ See [quickstart.md](docs/quickstart.md).
 | `job status [name]` | Registered jobs, or one job's versions and recent executions |
 | `job stop <name>` | Stop a registered job from being dispatched |
 | `node status` | Connected agent nodes |
-| `agent` | Run a client on a node that executes workloads ([agent.md](docs/agent.md)) |
+| `agent` | Run the agent on a node that executes workloads ([agent.md](docs/agent.md)) |
 | `execution status <id>` | One execution's record and result |
 | `execution logs <id>` | One execution's stored output |
 | `server [-dev]` | Serve the [HTTP API](docs/api.md) and accept agents |
@@ -223,9 +223,8 @@ Details: [architecture.md](docs/architecture.md).
 
 Not implemented yet. Tracked in [issues](https://github.com/afreidah/vagabond/issues).
 
-- Own nodes (chunk 8): pools that admission and placement use, fallback
-  ranking behind free cloud capacity, log streaming from agents, a Firecracker
-  runtime.
+- Own nodes: how nodes rank against cloud backends, log streaming from agents,
+  a Firecracker runtime, TLS on the agent connection.
 - Server: API authentication, degraded mode that keeps dispatching through a
   store outage.
 - Operations: periodic jobs, an event stream with live log streaming, blocking
