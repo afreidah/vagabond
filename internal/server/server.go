@@ -23,6 +23,7 @@ import (
 	"github.com/afreidah/vagabond/internal/dispatch"
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/jobs"
+	"github.com/afreidah/vagabond/internal/nodes"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/scheduler"
@@ -107,8 +108,7 @@ type Server struct {
 	mu      sync.Mutex
 	running map[execution.ID]context.CancelFunc
 
-	nodeMu    sync.Mutex
-	nodeConns map[string]*nodeConnState
+	nodeConns *nodes.Conns
 }
 
 // -------------------------------------------------------------------------
@@ -132,6 +132,12 @@ func WithLeases(ttl, renew, claim time.Duration) Option {
 	return func(s *Server) { s.leaseTTL, s.leaseRenew, s.claimEvery = ttl, renew, claim }
 }
 
+// WithNodes shares conns, the agent nodes the server tracks, with whatever else
+// reads them: pool providers, built before the server.
+func WithNodes(conns *nodes.Conns) Option {
+	return func(s *Server) { s.nodeConns = conns }
+}
+
 // New builds a server over its stores, with a dispatcher that records to
 // executions and charges ledger.
 func New(
@@ -150,7 +156,7 @@ func New(
 		logger:     logger,
 		now:        time.Now,
 		running:    make(map[execution.ID]context.CancelFunc),
-		nodeConns:  make(map[string]*nodeConnState),
+		nodeConns:  nodes.New(),
 	}
 
 	for _, opt := range opts {

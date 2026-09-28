@@ -3,7 +3,7 @@
 //
 // Author: Alex Freidah
 //
-// Runs a client on a node eligible for execution until interrupted. The same
+// Runs the agent on a node eligible for execution until interrupted. The same
 // command runs on bare metal and in a container; what differs is only what the
 // environment gives it, and a missing piece fails here, before the node
 // registers, rather than at the first workload.
@@ -19,9 +19,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/afreidah/vagabond/internal/client"
-	"github.com/afreidah/vagabond/internal/client/executor"
-	"github.com/afreidah/vagabond/internal/client/fingerprint"
+	"github.com/afreidah/vagabond/internal/agent"
+	"github.com/afreidah/vagabond/internal/agent/executor"
+	"github.com/afreidah/vagabond/internal/agent/fingerprint"
 	"github.com/afreidah/vagabond/internal/config"
 	"github.com/afreidah/vagabond/internal/version"
 )
@@ -49,7 +49,7 @@ type AgentCommand struct {
 
 // Synopsis returns the one-line description shown in help listings.
 func (c *AgentCommand) Synopsis() string {
-	return "Run a client that executes workloads on this node"
+	return "Run the agent that executes workloads on this node"
 }
 
 // Help returns the full usage text.
@@ -57,7 +57,7 @@ func (c *AgentCommand) Help() string {
 	text := `
 Usage: vagabond agent [options]
 
-  Runs a client on this node: dials the server, registers the node into a
+  Runs the agent on this node: dials the server, registers the node into a
   pool, and runs the workloads the server sends it on the node's containerd,
   until interrupted. Workloads keep running if the agent stops, and it finds
   them again when it starts.
@@ -72,7 +72,7 @@ Usage: vagabond agent [options]
 Agent Options:
 
   -server <addr>
-    The server's client address. Defaults to 127.0.0.1:4748.
+    The server's agent address. Defaults to 127.0.0.1:4748.
 
   -pool <name>
     The pool the node joins. Defaults to "default".
@@ -116,7 +116,7 @@ func (c *AgentCommand) Run(args []string) int {
 	host, _ := os.Hostname()
 
 	flags := c.FlagSet("agent")
-	flags.StringVar(&server, "server", config.DefaultAgentBind, "the server's client address")
+	flags.StringVar(&server, "server", config.DefaultAgentBind, "the server's agent address")
 	flags.StringVar(&pool, "pool", "default", "the pool the node joins")
 	flags.StringVar(&name, "name", host, "the node's name")
 	flags.Var(&labels, "label", "a label on the node as key=value, repeatable")
@@ -146,7 +146,7 @@ func (c *AgentCommand) Run(args []string) int {
 
 	parent := cgroupParent
 	if parent == "" {
-		if parent, err = client.Delegate(node.Cgroup); err != nil {
+		if parent, err = agent.Delegate(node.Cgroup); err != nil {
 			return c.Errorf("%s", err)
 		}
 	}
@@ -171,9 +171,9 @@ func (c *AgentCommand) Run(args []string) int {
 	logger := slog.New(slog.NewTextHandler(c.ErrStream, &slog.HandlerOptions{Level: level}))
 	logger.InfoContext(ctx, "node", "name", name, "pool", pool, "cpu", node.CPU, "memory", node.Memory, "cgroup", parent)
 
-	cfg := client.Config{Server: server, Pool: pool, Name: name, Labels: labels, Version: version.String()}
+	cfg := agent.Config{Server: server, Pool: pool, Name: name, Labels: labels, Version: version.String()}
 
-	if err := client.New(&cfg, node, exec, logger).Run(ctx); err != nil {
+	if err := agent.New(&cfg, node, exec, logger).Run(ctx); err != nil {
 		return c.Errorf("%s", err)
 	}
 

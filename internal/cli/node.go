@@ -3,7 +3,7 @@
 //
 // Author: Alex Freidah
 //
-// The namespace for client nodes, registered as a command so it carries a
+// The namespace for agent nodes, registered as a command so it carries a
 // synopsis in the top-level listing, as job does.
 // -------------------------------------------------------------------------------
 
@@ -19,7 +19,7 @@ type NodeCommand struct {
 
 // Synopsis returns the one-line description shown in the top-level listing.
 func (c *NodeCommand) Synopsis() string {
-	return "Interact with client nodes"
+	return "Interact with agent nodes"
 }
 
 // Help returns the namespace usage text.
@@ -27,8 +27,8 @@ func (c *NodeCommand) Help() string {
 	text := `
 Usage: vagabond node <subcommand> [options] [args]
 
-  Read the client nodes connected to a server: the machines vagabond agent
-  runs workloads on.
+  Read the nodes connected to a server: the machines running vagabond agent,
+  which the server sends workloads to.
 
   List the connected nodes:
 

@@ -3,8 +3,8 @@
 //
 // Author: Alex Freidah
 //
-// The client nodes connected to a server now: their pool, what they may use,
-// and how many workloads they held when they registered.
+// The agent nodes connected to a server now: their pool, what they may use,
+// and how much of it their running workloads have taken.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -24,7 +24,7 @@ type NodeStatusCommand struct {
 
 // Synopsis returns the one-line description shown in help listings.
 func (c *NodeStatusCommand) Synopsis() string {
-	return "List the connected client nodes"
+	return "List the connected agent nodes"
 }
 
 // Help returns the full usage text.
@@ -32,8 +32,9 @@ func (c *NodeStatusCommand) Help() string {
 	text := `
 Usage: vagabond node status [options]
 
-  Lists the client nodes connected to the server now, by name. A node that
-  loses its connection leaves the list until it reconnects.
+  Lists the agent nodes connected to the server now, by name, with what each
+  may use and how much its running workloads have taken. A node that loses its
+  connection leaves the list until it reconnects.
 
 Status Options:
 
@@ -69,7 +70,7 @@ func (c *NodeStatusCommand) Run(args []string) int {
 	}
 
 	if len(nodes) == 0 {
-		c.Ui.Output("No client nodes are connected.")
+		c.Ui.Output("No agent nodes are connected.")
 
 		return ExitSuccess
 	}
@@ -77,12 +78,13 @@ func (c *NodeStatusCommand) Run(args []string) int {
 	var b bytes.Buffer
 
 	w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "NAME\tPOOL\tADDRESS\tARCH\tCPU\tMEMORY\tWORKLOADS\tCONNECTED")
+	_, _ = fmt.Fprintln(w, "NAME\tPOOL\tADDRESS\tARCH\tCPU USED\tMEMORY USED\tWORKLOADS\tCONNECTED")
 
 	for i := range nodes {
 		n := &nodes[i]
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%dm\t%dMiB\t%d\t%s\n",
-			n.Name, n.Pool, n.Address, n.Architecture, n.CPU, n.Memory, n.Executions, stamp(n.Connected))
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d/%dm\t%d/%dMiB\t%d\t%s\n",
+			n.Name, n.Pool, n.Address, n.Architecture,
+			n.UsedCPU, n.CPU, n.UsedMemory, n.Memory, n.Executions, stamp(n.Connected))
 	}
 
 	_ = w.Flush()

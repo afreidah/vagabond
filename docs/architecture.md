@@ -59,8 +59,9 @@ calls the [HTTP API](api.md): `job plan` stops at the selection and prints it,
 | `internal/providers/gcp` | Cloud Run Jobs plugin |
 | `internal/execution` | Execution IDs, state machine, results |
 | `internal/cli` | Every command, `server` included; `cmd/vagabond` only calls `cli.Run` |
-| `internal/server` | The API: routes, dispatch in the background, lifecycle; accepting agent clients |
-| `internal/client` | The node side of `vagabond agent`: fingerprint, cgroup delegation, containerd executor |
+| `internal/server` | The API: routes, dispatch in the background, lifecycle; accepting agents |
+| `internal/agent` | `vagabond agent`, which runs on a node apart from the server: fingerprint, cgroup delegation, containerd executor |
+| `internal/nodes` | The agent nodes connected to a server, shared by the server and pool providers |
 | `internal/agentrpc` | Agent protocol: gRPC over a yamux session the agent dials |
 | `internal/api` | Request and response bodies of the API |
 | `internal/jobs` | Registered jobs, and loading a job for register, dispatch or run |

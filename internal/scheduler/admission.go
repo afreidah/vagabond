@@ -52,6 +52,7 @@ type Input struct {
 	Share        quota.Limits
 	ShareUsage   quota.PoolUsage
 	Tags         map[string]string
+	Labels       map[string]string // a pool node's labels, set while that node is judged
 	Enabled      bool
 	Healthy      bool
 }
@@ -82,6 +83,10 @@ func (in *Input) Attributes(e quota.Execution) map[string]string {
 		attrs[plugin.MetaPrefix+name] = value
 	}
 
+	for name, value := range in.Labels {
+		attrs[plugin.NodeLabelPrefix+name] = value
+	}
+
 	return attrs
 }
 
@@ -102,6 +107,7 @@ func (in *Input) Attributes(e quota.Execution) map[string]string {
 type Candidate struct {
 	Input
 	EstimatedCost job.Cost
+	Members       []string // for a pool, the nodes that passed; placement picks among them
 }
 
 // Rejection is a provider that cannot run the task, and why.

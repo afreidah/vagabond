@@ -71,12 +71,28 @@ A disabled provider stays in the registry. A plan reports it as
 |---|---|
 | `cloud-run` | [Google Cloud Run Jobs](providers/cloud-run.md) |
 | `lambda` | [AWS Lambda](providers/lambda.md) |
+| `pool` | The [agent](agent.md#pools) nodes that joined the pool named by the label |
 | `fake-container` | In-memory container provider |
 | `fake-function` | In-memory function provider |
 | `fake-worker` | In-memory worker provider |
 
 The fakes run admission, scheduling and planning with no cloud account
 configured. `examples/config.hcl` uses them.
+
+A `pool` provider takes no `config` or `credentials` block. Its label is the
+name agents join with `-pool`, and quota pools, `enabled` and `meta` apply to
+the pool as a whole:
+
+```hcl
+provider "homelab" {
+  type = "pool"
+}
+```
+
+- Only `vagabond server` can run a pool; it is a configuration error anywhere
+  else.
+- A pool with no connected nodes is unhealthy, and admission rejects it as
+  `provider-unhealthy`.
 
 ## `config` block
 

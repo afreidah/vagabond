@@ -114,7 +114,7 @@ integration-test: ## Run integration tests (requires Docker)
 # The executor drives the host's containerd, which needs root. Built as the
 # user and run with sudo, so the build cache stays the user's.
 containerd-test: ## Run the containerd executor tests (requires root and containerd)
-	$(GO) test -c -race -tags=containerd -o bin/executor.test ./internal/client/executor
+	$(GO) test -c -race -tags=containerd -o bin/executor.test ./internal/agent/executor
 	sudo ./bin/executor.test -test.v -test.timeout 5m
 
 # -------------------------------------------------------------------------

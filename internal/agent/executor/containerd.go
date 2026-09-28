@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -42,6 +43,8 @@ const (
 	labelStarted   = "vagabond.started"
 	labelTimeout   = "vagabond.timeout"
 	labelCancelled = "vagabond.cancelled"
+	labelCPU       = "vagabond.cpu"
+	labelMemory    = "vagabond.memory"
 )
 
 // Timings for stopping a workload, polling a log that is still being written,
@@ -74,6 +77,15 @@ type Spec struct {
 	Memory     int64
 	Timeout    time.Duration
 	Runtime    string
+}
+
+// Held is one workload the executor holds: what it declared, in millicores and
+// MiB, and whether it is still running and so still using that much.
+type Held struct {
+	ID      string
+	CPU     int64
+	Memory  int64
+	Running bool
 }
 
 // Config is where the executor runs workloads. Cgroup is the parent every
@@ -162,7 +174,11 @@ func (c *Containerd) Submit(ctx context.Context, id string, spec *Spec) error {
 		client.WithNewSnapshot(id, image),
 		client.WithNewSpec(c.specOpts(id, image, spec)...),
 		client.WithRuntime(runtime, nil),
-		client.WithContainerLabels(map[string]string{labelTimeout: spec.Timeout.String()}),
+		client.WithContainerLabels(map[string]string{
+			labelTimeout: spec.Timeout.String(),
+			labelCPU:     strconv.FormatInt(spec.CPU, 10),
+			labelMemory:  strconv.FormatInt(spec.Memory, 10),
+		}),
 	)
 	if err != nil {
 		return fmt.Errorf("creating the container: %w", err)
@@ -426,34 +442,48 @@ func (c *Containerd) Logs(ctx context.Context, id string, w io.Writer) error {
 	}
 }
 
-// List returns the ID of every workload the executor holds.
-func (c *Containerd) List(ctx context.Context) ([]string, error) {
+// Held returns every workload the executor holds, with what it declared and
+// whether it is still using it: running, or created and about to.
+func (c *Containerd) Held(ctx context.Context) ([]Held, error) {
 	containers, err := c.client.Containers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing containers: %w", err)
 	}
 
-	ids := make([]string, 0, len(containers))
+	held := make([]Held, 0, len(containers))
+
 	for _, container := range containers {
-		ids = append(ids, container.ID())
+		labels, err := container.Labels(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("reading labels of %s: %w", container.ID(), err)
+		}
+
+		h := Held{ID: container.ID(), Running: true}
+		h.CPU, _ = strconv.ParseInt(labels[labelCPU], 10, 64)
+		h.Memory, _ = strconv.ParseInt(labels[labelMemory], 10, 64)
+
+		if task, err := container.Task(ctx, nil); err == nil {
+			if status, err := task.Status(ctx); err == nil && status.Status == client.Stopped {
+				h.Running = false
+			}
+		}
+
+		held = append(held, h)
 	}
 
-	return ids, nil
+	return held, nil
 }
 
 // Recover watches the timeouts of every workload still running, after the
 // agent restarts.
 func (c *Containerd) Recover(ctx context.Context) error {
-	ids, err := c.List(ctx)
+	containers, err := c.client.Containers(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("listing containers: %w", err)
 	}
 
-	for _, id := range ids {
-		container, err := c.client.LoadContainer(ctx, id)
-		if err != nil {
-			continue
-		}
+	for _, container := range containers {
+		id := container.ID()
 
 		labels, err := container.Labels(ctx)
 		if err != nil {

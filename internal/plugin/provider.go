@@ -119,6 +119,21 @@ type LogStreamer interface {
 	StreamLogs(ctx context.Context, id execution.ID, w io.Writer) error
 }
 
+// Live is implemented by providers whose capabilities change between
+// refreshes and cost nothing to read, as a pool's do as nodes join and fill.
+// The registry reads them on every plan instead of from the last refresh; an
+// error marks the provider unhealthy.
+type Live interface {
+	LiveCapabilities() (Capabilities, error)
+}
+
+// MemberSubmitter is implemented by providers made of members, as a pool is.
+// Dispatch passes the members admission passed, so work only goes to a member
+// it was judged to fit.
+type MemberSubmitter interface {
+	SubmitTo(ctx context.Context, id execution.ID, task *job.Task, members []string) (Submission, error)
+}
+
 // Releaser is implemented by providers that leave a resource behind, as Cloud
 // Run does. Called after Result, best effort, never failing the execution.
 type Releaser interface {

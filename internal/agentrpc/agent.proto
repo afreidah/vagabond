@@ -3,10 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// What a server and its clients say to each other. The client dials the server
+// What a server and its agents say to each other. The agent dials the server
 // and both sides run gRPC over streams of that one multiplexed connection:
-// Node is served by the server and called by the client, ClientExecutions is
-// served by the client and called by the server.
+// Node is served by the server and called by the agent, AgentExecutions is
+// served by the agent and called by the server.
 // -----------------------------------------------------------------------------
 
 syntax = "proto3";
@@ -19,19 +19,20 @@ import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 
 // -----------------------------------------------------------------------------
-// NODE: client to server
+// NODE: agent to server
 // -----------------------------------------------------------------------------
 
 service Node {
-  // Register announces the node when the client connects, and again whenever
+  // Register announces the node when the agent connects, and again whenever
   // what it reports changes.
   rpc Register(NodeRegisterRequest) returns (NodeRegisterResponse);
 }
 
-// NodeRegisterRequest is one client's node as it reports itself. capacity is
-// the smallest of the host's resources, the client's cgroup limits, and its
-// flags. executions are the workloads it still holds, so a server can
-// reconcile after either side restarts.
+// NodeRegisterRequest is one agent's node as it reports itself, sent when it
+// connects and again whenever its workloads change. capacity is the smallest
+// of the host's resources, the agent's cgroup limits, and its flags. held is
+// every workload it still holds, so a server knows what is placed where and
+// how much of the node is in use, after either side restarts.
 message NodeRegisterRequest {
   string name = 1;
   string pool = 2;
@@ -40,7 +41,15 @@ message NodeRegisterRequest {
   Resources capacity = 5;
   repeated string runtimes = 6;
   string version = 7;
-  repeated string executions = 8;
+  repeated Held held = 8;
+}
+
+// Held is one workload on a node: what it declared, and whether it is still
+// running and so still using that much of the node.
+message Held {
+  string execution_id = 1;
+  Resources resources = 2;
+  bool running = 3;
 }
 
 // Resources are millicores and MiB, matching job.Resources.
@@ -52,10 +61,10 @@ message Resources {
 message NodeRegisterResponse {}
 
 // -----------------------------------------------------------------------------
-// CLIENT EXECUTIONS: server to client
+// AGENT EXECUTIONS: server to agent
 // -----------------------------------------------------------------------------
 
-service ClientExecutions {
+service AgentExecutions {
   rpc Submit(SubmitRequest) returns (Submission);
   rpc Status(ExecutionRequest) returns (ExecutionStatus);
   rpc Result(ExecutionRequest) returns (ExecutionResult);
@@ -65,7 +74,7 @@ service ClientExecutions {
 }
 
 // Workload is a task already translated to what a container needs: the server
-// decodes the job, the client only runs it.
+// decodes the job, the agent only runs it.
 message Workload {
   string image = 1;
   repeated string command = 2;

@@ -24,6 +24,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/config"
 	"github.com/afreidah/vagabond/internal/ledger"
+	"github.com/afreidah/vagabond/internal/nodes"
 	"github.com/afreidah/vagabond/internal/registry"
 	"github.com/afreidah/vagabond/internal/server"
 	"github.com/afreidah/vagabond/internal/state/memory"
@@ -49,8 +50,8 @@ Usage: vagabond server [options]
   and store, until interrupted. Requires a store block unless -dev is given.
 
   Listens on the server block's bind address, 127.0.0.1:4747 by default, with
-  TLS when the block names a certificate and key, and for vagabond agent
-  clients on its agent_bind address, 127.0.0.1:4748 by default.
+  TLS when the block names a certificate and key, and for agents on its
+  agent_bind address, 127.0.0.1:4748 by default.
 
   Stopping the server drains requests and leaves running dispatches to the
   next server, which resumes them once their leases lapse.
@@ -101,7 +102,11 @@ func (c *ServerCommand) Run(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	reg, cfg, code := c.loadRegistry(ctx, configPath)
+	// One set of connected agent nodes: the server fills it as agents connect,
+	// and pool providers read it.
+	conns := nodes.New()
+
+	reg, cfg, code := c.loadRegistry(ctx, configPath, conns)
 	if reg == nil {
 		return code
 	}
@@ -123,7 +128,7 @@ func (c *ServerCommand) Run(args []string) int {
 			c.Ui.Warn("Running with -dev: the store block is ignored and everything is kept in memory.")
 		}
 
-		srv, err = devServer(ctx, reg, logger)
+		srv, err = devServer(ctx, reg, conns, logger)
 
 	case cfg.Store == nil:
 		return c.Errorf("The server needs a store block, or -dev to keep everything in memory.")
@@ -131,7 +136,7 @@ func (c *ServerCommand) Run(args []string) int {
 	default:
 		var closeStore func()
 
-		srv, closeStore, err = storeServer(ctx, cfg.Store.DSN, reg, logger)
+		srv, closeStore, err = storeServer(ctx, cfg.Store.DSN, reg, conns, logger)
 		if err == nil {
 			defer closeStore()
 		}
@@ -148,12 +153,12 @@ func (c *ServerCommand) Run(args []string) int {
 
 	var lc net.ListenConfig
 
-	clients, err := lc.Listen(ctx, "tcp", cfg.Server.AgentAddress())
+	agents, err := lc.Listen(ctx, "tcp", cfg.Server.AgentAddress())
 	if err != nil {
-		return c.Errorf("Listening for clients on %s: %s", cfg.Server.AgentAddress(), err)
+		return c.Errorf("Listening for agents on %s: %s", cfg.Server.AgentAddress(), err)
 	}
 
-	go func() { _ = srv.ServeClients(ctx, clients) }()
+	go func() { _ = srv.ServeAgents(ctx, agents) }()
 
 	if err := srv.Serve(ctx, cfg.Server.Address(), tlsConfig); err != nil {
 		return c.Errorf("%s", err)
@@ -171,9 +176,10 @@ func (c *ServerCommand) Run(args []string) int {
 // blocks.
 //
 // A refresh failure is reported but does not stop the server. A provider that
-// did not answer is marked unhealthy and rejected by name until it does.
+// did not answer is marked unhealthy and rejected by name until it does. Pools
+// are built over conns.
 func (m *Meta) loadRegistry(
-	ctx context.Context, configPath string,
+	ctx context.Context, configPath string, conns *nodes.Conns,
 ) (*registry.Registry, *config.File, int) {
 	path, err := config.Discover(configPath)
 	if err != nil {
@@ -187,7 +193,7 @@ func (m *Meta) loadRegistry(
 		return nil, nil, ExitFailure
 	}
 
-	reg, diags := registry.New(ctx, cfg)
+	reg, diags := registry.New(ctx, cfg, registry.WithNodes(conns))
 	if diags.HasErrors() {
 		renderDiagnostics(m.Ui, nil, diags, m.color())
 
@@ -201,8 +207,11 @@ func (m *Meta) loadRegistry(
 	return reg, cfg, ExitSuccess
 }
 
-// devServer builds a server over memory stores, empty at every start.
-func devServer(ctx context.Context, reg *registry.Registry, logger *slog.Logger) (*server.Server, error) {
+// devServer builds a server over memory stores, empty at every start, tracking
+// agent nodes in conns.
+func devServer(
+	ctx context.Context, reg *registry.Registry, conns *nodes.Conns, logger *slog.Logger,
+) (*server.Server, error) {
 	led, err := ledger.New(ctx, reg.Budgets(), ledger.NewMemory(nil))
 	if err != nil {
 		return nil, err
@@ -210,13 +219,13 @@ func devServer(ctx context.Context, reg *registry.Registry, logger *slog.Logger)
 
 	executions := memory.NewExecutions()
 
-	return server.New(reg, led, executions, memory.NewJobs(executions), logger), nil
+	return server.New(reg, led, executions, memory.NewJobs(executions), logger, server.WithNodes(conns)), nil
 }
 
-// storeServer connects to the store, migrates it, and builds a server over it.
-// The function returned closes the connection.
+// storeServer connects to the store, migrates it, and builds a server over it
+// tracking agent nodes in conns. The function returned closes the connection.
 func storeServer(
-	ctx context.Context, dsn string, reg *registry.Registry, logger *slog.Logger,
+	ctx context.Context, dsn string, reg *registry.Registry, conns *nodes.Conns, logger *slog.Logger,
 ) (*server.Server, func(), error) {
 	db, err := postgres.Open(ctx, dsn)
 	if err != nil {
@@ -241,7 +250,7 @@ func storeServer(
 		return nil, nil, fmt.Errorf("could not read quota usage: %w", err)
 	}
 
-	return server.New(reg, led, db, db, logger), db.Close, nil
+	return server.New(reg, led, db, db, logger, server.WithNodes(conns)), db.Close, nil
 }
 
 // serverTLS loads the certificate and key the server block names, or returns

@@ -28,6 +28,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/config"
 	"github.com/afreidah/vagabond/internal/job"
+	"github.com/afreidah/vagabond/internal/nodes"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/scheduler"
@@ -73,6 +74,20 @@ type entry struct {
 // CONSTRUCTION
 // -------------------------------------------------------------------------
 
+// Option configures what New builds providers with.
+type Option func(*options)
+
+// options is what the Options set.
+type options struct {
+	nodes *nodes.Conns
+}
+
+// WithNodes gives pool providers the server's connected agent nodes, which
+// they are made of. Without it, a pool is a configuration error.
+func WithNodes(conns *nodes.Conns) Option {
+	return func(o *options) { o.nodes = conns }
+}
+
 // New builds a registry from configuration.
 //
 // The context is for resolving credentials, which may run a command an
@@ -87,9 +102,14 @@ type entry struct {
 //
 // Every provider is attempted even after one fails, so an operator fixing a
 // configuration sees everything wrong with it in one run.
-func New(ctx context.Context, cfg *config.File) (*Registry, hcl.Diagnostics) {
+func New(ctx context.Context, cfg *config.File, opts ...Option) (*Registry, hcl.Diagnostics) {
 	if cfg == nil {
 		return &Registry{}, nil
+	}
+
+	var o options
+	for _, opt := range opts {
+		opt(&o)
 	}
 
 	namespaces, diags := compileNamespaces(cfg.Namespaces)
@@ -100,7 +120,7 @@ func New(ctx context.Context, cfg *config.File) (*Registry, hcl.Diagnostics) {
 	}
 
 	for i := range cfg.Providers {
-		e, entryDiags := newEntry(ctx, &cfg.Providers[i])
+		e, entryDiags := newEntry(ctx, &cfg.Providers[i], o.nodes)
 
 		diags = append(diags, entryDiags...)
 
@@ -153,7 +173,7 @@ func compileNamespaces(namespaces []config.Namespace) (map[string]map[string]quo
 }
 
 // newEntry constructs one provider from its configuration.
-func newEntry(ctx context.Context, cfg *config.Provider) (*entry, hcl.Diagnostics) {
+func newEntry(ctx context.Context, cfg *config.Provider, conns *nodes.Conns) (*entry, hcl.Diagnostics) {
 	tags, diags := cfg.Tags()
 	if diags.HasErrors() {
 		return nil, diags
@@ -186,6 +206,7 @@ func newEntry(ctx context.Context, cfg *config.Provider) (*entry, hcl.Diagnostic
 		Name:        cfg.Name,
 		Config:      cfg.ConfigBody(),
 		Credentials: credentials,
+		Nodes:       conns,
 	})
 
 	diags = append(diags, buildDiags...)
@@ -211,7 +232,16 @@ func newEntry(ctx context.Context, cfg *config.Provider) (*entry, hcl.Diagnostic
 // REFRESH
 // -------------------------------------------------------------------------
 
-// Refresh asks every enabled provider what it can currently do.
+// isLive reports whether a provider's capabilities are read on every plan
+// rather than refreshed, so Refresh leaves it alone.
+func isLive(e *entry) bool {
+	_, ok := e.provider.(plugin.Live)
+
+	return ok
+}
+
+// Refresh asks every enabled provider what it can currently do, except live
+// ones, which Inputs reads on every plan.
 //
 // A provider that fails to answer is marked unhealthy and keeps whatever was
 // last known about it, rather than being dropped. Losing a provider because one
@@ -234,7 +264,7 @@ func (r *Registry) Refresh(ctx context.Context) error {
 	var wg sync.WaitGroup
 
 	for i, e := range r.entries {
-		if !e.enabled {
+		if !e.enabled || isLive(e) {
 			continue
 		}
 
@@ -254,7 +284,7 @@ func (r *Registry) Refresh(ctx context.Context) error {
 	var failures []error
 
 	for i, e := range r.entries {
-		if !e.enabled {
+		if !e.enabled || isLive(e) {
 			continue
 		}
 
@@ -294,15 +324,26 @@ func (r *Registry) Inputs(
 	defer r.mu.RUnlock()
 
 	for _, e := range r.entries {
+		caps, healthy := e.capabilities.Clone(), e.healthy
+
+		// A live provider is read now rather than from the last refresh, so a
+		// node that just joined or filled up is seen by this plan.
+		if live, ok := e.provider.(plugin.Live); ok && e.enabled {
+			var err error
+
+			caps, err = live.LiveCapabilities()
+			healthy = err == nil
+		}
+
 		in := scheduler.Input{
 			Provider:     e.name,
-			Capabilities: e.capabilities.Clone(),
+			Capabilities: caps,
 			Limits:       e.limits,
 			Namespace:    namespace,
 			Share:        r.namespaces[namespace][e.name],
 			Tags:         e.tags,
 			Enabled:      e.enabled,
-			Healthy:      e.healthy,
+			Healthy:      healthy,
 		}
 
 		if usage != nil {

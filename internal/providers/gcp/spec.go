@@ -14,6 +14,8 @@ package gcp
 import (
 	"fmt"
 	"math"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/afreidah/vagabond/internal/job"
@@ -47,7 +49,7 @@ const (
 
 // jobSpec builds the Cloud Run job for a task.
 func (p *Provider) jobSpec(task *job.Task) (map[string]any, error) {
-	image, ok := containerImage(task)
+	image, ok := task.ConfigString(job.ConfigImage)
 	if !ok {
 		return nil, plugin.Internal(
 			fmt.Errorf("task %q names no image", task.Name))
@@ -63,11 +65,11 @@ func (p *Provider) jobSpec(task *job.Task) (map[string]any, error) {
 		"resources": map[string]any{"limits": resourceLimits(task)},
 	}
 
-	if command, ok := containerString(task, "command"); ok {
+	if command, ok := task.ConfigString("command"); ok {
 		container["command"] = []string{command}
 	}
 
-	if args, ok := containerArgs(task); ok {
+	if args, ok := task.ConfigStrings("args"); ok {
 		container["args"] = args
 	}
 
@@ -173,7 +175,7 @@ func environment(task *job.Task) []map[string]string {
 
 	// Sorted, because a map's order would make two submissions of the same
 	// task differ and a diff of what was sent meaningless.
-	sortEnv(env)
+	slices.SortFunc(env, func(a, b map[string]string) int { return strings.Compare(a["name"], b["name"]) })
 
 	return env
 }
