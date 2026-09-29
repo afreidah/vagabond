@@ -369,9 +369,9 @@ times out is reported as `the store is unreachable`.
 | Operation | During the outage |
 |---|---|
 | `POST /v1/jobs/run` | 503. Nothing is recorded, reserved or submitted |
-| `POST /v1/job/{name}/dispatch`, reads of jobs, dispatches and executions | 500: reading the store fails |
+| `POST /v1/job/{name}/dispatch`, reads of jobs, dispatches and executions | 503 |
 | `POST /v1/jobs/plan` with a job file | Answers from the last usage snapshot |
-| `POST /v1/jobs/plan` of a registered job | 500: reading the job fails |
+| `POST /v1/jobs/plan` of a registered job | 503: the job is read from the store |
 | `GET /v1/health` | 503, `Store` is `unreachable`, `StoreError` set, `UsageRefreshed` ages |
 | Execution being polled | Carries on. Polling needs no store; record writes fail silently |
 | Next attempt or next task | Stops the dispatch: reserving quota on a provider with pools, or creating the `pending` record, fails |

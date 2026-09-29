@@ -76,6 +76,19 @@ func TestStoreOutage_RefusesNewWorkAndRecovers(t *testing.T) {
 		t.Errorf("Run() during the outage = %v, want 503", err)
 	}
 
+	// Reads are as unavailable as writes, not internal errors.
+	reads := map[string]func() error{
+		"DispatchStatus": func() error { _, err := client.DispatchStatus(ctx, started.DispatchID); return err },
+		"Execution":      func() error { _, err := client.Execution(ctx, id.String()); return err },
+		"Jobs":           func() error { _, err := client.Jobs(ctx, ""); return err },
+	}
+
+	for name, read := range reads {
+		if err := read(); !errors.As(err, &failure) || failure.Status != http.StatusServiceUnavailable {
+			t.Errorf("%s() during the outage = %v, want 503", name, err)
+		}
+	}
+
 	if health, err := client.Health(ctx); err == nil || health.Store != "unreachable" {
 		t.Errorf("Health() during the outage = %+v, %v; want unreachable", health, err)
 	}

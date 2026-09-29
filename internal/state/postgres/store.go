@@ -79,7 +79,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 		return nil, fmt.Errorf("%w: %w", state.ErrUnavailable, err)
 	}
 
-	return &Store{pool: pool, queries: db.New(pool), dsn: dsn}, nil
+	return &Store{pool: pool, queries: db.New(classified{pool: pool}), dsn: dsn}, nil
 }
 
 // Close releases the pool.

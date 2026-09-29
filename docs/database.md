@@ -266,7 +266,7 @@ unreachable`.
 | | During the outage |
 |---|---|
 | New dispatch or run, register, stop | 503 |
-| Status, list, logs | Fail; reads are not classified as unreachable and answer 500 |
+| Status, list, logs | 503, as every query's connection failure is classified unreachable |
 | Plan | Answers from the last usage snapshot |
 | Dispatch already running | Continues; record writes after `pending` are best effort |
 | `GET /v1/health` | 503, `"Store": "unreachable"` |
