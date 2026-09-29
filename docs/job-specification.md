@@ -619,9 +619,10 @@ env {
 - Values may reference `${meta.*}`.
 - `VAGABOND_META_<KEY>` is added for every metadata key unless `env` sets the
   same name.
-- Values must be strings or convert to one. A list or object passes
-  validation; at dispatch the pool and Lambda providers fail the execution as
-  an internal failure, and Cloud Run sends no environment at all.
+- Values must be strings or convert to one: numbers and bools do. A list or
+  object fails validation with `Invalid value: The value for "<NAME>" must be
+  a string`, at its line, so the job is refused by `job validate`,
+  `register` and `run`.
 
 Cloud Run passes the variables sorted by name. Lambda passes them in the
 event's `env` object, not as the function's process environment.

@@ -73,7 +73,12 @@ func (p *Provider) jobSpec(task *job.Task) (map[string]any, error) {
 		container["args"] = args
 	}
 
-	if env := environment(task); len(env) > 0 {
+	env, err := environment(task)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(env) > 0 {
 		container["env"] = env
 	}
 
@@ -161,11 +166,12 @@ func taskTimeout(task *job.Task) (time.Duration, error) {
 // -------------------------------------------------------------------------
 
 // environment renders a task's environment the way Cloud Run wants it: its env
-// block plus the VAGABOND_META_* variables.
-func environment(task *job.Task) []map[string]string {
+// block plus the VAGABOND_META_* variables. One that does not evaluate is our
+// failure to have admitted the task, never a job run with no environment.
+func environment(task *job.Task) ([]map[string]string, error) {
 	attrs, diags := task.Environment()
 	if diags.HasErrors() {
-		return nil
+		return nil, plugin.Internal(fmt.Errorf("task %q env: %s", task.Name, diags.Error()))
 	}
 
 	env := make([]map[string]string, 0, len(attrs))
@@ -177,5 +183,5 @@ func environment(task *job.Task) []map[string]string {
 	// task differ and a diff of what was sent meaningless.
 	slices.SortFunc(env, func(a, b map[string]string) int { return strings.Compare(a["name"], b["name"]) })
 
-	return env
+	return env, nil
 }

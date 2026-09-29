@@ -183,22 +183,21 @@ func bindTasks(file *job.File, ctx *hcl.EvalContext, supplied map[string]string)
 func checkReferences(task *job.Task) hcl.Diagnostics {
 	var diags hcl.Diagnostics
 
-	for _, block := range []*job.RawBlock{task.Config, task.Env} {
-		if block == nil || block.Body == nil {
-			continue
-		}
-
-		attrs, attrDiags := block.Body.JustAttributes()
-		if attrDiags.HasErrors() {
-			// Nested config blocks are reported by checkConfigBlocks.
-			continue
-		}
-
-		for _, attr := range attrs {
-			if _, valueDiags := attr.Expr.Value(task.Vars); valueDiags.HasErrors() {
-				diags = append(diags, valueDiags...)
+	if block := task.Config; block != nil && block.Body != nil {
+		// Nested config blocks are reported by checkConfigBlocks.
+		if attrs, attrDiags := block.Body.JustAttributes(); !attrDiags.HasErrors() {
+			for _, attr := range attrs {
+				if _, valueDiags := attr.Expr.Value(task.Vars); valueDiags.HasErrors() {
+					diags = append(diags, valueDiags...)
+				}
 			}
 		}
+	}
+
+	// The env block is read exactly as providers read it, so a value that is
+	// not a string is refused here rather than failing the execution.
+	if _, envDiags := task.Env.Attributes(task.Vars); envDiags.HasErrors() {
+		diags = append(diags, envDiags...)
 	}
 
 	return diags
