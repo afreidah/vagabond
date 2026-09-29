@@ -81,6 +81,16 @@ func (s *Store) Settle(ctx context.Context, id execution.ID, actual map[ledger.P
 	})
 }
 
+// Reserved reports whether id still holds a reservation.
+func (s *Store) Reserved(ctx context.Context, id execution.ID) (bool, error) {
+	held, err := s.queries.ExecutionReserved(ctx, id.String())
+	if err != nil {
+		return false, fmt.Errorf("reading the reservation of %s: %w", id, err)
+	}
+
+	return held, nil
+}
+
 // ReadUsage returns settled plus reserved usage in the given periods.
 //
 // One statement reads both tables from one snapshot, so a settle moving an

@@ -62,6 +62,18 @@ func (q *Queries) ClaimStaleReservations(ctx context.Context, before time.Time) 
 	return items, nil
 }
 
+const executionReserved = `-- name: ExecutionReserved :one
+SELECT EXISTS (SELECT 1 FROM quota_reservations WHERE execution_id = $1)
+`
+
+// Whether an execution still holds a reservation the reaper has not settled.
+func (q *Queries) ExecutionReserved(ctx context.Context, executionID string) (bool, error) {
+	row := q.db.QueryRow(ctx, executionReserved, executionID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const readQuotaUsage = `-- name: ReadQuotaUsage :many
 SELECT charged.namespace, charged.provider, charged.pool, charged.period, SUM(charged.amount)::bigint AS used
 FROM (

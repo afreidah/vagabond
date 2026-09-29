@@ -4,8 +4,9 @@
 // Author: Alex Freidah
 //
 // What the CLI does once per call, the server does on timers: refreshing
-// provider capabilities and quota usage, reaping stale reservations, and
-// claiming dispatches whose owner died. Each task logs its own failures and
+// provider capabilities and quota usage, reaping stale reservations, releasing
+// what providers still hold for finished executions, and claiming dispatches
+// whose owner died. Each task logs its own failures and
 // waits for its next tick, so one failing never stops another.
 // -------------------------------------------------------------------------------
 
@@ -25,6 +26,7 @@ const (
 	capabilitiesInterval = time.Minute
 	usageInterval        = 15 * time.Second
 	reapInterval         = 5 * time.Minute
+	releaseInterval      = 5 * time.Minute
 	claimInterval        = 30 * time.Second
 )
 
@@ -40,6 +42,7 @@ func (s *Server) startUpkeep(ctx context.Context) *sync.WaitGroup {
 	wg.Go(func() { every(ctx, capabilitiesInterval, s.refreshCapabilities) })
 	wg.Go(func() { every(ctx, usageInterval, s.refreshUsage) })
 	wg.Go(func() { every(ctx, reapInterval, s.reap) })
+	wg.Go(func() { every(ctx, releaseInterval, s.release) })
 	wg.Go(func() { every(ctx, s.claimEvery, s.claim) })
 
 	return &wg
@@ -86,5 +89,20 @@ func (s *Server) reap(ctx context.Context) {
 		s.logger.WarnContext(ctx, "resolving abandoned quota reservations", "error", err)
 	case reaped > 0:
 		s.logger.InfoContext(ctx, "resolved abandoned quota reservations", "count", reaped)
+	}
+}
+
+// release frees what providers still hold for executions that are over, which
+// dispatch leaves for every ending but a result it read.
+func (s *Server) release(ctx context.Context) {
+	released, err := s.dispatcher.ReleaseLeftovers(ctx)
+
+	// Some may have been released even when others failed, so both are logged.
+	if released > 0 {
+		s.logger.InfoContext(ctx, "released provider leftovers", "count", released)
+	}
+
+	if err != nil {
+		s.logger.WarnContext(ctx, "releasing provider leftovers", "error", err)
 	}
 }

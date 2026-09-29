@@ -11,12 +11,12 @@ INSERT INTO executions (
     id, namespace, job, job_version, task, provider, attempt, previous_id,
     state, provider_id, failure, created_at, started_at, ended_at, updated_at,
     exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated,
-    dispatch_id, cpu, memory
+    dispatch_id, cpu, memory, released_at
 ) VALUES (
     @id, @namespace, @job, @job_version, @task, @provider, @attempt, @previous_id,
     @state, @provider_id, @failure, @created_at, @started_at, @ended_at, @updated_at,
     @exit_code, @duration_ms, @billed_cpu, @billed_memory, @billed_ms, @logs, @logs_truncated,
-    @dispatch_id, @cpu, @memory
+    @dispatch_id, @cpu, @memory, @released_at
 );
 
 -- name: UpdateExecution :execrows
@@ -46,6 +46,17 @@ SELECT * FROM executions WHERE id = @id;
 SELECT * FROM executions
 WHERE dispatch_id = @dispatch_id
 ORDER BY created_at;
+
+-- name: ListUnreleasedExecutions :many
+-- Executions whose leftovers are not yet released and that have not changed
+-- since before, oldest first. Unlimited, so executions that cannot be released
+-- yet never crowd out ones that can.
+SELECT * FROM executions
+WHERE released_at IS NULL AND updated_at < @before
+ORDER BY updated_at;
+
+-- name: MarkExecutionReleased :exec
+UPDATE executions SET released_at = @released_at WHERE id = @id;
 
 -- name: ListJobExecutions :many
 -- A job's most recent executions, newest first.

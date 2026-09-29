@@ -128,9 +128,11 @@ type Resolver func(ctx context.Context, h Held) (Verdict, time.Duration)
 // returns the usage it was refused against. Settle replaces a reservation with
 // what the run cost; one with none settles to nothing. Reap hands each
 // reservation created before the cutoff to settle and settles those it accepts.
+// Reserved reports whether an execution still holds a reservation.
 type Store interface {
 	Reserve(ctx context.Context, r *Reservation) (bool, Usage, error)
 	Settle(ctx context.Context, id execution.ID, actual map[PoolRef]int64) error
+	Reserved(ctx context.Context, id execution.ID) (bool, error)
 	ReadUsage(ctx context.Context, periods []string) (Usage, error)
 	Reap(ctx context.Context, before time.Time,
 		settle func(context.Context, Held) (map[PoolRef]int64, bool)) (int, error)
@@ -254,6 +256,12 @@ func (l *Ledger) Settle(
 	}
 
 	return nil
+}
+
+// Reserved reports whether id still holds a reservation, which the reaper will
+// settle by asking its provider what it did.
+func (l *Ledger) Reserved(ctx context.Context, id execution.ID) (bool, error) {
+	return l.store.Reserved(ctx, id)
 }
 
 // Reap resolves reservations older than StaleAfter, which a process that died

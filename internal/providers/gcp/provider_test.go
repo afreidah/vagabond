@@ -308,7 +308,7 @@ func TestSubmitTranslatesTheTask(t *testing.T) {
 }
 
 // A job that was created but could not be run leaves a resource behind, so it
-// is cleaned up rather than left for the sweep.
+// is cleaned up rather than left for the release loop.
 func TestSubmitCleansUpAfterAFailedRun(t *testing.T) {
 	t.Parallel()
 

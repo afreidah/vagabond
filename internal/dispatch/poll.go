@@ -13,6 +13,7 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -214,29 +215,30 @@ func (d *Dispatcher) follow(
 }
 
 // release frees whatever the provider left behind, for providers that leave
-// anything.
+// anything, and records that it was done.
 //
 // Best effort and on its own context, so that a caller who has already stopped
 // waiting still gets the resource cleaned up. A failure here has not failed the
-// execution, and the provider's own sweep is the backstop.
+// execution: the record stays unreleased, and the release loop tries again.
 func (d *Dispatcher) release(provider plugin.Provider, id execution.ID) {
-	releaser, ok := provider.(plugin.Releaser)
-	if !ok {
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()),
 		releaseTimeout)
 	defer cancel()
 
-	_ = releaser.Release(ctx, id)
+	if releaser, ok := provider.(plugin.Releaser); ok {
+		if err := releaser.Release(ctx, id); err != nil && !errors.Is(err, plugin.ErrUnknownExecution) {
+			return
+		}
+	}
+
+	_ = d.executions.MarkReleased(ctx, id, d.now())
 }
 
 // abandon stops an execution the caller stopped waiting for.
 //
 // On its own context, because the one that was cancelled is why we are here.
-// Best effort: nothing is left to report a failure to, and the sweep is the
-// backstop for whatever this misses.
+// Best effort: nothing is left to report a failure to. What the provider still
+// holds for it is released by the release loop once it is over.
 func (d *Dispatcher) abandon(provider plugin.Provider, id execution.ID) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()),
 		abandonTimeout)

@@ -16,12 +16,12 @@ INSERT INTO executions (
     id, namespace, job, job_version, task, provider, attempt, previous_id,
     state, provider_id, failure, created_at, started_at, ended_at, updated_at,
     exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated,
-    dispatch_id, cpu, memory
+    dispatch_id, cpu, memory, released_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8,
     $9, $10, $11, $12, $13, $14, $15,
     $16, $17, $18, $19, $20, $21, $22,
-    $23, $24, $25
+    $23, $24, $25, $26
 )
 `
 
@@ -51,6 +51,7 @@ type CreateExecutionParams struct {
 	DispatchID    string
 	Cpu           int64
 	Memory        int64
+	ReleasedAt    *time.Time
 }
 
 // -----------------------------------------------------------------------------
@@ -87,12 +88,13 @@ func (q *Queries) CreateExecution(ctx context.Context, arg CreateExecutionParams
 		arg.DispatchID,
 		arg.Cpu,
 		arg.Memory,
+		arg.ReleasedAt,
 	)
 	return err
 }
 
 const getExecution = `-- name: GetExecution :one
-SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated, dispatch_id, cpu, memory FROM executions WHERE id = $1
+SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated, dispatch_id, cpu, memory, released_at FROM executions WHERE id = $1
 `
 
 func (q *Queries) GetExecution(ctx context.Context, id string) (Execution, error) {
@@ -124,12 +126,13 @@ func (q *Queries) GetExecution(ctx context.Context, id string) (Execution, error
 		&i.DispatchID,
 		&i.Cpu,
 		&i.Memory,
+		&i.ReleasedAt,
 	)
 	return i, err
 }
 
 const listDispatchExecutions = `-- name: ListDispatchExecutions :many
-SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated, dispatch_id, cpu, memory FROM executions
+SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated, dispatch_id, cpu, memory, released_at FROM executions
 WHERE dispatch_id = $1
 ORDER BY created_at
 `
@@ -170,6 +173,7 @@ func (q *Queries) ListDispatchExecutions(ctx context.Context, dispatchID string)
 			&i.DispatchID,
 			&i.Cpu,
 			&i.Memory,
+			&i.ReleasedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -182,7 +186,7 @@ func (q *Queries) ListDispatchExecutions(ctx context.Context, dispatchID string)
 }
 
 const listJobExecutions = `-- name: ListJobExecutions :many
-SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated, dispatch_id, cpu, memory FROM executions
+SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated, dispatch_id, cpu, memory, released_at FROM executions
 WHERE namespace = $1 AND job = $2
 ORDER BY created_at DESC
 LIMIT $3
@@ -230,6 +234,7 @@ func (q *Queries) ListJobExecutions(ctx context.Context, arg ListJobExecutionsPa
 			&i.DispatchID,
 			&i.Cpu,
 			&i.Memory,
+			&i.ReleasedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -239,6 +244,76 @@ func (q *Queries) ListJobExecutions(ctx context.Context, arg ListJobExecutionsPa
 		return nil, err
 	}
 	return items, nil
+}
+
+const listUnreleasedExecutions = `-- name: ListUnreleasedExecutions :many
+SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated, dispatch_id, cpu, memory, released_at FROM executions
+WHERE released_at IS NULL AND updated_at < $1
+ORDER BY updated_at
+`
+
+// Executions whose leftovers are not yet released and that have not changed
+// since before, oldest first. Unlimited, so executions that cannot be released
+// yet never crowd out ones that can.
+func (q *Queries) ListUnreleasedExecutions(ctx context.Context, before time.Time) ([]Execution, error) {
+	rows, err := q.db.Query(ctx, listUnreleasedExecutions, before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Execution{}
+	for rows.Next() {
+		var i Execution
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Job,
+			&i.JobVersion,
+			&i.Task,
+			&i.Provider,
+			&i.Attempt,
+			&i.PreviousID,
+			&i.State,
+			&i.ProviderID,
+			&i.Failure,
+			&i.CreatedAt,
+			&i.StartedAt,
+			&i.EndedAt,
+			&i.UpdatedAt,
+			&i.ExitCode,
+			&i.DurationMs,
+			&i.BilledCpu,
+			&i.BilledMemory,
+			&i.BilledMs,
+			&i.Logs,
+			&i.LogsTruncated,
+			&i.DispatchID,
+			&i.Cpu,
+			&i.Memory,
+			&i.ReleasedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markExecutionReleased = `-- name: MarkExecutionReleased :exec
+UPDATE executions SET released_at = $1 WHERE id = $2
+`
+
+type MarkExecutionReleasedParams struct {
+	ReleasedAt *time.Time
+	ID         string
+}
+
+func (q *Queries) MarkExecutionReleased(ctx context.Context, arg MarkExecutionReleasedParams) error {
+	_, err := q.db.Exec(ctx, markExecutionReleased, arg.ReleasedAt, arg.ID)
+	return err
 }
 
 const updateExecution = `-- name: UpdateExecution :execrows

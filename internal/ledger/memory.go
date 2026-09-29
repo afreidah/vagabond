@@ -67,6 +67,16 @@ func (m *Memory) Settle(_ context.Context, id execution.ID, actual map[PoolRef]i
 	return nil
 }
 
+// Reserved reports whether id still holds a reservation.
+func (m *Memory) Reserved(_ context.Context, id execution.ID) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	_, held := m.held[id]
+
+	return held, nil
+}
+
 // ReadUsage returns settled plus reserved usage in the given periods.
 func (m *Memory) ReadUsage(_ context.Context, periods []string) (Usage, error) {
 	m.mu.Lock()

@@ -131,8 +131,7 @@ The permissions the plugin exercises, by call:
 | `POST .../jobs/{job}:run` | `Submit` | `run.jobs.run` |
 | `GET .../jobs/{job}/executions` | `Status`, `Result` | `run.executions.list` |
 | `GET /v2/{execution}/tasks` | `Result` | `run.tasks.list` |
-| `DELETE .../jobs/{job}` | `Cancel`, `Release`, failed `Submit`, `Sweep` | `run.jobs.delete` |
-| `GET .../jobs?pageSize=100` | `Sweep` | `run.jobs.list` |
+| `DELETE .../jobs/{job}` | `Cancel`, `Release`, failed `Submit` | `run.jobs.delete` |
 | `POST /v2/entries:list` | `Result` | `logging.logEntries.list` |
 | `POST /v2/entries:tail` | `StreamLogs` | `logging.logEntries.list` |
 
@@ -355,28 +354,19 @@ from `Result` once the execution ends. See [Dispatch](../dispatch.md#output).
 | Mechanism | When | Effect |
 |---|---|---|
 | `Release` | After every `Result`, by dispatch, 30s timeout | Deletes the job |
+| `Release` | Every other ending, by the [provider release](../background-services.md#provider-release) loop | Deletes the job |
 | `Cancel` | When the dispatching caller gives up, or `DELETE /v1/execution/{id}` for an execution no local dispatch is running | Deletes the job, stopping its execution |
 | Failed `:run` | Inside `Submit` | Deletes the job |
-| `Sweep(ctx, now)` | Only when called; no background service calls it | Deletes leaked jobs |
 
 **Cancel destroys the result.** Deleting the job deletes its executions and
 tasks, and the exit code with them. `Result` after `Cancel` fails with
 `ErrUnknownExecution`. Dispatch always reads `Result` before `Release`.
 
-A job leaks when the process dies between `Submit` and `Release`. A server that
-takes over the dispatch releases it when it finishes following the execution.
-Leaked jobs count against Cloud Run's per-region job quota.
-
-`Sweep` lists every job in the project and region and deletes those that:
-
-- are named with the `vagabond-` prefix, so jobs created by anything else are
-  untouched, and
-- were created more than 25 hours ago, past the 24-hour task maximum, so no
-  running execution is deleted.
-
-A job whose `createTime` does not parse is skipped. A 404 on delete counts as
-swept. Delete failures are collected and returned together after every job has
-been attempted; the count of deleted jobs is returned alongside.
+A job outlives its run when dispatch never reaches `Release`: a failed
+`Result`, a provider that stopped answering, a server that died. The release
+loop deletes it once `Status` reports the execution over and any quota
+reservation is settled. Leftover jobs count against Cloud Run's per-region job
+quota until then.
 
 ## Failure classification
 

@@ -246,11 +246,14 @@ implement `plugin.Releaser`:
 
 - Called after `Result`, because releasing may delete what the result reads.
   A synchronous submission is released as soon as `Submit` returns.
-- Own context, 30s timeout, errors ignored. A failed release does not fail the
+- Own context, 30s timeout. A release that succeeds, or finds nothing left,
+  sets the record's `released_at`. A failed release does not fail the
   execution.
-- Not called when `Result` failed, when the execution was cancelled by
-  Vagabond, or when it went `lost`. What the provider holds then stays until
-  removed by hand or by the provider.
+- Not called by dispatch when `Result` failed, when the execution was
+  cancelled by Vagabond, when the provider stopped answering, or when the
+  server died mid-run. The [provider release](background-services.md#provider-release)
+  loop releases those once the provider reports them over and their quota is
+  settled, and retries any release that failed.
 
 ## Cancellation
 
