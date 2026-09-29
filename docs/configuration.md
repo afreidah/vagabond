@@ -417,9 +417,15 @@ server {
   bind       = "0.0.0.0:4747"   # HTTP API
   agent_bind = "0.0.0.0:4748"   # agent connections
 
-  tls {                         # API only
+  tls {                         # the API
     cert = "/etc/vagabond/tls/server.crt"
     key  = "/etc/vagabond/tls/server.key"
+  }
+
+  agent_tls {                   # the agent listener, mutual TLS
+    cert = "/etc/vagabond/agents/server.pem"
+    key  = "/etc/vagabond/agents/server-key.pem"
+    ca   = "/etc/vagabond/agents/ca.pem"
   }
 }
 ```
@@ -429,6 +435,7 @@ server {
 | `bind` | string | no | `127.0.0.1:4747` | `host:port` for the HTTP API |
 | `agent_bind` | string | no | `127.0.0.1:4748` | `host:port` [agents](agent.md) dial |
 | `tls` | block | no | plain HTTP | Certificate for the API |
+| `agent_tls` | block | when `agent_bind` is not loopback | plain TCP | Mutual TLS for agents |
 
 ### `tls` block
 
@@ -439,11 +446,36 @@ server {
 
 - Loaded at startup; a bad pair fails with `loading the server certificate:
   ...`. Minimum TLS 1.2.
-- Covers the API listener only. The agent listener is plain TCP.
+- Covers the API listener only; `agent_tls` covers agents.
 - The API has no authentication. Anyone who can reach `bind` can register,
   run and cancel jobs. See [Deployment](deployment.md#network-exposure).
 - Clients reach a TLS server with `-address https://host:4747`; the certificate
   is verified against the system trust store.
+
+### `agent_tls` block
+
+Mutual TLS on the agent listener. The server presents `cert`, and every agent
+must present a certificate `ca` signed.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `cert` | string | yes | PEM certificate (chain) the server presents to agents |
+| `key` | string | yes | Its PEM private key |
+| `ca` | string | yes | PEM file of the CA certificates agent certificates must chain to |
+
+- Required when `agent_bind` is not a loopback address. Without it the server
+  refuses to start: `agent_bind <addr> is reachable beyond this machine: add an
+  agent_tls block to the server block so agents must present a certificate, or
+  bind to 127.0.0.1`. An empty host (`:4748`) listens everywhere and counts as
+  not loopback.
+- An agent registers only under its certificate's common name. Registering
+  another name is refused with `PermissionDenied`, so a node can only be
+  replaced by an agent holding its certificate.
+- The server certificate must carry the name agents dial as a SAN (an IP
+  address or DNS name), or agents set `-tls-server-name`.
+- Loaded at startup; minimum TLS 1.2. A handshake not finished within 10
+  seconds is dropped. Generating the certificates:
+  [agent](agent.md#certificates).
 
 ## `store` block
 
@@ -553,6 +585,12 @@ server {
   tls {
     cert = "/etc/vagabond/tls/server.crt"
     key  = "/etc/vagabond/tls/server.key"
+  }
+
+  agent_tls {
+    cert = "/etc/vagabond/agents/server.pem"
+    key  = "/etc/vagabond/agents/server-key.pem"
+    ca   = "/etc/vagabond/agents/ca.pem"
   }
 }
 

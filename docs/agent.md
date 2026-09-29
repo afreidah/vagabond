@@ -33,14 +33,19 @@ connection the agent opened.
 ## Flags
 
 ```bash
-vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=no -memory 12288
+vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=no -memory 12288 \
+  -tls-ca /etc/vagabond/ca.pem -tls-cert /etc/vagabond/box1.pem -tls-key /etc/vagabond/box1-key.pem
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `-server <addr>` | `127.0.0.1:4748` | The server's `agent_bind` address, `host:port`. |
 | `-pool <name>` | `default` | Pool the node joins. Must match the name of a `pool` provider on the server to receive work. |
-| `-name <name>` | the hostname | Node name. Unique per server: an agent registering under a name already connected replaces that connection. |
+| `-name <name>` | the certificate's common name with TLS, else the hostname | Node name. Unique per server: an agent registering under a name already connected replaces that connection. With TLS it must match the certificate. |
+| `-tls-ca <path>` | none | CA the server's certificate chains to. `-tls-ca`, `-tls-cert` and `-tls-key` are all set or none. See [Security](#security). |
+| `-tls-cert <path>` | none | This agent's certificate. Its common name is the node's name. |
+| `-tls-key <path>` | none | This agent's private key. |
+| `-tls-server-name <name>` | host part of `-server` | Name the server's certificate must carry. |
 | `-label <key>=<value>` | none | Node label, repeatable. Published to constraints as `node.label.<key>`. A repeated key, an empty key or a value without `=` is a flag error. |
 | `-cpu <millicores>` | `0` (no cap) | Upper bound on capacity CPU. |
 | `-memory <MiB>` | `0` (no cap) | Upper bound on capacity memory. |
@@ -154,7 +159,8 @@ Wants=network-online.target
 Requires=containerd.service
 
 [Service]
-ExecStart=/usr/local/bin/vagabond agent -server 10.0.0.5:4748 -pool homelab
+ExecStart=/usr/local/bin/vagabond agent -server 10.0.0.5:4748 -pool homelab \
+  -tls-ca /etc/vagabond/ca.pem -tls-cert /etc/vagabond/box1.pem -tls-key /etc/vagabond/box1-key.pem
 Delegate=yes
 CPUQuota=400%
 MemoryMax=16G
@@ -182,8 +188,10 @@ docker run -d --name vagabond-agent --restart unless-stopped \
   --privileged --cgroupns=host \
   -v /run/containerd/containerd.sock:/run/containerd/containerd.sock \
   -v /var/lib/vagabond:/var/lib/vagabond \
+  -v /etc/vagabond:/etc/vagabond:ro \
   --cpus 4 --memory 16g \
-  <image-with-vagabond> agent -server 10.0.0.5:4748 -pool homelab -name "$(hostname)"
+  <image-with-vagabond> agent -server 10.0.0.5:4748 -pool homelab \
+    -tls-ca /etc/vagabond/ca.pem -tls-cert /etc/vagabond/box1.pem -tls-key /etc/vagabond/box1-key.pem
 ```
 
 | Setting | Why |
@@ -193,7 +201,7 @@ docker run -d --name vagabond-agent --restart unless-stopped \
 | `--privileged` | Mounts `/sys/fs/cgroup` writable, for delegation. |
 | `-data-dir` mounted at the same path | containerd on the host writes workload output to the path the agent names, and the agent reads it back from the same path. |
 | `--cpus`, `--memory` | Become the container cgroup's limits, and so the node's capacity. Optional. |
-| `-name` | The container's hostname is its ID, which changes when the container is recreated. |
+| `/etc/vagabond` mounted read-only | The CA and the node's certificate and key. The node's name comes from the certificate, not the container's hostname, which is its ID and changes when the container is recreated. |
 
 ### Nomad
 
@@ -216,7 +224,11 @@ job "vagabond-agent" {
           "agent",
           "-server", "10.0.0.5:4748",
           "-pool", "homelab",
-          "-name", "${node.unique.name}",
+          # Each Nomad client holds its own node certificate at these paths;
+          # the node's name is the certificate's common name.
+          "-tls-ca", "/etc/vagabond/ca.pem",
+          "-tls-cert", "/etc/vagabond/node.pem",
+          "-tls-key", "/etc/vagabond/node-key.pem",
           "-cpu", "4000",
           "-memory", "8192",
         ]
@@ -229,16 +241,23 @@ job "vagabond-agent" {
 ### Server side
 
 The server listens for agents on `agent_bind`, loopback-only by default. For
-agents on other hosts, bind an address they can reach:
+agents on other hosts, bind an address they can reach, with `agent_tls`:
 
 ```hcl
 server {
   agent_bind = "10.0.0.5:4748"   # default "127.0.0.1:4748"
+
+  agent_tls {
+    cert = "/etc/vagabond/agents/server.pem"
+    key  = "/etc/vagabond/agents/server-key.pem"
+    ca   = "/etc/vagabond/agents/ca.pem"
+  }
 }
 ```
 
-See [`server` block](configuration.md#server-block). A listen failure stops the
-server with `Listening for agents on <addr>: ...`.
+See [`agent_tls` block](configuration.md#agent_tls-block) and
+[Security](#security). A listen failure stops the server with
+`listening for agents on <addr>: ...`.
 
 ## Connection and reporting
 
@@ -312,7 +331,8 @@ provider "homelab" {
 ### Joining
 
 ```bash
-vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=yes -label rack=a
+vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=yes -label rack=a \
+  -tls-ca /etc/vagabond/ca.pem -tls-cert /etc/vagabond/box1.pem -tls-key /etc/vagabond/box1-key.pem
 ```
 
 A pool's membership is read live on every plan, not from the periodic
@@ -594,7 +614,7 @@ One TCP connection from agent to server, multiplexed with yamux. Each side
 serves gRPC on the streams the other opens, so the server calls the agent
 without the agent listening on anything.
 
-![The agent dials one TCP connection to the server, multiplexed with yamux. The agent calls the server's Node service to register; the server calls the agent's AgentExecutions service to run workloads. The agent starts workloads on the node's containerd, inside the agent's cgroup.](assets/agent-connection.svg)
+![The agent dials one mutual TLS connection to the server, multiplexed with yamux, and presents a certificate whose common name is its node name. The agent calls the server's Node service to register under that name; the server calls the agent's AgentExecutions service to run workloads. The agent starts workloads on the node's containerd, inside the agent's cgroup.](assets/agent-connection.svg)
 
 Package `vagabond.agent.v1`, defined in `internal/agentrpc/agent.proto`;
 regenerate with `make generate`.
@@ -631,17 +651,79 @@ States travel as their names (`accepted`, `running`, `succeeded`, ...).
 
 ## Security
 
-- The agent connection is plain TCP. There is no TLS on it.
-- There is no authentication. Anything that can reach `agent_bind` can
-  register a node under any name into any pool, replace a connected node of
-  the same name, and receive the workloads scheduled to it, including their
-  environment.
-- The server calls agents only over connections agents opened. Agents listen
-  on nothing.
+| `agent_bind` | Agent connection | Who can register |
+|---|---|---|
+| Loopback (default `127.0.0.1:4748`) | Plain TCP, or mutual TLS with `agent_tls` | Local agents, under any name |
+| Anything else | Mutual TLS; the server refuses to start without `agent_tls` | Agents with a certificate the CA signed, under its common name |
 
-Bind `agent_bind` to an interface reachable only by your agent hosts: a
-private network, a VPN or overlay, or firewall rules that admit only those
-hosts. The default `127.0.0.1:4748` accepts only local agents.
+With mutual TLS:
+
+- The server presents its certificate and requires one from every agent,
+  signed by `agent_tls.ca`. A connection without a certificate, or with one
+  from another CA, fails the handshake and never registers.
+- The node name is the certificate's common name. `-name` defaults to it, and
+  the agent refuses to start with a `-name` that differs. The server refuses a
+  registration under any other name with `PermissionDenied`, so only the
+  holder of a node's certificate can replace it.
+- The agent verifies the server's certificate against `-tls-ca`, for the name
+  in `-tls-server-name` or the host of `-server`.
+- A handshake the agent cannot complete is a failed dial, retried with backoff
+  and logged as `connecting to the server ... error="TLS with <addr>: ..."`.
+
+The server calls agents only over connections agents opened. Agents listen on
+nothing.
+
+### Certificates
+
+One CA signs the server's certificate and every agent's. With `openssl`:
+
+```bash
+# CA, kept off the nodes.
+openssl req -x509 -new -nodes -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+  -keyout ca-key.pem -out ca.pem -days 3650 -subj "/CN=vagabond agents CA"
+
+# Server: the name agents dial must be a SAN.
+openssl req -new -nodes -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+  -keyout server-key.pem -out server.csr -subj "/CN=vagabond server"
+openssl x509 -req -in server.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial \
+  -out server.pem -days 825 \
+  -extfile <(printf "subjectAltName=IP:10.0.0.5,DNS:vagabond.internal\nextendedKeyUsage=serverAuth")
+
+# One per node: the common name is the node's name.
+openssl req -new -nodes -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+  -keyout box1-key.pem -out box1.csr -subj "/CN=box1"
+openssl x509 -req -in box1.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial \
+  -out box1.pem -days 825 -extfile <(printf "extendedKeyUsage=clientAuth")
+```
+
+Server:
+
+```hcl
+server {
+  agent_bind = "0.0.0.0:4748"
+
+  agent_tls {
+    cert = "/etc/vagabond/agents/server.pem"
+    key  = "/etc/vagabond/agents/server-key.pem"
+    ca   = "/etc/vagabond/agents/ca.pem"
+  }
+}
+```
+
+Agent:
+
+```bash
+vagabond agent -server 10.0.0.5:4748 -pool homelab \
+  -tls-ca /etc/vagabond/ca.pem \
+  -tls-cert /etc/vagabond/box1.pem \
+  -tls-key /etc/vagabond/box1-key.pem
+```
+
+- Keep `ca-key.pem` off the server and the nodes; it mints node identities.
+- Certificates are read once at startup. Replacing one takes a restart of the
+  server or the agent.
+- There is no revocation list. To remove a node's access, issue new
+  certificates from a new CA.
 
 ## Troubleshooting
 

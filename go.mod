@@ -15,6 +15,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/cli v1.1.7
 	github.com/hashicorp/go-cleanhttp v0.5.2
+	github.com/hashicorp/go-rootcerts v1.0.2
 	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/hashicorp/yamux v0.1.2
 	github.com/jackc/pgx/v5 v5.11.0
@@ -124,6 +125,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/mitchellh/copystructure v1.0.0 // indirect
+	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
 	github.com/mitchellh/reflectwalk v1.0.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect

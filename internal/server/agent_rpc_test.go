@@ -12,6 +12,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
 	"log/slog"
 	"net"
@@ -143,11 +144,23 @@ func newAgentHarness(t *testing.T) *agentHarness {
 	reg, led := fixtures(t)
 	srv := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler))
 
+	return serveAgents(t, srv, nil)
+}
+
+// serveAgents serves srv's agent listener on a free loopback port, over TLS
+// when tlsConfig is set, and its API, until the test ends.
+func serveAgents(t *testing.T, srv *Server, tlsConfig *tls.Config) *agentHarness {
+	t.Helper()
+
 	var lc net.ListenConfig
 
 	listener, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
+	}
+
+	if tlsConfig != nil {
+		listener = tls.NewListener(listener, tlsConfig)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

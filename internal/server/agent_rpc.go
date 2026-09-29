@@ -6,7 +6,8 @@
 // Where agents connect. Each connection is a multiplexed session the agent
 // registers its node on; the node is connected for as long as the session
 // holds, and an agent reconnecting under the same name replaces its old
-// session. The server calls a node's executions back down its session.
+// session. The server calls a node's executions back down its session. On a
+// TLS listener a node may register only under its certificate's common name.
 // -------------------------------------------------------------------------------
 
 package server
@@ -15,12 +16,16 @@ import (
 	"context"
 	"errors"
 	"net"
+	"time"
 
 	"google.golang.org/grpc"
 
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/nodes"
 )
+
+// handshakeTimeout bounds an agent's TLS handshake.
+const handshakeTimeout = 10 * time.Second
 
 // -------------------------------------------------------------------------
 // SERVING
@@ -55,7 +60,12 @@ func (s *Server) ServeAgents(ctx context.Context, listener net.Listener) error {
 // handleAgent runs one agent's session: serves the Node endpoint on it, and
 // forgets the node when the session ends.
 func (s *Server) handleAgent(ctx context.Context, conn net.Conn) {
-	session, err := agentrpc.Accept(conn)
+	// A peer that never finishes the TLS handshake is dropped, not held open.
+	handshake, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	session, err := agentrpc.Accept(handshake, conn)
+
+	cancel()
+
 	if err != nil {
 		s.logger.WarnContext(ctx, "agent connection", "from", conn.RemoteAddr().String(), "error", err)
 

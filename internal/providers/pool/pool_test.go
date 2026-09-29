@@ -147,7 +147,7 @@ func newHarness(t *testing.T) *harness {
 			}
 
 			go func() {
-				session, err := agentrpc.Accept(conn)
+				session, err := agentrpc.Accept(t.Context(), conn)
 				if err != nil {
 					return
 				}

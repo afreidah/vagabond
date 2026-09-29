@@ -8,9 +8,13 @@
 # pinned in web/go.mod.
 # -------------------------------------------------------------------------------
 
-FROM --platform=$BUILDPLATFORM hugomods/hugo:exts-0.157.0 AS builder
+FROM --platform=$BUILDPLATFORM hugomods/hugo:go-git-0.157.0 AS builder
 
 WORKDIR /src/web
+
+# The image pins GOTOOLCHAIN=local to its own Go; auto fetches the version
+# web/go.mod names, which Hugo's module download runs under
+ENV GOTOOLCHAIN=auto
 
 # Copy the site and the docs it mounts
 COPY web/ /src/web/

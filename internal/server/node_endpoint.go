@@ -3,7 +3,7 @@
 //
 // Author: Alex Freidah
 //
-// What clients call on the server over their session: registering their node,
+// What agents call on the server over their session: registering their node,
 // and GET /v1/nodes, which lists the nodes connected now.
 // -------------------------------------------------------------------------------
 
@@ -12,6 +12,9 @@ package server
 import (
 	"context"
 	"net/http"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/api"
@@ -26,10 +29,16 @@ type nodeEndpoint struct {
 }
 
 // Register records the node on this session, replacing what it registered
-// before.
+// before. Over TLS the name must be the certificate's, so an agent cannot
+// register as, and so replace, a node it holds no certificate for.
 func (n *nodeEndpoint) Register(
 	ctx context.Context, req *agentrpc.NodeRegisterRequest,
 ) (*agentrpc.NodeRegisterResponse, error) {
+	if identity := n.session.Identity(); identity != "" && req.GetName() != identity {
+		return nil, status.Errorf(codes.PermissionDenied,
+			"node %q cannot register as %q: its certificate names %q", identity, req.GetName(), identity)
+	}
+
 	n.srv.addNodeConn(ctx, req, n.session)
 
 	return &agentrpc.NodeRegisterResponse{}, nil

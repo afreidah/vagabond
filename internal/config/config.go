@@ -45,18 +45,27 @@ const (
 	DefaultAgentBind = "127.0.0.1:4748"
 )
 
-// ServerBlock configures vagabond server. Absent means the defaults. AgentBind
-// is where agents connect; TLS covers the API only for now.
+// ServerBlock configures vagabond server. Absent means the defaults. TLS
+// covers the API; AgentTLS covers the agent listener at AgentBind.
 type ServerBlock struct {
-	Bind      *string   `hcl:"bind,optional"`
-	AgentBind *string   `hcl:"agent_bind,optional"`
-	TLS       *TLSBlock `hcl:"tls,block"`
+	Bind      *string        `hcl:"bind,optional"`
+	AgentBind *string        `hcl:"agent_bind,optional"`
+	TLS       *TLSBlock      `hcl:"tls,block"`
+	AgentTLS  *AgentTLSBlock `hcl:"agent_tls,block"`
 }
 
 // TLSBlock names the certificate and key the server presents.
 type TLSBlock struct {
 	Cert string `hcl:"cert"`
 	Key  string `hcl:"key"`
+}
+
+// AgentTLSBlock is mutual TLS on the agent listener: the certificate and key
+// the server presents, and the CA every agent's certificate must chain to.
+type AgentTLSBlock struct {
+	Cert string `hcl:"cert"`
+	Key  string `hcl:"key"`
+	CA   string `hcl:"ca"`
 }
 
 // Address returns where the server listens. A nil block is the default.
