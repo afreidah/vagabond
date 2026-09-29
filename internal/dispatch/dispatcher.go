@@ -383,8 +383,8 @@ func (d *Dispatcher) attempt(
 
 		tried++
 
-		result, streamed, err := d.execute(ctx, provider, task, run, ranking[i].Members)
-		d.charge(ctx, &run.rec, result)
+		ended, err := d.execute(ctx, provider, task, run, ranking[i].Members)
+		d.charge(ctx, &run.rec, ended.result)
 
 		outcome.Attempts = append(outcome.Attempts, Attempt{
 			Provider: name,
@@ -395,8 +395,9 @@ func (d *Dispatcher) attempt(
 		if err == nil {
 			outcome.Provider = name
 			outcome.ID = id
-			outcome.Result = result
-			outcome.Streamed = streamed
+			outcome.State = ended.state
+			outcome.Result = ended.result
+			outcome.Streamed = ended.streamed
 
 			return outcome, nil
 		}

@@ -48,6 +48,10 @@ type scriptedProvider struct {
 	finalState    execution.State
 	exitCode      int
 
+	// noExitCode leaves the result without one, as a worker, or a task
+	// stopped before its process ran, has none.
+	noExitCode bool
+
 	// synchronous providers finish inside Submit, like a function invocation.
 	synchronous bool
 
@@ -61,6 +65,15 @@ type scriptedProvider struct {
 }
 
 func (p *scriptedProvider) Name() string { return p.name }
+
+// exit is the result's exit code: exitCode, or none with noExitCode.
+func (p *scriptedProvider) exit() *int {
+	if p.noExitCode {
+		return nil
+	}
+
+	return new(p.exitCode)
+}
 
 func (p *scriptedProvider) Capabilities(context.Context) (plugin.Capabilities, error) {
 	return plugin.FixtureContainer(time.Now()), nil
@@ -79,7 +92,7 @@ func (p *scriptedProvider) Submit(
 		return plugin.Submission{
 			ProviderID: p.name + "-" + id.String(),
 			State:      execution.StateSucceeded,
-			Result:     &execution.Result{ID: id, ExitCode: new(p.exitCode)},
+			Result:     &execution.Result{ID: id, ExitCode: p.exit()},
 		}, nil
 	}
 
@@ -117,7 +130,7 @@ func (p *scriptedProvider) Result(
 
 	return &execution.Result{
 		ID:       id,
-		ExitCode: new(p.exitCode),
+		ExitCode: p.exit(),
 		Duration: time.Second,
 		Billed:   p.billed,
 		Logs:     []byte("scripted output\n"),
@@ -391,6 +404,38 @@ func TestWorkloadFailureIsNotRerouted(t *testing.T) {
 
 	if len(outcome.Attempts) != 1 {
 		t.Errorf("made %d attempts, want 1", len(outcome.Attempts))
+	}
+}
+
+// The provider's state is the verdict. A task it reports failed with no exit
+// code, as Cloud Run does for one stopped before its process ran, fails.
+func TestFailedStateWithoutAnExitCodeFails(t *testing.T) {
+	t.Parallel()
+
+	p := &scriptedProvider{name: "a", pollsToFinish: 1, finalState: execution.StateFailed, noExitCode: true}
+
+	outcome, err := newDispatcher(t, newRegistry(p)).
+		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil)
+	if err != nil {
+		t.Fatalf("RunTask() = %v", err)
+	}
+
+	if outcome.Succeeded() {
+		t.Error("a failed state with no exit code reported success")
+	}
+}
+
+// A task with no exit code at all, as a worker has none, succeeds on the
+// provider's word.
+func TestSucceededStateWithoutAnExitCodeSucceeds(t *testing.T) {
+	t.Parallel()
+
+	p := &scriptedProvider{name: "a", synchronous: true, noExitCode: true}
+
+	outcome, err := newDispatcher(t, newRegistry(p)).
+		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil)
+	if err != nil || !outcome.Succeeded() {
+		t.Errorf("RunTask() = %+v, %v; want a success", outcome, err)
 	}
 }
 

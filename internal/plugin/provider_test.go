@@ -231,8 +231,8 @@ func TestProvider_ContainerResultIsFetched(t *testing.T) {
 		t.Errorf("result ID = %s, want %s", result.ID, id)
 	}
 
-	if !result.Succeeded() {
-		t.Error("a zero exit code did not report success")
+	if result.ExitCode == nil || *result.ExitCode != 0 {
+		t.Errorf("exit code = %v, want 0", result.ExitCode)
 	}
 
 	if len(result.Logs) == 0 {
@@ -259,10 +259,6 @@ func TestProvider_ContainerResultCarriesNonZeroExit(t *testing.T) {
 
 	if ptr.Deref(result.ExitCode) != 3 {
 		t.Errorf("exit code = %d, want 3", ptr.Deref(result.ExitCode))
-	}
-
-	if result.Succeeded() {
-		t.Error("exit code 3 reported success")
 	}
 }
 

@@ -91,8 +91,8 @@ func (d *Dispatcher) resume(ctx context.Context, rec *execution.Record) {
 		Task: rec.Task, Provider: rec.Provider, ID: rec.ID, Attempt: rec.Attempt, State: status.State,
 	}
 
-	result, _, _ := d.follow(ctx, provider, run, event)
-	d.charge(ctx, &run.rec, result)
+	ended, _ := d.follow(ctx, provider, run, event)
+	d.charge(ctx, &run.rec, ended.result)
 }
 
 // -------------------------------------------------------------------------
@@ -118,9 +118,10 @@ func ended(tasks int, records []*execution.Record) (execution.DispatchState, str
 		last.Result != nil && last.Failure == ""
 
 	switch {
-	case answered && last.Result.Succeeded() && len(ran) >= tasks:
+	// The provider's terminal state is the verdict, not the exit code.
+	case answered && last.State == execution.StateSucceeded && len(ran) >= tasks:
 		return execution.DispatchSucceeded, ""
-	case answered && last.Result.Succeeded():
+	case answered && last.State == execution.StateSucceeded:
 		return execution.DispatchUnanswered, fmt.Sprintf("interrupted after %d of %d tasks", len(ran), tasks)
 	case answered:
 		return execution.DispatchFailed, ""

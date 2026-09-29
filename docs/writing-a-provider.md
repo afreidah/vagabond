@@ -155,9 +155,9 @@ terminal state, and before `Release`.
 | `LogsTruncated` | The plugin cut the output short |
 
 - A non-zero exit is not an error. Return the result; the state is `failed`.
-- `Result.Succeeded()` is true for a nil `ExitCode`. Return nil only for
-  drivers with no process; a container killed before it ran has no exit code,
-  and dispatch will count that result as a success.
+- The terminal state is the verdict: dispatch counts a task as succeeded only
+  when the provider reports `succeeded`, whatever the exit code. Map exit
+  codes to the state; a nil `ExitCode` is fine for a task that never ran.
 - A failed log fetch should not fail `Result`. Return the exit code without
   logs.
 - Set `Billed` when the platform reports its charge, as Lambda's `REPORT` line

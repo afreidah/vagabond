@@ -239,8 +239,9 @@ func (p *FakeSyncProvider) Submit(
 		Duration: time.Second,
 	}
 
+	// A non-zero exit fails; no exit code, as a worker has none, succeeds.
 	state := execution.StateSucceeded
-	if !result.Succeeded() {
+	if p.ExitCode != nil && *p.ExitCode != 0 {
 		state = execution.StateFailed
 	}
 

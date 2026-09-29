@@ -40,16 +40,3 @@ type Result struct {
 	Logs          []byte
 	LogsTruncated bool
 }
-
-// Succeeded reports whether the task itself reported success.
-//
-// A worker execution has no exit code, so reaching this point at all is its
-// success. Anything that failed to produce a result never gets here: that is a
-// Status question, and the answer is in State.
-func (r *Result) Succeeded() bool {
-	if r.ExitCode == nil {
-		return true
-	}
-
-	return *r.ExitCode == 0
-}
