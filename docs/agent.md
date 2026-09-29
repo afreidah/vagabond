@@ -457,7 +457,10 @@ executions it holds:
 
 `lost` is not terminal: dispatch keeps polling. A node that reconnects within
 the grace period reports its workloads, and they finish normally. After it,
-the status failure ends the attempt and dispatch records it `lost`.
+the status failure ends the attempt and dispatch records it `lost`. A node
+that comes back later still reports it, and the server records its real
+outcome ([Lost executions](dispatch.md#lost-executions)); one that never does
+is `failed` after 24 hours.
 
 **After a server restart**, the server has no record of which node holds an
 execution until a node reports it. For the first 5 minutes after the pool

@@ -136,12 +136,13 @@ died mid-run, a release that failed.
 | Interval | 5m |
 | At startup | No; the first pass is one interval in |
 | Selects | Executions with no `released_at`, unchanged for more than 10m |
-| Touches | Store: executions and reservations; each execution's provider `Status` and `Release` |
+| Touches | Store: executions and reservations; each execution's provider `Status`, `Result` and `Release` |
 
 For each execution, in order:
 
 | Condition | Action |
 |---|---|
+| It is `lost` | Reconciled first ([Lost executions](dispatch.md#lost-executions)): its result recorded if the provider reports it over, `failed` if the provider forgot it or 24 hours passed. One still unresolved is skipped |
 | It still holds a quota reservation | Skipped: the reaper settles it first by asking the provider, which a released execution can no longer answer |
 | Its provider is no longer configured, or implements no `Release` | Marked released; nothing to do |
 | No recorded result, provider reports it unknown | Marked released |

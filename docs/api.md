@@ -599,7 +599,7 @@ and `JobStatus`.
 | `succeeded` | yes | Exited successfully |
 | `failed` | yes | Exited unsuccessfully or the provider failed |
 | `cancelled` | yes | Cancelled |
-| `lost` | no | Stopped answering after submission; may still resolve |
+| `lost` | no | Stopped answering after submission; resolved by the server within 24 hours, to its real outcome or `failed` |
 
 ### Read an execution
 

@@ -39,8 +39,24 @@ func releasing(state execution.State, polls int) (*releasingProvider, *fakeRegis
 }
 
 // leftover records an execution on provider as dispatch leaves one it stopped
-// following: no result, last changed age ago.
+// following: cancelled, no result, last changed age ago.
 func leftover(t *testing.T, reg *fakeRegistry, provider string, age time.Duration) execution.ID {
+	t.Helper()
+
+	return seeded(t, reg, provider, execution.StateCancelled, age)
+}
+
+// lostExecution records an execution dispatch lost track of: lost, no result,
+// last changed age ago.
+func lostExecution(t *testing.T, reg *fakeRegistry, provider string, age time.Duration) execution.ID {
+	t.Helper()
+
+	return seeded(t, reg, provider, execution.StateLost, age)
+}
+
+// seeded records an execution on provider in state, with no result, last
+// changed age ago.
+func seeded(t *testing.T, reg *fakeRegistry, provider string, state execution.State, age time.Duration) execution.ID {
 	t.Helper()
 
 	id, err := execution.NewID()
@@ -49,7 +65,7 @@ func leftover(t *testing.T, reg *fakeRegistry, provider string, age time.Duratio
 	}
 
 	rec := &execution.Record{Namespace: ns, Provider: provider}
-	rec.ID, rec.State, rec.UpdatedAt = id, execution.StateCancelled, time.Now().Add(-age)
+	rec.ID, rec.State, rec.UpdatedAt = id, state, time.Now().Add(-age)
 
 	if err := reg.executions.Create(t.Context(), rec); err != nil {
 		t.Fatalf("Create() = %v", err)
@@ -212,5 +228,102 @@ func TestReleaseAfterTheResultMarksTheRecord(t *testing.T) {
 
 	if record(t, reg, outcome.ID).Released.IsZero() {
 		t.Error("the record was not marked released")
+	}
+}
+
+// -------------------------------------------------------------------------
+// LOST EXECUTIONS
+// -------------------------------------------------------------------------
+
+// A lost execution the provider reports over is recorded with its state and
+// result, then released.
+func TestReleaseLoop_ReconcilesALostExecution(t *testing.T) {
+	t.Parallel()
+
+	p, reg := releasing(execution.StateSucceeded, 1)
+	id := lostExecution(t, reg, "a", 2*ReleaseAfter)
+
+	if released, err := releaseLoop(t, reg); err != nil || released != 1 {
+		t.Fatalf("released %d, %v; want 1", released, err)
+	}
+
+	rec := record(t, reg, id)
+	if rec.State != execution.StateSucceeded || rec.Result == nil {
+		t.Errorf("state = %s, result = %v; want succeeded with the result", rec.State, rec.Result)
+	}
+
+	// The result is read before the release that may destroy it.
+	if p.releasedAfter != 1 {
+		t.Error("released before the result was recorded")
+	}
+}
+
+// A lost execution the provider has no record of will never be learned about,
+// so it fails at once.
+func TestReleaseLoop_FailsALostExecutionTheProviderForgot(t *testing.T) {
+	t.Parallel()
+
+	p, reg := releasing(execution.StateSucceeded, 1)
+	p.statusErr = plugin.ErrUnknownExecution
+	id := lostExecution(t, reg, "a", 2*ReleaseAfter)
+
+	if _, err := releaseLoop(t, reg); err != nil {
+		t.Fatalf("ReleaseLeftovers() = %v", err)
+	}
+
+	if got := record(t, reg, id).State; got != execution.StateFailed {
+		t.Errorf("state = %s, want failed", got)
+	}
+}
+
+// A lost execution still unresolved stays lost within the grace period, and
+// is failed once it is over; it is not released while it may be running.
+func TestReleaseLoop_ExpiresALostExecution(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		age  time.Duration
+		want execution.State
+	}{
+		{name: "within the grace period", age: 2 * ReleaseAfter, want: execution.StateLost},
+		{name: "past the grace period", age: execution.LostGracePeriod + time.Hour, want: execution.StateFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p, reg := releasing(execution.StateSucceeded, 100)
+			id := lostExecution(t, reg, "a", tc.age)
+
+			if _, err := releaseLoop(t, reg); err != nil {
+				t.Fatalf("ReleaseLeftovers() = %v", err)
+			}
+
+			if got := record(t, reg, id).State; got != tc.want {
+				t.Errorf("state = %s, want %s", got, tc.want)
+			}
+
+			if p.releases != 0 {
+				t.Error("released an execution the provider reports running")
+			}
+		})
+	}
+}
+
+// A provider that is not answering leaves the execution lost, reported for
+// the next pass, until the grace period is over.
+func TestReleaseLoop_KeepsALostExecutionWhileTheProviderIsDown(t *testing.T) {
+	t.Parallel()
+
+	p, reg := releasing(execution.StateSucceeded, 1)
+	p.statusErr = plugin.Infrastructure(errors.New("503"))
+	id := lostExecution(t, reg, "a", 2*ReleaseAfter)
+
+	if _, err := releaseLoop(t, reg); err == nil {
+		t.Error("ReleaseLeftovers() = nil, want the provider's failure reported")
+	}
+
+	if got := record(t, reg, id).State; got != execution.StateLost {
+		t.Errorf("state = %s, want lost", got)
 	}
 }

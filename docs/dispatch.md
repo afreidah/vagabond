@@ -80,7 +80,7 @@ charged without the job ([Quotas](quotas.md)).
 | `succeeded` | yes | The provider reported success |
 | `failed` | yes | The provider reported failure, or the attempt failed before submission |
 | `cancelled` | yes | Stopped by Vagabond or by the provider |
-| `lost` | no | Submitted, then a status call failed. The work may still be running |
+| `lost` | no | Submitted, then a status call failed. The work may still be running; [reconciled](#lost-executions) later |
 
 Legal transitions:
 
@@ -161,6 +161,24 @@ repeat anywhere.
 A provider that fails a `Status` call leaves the execution `lost`. The run is
 not cancelled on that provider, and its quota reservation stands until the
 [reaper](background-services.md#reservation-reaper) resolves it.
+
+### Lost executions
+
+A `lost` execution is reconciled by the
+[provider release](background-services.md#provider-release) loop, once it has
+gone 10 minutes unchanged, and again every 5 minutes until it is resolved:
+
+| Provider answer | Record |
+|---|---|
+| Terminal, `Result` answers | That state, with the result |
+| Unknown execution, or the provider is no longer configured | `failed` at once |
+| Still running, `Status` errors, or `Result` errors | Stays `lost`; `failed` once it has been `lost` for 24 hours (`LostGracePeriod`) |
+
+- `Failure` keeps the class that made it `lost`.
+- The dispatch it belongs to already ended `unanswered`; reconciling an
+  execution does not change that.
+- Quota is settled by the reaper from `Status`, not by reconciliation.
+- A resolved execution is then released as any other.
 
 ## Retry budget
 
