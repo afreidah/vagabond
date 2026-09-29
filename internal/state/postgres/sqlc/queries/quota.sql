@@ -92,6 +92,10 @@ FROM (
 ) AS charged
 GROUP BY charged.namespace, charged.provider, charged.pool, charged.period;
 
+-- name: ExecutionReserved :one
+-- Whether an execution still holds a reservation the reaper has not settled.
+SELECT EXISTS (SELECT 1 FROM quota_reservations WHERE execution_id = @execution_id);
+
 -- name: ClaimStaleReservations :many
 -- Locks reservation rows older than the cutoff, skipping any another process
 -- holds, so two reapers never resolve the same execution.

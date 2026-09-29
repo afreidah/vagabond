@@ -262,18 +262,20 @@ type releasingProvider struct {
 	scriptedProvider
 
 	releases      int
-	releasedAfter int // how many Result calls had happened by then
+	releasedAfter int   // how many Result calls had happened by then
+	releaseErr    error // what Release fails with, nil to succeed
 }
 
+// Release counts the call and fails with releaseErr when one is set.
 func (p *releasingProvider) Release(context.Context, execution.ID) error {
 	p.releases++
 	p.releasedAfter = p.results
 
-	return nil
+	return p.releaseErr
 }
 
 // Every run leaves a Cloud Run job against a per-region quota, so the normal
-// path has to delete it rather than leaving the sweep as the only cleanup.
+// path deletes it at once rather than leaving it for the release loop.
 func TestReleaseIsCalledOnSuccess(t *testing.T) {
 	t.Parallel()
 

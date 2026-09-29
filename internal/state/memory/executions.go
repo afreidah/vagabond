@@ -158,7 +158,46 @@ func (s *Executions) Update(_ context.Context, r *execution.Record, from executi
 		return fmt.Errorf("%w: %s", execution.ErrStale, r.ID)
 	}
 
-	s.records[r.ID] = clone(r)
+	// Release is written on its own, so an update leaves it as stored.
+	updated := clone(r)
+	updated.Released = stored.Released
+	s.records[r.ID] = updated
+
+	return nil
+}
+
+// Unreleased returns copies of the records not yet released and unchanged
+// since before, oldest first.
+func (s *Executions) Unreleased(_ context.Context, before time.Time) ([]*execution.Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var out []*execution.Record
+
+	for id := range s.records {
+		if stored := s.records[id]; stored.Released.IsZero() && stored.UpdatedAt.Before(before) {
+			r := clone(&stored)
+			out = append(out, &r)
+		}
+	}
+
+	slices.SortFunc(out, func(a, b *execution.Record) int { return a.UpdatedAt.Compare(b.UpdatedAt) })
+
+	return out, nil
+}
+
+// MarkReleased records that id's leftovers were released at at.
+func (s *Executions) MarkReleased(_ context.Context, id execution.ID, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stored, ok := s.records[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", execution.ErrNotFound, id)
+	}
+
+	stored.Released = at
+	s.records[id] = stored
 
 	return nil
 }

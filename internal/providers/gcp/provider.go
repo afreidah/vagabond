@@ -28,9 +28,8 @@ import (
 
 // namePrefix marks every job this plugin creates.
 //
-// Load-bearing twice over: it carries our execution id, which is how a later
-// process finds a run it did not submit, and it identifies our leftovers to
-// the sweep without touching anything else in the project.
+// It carries our execution id, which is how a later process finds, and
+// releases, a run it did not submit.
 const namePrefix = "vagabond-"
 
 // -------------------------------------------------------------------------
@@ -121,7 +120,7 @@ func (p *Provider) Capabilities(context.Context) (plugin.Capabilities, error) {
 //
 // Two calls, because Cloud Run has no ad-hoc form: a Job is a resource that
 // must exist before an Execution of it can start. That is the cost of this
-// platform and the reason Cancel has a sweep behind it.
+// platform and the reason it implements Release.
 //
 // The job is named from the execution id, which is what makes every later call
 // derivable without this plugin remembering anything. A CLI process that
@@ -146,8 +145,8 @@ func (p *Provider) Submit(
 	}
 
 	if err := p.call(ctx, http.MethodPost, p.cfg.jobURL(p.runURL, name)+":run", struct{}{}, nil); err != nil {
-		// The job exists but nothing is running it, so clean up rather than
-		// leaving a resource the sweep has to notice later.
+		// The job exists but nothing is running it, so clean up now rather
+		// than leave it for the release loop.
 		p.deleteJob(ctx, name)
 
 		return plugin.Submission{}, err
@@ -264,8 +263,8 @@ func (p *Provider) Cancel(ctx context.Context, id execution.ID) error {
 //
 // The same delete as Cancel, reached for a different reason: nothing is
 // running, and this is the resource that outlived it. Without this every run
-// leaves a Job against a per-region quota, and Sweep becomes the only thing
-// keeping the project usable rather than the backstop it is meant to be.
+// leaves a Job against a per-region quota. Dispatch calls it after the result,
+// and the release loop for every other ending.
 func (p *Provider) Release(ctx context.Context, id execution.ID) error {
 	return p.Cancel(ctx, id)
 }

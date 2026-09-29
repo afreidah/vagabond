@@ -550,7 +550,11 @@ with no task only sets the label.
 
 `Release` deletes the task (killing it if still running), the container, its
 snapshot, and its log file. Releasing an execution the node does not hold
-succeeds. Dispatch releases after reading the result.
+succeeds. Dispatch releases after reading the result; a workload that ended
+any other way, cancelled or with its result unread, is released by the
+server's [release loop](background-services.md#provider-release) once it has
+stopped. While the node is offline the release fails and is retried until the
+node reconnects.
 
 ### Agent restarts
 

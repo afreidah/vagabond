@@ -273,6 +273,93 @@ func TestDispatches_LeaseClaim(t *testing.T) {
 }
 
 // TestExecutions_GetUnknown reads an ID nothing recorded.
+// A record is unreleased until marked, only once it is older than the cutoff,
+// and an update after marking leaves the mark alone.
+func TestExecutions_Release(t *testing.T) {
+	for _, e := range engines() {
+		t.Run(e.Name, func(t *testing.T) {
+			ctx := context.Background()
+			store := open(ctx, t, e)
+
+			r := pendingRecord(t)
+			if err := store.Create(ctx, r); err != nil {
+				t.Fatalf("Create() = %v", err)
+			}
+
+			unreleased := func(before time.Time) bool {
+				t.Helper()
+
+				records, err := store.Unreleased(ctx, before)
+				if err != nil {
+					t.Fatalf("Unreleased() = %v", err)
+				}
+
+				for _, rec := range records {
+					if rec.ID == r.ID {
+						return true
+					}
+				}
+
+				return false
+			}
+
+			if unreleased(r.UpdatedAt) {
+				t.Error("listed before the cutoff it was updated at")
+			}
+
+			if !unreleased(r.UpdatedAt.Add(time.Second)) {
+				t.Fatal("not listed after the cutoff")
+			}
+
+			at := time.Now().UTC().Truncate(time.Microsecond)
+			if err := store.MarkReleased(ctx, r.ID, at); err != nil {
+				t.Fatalf("MarkReleased() = %v", err)
+			}
+
+			if unreleased(time.Now().Add(time.Hour)) {
+				t.Error("still listed after being marked")
+			}
+
+			// Dispatch's own writes do not carry the mark and must not clear it.
+			advance(t, r, execution.StateSubmitted)
+
+			if err := store.Update(ctx, r, execution.StatePending); err != nil {
+				t.Fatalf("Update() = %v", err)
+			}
+
+			got, err := store.Get(ctx, r.ID)
+			if err != nil || !got.Released.Equal(at) {
+				t.Errorf("Released = %v, %v; want %v", got.Released, err, at)
+			}
+		})
+	}
+}
+
+// A reservation is reported until it is settled.
+func TestExecutions_Reserved(t *testing.T) {
+	for _, e := range engines() {
+		t.Run(e.Name, func(t *testing.T) {
+			ctx := context.Background()
+			store := open(ctx, t, e)
+
+			r := fnReservation(t, time.Now(), 1)
+			mustReserve(ctx, t, store, r)
+
+			if held, err := store.Reserved(ctx, r.ID); err != nil || !held {
+				t.Fatalf("Reserved() = %v, %v; want true", held, err)
+			}
+
+			if err := store.Settle(ctx, r.ID, nil); err != nil {
+				t.Fatalf("Settle() = %v", err)
+			}
+
+			if held, err := store.Reserved(ctx, r.ID); err != nil || held {
+				t.Errorf("Reserved() after settling = %v, %v; want false", held, err)
+			}
+		})
+	}
+}
+
 func TestExecutions_GetUnknown(t *testing.T) {
 	for _, e := range engines() {
 		t.Run(e.Name, func(t *testing.T) {

@@ -48,6 +48,7 @@ type Execution struct {
 	DispatchID    string
 	Cpu           int64
 	Memory        int64
+	ReleasedAt    *time.Time
 }
 
 type Job struct {

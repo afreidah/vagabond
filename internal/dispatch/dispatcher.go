@@ -51,6 +51,7 @@ type Registry interface {
 type Ledger interface {
 	Reserve(ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution) error
 	Settle(ctx context.Context, id execution.ID, namespace, provider string, actual quota.Execution) error
+	Reserved(ctx context.Context, id execution.ID) (bool, error)
 	Reap(ctx context.Context, resolve ledger.Resolver) (int, error)
 	Refresh(ctx context.Context) error
 	PoolUsage(namespace, provider string) (total, share quota.PoolUsage)
@@ -61,7 +62,9 @@ type Ledger interface {
 //
 // Update writes the record only if the stored one is still in from, and fails
 // with execution.ErrStale otherwise. FinishDispatch and RenewDispatch change
-// only a dispatch still running under the named owner.
+// only a dispatch still running under the named owner. Unreleased lists the
+// records whose leftovers are not yet released and that have not changed since
+// before; MarkReleased records that they were.
 type Executions interface {
 	CreateDispatch(ctx context.Context, d *execution.Dispatch) error
 	FinishDispatch(ctx context.Context, d *execution.Dispatch) error
@@ -69,6 +72,8 @@ type Executions interface {
 	DispatchExecutions(ctx context.Context, dispatch execution.ID) ([]*execution.Record, error)
 	Create(ctx context.Context, r *execution.Record) error
 	Update(ctx context.Context, r *execution.Record, from execution.State) error
+	Unreleased(ctx context.Context, before time.Time) ([]*execution.Record, error)
+	MarkReleased(ctx context.Context, id execution.ID, at time.Time) error
 }
 
 // Origin is what a task runs for: the job, the namespace it runs in, and the

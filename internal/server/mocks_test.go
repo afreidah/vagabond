@@ -200,6 +200,21 @@ func (mr *MockserverLedgerMockRecorder) Reserve(ctx, id, namespace, provider, e 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reserve", reflect.TypeOf((*MockserverLedger)(nil).Reserve), ctx, id, namespace, provider, e)
 }
 
+// Reserved mocks base method.
+func (m *MockserverLedger) Reserved(ctx context.Context, id execution.ID) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Reserved", ctx, id)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Reserved indicates an expected call of Reserved.
+func (mr *MockserverLedgerMockRecorder) Reserved(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reserved", reflect.TypeOf((*MockserverLedger)(nil).Reserved), ctx, id)
+}
+
 // Settle mocks base method.
 func (m *MockserverLedger) Settle(ctx context.Context, id execution.ID, namespace, provider string, actual quota.Execution) error {
 	m.ctrl.T.Helper()
@@ -340,6 +355,20 @@ func (mr *MockserverExecutionsMockRecorder) GetDispatch(ctx, id any) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDispatch", reflect.TypeOf((*MockserverExecutions)(nil).GetDispatch), ctx, id)
 }
 
+// MarkReleased mocks base method.
+func (m *MockserverExecutions) MarkReleased(ctx context.Context, id execution.ID, at time.Time) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MarkReleased", ctx, id, at)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// MarkReleased indicates an expected call of MarkReleased.
+func (mr *MockserverExecutionsMockRecorder) MarkReleased(ctx, id, at any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkReleased", reflect.TypeOf((*MockserverExecutions)(nil).MarkReleased), ctx, id, at)
+}
+
 // Ping mocks base method.
 func (m *MockserverExecutions) Ping(ctx context.Context) error {
 	m.ctrl.T.Helper()
@@ -366,6 +395,21 @@ func (m *MockserverExecutions) RenewDispatch(ctx context.Context, id execution.I
 func (mr *MockserverExecutionsMockRecorder) RenewDispatch(ctx, id, owner, until any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RenewDispatch", reflect.TypeOf((*MockserverExecutions)(nil).RenewDispatch), ctx, id, owner, until)
+}
+
+// Unreleased mocks base method.
+func (m *MockserverExecutions) Unreleased(ctx context.Context, before time.Time) ([]*execution.Record, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Unreleased", ctx, before)
+	ret0, _ := ret[0].([]*execution.Record)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Unreleased indicates an expected call of Unreleased.
+func (mr *MockserverExecutionsMockRecorder) Unreleased(ctx, before any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Unreleased", reflect.TypeOf((*MockserverExecutions)(nil).Unreleased), ctx, before)
 }
 
 // Update mocks base method.

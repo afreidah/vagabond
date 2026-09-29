@@ -21,6 +21,7 @@ decides (see [Multiple servers](#multiple-servers)).
 | [Capability refresh](#capability-refresh) | 1m | Yes, before serving | Every non-pool provider's `Capabilities` | Provider marked unhealthy, warn |
 | [Usage snapshot refresh](#usage-snapshot-refresh) | 15s | Yes, required | Store: quota usage and reservations | Last snapshot kept, warn |
 | [Reservation reaper](#reservation-reaper) | 5m | Yes, before serving | Store: reservations over 1h old; provider `Status` | Reservation kept, warn |
+| [Provider release](#provider-release) | 5m | No | Store: unreleased executions; provider `Status` and `Release` | Left unreleased, warn, retried next tick |
 | [Dispatch claim](#dispatch-claim) | 30s | Yes, before serving | Store: dispatches with a lapsed lease | Warn, retried next tick |
 | [Dispatch runner](#dispatch-runner) | Per dispatch | | Providers, store, ledger | Dispatch ends `unanswered` |
 | [Lease renewal](#lease-renewal) | 20s per running dispatch | | Store: the dispatch's lease | Ignored; stale lease stops the run |
@@ -121,6 +122,45 @@ Each stale reservation's provider is asked about the execution:
 
 **Logs:** info `resolved abandoned quota reservations` with `count` when any
 were settled; warn `resolving abandoned quota reservations` on error.
+
+### Provider release
+
+Releases what providers still hold for executions that are over: a Cloud Run
+Job, a stopped container on a pool node. Dispatch releases after it reads a
+result; every other ending leaves the release to this service: a cancelled
+run, a provider that stopped answering, a `Result` that failed, a server that
+died mid-run, a release that failed.
+
+| | |
+|---|---|
+| Interval | 5m |
+| At startup | No; the first pass is one interval in |
+| Selects | Executions with no `released_at`, unchanged for more than 10m |
+| Touches | Store: executions and reservations; each execution's provider `Status` and `Release` |
+
+For each execution, in order:
+
+| Condition | Action |
+|---|---|
+| It still holds a quota reservation | Skipped: the reaper settles it first by asking the provider, which a released execution can no longer answer |
+| Its provider is no longer configured, or implements no `Release` | Marked released; nothing to do |
+| No recorded result, provider reports it unknown | Marked released |
+| No recorded result, `Status` errors or is not terminal | Skipped, asked again next tick |
+| Otherwise | `Release`, then marked released. An unknown execution counts as released; any other error leaves it for the next tick |
+
+- Every candidate is read each pass, with no batch limit, so executions that
+  cannot be released yet never crowd out ones that can.
+- A pool node that is offline fails `Release` and is retried every pass until
+  it returns.
+- Releases and marks are idempotent, so several servers running the loop at
+  once is harmless.
+- If a reservation outlives the store being unreachable for longer than the
+  execution's provider keeps it, the reaper finds it unknown and drops its
+  charge. Only an outage long enough for that loses the charge.
+
+**Logs:** info `released provider leftovers` with `count` when any were
+released; warn `releasing provider leftovers` with the joined errors when any
+failed.
 
 ### Dispatch claim
 

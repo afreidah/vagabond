@@ -37,7 +37,7 @@ var migrationFS embed.FS
 
 // SchemaVersion is the migration version this binary expects. Raised with every
 // migration added.
-const SchemaVersion = 6
+const SchemaVersion = 7
 
 // connectTimeout bounds opening a connection when the DSN sets none, so an
 // unreachable database fails a request quickly rather than holding it.

@@ -207,6 +207,16 @@ func (failingStore) Update(context.Context, *execution.Record, execution.State) 
 	return errors.New("store down")
 }
 
+// Unreleased fails, as every read from a store that is down does.
+func (failingStore) Unreleased(context.Context, time.Time) ([]*execution.Record, error) {
+	return nil, errors.New("store down")
+}
+
+// MarkReleased fails, as every write to a store that is down does.
+func (failingStore) MarkReleased(context.Context, execution.ID, time.Time) error {
+	return errors.New("store down")
+}
+
 // -------------------------------------------------------------------------
 // DISPATCH RECORDS
 // -------------------------------------------------------------------------

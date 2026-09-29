@@ -12,6 +12,7 @@ package execution
 
 import (
 	"errors"
+	"time"
 )
 
 // MaxStoredLogs is how much output a record keeps. The tail, because the end of
@@ -32,7 +33,8 @@ var ErrStale = errors.New("execution changed since it was read")
 // Previous is the zero ID on a task's first attempt. Failure is the class of
 // the error that ended the attempt without an answer, empty when none did.
 // CPU and Memory are the task's declared shape, which a result without a bill
-// is charged at.
+// is charged at. Released is when what the provider left behind for this
+// execution was cleaned up, zero until then.
 type Record struct {
 	Status
 
@@ -47,8 +49,9 @@ type Record struct {
 	CPU        int
 	Memory     int
 
-	Result  *Result
-	Failure string
+	Result   *Result
+	Failure  string
+	Released time.Time
 }
 
 // Bounded returns a copy of r holding at most MaxStoredLogs of output, the tail

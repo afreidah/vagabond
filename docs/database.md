@@ -84,7 +84,7 @@ server under a supervisor that restarts it.
 | Source | `internal/state/postgres/migrations/*.sql`, embedded in the binary |
 | Applied | At every `vagabond server` start, pending ones only |
 | Version table | `goose_db_version`, created by goose |
-| Expected version | `6` in this release (`SchemaVersion`) |
+| Expected version | `7` in this release (`SchemaVersion`) |
 | Connection | A separate `database/sql` connection opened for the migration and closed after |
 
 After migrating, the server reads `MAX(version_id)` from `goose_db_version`
@@ -113,6 +113,7 @@ for:
 | 4 | `00004_jobs.sql` | `jobs`, `job_versions`, `executions.dispatch_id` |
 | 5 | `00005_dispatches.sql` | `dispatches` |
 | 6 | `00006_dispatch_leases.sql` | `dispatches.tasks`, `owner`, `lease_until`; `executions.cpu`, `memory` |
+| 7 | `00007_execution_release.sql` | `executions.released_at`, backfilled for rows with a result; index `executions_unreleased` |
 
 ## Schema
 
@@ -171,9 +172,13 @@ holder can end a run. Claiming is one `UPDATE ... RETURNING`. See
 | `exit_code`, `duration_ms` | Null until a result is recorded |
 | `billed_cpu`, `billed_memory`, `billed_ms` | What the provider reported billing, when it reports it |
 | `logs`, `logs_truncated` | Last 64 KiB of output (`BYTEA`), and whether it was cut |
+| `released_at` | When what the provider left behind was released; null until then |
 
 Updates match the state the writer read, so two writers cannot overwrite each
-other. Index `executions_job (namespace, job, created_at)` serves job status.
+other, and never touch `released_at`, which only the release path writes.
+Index `executions_job (namespace, job, created_at)` serves job status; the
+partial index `executions_unreleased (updated_at) WHERE released_at IS NULL`
+serves the [release loop](background-services.md#provider-release).
 
 ### `quota_usage` and `quota_reservations`
 

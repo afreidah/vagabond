@@ -149,6 +149,46 @@ func TestExecutions_DispatchLeases(t *testing.T) {
 }
 
 // TestExecutions_GetUnknown reads an ID nothing recorded.
+// A record is unreleased until marked, only past the cutoff, and an update
+// after marking keeps the mark, as the Postgres store does.
+func TestExecutions_Release(t *testing.T) {
+	s := NewExecutions()
+	r := pending(t)
+
+	if err := s.Create(t.Context(), r); err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+
+	if got, _ := s.Unreleased(t.Context(), r.UpdatedAt); len(got) != 0 {
+		t.Errorf("Unreleased() before the cutoff = %d records, want 0", len(got))
+	}
+
+	if got, _ := s.Unreleased(t.Context(), r.UpdatedAt.Add(time.Second)); len(got) != 1 {
+		t.Fatalf("Unreleased() past the cutoff = %d records, want 1", len(got))
+	}
+
+	at := time.Now()
+	if err := s.MarkReleased(t.Context(), r.ID, at); err != nil {
+		t.Fatalf("MarkReleased() = %v", err)
+	}
+
+	if err := r.To(execution.StateSubmitted, time.Now()); err != nil {
+		t.Fatalf("To() = %v", err)
+	}
+
+	if err := s.Update(t.Context(), r, execution.StatePending); err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+
+	if got, _ := s.Get(t.Context(), r.ID); !got.Released.Equal(at) {
+		t.Errorf("Released = %v after an update, want %v", got.Released, at)
+	}
+
+	if got, _ := s.Unreleased(t.Context(), time.Now().Add(time.Hour)); len(got) != 0 {
+		t.Errorf("Unreleased() after marking = %d records, want 0", len(got))
+	}
+}
+
 func TestExecutions_GetUnknown(t *testing.T) {
 	id, _ := execution.NewID()
 

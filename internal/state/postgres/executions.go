@@ -104,6 +104,28 @@ func (s *Store) JobExecutions(ctx context.Context, namespace, job string, limit 
 	return recordsOf(rows)
 }
 
+// Unreleased returns the records not yet released and unchanged since before,
+// oldest first.
+func (s *Store) Unreleased(ctx context.Context, before time.Time) ([]*execution.Record, error) {
+	rows, err := s.queries.ListUnreleasedExecutions(ctx, before)
+	if err != nil {
+		return nil, fmt.Errorf("list unreleased executions: %w", err)
+	}
+
+	return recordsOf(rows)
+}
+
+// MarkReleased records that id's leftovers were released at at.
+func (s *Store) MarkReleased(ctx context.Context, id execution.ID, at time.Time) error {
+	return s.serializable(ctx, func(q *db.Queries) error {
+		if err := q.MarkExecutionReleased(ctx, db.MarkExecutionReleasedParams{ReleasedAt: &at, ID: id.String()}); err != nil {
+			return fmt.Errorf("mark execution %s released: %w", id, err)
+		}
+
+		return nil
+	})
+}
+
 // DispatchExecutions returns every execution of one dispatch, oldest first.
 func (s *Store) DispatchExecutions(ctx context.Context, dispatch execution.ID) ([]*execution.Record, error) {
 	rows, err := s.queries.ListDispatchExecutions(ctx, dispatch.String())
@@ -155,6 +177,7 @@ func rowOf(r *execution.Record) db.Execution {
 		StartedAt:  nullTime(r.StartedAt),
 		EndedAt:    nullTime(r.EndedAt),
 		UpdatedAt:  r.UpdatedAt,
+		ReleasedAt: nullTime(r.Released),
 	}
 
 	if !r.Previous.IsZero() {
@@ -211,6 +234,7 @@ func recordOf(row *db.Execution) (*execution.Record, error) {
 		CPU:        int(row.Cpu),
 		Memory:     int(row.Memory),
 		Failure:    row.Failure,
+		Released:   ptr.Deref(row.ReleasedAt),
 	}
 
 	if row.PreviousID != "" {

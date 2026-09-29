@@ -202,7 +202,7 @@ is absent.
 | Interface | Method | Called by | When |
 |---|---|---|---|
 | `LogStreamer` | `StreamLogs(ctx context.Context, id execution.ID, w io.Writer) error` | Dispatch | Alongside the poll loop, when the caller asked for live output |
-| `Releaser` | `Release(ctx context.Context, id execution.ID) error` | Dispatch | After `Result` (or after a synchronous `Submit`) |
+| `Releaser` | `Release(ctx context.Context, id execution.ID) error` | Dispatch; the release loop | After `Result` (or after a synchronous `Submit`); for every other ending, once the execution is over |
 | `Live` | `LiveCapabilities() (Capabilities, error)` | Registry | On every plan, in place of the refreshed snapshot |
 | `MemberSubmitter` | `SubmitTo(ctx context.Context, id execution.ID, task *job.Task, members []string) (Submission, error)` | Dispatch | In place of `Submit`, when admission passed specific members |
 
@@ -222,9 +222,17 @@ is absent.
 ### `Releaser`
 
 - Deletes a resource the execution left behind, such as Cloud Run's Job.
-- Called on a fresh context with a 30-second timeout, so it runs even after the
-  caller gave up. The error is discarded.
-- Called after `Result` because releasing may destroy what `Result` reads.
+  Implementing it is all a provider does for cleanup: the control plane records
+  which executions are released and calls it for every one that is not.
+- Dispatch calls it after `Result`, because releasing may destroy what `Result`
+  reads, on a fresh context with a 30-second timeout.
+- The [provider release](background-services.md#provider-release) loop calls it
+  for every other ending: a cancelled run, a failed `Result`, a provider that
+  stopped answering, a server that died. It first waits for `Status` to report
+  the execution over and for any quota reservation to settle.
+- Idempotent: it may be called more than once for an execution. Return nil or
+  `ErrUnknownExecution` when there is nothing left; any other error is retried
+  on the loop's next pass.
 
 ### `Live`
 
@@ -334,12 +342,13 @@ A platform that uses a status unusually builds the `*Error` directly.
 | `Submit` returns `infrastructure` | No run | `failed`, failure `infrastructure` | Next ranked provider, if the task's `retry` block allows reroute and attempts remain |
 | `Submit` returns `internal` or unclassified | No run | `failed`, failure `internal` | Task stops; job fails |
 | `Submission.Validate` fails | Treated as `internal` | `failed`, failure `internal` | Task stops |
-| `Status` returns an error while polling | Watch ends; the run is not cancelled | `lost` | Reroute if `infrastructure`, else stop |
-| Caller gives up while polling | `Cancel` called | `cancelled` | Stop |
+| `Status` returns an error while polling | Watch ends; the run is not cancelled; released later by the loop | `lost` | Reroute if `infrastructure`, else stop |
+| Caller gives up while polling | `Cancel` called; released later by the loop | `cancelled` | Stop |
 | `Status` reports `cancelled` | `Result` read, `Release` called | `cancelled` | Treated as `infrastructure`: reroute if allowed |
-| `Result` returns an error | Nothing released | Terminal state from `Status`, no result | Reroute if `infrastructure`, else stop |
+| `Result` returns an error | Released later by the loop | Terminal state from `Status`, no result | Reroute if `infrastructure`, else stop |
 | `Status` reports `succeeded` or `failed`, `Result` returns | `Release` called | Terminal state and result | Task ends; a non-zero exit stops the job |
-| `StreamLogs` or `Release` returns an error | Ignored | Unchanged | None |
+| `StreamLogs` returns an error | Ignored | Unchanged | None |
+| `Release` returns an error | Retried by the loop | Unchanged | None |
 
 Retry budgets, backoff and reroute rules are in [Dispatch](dispatch.md).
 
