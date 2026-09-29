@@ -484,8 +484,7 @@ provider "gcp-cloud-run" {
   internal, and is not rerouted.
 - **Sub-second timeouts** are truncated to whole seconds.
 - **Exit code absent:** a task stopped before its process ran has a nil exit
-  code. Dispatch judges success from the exit code, and a result with none is
-  treated as succeeded even when the state is `failed`.
+  code. Dispatch judges success from the state, so it fails as `failed`.
 - **Hand-run executions:** if someone runs a `vagabond-` job by hand, `Status`
   and `Result` follow the execution with the latest start time.
 - **Deleted from the console:** a job deleted outside Vagabond while running

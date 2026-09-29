@@ -168,7 +168,7 @@ args     = ["go", "test", "./..."]
 		t.Errorf("Validate() = %v", err)
 	}
 
-	if sub.State != execution.StateSucceeded || !sub.Result.Succeeded() {
+	if sub.State != execution.StateSucceeded || sub.Result.ExitCode == nil || *sub.Result.ExitCode != 0 {
 		t.Errorf("state = %s, exit = %v; want a success", sub.State, sub.Result.ExitCode)
 	}
 }
@@ -252,7 +252,7 @@ func TestSubmit_FunctionErrorIsAFailedTask(t *testing.T) {
 		t.Fatalf("Submit() = %v, want a failed task rather than an error", err)
 	}
 
-	if sub.State != execution.StateFailed || sub.Result.Succeeded() {
+	if sub.State != execution.StateFailed || sub.Result.ExitCode == nil || *sub.Result.ExitCode == 0 {
 		t.Errorf("state = %s, exit = %v; want a failure", sub.State, sub.Result.ExitCode)
 	}
 

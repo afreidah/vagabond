@@ -138,8 +138,8 @@ terminal state only with a result. A submission that breaks this is an
 
 | Outcome | Dispatch state |
 |---|---|
-| Every task has a result with exit code 0 (or no exit code) | `succeeded` |
-| A task has a result with a non-zero exit code | `failed` |
+| Every task ended in state `succeeded` with a result | `succeeded` |
+| A task ended in state `failed` with a result, with or without an exit code | `failed` |
 | A task returned an error | `unanswered`, with `Error` set |
 
 ## Failure classes and rerouting

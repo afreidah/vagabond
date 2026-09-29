@@ -484,10 +484,6 @@ func TestResultReadsTheExitCode(t *testing.T) {
 		t.Errorf("exit code = %v, want 3", result.ExitCode)
 	}
 
-	if result.Succeeded() {
-		t.Error("exit code 3 reported success")
-	}
-
 	if got := result.Duration; got != 3*time.Second {
 		t.Errorf("duration = %s, want 3s", got)
 	}
@@ -523,8 +519,8 @@ func TestResultSurvivesUnreadableLogs(t *testing.T) {
 		t.Fatalf("a log failure lost the whole result: %v", err)
 	}
 
-	if !result.Succeeded() {
-		t.Error("the exit code was lost")
+	if result.ExitCode == nil || *result.ExitCode != 0 {
+		t.Errorf("exit code = %v, want 0: the exit code was lost", result.ExitCode)
 	}
 
 	if len(result.Logs) != 0 {

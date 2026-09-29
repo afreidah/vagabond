@@ -182,7 +182,8 @@ func (h *tlsHarness) clientTLS(t *testing.T, ca *testCA, commonName string) *tls
 }
 
 // register dials the harness and registers a node called name, returning what
-// the server answered.
+// the server answered. The session stays open until the test ends, since
+// closing it is the node leaving.
 func (h *tlsHarness) register(t *testing.T, cfg *tls.Config, name string) error {
 	t.Helper()
 
@@ -191,7 +192,7 @@ func (h *tlsHarness) register(t *testing.T, cfg *tls.Config, name string) error 
 		return err
 	}
 
-	defer func() { _ = session.Close() }()
+	t.Cleanup(func() { _ = session.Close() })
 
 	_, err = agentrpc.NewNodeClient(session.Peer()).Register(t.Context(), &agentrpc.NodeRegisterRequest{
 		Name: name, Pool: "homelab", Capacity: &agentrpc.Resources{Cpu: 1000, Memory: 1024},

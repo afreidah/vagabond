@@ -217,6 +217,9 @@ func TestEnded(t *testing.T) {
 		{"task exited non-zero", 1, []*execution.Record{
 			rec("a", execution.StateFailed, exited, ""),
 		}, execution.DispatchFailed},
+		{"task failed with no exit code", 1, []*execution.Record{
+			rec("a", execution.StateFailed, &execution.Result{}, ""),
+		}, execution.DispatchFailed},
 		{"attempt failed without an answer", 1, []*execution.Record{
 			rec("a", execution.StateFailed, nil, string(plugin.ClassInfrastructure)),
 		}, execution.DispatchUnanswered},

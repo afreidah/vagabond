@@ -188,47 +188,6 @@ func TestStatus_ExpiredLostCanBecomeFailed(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
-// RESULT
-// -------------------------------------------------------------------------
-
-func TestResult_Succeeded(t *testing.T) {
-	tests := []struct {
-		name     string
-		exitCode *int
-		want     bool
-	}{
-		{name: "exit zero", exitCode: new(0), want: true},
-		{name: "exit one", exitCode: new(1), want: false},
-		{name: "exit 127", exitCode: new(127), want: false},
-		{name: "no exit code at all", exitCode: nil, want: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := &Result{ExitCode: tt.exitCode}
-			if got := r.Succeeded(); got != tt.want {
-				t.Errorf("Succeeded() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-// Nil means the family has no exit status, not that the task exited zero. A
-// worker execution reaching a result at all is its success.
-func TestResult_NilExitCodeIsNotZero(t *testing.T) {
-	worker := &Result{ExitCode: nil}
-	explicit := &Result{ExitCode: new(0)}
-
-	if !worker.Succeeded() || !explicit.Succeeded() {
-		t.Fatal("both should report success")
-	}
-
-	if worker.ExitCode != nil {
-		t.Error("a worker result carries an exit code")
-	}
-}
-
-// -------------------------------------------------------------------------
 // CAPACITY ACCOUNTING
 // -------------------------------------------------------------------------
 

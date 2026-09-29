@@ -39,6 +39,9 @@ const (
 	dispatchFailed    = "failed"
 )
 
+// executionFailed is an execution's failed state, as the API reports it.
+const executionFailed = "failed"
+
 // -------------------------------------------------------------------------
 // FOLLOWING
 // -------------------------------------------------------------------------
@@ -187,15 +190,12 @@ func (f *follower) interrupted(job string, last *api.Dispatch) int {
 	return ExitNoCapacity
 }
 
-// verdict renders whether the task itself passed, with its exit code when it
-// failed and has one.
+// verdict renders how the task ended, which the provider's state decides,
+// with its exit code when it failed and has one.
 func verdict(e *api.Execution) string {
-	switch {
-	case e.ExitCode != nil && *e.ExitCode == 0:
-		return "succeeded"
-	case e.ExitCode != nil:
+	if e.State == executionFailed && e.ExitCode != nil {
 		return fmt.Sprintf("failed (exit %d)", *e.ExitCode)
-	default:
-		return e.State
 	}
+
+	return e.State
 }

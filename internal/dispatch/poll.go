@@ -104,12 +104,21 @@ func submit(
 	return provider.Submit(ctx, id, task)
 }
 
+// answer is how an execution ended: the provider's terminal state, which is
+// the verdict, what the task produced, and whether its output was already
+// shown live.
+type answer struct {
+	state    execution.State
+	result   *execution.Result
+	streamed bool
+}
+
 // execute runs a task on one provider under an id the caller reserved quota
-// for, and returns what it produced. members are the provider's members
-// admission passed, empty for a provider without any.
+// for, and returns how it ended. members are the provider's members admission
+// passed, empty for a provider without any.
 func (d *Dispatcher) execute(
 	ctx context.Context, provider plugin.Provider, task *job.Task, run *tracked, members []string,
-) (*execution.Result, bool, error) {
+) (answer, error) {
 	id := run.rec.ID
 
 	event := Event{
@@ -128,7 +137,7 @@ func (d *Dispatcher) execute(
 	if err != nil {
 		run.failed(ctx, err)
 
-		return nil, false, err
+		return answer{}, err
 	}
 
 	run.submitted(ctx, &submission)
@@ -145,7 +154,7 @@ func (d *Dispatcher) execute(
 	if submission.Synchronous() {
 		d.release(provider, id)
 
-		return submission.Result, false, nil
+		return answer{state: submission.State, result: submission.Result}, nil
 	}
 
 	return d.follow(ctx, provider, run, event)
@@ -156,7 +165,7 @@ func (d *Dispatcher) execute(
 // restart, which differ only in how they got here.
 func (d *Dispatcher) follow(
 	ctx context.Context, provider plugin.Provider, run *tracked, event Event,
-) (*execution.Result, bool, error) {
+) (answer, error) {
 	id := run.rec.ID
 
 	stream := d.startStream(ctx, provider, id)
@@ -180,27 +189,28 @@ func (d *Dispatcher) follow(
 			run.failed(ctx, err)
 		}
 
-		return nil, streamed, err
+		return answer{streamed: streamed}, err
 	}
 
 	result, err := provider.Result(ctx, id)
 	run.finish(ctx, state, result)
 
 	if err != nil {
-		return nil, streamed, err
+		return answer{streamed: streamed}, err
 	}
 
 	// After the result, because releasing may destroy what it reads.
 	d.release(provider, id)
 
+	ended := answer{state: state, result: result, streamed: streamed}
+
 	// A provider that reported cancelled produced no verdict about the work,
 	// so it is not an answer even though a result came back.
 	if state == execution.StateCancelled {
-		return result, streamed, plugin.Infrastructure(
-			fmt.Errorf("execution %s was cancelled by the provider", id))
+		return ended, plugin.Infrastructure(fmt.Errorf("execution %s was cancelled by the provider", id))
 	}
 
-	return result, streamed, nil
+	return ended, nil
 }
 
 // release frees whatever the provider left behind, for providers that leave

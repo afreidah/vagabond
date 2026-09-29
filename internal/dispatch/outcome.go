@@ -66,18 +66,21 @@ type TaskOutcome struct {
 	Task       string
 	Provider   string
 	ID         execution.ID
+	State      execution.State // the terminal state the provider reported; the verdict
 	Result     *execution.Result
 	Streamed   bool                  // output was shown live; do not print it again
 	Attempts   []Attempt             // every provider tried, including the one that answered
 	Rejections []scheduler.Rejection // why the ineligible providers were never tried
 }
 
-// Succeeded reports whether the task ran and reported success.
+// Succeeded reports whether the task ran and the provider reported it
+// succeeded. The state is the verdict: an exit code is what the task said, and
+// a task that never ran has none.
 //
 // False when no result was produced at all, so a caller can ask this without
 // checking for nil first.
 func (o *TaskOutcome) Succeeded() bool {
-	return o.Result != nil && o.Result.Succeeded()
+	return o.Result != nil && o.State == execution.StateSucceeded
 }
 
 // Rerouted reports whether this task was submitted to more than one provider.
