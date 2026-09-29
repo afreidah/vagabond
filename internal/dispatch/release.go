@@ -8,7 +8,9 @@
 // reading the result; every other ending, a cancelled run, a provider that
 // stopped answering, a process that died, leaves it. The execution records know
 // every execution not yet released, so this finds them and releases each once
-// it is known to be over and its charge is settled.
+// it is known to be over and its charge is settled. A lost execution is among
+// them, and is reconciled on the way: its result recorded if the provider has
+// one, failed once nothing more can be learned.
 // -------------------------------------------------------------------------------
 
 package dispatch
@@ -62,6 +64,19 @@ func (d *Dispatcher) ReleaseLeftovers(ctx context.Context) (int, error) {
 // because the reaper settles it by asking the provider what it did, which a
 // released execution can no longer answer.
 func (d *Dispatcher) releaseLeftover(ctx context.Context, rec *execution.Record) (bool, error) {
+	// A lost execution is resolved first, so its result is recorded before
+	// releasing could destroy it.
+	if rec.State == execution.StateLost {
+		if err := d.reconcileLost(ctx, rec); err != nil {
+			return false, err
+		}
+
+		// Still unresolved, so possibly still running: nothing to release yet.
+		if rec.State == execution.StateLost {
+			return false, nil
+		}
+	}
+
 	reserved, err := d.ledger.Reserved(ctx, rec.ID)
 	if err != nil {
 		return false, err
@@ -100,6 +115,68 @@ func (d *Dispatcher) releaseLeftover(ctx context.Context, rec *execution.Record)
 	}
 
 	return true, d.markReleased(ctx, rec.ID)
+}
+
+// reconcileLost learns what became of an execution dispatch lost track of. One
+// the provider reports over has its state and result recorded; one it has no
+// record of, or that is still unresolved past execution.LostGracePeriod, is
+// recorded failed. Anything else stays lost for the next pass. rec is updated
+// in place.
+func (d *Dispatcher) reconcileLost(ctx context.Context, rec *execution.Record) error {
+	provider, ok := d.registry.Provider(rec.Provider)
+	if !ok {
+		// A provider no longer configured can never answer.
+		return d.resolveLost(ctx, rec, execution.StateFailed, nil)
+	}
+
+	status, err := provider.Status(ctx, rec.ID)
+
+	switch {
+	case errors.Is(err, plugin.ErrUnknownExecution):
+		return d.resolveLost(ctx, rec, execution.StateFailed, nil)
+
+	case err == nil && status.State.Terminal():
+		result, resultErr := provider.Result(ctx, rec.ID)
+		if resultErr == nil {
+			return d.resolveLost(ctx, rec, status.State, result)
+		}
+
+		err = resultErr
+	}
+
+	// Still running, or the provider is not answering: give up only once the
+	// grace period is over.
+	if rec.LostExpired(d.now()) {
+		return d.resolveLost(ctx, rec, execution.StateFailed, nil)
+	}
+
+	if err != nil {
+		return fmt.Errorf("reconciling lost %s on %s: %w", rec.ID, rec.Provider, err)
+	}
+
+	return nil
+}
+
+// resolveLost records a lost execution as ended in state, with result when one
+// was fetched. The write must land: releasing after an unrecorded result would
+// lose it.
+func (d *Dispatcher) resolveLost(
+	ctx context.Context, rec *execution.Record, state execution.State, result *execution.Result,
+) error {
+	resolved := *rec
+	resolved.Result = result.Bounded()
+
+	if err := resolved.To(state, d.now()); err != nil {
+		return fmt.Errorf("resolving lost %s: %w", rec.ID, err)
+	}
+
+	if err := d.executions.Update(ctx, &resolved, execution.StateLost); err != nil {
+		return fmt.Errorf("recording lost %s as %s: %w", rec.ID, state, err)
+	}
+
+	*rec = resolved
+
+	return nil
 }
 
 // markReleased records that id's leftovers are gone.
