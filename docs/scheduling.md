@@ -181,10 +181,9 @@ charge is computed.
 The check applies only to jobs that will not pay, meaning `max_cost_usd` is
 unset or 0.
 
-- `max_cost_usd > 0`: the quota check passes regardless of usage.
-- The dispatch reservation still enforces every pool limit, so a job admitted
-  this way past a full pool is refused when dispatch reserves, and is reported
-  as having no provider if no other candidate has room.
+- `max_cost_usd > 0`: the quota check passes regardless of usage, and the
+  dispatch reservation charges the job past the limit rather than refusing
+  it. Its usage still counts. See [Quotas](quotas.md).
 - A provider with no pools, or a task that charges none of its pools, always
   passes.
 

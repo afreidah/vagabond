@@ -45,11 +45,11 @@ type Registry interface {
 // Ledger is the account every dispatch charges, declared here for the same
 // reason as Registry.
 //
-// Reserve refuses with a *ledger.Refusal when the charge would pass a limit.
-// Any other error means the charge could not be made at all, and nothing is
-// dispatched on it.
+// Reserve refuses with a *ledger.Refusal when the charge would pass a limit,
+// unless pays says the job pays past it. Any other error means the charge
+// could not be made at all, and nothing is dispatched on it.
 type Ledger interface {
-	Reserve(ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution) error
+	Reserve(ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution, pays bool) error
 	Settle(ctx context.Context, id execution.ID, namespace, provider string, actual quota.Execution) error
 	Reserved(ctx context.Context, id execution.ID) (bool, error)
 	Reap(ctx context.Context, resolve ledger.Resolver) (int, error)
@@ -460,7 +460,9 @@ func (d *Dispatcher) prepare(
 		},
 	}
 
-	if err := d.ledger.Reserve(ctx, id, origin.Namespace, name, req.Execution); err != nil {
+	// A job that pays passes the quota check at admission, so its reservation is
+	// uncapped too; otherwise plan and dispatch would disagree at the limit.
+	if err := d.ledger.Reserve(ctx, id, origin.Namespace, name, req.Execution, req.WillPay()); err != nil {
 		if refused(err) {
 			return run, err
 		}
