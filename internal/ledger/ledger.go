@@ -19,6 +19,7 @@ package ledger
 import (
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"sync"
 	"time"
@@ -208,8 +209,11 @@ func New(ctx context.Context, budgets quota.Budgets, store Store) (*Ledger, erro
 // Refuses rather than reports. Admission checks quota earlier so that a plan
 // can explain itself, but time passes between deciding and dispatching, and
 // another process may have charged the pool in between.
+//
+// A job that pays for capacity past the allowance is charged the same way but
+// never refused: its usage still counts, so later jobs see the pools spent.
 func (l *Ledger) Reserve(
-	ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution,
+	ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution, pays bool,
 ) error {
 	total, share := l.budgets.Total(provider), l.budgets.Share(namespace, provider)
 	if total.Unlimited() && share.Unlimited() {
@@ -224,7 +228,7 @@ func (l *Ledger) Reserve(
 		CPU:      e.CPU,
 		Memory:   e.Memory,
 		Created:  now,
-		Charges:  append(charges(Total, total, e, now), charges(namespace, share, e, now)...),
+		Charges:  append(charges(Total, total, e, now, pays), charges(namespace, share, e, now, pays)...),
 	}
 
 	fits, standing, err := l.store.Reserve(ctx, &r)
@@ -426,18 +430,24 @@ func (l *Ledger) periods() []string {
 // -------------------------------------------------------------------------
 
 // charges prices e against one layer's pools, zero amounts included.
-func charges(namespace string, limits quota.Limits, e quota.Execution, now time.Time) []Charge {
+func charges(namespace string, limits quota.Limits, e quota.Execution, now time.Time, pays bool) []Charge {
 	deltas := limits.Deltas(e)
 	pools := limits.Pools()
 	out := make([]Charge, 0, len(pools))
 
 	for _, p := range pools {
+		// A job that pays goes past the allowance, so its charge has no ceiling.
+		limit := p.Limit
+		if pays {
+			limit = math.MaxInt64
+		}
+
 		out = append(out, Charge{
 			Namespace: namespace,
 			Pool:      p.Name,
 			Period:    p.Period.Key(now),
 			Amount:    deltas[p.Name],
-			Limit:     p.Limit,
+			Limit:     limit,
 		})
 	}
 

@@ -187,17 +187,17 @@ func (mr *MockserverLedgerMockRecorder) Refreshed() *gomock.Call {
 }
 
 // Reserve mocks base method.
-func (m *MockserverLedger) Reserve(ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution) error {
+func (m *MockserverLedger) Reserve(ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution, pays bool) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Reserve", ctx, id, namespace, provider, e)
+	ret := m.ctrl.Call(m, "Reserve", ctx, id, namespace, provider, e, pays)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Reserve indicates an expected call of Reserve.
-func (mr *MockserverLedgerMockRecorder) Reserve(ctx, id, namespace, provider, e any) *gomock.Call {
+func (mr *MockserverLedgerMockRecorder) Reserve(ctx, id, namespace, provider, e, pays any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reserve", reflect.TypeOf((*MockserverLedger)(nil).Reserve), ctx, id, namespace, provider, e)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reserve", reflect.TypeOf((*MockserverLedger)(nil).Reserve), ctx, id, namespace, provider, e, pays)
 }
 
 // Reserved mocks base method.

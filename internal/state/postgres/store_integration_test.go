@@ -523,7 +523,7 @@ func TestLedgerSurvivesARestart(t *testing.T) {
 				t.Fatalf("New() = %v", err)
 			}
 
-			if err := before.Reserve(ctx, newID(t), "ci", "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}); err != nil {
+			if err := before.Reserve(ctx, newID(t), "ci", "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, false); err != nil {
 				t.Fatalf("Reserve() = %v", err)
 			}
 

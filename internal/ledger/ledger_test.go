@@ -126,7 +126,7 @@ func newID(t *testing.T) execution.ID {
 func reserve(t *testing.T, l *Ledger, id execution.ID, provider string, e quota.Execution) {
 	t.Helper()
 
-	if err := l.Reserve(t.Context(), id, ns, provider, e); err != nil {
+	if err := l.Reserve(t.Context(), id, ns, provider, e, false); err != nil {
 		t.Fatalf("Reserve() = %v", err)
 	}
 }
@@ -187,7 +187,7 @@ func TestReserve_ChargesEveryPoolTheExecutionTouches(t *testing.T) {
 func TestReserve_RefusedChargesNothing(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, Usage{fnCompute: 400_000 * gbSeconds})
 
-	err := l.Reserve(t.Context(), newID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second})
+	err := l.Reserve(t.Context(), newID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, false)
 
 	var refusal *Refusal
 	if !errors.As(err, &refusal) {
@@ -200,6 +200,21 @@ func TestReserve_RefusedChargesNothing(t *testing.T) {
 
 	if got := total(l, "fn")["requests"]; got != 0 {
 		t.Errorf("requests = %d after a refusal, want 0", got)
+	}
+}
+
+// A job that pays is charged past a spent allowance rather than refused, and
+// what it used counts against the pool like any other charge.
+func TestReserve_PayingJobGoesPastTheLimit(t *testing.T) {
+	spent := int64(400_000 * gbSeconds)
+	l, _ := newLedger(t, midSeptember, Usage{fnCompute: spent})
+
+	if err := l.Reserve(t.Context(), newID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, true); err != nil {
+		t.Fatalf("Reserve() for a paying job = %v, want it charged", err)
+	}
+
+	if got := total(l, "fn")["compute"]; got != spent+10*gbSeconds {
+		t.Errorf("compute = %d, want the spent allowance plus the charge, %d", got, spent+10*gbSeconds)
 	}
 }
 
@@ -231,7 +246,7 @@ func TestReserve_RefusedByAChargeTheSnapshotMissed(t *testing.T) {
 
 	reserve(t, first, newID(t), "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second})
 
-	err := second.Reserve(t.Context(), newID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second})
+	err := second.Reserve(t.Context(), newID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, false)
 
 	if _, ok := errors.AsType[*Refusal](err); !ok {
 		t.Errorf("Reserve() = %v, want a refusal from the other ledger's charge", err)
@@ -351,7 +366,7 @@ var tenGBSeconds = quota.Execution{Memory: 1024, Duration: 10 * time.Second}
 func TestReserve_ChargesTheTotalAndTheShare(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, nil)
 
-	if err := l.Reserve(t.Context(), newID(t), "ci", "fn", tenGBSeconds); err != nil {
+	if err := l.Reserve(t.Context(), newID(t), "ci", "fn", tenGBSeconds, false); err != nil {
 		t.Fatalf("Reserve() = %v", err)
 	}
 
@@ -372,7 +387,7 @@ func TestReserve_ShareRefusesItsOwnNamespaceOnly(t *testing.T) {
 	ciCompute := Key{Namespace: "ci", Provider: "fn", Pool: "compute", Period: "2026-09"}
 	l, _ := newLedger(t, midSeptember, Usage{ciCompute: 299_995 * gbSeconds})
 
-	err := l.Reserve(t.Context(), newID(t), "ci", "fn", tenGBSeconds)
+	err := l.Reserve(t.Context(), newID(t), "ci", "fn", tenGBSeconds, false)
 
 	var refusal *Refusal
 	if !errors.As(err, &refusal) || refusal.Namespace != "ci" {
@@ -383,7 +398,7 @@ func TestReserve_ShareRefusesItsOwnNamespaceOnly(t *testing.T) {
 		t.Errorf("Refusal.Error() = %q, want it to name the namespace", err)
 	}
 
-	if err := l.Reserve(t.Context(), newID(t), "batch", "fn", tenGBSeconds); err != nil {
+	if err := l.Reserve(t.Context(), newID(t), "batch", "fn", tenGBSeconds, false); err != nil {
 		t.Errorf("Reserve() in batch = %v, want it to fit", err)
 	}
 }
@@ -393,7 +408,7 @@ func TestReserve_ShareRefusesItsOwnNamespaceOnly(t *testing.T) {
 func TestReserve_TotalBindsAcrossShares(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, Usage{fnCompute: 399_995 * gbSeconds})
 
-	err := l.Reserve(t.Context(), newID(t), "ci", "fn", tenGBSeconds)
+	err := l.Reserve(t.Context(), newID(t), "ci", "fn", tenGBSeconds, false)
 
 	var refusal *Refusal
 	if !errors.As(err, &refusal) || refusal.Namespace != Total {
@@ -406,7 +421,7 @@ func TestSettle_CorrectsTheShareToo(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, nil)
 	id := newID(t)
 
-	if err := l.Reserve(t.Context(), id, "ci", "fn", quota.Execution{Memory: 1024, Duration: 15 * time.Minute}); err != nil {
+	if err := l.Reserve(t.Context(), id, "ci", "fn", quota.Execution{Memory: 1024, Duration: 15 * time.Minute}, false); err != nil {
 		t.Fatalf("Reserve() = %v", err)
 	}
 
@@ -426,7 +441,7 @@ func TestSettle_CorrectsTheShareToo(t *testing.T) {
 func TestReap_FinishedChargesTheShareToo(t *testing.T) {
 	l, _ := newLedger(t, midSeptember.Add(-StaleAfter-time.Minute), nil)
 
-	if err := l.Reserve(t.Context(), newID(t), "ci", "fn", quota.Execution{Memory: 1024, Duration: 15 * time.Minute}); err != nil {
+	if err := l.Reserve(t.Context(), newID(t), "ci", "fn", quota.Execution{Memory: 1024, Duration: 15 * time.Minute}, false); err != nil {
 		t.Fatalf("Reserve() = %v", err)
 	}
 
@@ -555,7 +570,7 @@ func TestReap_SkipsRecentReservations(t *testing.T) {
 func TestRefusal_ErrorReportsNaturalUnits(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, Usage{fnCompute: 399_995 * gbSeconds})
 
-	err := l.Reserve(t.Context(), newID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second})
+	err := l.Reserve(t.Context(), newID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, false)
 	if err == nil {
 		t.Fatal("Reserve() admitted an execution with no room")
 	}
@@ -599,7 +614,7 @@ func TestReserve_ConcurrentReservationsStopAtTheLimit(t *testing.T) {
 				return
 			}
 
-			if l.Reserve(t.Context(), id, ns, "fn", quota.Execution{Memory: 128, Duration: time.Second}) == nil {
+			if l.Reserve(t.Context(), id, ns, "fn", quota.Execution{Memory: 128, Duration: time.Second}, false) == nil {
 				mu.Lock()
 				admitted++
 				mu.Unlock()

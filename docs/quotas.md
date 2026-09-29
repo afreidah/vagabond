@@ -222,9 +222,10 @@ Dispatch then moves to the next ranked provider without spending a retry
 attempt. If every candidate refuses, the task fails with
 `no provider can run this task`. See [Dispatch](dispatch.md).
 
-The reservation enforces limits for every job, including jobs with
-`max_cost_usd > 0` that admission let past a full pool. Such a job is refused
-here.
+A job with `max_cost_usd > 0` is never refused here, as admission never
+rejects it for quota. Its charges are written with no ceiling, so it runs
+past a spent allowance, and what it used still counts: later jobs that will
+not pay see the pool spent until the period resets.
 
 ### Settlement
 

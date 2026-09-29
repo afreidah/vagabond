@@ -271,12 +271,12 @@ validation; an unknown name matches nothing.
 **`max_cost_usd`:** a whole number (`0.5` is a decode error:
 `value must be a whole number`). A provider whose `provider.estimated_cost`
 exceeds it is rejected with `cost-policy`. Every provider publishes an
-estimated cost of `0`. The value also decides quota handling at admission:
+estimated cost of `0`. The value also decides how quota pools apply:
 
-| `max_cost_usd` | Admission |
+| `max_cost_usd` | Quota |
 |---|---|
-| `0` or omitted | A provider whose quota pools cannot fit the task is rejected with `quota-exhausted` |
-| Greater than `0` | The `quota-exhausted` check is skipped. The quota reservation at dispatch still applies (see [quotas](quotas.md)) |
+| `0` or omitted | A provider whose quota pools cannot fit the task is rejected with `quota-exhausted`, and dispatch refuses a reservation that no longer fits |
+| Greater than `0` | Neither refuses. The task runs past a spent allowance and its usage is still charged (see [quotas](quotas.md)) |
 
 A negative value is accepted and rejects every provider with `cost-policy`.
 

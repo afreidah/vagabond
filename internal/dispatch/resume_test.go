@@ -54,7 +54,7 @@ func abandon(
 		id := newTestID(t)
 		ids = append(ids, id)
 
-		if err := reg.ledger.Reserve(ctx, id, ns, "a", declared); err != nil {
+		if err := reg.ledger.Reserve(ctx, id, ns, "a", declared, false); err != nil {
 			t.Fatalf("Reserve() = %v", err)
 		}
 

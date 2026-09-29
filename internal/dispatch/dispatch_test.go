@@ -634,7 +634,7 @@ type refusingLedger struct {
 }
 
 func (l *refusingLedger) Reserve(
-	ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution,
+	ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution, pays bool,
 ) error {
 	if l.refuse[provider] {
 		return &ledger.Refusal{
@@ -643,7 +643,7 @@ func (l *refusingLedger) Reserve(
 		}
 	}
 
-	return l.Ledger.Reserve(ctx, id, namespace, provider, e)
+	return l.Ledger.Reserve(ctx, id, namespace, provider, e, pays)
 }
 
 // brokenLedger cannot record anything.
@@ -651,7 +651,7 @@ type brokenLedger struct {
 	*ledger.Ledger
 }
 
-func (brokenLedger) Reserve(context.Context, execution.ID, string, string, quota.Execution) error {
+func (brokenLedger) Reserve(context.Context, execution.ID, string, string, quota.Execution, bool) error {
 	return errors.New("store down")
 }
 
@@ -760,6 +760,52 @@ func TestRefusedProviderDoesNotSpendAnAttempt(t *testing.T) {
 
 	if outcome.Rerouted() {
 		t.Error("a refusal was reported as a reroute")
+	}
+}
+
+// payingLedger records whether each reservation was made for a job that pays.
+type payingLedger struct {
+	*ledger.Ledger
+	pays []bool
+}
+
+// Reserve notes pays and reserves as the real ledger does.
+func (l *payingLedger) Reserve(
+	ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution, pays bool,
+) error {
+	l.pays = append(l.pays, pays)
+
+	return l.Ledger.Reserve(ctx, id, namespace, provider, e, pays)
+}
+
+// A job that budgeted for paid capacity reserves as one that pays, so the
+// ledger charges it past a spent allowance as admission already let it through.
+func TestPayingJobReservesAsPaying(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		routing *job.Routing
+		want    bool
+	}{
+		{name: "no budget", routing: nil, want: false},
+		{name: "a budget", routing: &job.Routing{MaxCost: new(job.Cost(1))}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			reg := newRegistry(&scriptedProvider{name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded})
+			led := &payingLedger{Ledger: reg.ledger}
+
+			if _, err := New(reg, led, reg.executions, WithSleeper(noWait)).
+				RunTask(t.Context(), origin, containerTask(t, nil), tc.routing, nil); err != nil {
+				t.Fatalf("RunTask() = %v", err)
+			}
+
+			if len(led.pays) != 1 || led.pays[0] != tc.want {
+				t.Errorf("reserved with pays = %v, want [%v]", led.pays, tc.want)
+			}
+		})
 	}
 }
 

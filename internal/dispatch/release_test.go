@@ -124,7 +124,7 @@ func TestReleaseLoop_WaitsForTheReservationToSettle(t *testing.T) {
 	p, reg := releasing(execution.StateCancelled, 1)
 	id := leftover(t, reg, "a", 2*ReleaseAfter)
 
-	if err := reg.ledger.Reserve(t.Context(), id, ns, "a", quota.Execution{CPU: 1000, Memory: 512}); err != nil {
+	if err := reg.ledger.Reserve(t.Context(), id, ns, "a", quota.Execution{CPU: 1000, Memory: 512}, false); err != nil {
 		t.Fatalf("Reserve() = %v", err)
 	}
 
