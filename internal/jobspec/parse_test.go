@@ -12,6 +12,7 @@
 package jobspec
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -380,6 +381,37 @@ job "example" {
 
 	if env["CI"] != "true" {
 		t.Errorf("env[CI] = %q, want true", env["CI"])
+	}
+}
+
+// An env value that is not a string is refused at validation, pointing at the
+// line, since every provider would fail it at dispatch. A number converts.
+func TestParse_EnvValuesMustBeStrings(t *testing.T) {
+	const task = `
+job "example" {
+  type = "batch"
+
+  task "verify" {
+    driver = "container"
+
+    config {
+      image = "alpine:latest"
+    }
+
+    env {
+      %s
+    }
+  }
+}
+`
+
+	parse(t, fmt.Sprintf(task, "RETRIES = 3"), nil)
+
+	diags := parseErr(t, fmt.Sprintf(task, `LIST = ["a", "b"]`))
+
+	d := diags[0]
+	if !strings.Contains(d.Detail, `"LIST" must be a string`) || d.Subject == nil || d.Subject.Start.Line != 13 {
+		t.Errorf("diagnostic = %s: %s at %v, want LIST refused on line 13", d.Summary, d.Detail, d.Subject)
 	}
 }
 

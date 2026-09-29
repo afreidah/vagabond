@@ -15,6 +15,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobspec"
+	"github.com/afreidah/vagabond/internal/plugin"
 )
 
 // Rounding up, because giving a task less CPU than it asked for produces a
@@ -166,5 +167,24 @@ func TestJobSpecNeedsAnImage(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("a task with no image was translated")
+	}
+}
+
+// An env block that does not evaluate fails the translation as internal; the
+// job never runs with no environment at all.
+func TestJobSpecRefusesAnUnreadableEnv(t *testing.T) {
+	t.Parallel()
+
+	_, p := newFakeGoogle(t)
+
+	_, err := p.jobSpec(&job.Task{
+		Name:   "test",
+		Driver: job.DriverContainer,
+		Config: rawBlock(t, "image = \"alpine:3.20\"\n"),
+		Env:    rawBlock(t, "LIST = [\"a\", \"b\"]\n"),
+	})
+
+	if err == nil || plugin.Reroutable(err) {
+		t.Fatalf("jobSpec() = %v, want an internal failure", err)
 	}
 }

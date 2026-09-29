@@ -223,8 +223,9 @@ A value of `0` or below is treated as unset.
 
 **Environment:** the task's `env` block plus one `VAGABOND_META_<KEY>` variable
 per job `meta` key, with an `env` entry winning over a metadata variable of the
-same name. If the `env` block fails to evaluate, the container is created with
-no environment at all rather than failing the submission.
+same name. Validation refuses an `env` value that is not a string; one that
+still fails to evaluate fails the submission as `internal`, never a container
+with no environment.
 
 **Retries:** `maxRetries` is always `0`. Cloud Run's default of 3 would run a
 failing task up to four times and bill each run while the ledger records one
