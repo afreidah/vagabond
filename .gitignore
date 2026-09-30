@@ -1,7 +1,6 @@
 /vagabond
 /vagabond-server
 *.test
-cover.out
 coverage.out
 integration-coverage.out
 dist/

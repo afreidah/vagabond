@@ -1,0 +1,13 @@
+.git
+.jj
+bin
+dist
+docs
+examples
+local
+web
+vagabond
+*.test
+cover.out
+coverage.out
+integration-coverage.out
