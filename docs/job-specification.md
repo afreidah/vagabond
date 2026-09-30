@@ -26,6 +26,7 @@ job "<name>" {
 
   routing {
     strategy     = "free-first"
+    tiers        = "strict"
     providers    = [...]
     max_cost_usd = 0
 
@@ -233,6 +234,9 @@ routing {
   # Base scorer for ranking. "free-first" is the only strategy.
   strategy = "free-first"
 
+  # How provider tiers order candidates. Defaults to the server's setting.
+  tiers = "weighted"
+
   # Allowlist. Order carries no meaning; ranking decides.
   providers = ["gcp-cloud-run", "homelab"]
 
@@ -257,6 +261,7 @@ routing {
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `strategy` | string | no | `free-first` | Base scorer used to rank admitted providers. See [ranking](scheduling.md#ranking) |
+| `tiers` | string | no | server's `scheduling.tiers`, else `strict` | Tier mode, `strict` or `weighted`. See [tiers](scheduling.md#tiers) |
 | `providers` | list(string) | no | all providers | Provider names the job may use. Empty or omitted admits all |
 | `max_cost_usd` | integer | no | `0` | Highest per-execution estimated cost accepted |
 | `constraint` | block | no | — | Hard requirement, repeatable |
@@ -267,6 +272,12 @@ non-empty list is rejected with `not-allowlisted`; the rest are admitted or
 rejected on their own merits and ranked by score. Names are the labels of
 `provider` blocks in the server configuration and are not checked at
 validation; an unknown name matches nothing.
+
+**`tiers`:** overrides the server's
+[`scheduling` block](configuration.md#scheduling-block) for this job. `strict`
+ranks every admitted provider in a lower `tier` ahead of any in a higher one;
+`weighted` averages the tier into the score. Providers without a `tier` are in
+tier 0, so on a deployment that sets no tiers both modes rank the same.
 
 **`max_cost_usd`:** a whole number (`0.5` is a decode error:
 `value must be a whole number`). A provider whose `provider.estimated_cost`
@@ -285,6 +296,7 @@ A negative value is accepted and rejects every provider with `cost-policy`.
 | Diagnostic | Cause |
 |---|---|
 | `Unknown routing strategy in "<job>"` | `strategy` other than `free-first` |
+| `Unknown tier mode in "<job>"` | `tiers` other than `strict` or `weighted` |
 
 ### `constraint` block
 
@@ -340,7 +352,8 @@ affinity {
 
 **Scoring:** the affinity score is the sum of the weights of satisfied
 affinities divided by the sum of all weights, from 0 to 1. It is averaged with
-the strategy's base score into the plan's `score`. A job with no affinities
+the strategy's base score, and the tier score under `weighted` tiers, into the
+plan's `score`. A job with no affinities
 has no affinity scorer at all, so it does not halve every score. See
 [ranking](scheduling.md#ranking).
 
@@ -391,7 +404,7 @@ A constraint or affinity can name three kinds of attribute:
 
 | Prefix | Source | Checked at validation |
 |---|---|---|
-| `provider.<name>` | Published by Vagabond from the provider's capabilities and quota | Yes, against the table below |
+| `provider.<name>` | Published by Vagabond from the provider's capabilities, quota and tier | Yes, against the table below |
 | `provider.meta.<key>` | The `meta` block of the provider's configuration block | No |
 | `node.label.<key>` | An agent's `-label` flags, present only while a pool's node is judged | No |
 
@@ -409,6 +422,7 @@ Published attributes:
 | `provider.arbitrary_images` | bool | Always | `true` when any container image may be run |
 | `provider.estimated_cost` | integer | Always, including `0` | Estimated cost per execution |
 | `provider.free_quota_percent` | integer | Always | Tightest remaining allowance, 0–100, see below |
+| `provider.tier` | integer | Always, including `0` | The provider's [`tier`](configuration.md#tiers) from the server configuration |
 
 A limit the provider never stated is absent rather than `0`, so `is_set` and
 `is_not_set` distinguish "no limit stated" from "a limit of zero".

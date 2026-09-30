@@ -492,6 +492,7 @@ Response, `Plan`:
       "Candidates": [
         {
           "Provider": "cloud-run",
+          "Tier": 0,
           "Score": 82,
           "Scores": [ { "Name": "headroom", "Value": 0.82 } ],
           "Observed": "2026-09-28T14:00:03Z"
@@ -507,7 +508,8 @@ Response, `Plan`:
       ],
       "Selected": "cloud-run",
       "EstimatedCost": 0,
-      "Retryable": false
+      "Retryable": false,
+      "Tiers": "strict"
     }
   ]
 }
@@ -518,8 +520,9 @@ Response, `Plan`:
 | `Tasks` | One entry per task, in job order |
 | `Driver` | The task's driver |
 | `Candidates` | Admitted providers, best first. `[]` when none |
+| `Candidates[].Tier` | The provider's configured [tier](configuration.md#tiers) |
 | `Candidates[].Score` | Overall score as a percentage, 0 to 100 |
-| `Candidates[].Scores` | Each scorer's contribution in `[0,1]`: `headroom`, `affinity` |
+| `Candidates[].Scores` | Each scorer's contribution in `[0,1]`: `headroom`, `affinity`, `tier` (see [scorers](scheduling.md#scorers)) |
 | `Candidates[].Observed` | When the provider's capabilities were last observed |
 | `Rejections` | Providers that cannot run the task. `[]` when none |
 | `Rejections[].Reason` | First rule failed; a [reason code](scheduling.md#reason-codes) |
@@ -528,6 +531,7 @@ Response, `Plan`:
 | `Selected` | Provider the task would run on; empty when no candidate |
 | `EstimatedCost` | Estimated cost of `Selected`; always `0` |
 | `Retryable` | With no `Selected`: `true` when the refusal may clear on its own (quota recovering, provider healthy again) |
+| `Tiers` | Tier mode the candidates were ordered under: `strict` or `weighted` (see [tiers](scheduling.md#tiers)) |
 
 Errors: 400 (invalid job or metadata, both `Source` and `Name`, namespace), 404
 and 409 (with `Name`: not registered, stopped), 503 (with `Name`).

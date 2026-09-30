@@ -175,6 +175,7 @@ func (c *JobPlanCommand) renderTask(t *api.TaskPlan, verbose bool) bool {
 		return false
 	}
 
+	c.Ui.Output(fmt.Sprintf("Tiers: %s", t.Tiers))
 	c.Ui.Output(fmt.Sprintf("Selected: %s", t.Selected))
 	c.Ui.Output(fmt.Sprintf("Estimated cost: %s", cost(t.EstimatedCost)))
 
@@ -192,7 +193,8 @@ func table(t *api.TaskPlan, verbose bool) string {
 	for i := range t.Candidates {
 		cand := &t.Candidates[i]
 
-		_, _ = fmt.Fprintf(w, "%s\tadmitted\tscore %d\t%s\n", cand.Provider, cand.Score, observed(cand))
+		_, _ = fmt.Fprintf(w, "%s\tadmitted\ttier %d\tscore %d\t%s\n",
+			cand.Provider, cand.Tier, cand.Score, observed(cand))
 
 		if verbose {
 			for _, s := range cand.Scores {

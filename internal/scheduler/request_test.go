@@ -54,7 +54,7 @@ command = "go test ./..."
 `),
 	}
 
-	req, diags := NewRequest(task, nil, nil)
+	req, diags := NewRequest(task, nil, "", nil)
 	if diags.HasErrors() {
 		t.Fatalf("building request failed: %s", diags.Error())
 	}
@@ -79,7 +79,7 @@ func TestNewRequestInterpolatesImage(t *testing.T) {
 		Variables: map[string]cty.Value{"tag": cty.StringVal("1.27")},
 	}
 
-	req, diags := NewRequest(task, nil, ctx)
+	req, diags := NewRequest(task, nil, "", ctx)
 	if diags.HasErrors() {
 		t.Fatalf("building request failed: %s", diags.Error())
 	}
@@ -100,7 +100,7 @@ func TestNewRequestWithoutImage(t *testing.T) {
 		Config: configBlock(t, `handler = "main.handler"`),
 	}
 
-	req, diags := NewRequest(task, nil, nil)
+	req, diags := NewRequest(task, nil, "", nil)
 	if diags.HasErrors() {
 		t.Fatalf("building request failed: %s", diags.Error())
 	}
@@ -113,7 +113,7 @@ func TestNewRequestWithoutImage(t *testing.T) {
 func TestNewRequestWithoutConfig(t *testing.T) {
 	t.Parallel()
 
-	req, diags := NewRequest(&job.Task{Name: "test"}, nil, nil)
+	req, diags := NewRequest(&job.Task{Name: "test"}, nil, "", nil)
 	if diags.HasErrors() {
 		t.Fatalf("building request failed: %s", diags.Error())
 	}
@@ -278,5 +278,34 @@ func TestConstraintDetailNamesAnAbsentAttribute(t *testing.T) {
 
 	if !strings.Contains(rejection.Detail, "nothing for it") {
 		t.Errorf("detail does not say the attribute is unpublished: %s", rejection.Detail)
+	}
+}
+
+// A job's own tier mode wins over the server's, and with neither the mode is
+// strict.
+func TestRequestTiers(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		routing *job.Routing
+		server  job.TierMode
+		want    job.TierMode
+	}{
+		"neither":         {want: job.TiersStrict},
+		"server":          {server: job.TiersWeighted, want: job.TiersWeighted},
+		"job":             {routing: &job.Routing{Tiers: new(job.TiersWeighted)}, want: job.TiersWeighted},
+		"job over server": {routing: &job.Routing{Tiers: new(job.TiersStrict)}, server: job.TiersWeighted, want: job.TiersStrict},
+		"routing no mode": {routing: &job.Routing{}, server: job.TiersWeighted, want: job.TiersWeighted},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			req := &Request{Routing: tc.routing, ServerTiers: tc.server}
+			if got := req.Tiers(); got != tc.want {
+				t.Errorf("Tiers() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

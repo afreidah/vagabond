@@ -22,6 +22,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/dispatch"
 	"github.com/afreidah/vagabond/internal/execution"
+	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobs"
 	"github.com/afreidah/vagabond/internal/nodes"
 	"github.com/afreidah/vagabond/internal/plugin"
@@ -104,6 +105,7 @@ type Server struct {
 	claimEvery time.Duration // how often lapsed leases are claimed
 	logger     *slog.Logger
 	now        func() time.Time
+	tiers      job.TierMode // the deployment's tier mode; empty is the default
 
 	mu      sync.Mutex
 	running map[execution.ID]context.CancelFunc
@@ -138,6 +140,12 @@ func WithNodes(conns *nodes.Conns) Option {
 	return func(s *Server) { s.nodeConns = conns }
 }
 
+// WithTierMode sets how provider tiers order candidates, in plans and
+// dispatches, for a job that does not say.
+func WithTierMode(mode job.TierMode) Option {
+	return func(s *Server) { s.tiers = mode }
+}
+
 // New builds a server over its stores, with a dispatcher that records to
 // executions and charges ledger.
 func New(
@@ -164,7 +172,7 @@ func New(
 	}
 
 	s.dispatcher = dispatch.New(reg, ledger, executions,
-		dispatch.WithOwner(s.owner), dispatch.WithLease(s.leaseTTL, s.leaseRenew))
+		dispatch.WithOwner(s.owner), dispatch.WithLease(s.leaseTTL, s.leaseRenew), dispatch.WithTierMode(s.tiers))
 
 	return s
 }

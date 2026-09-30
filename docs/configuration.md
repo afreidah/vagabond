@@ -1,7 +1,7 @@
 ---
 title: "Configuration"
 seoTitle: "Server Configuration Reference"
-description: "Syntax reference for the server configuration: discovery, providers, credentials, quota pools, namespaces, the server block and the store."
+description: "Syntax reference for the server configuration: discovery, providers, tiers, credentials, quota pools, namespaces, scheduling, the server block and the store."
 weight: 410
 ---
 
@@ -60,6 +60,7 @@ provider "gcp-cloud-run" {
 | `store` | none | no | yes, unless `-dev` | [`store` block](#store-block) |
 | `provider` | provider name | yes | at least one | [`provider` block](#provider-block) |
 | `namespace` | namespace name | yes | no | [`namespace` block](#namespace-block) |
+| `scheduling` | none | no | no | [`scheduling` block](#scheduling-block) |
 
 Any other block or attribute at the top level is an error (`Unsupported block
 type`, `Unsupported argument`), reported with its line and column.
@@ -113,6 +114,7 @@ Merge rules:
 | `namespace` | Concatenated. The same name in two files is `Duplicate namespace`. |
 | `store` | At most one across all files. A second is `Duplicate store`. |
 | `server` | At most one across all files. A second is `Duplicate server`. |
+| `scheduling` | At most one across all files. A second is `Duplicate scheduling`. |
 
 - Validation runs on the merged result, so a cross-file duplicate is reported
   once.
@@ -134,6 +136,7 @@ job's `providers` list and a namespace `quota` refer to.
 provider "aws-lambda" {
   type    = "lambda"   # which plugin implements it
   enabled = true       # default; false keeps it configured but unused
+  tier    = 1          # preference, lower first; default 0
 
   config {             # plugin-specific settings
     region = "us-east-1"
@@ -160,6 +163,7 @@ provider "aws-lambda" {
 | label | string | yes | | Provider name; unique across the configuration |
 | `type` | string | yes | | Plugin, from [Types](#types) |
 | `enabled` | bool | no | `true` | `false` keeps the provider registered but never selected |
+| `tier` | int | no | `0` | Preference, lower first; see [Tiers](#tiers) |
 | `config` | block | per type | | [`config` block](#config-block) |
 | `credentials` | block | no | | [`credentials` block](#credentials-block) |
 | `meta` | block | no | | [`meta` block](#meta-block) |
@@ -179,6 +183,30 @@ startup and every minute. One that does not answer within 30 seconds is marked
 unhealthy and rejected as `provider-unhealthy` until a later refresh succeeds.
 At startup this prints `Some providers did not answer: ...` and the server
 starts anyway. See [background services](background-services.md).
+
+### Tiers
+
+`tier` ranks providers by operator preference: tier 0 is tried before tier 1,
+and so on. Providers in the same tier are ordered by score. A provider without
+`tier` is in tier 0, so tiering one fallback does not demote the rest.
+
+```hcl
+provider "homelab"       { type = "pool" }        # tier 0
+provider "gcp-cloud-run" { type = "cloud-run" }   # tier 0
+provider "aws-lambda" {
+  type = "lambda"
+  tier = 1                                        # only when both above are rejected
+}
+```
+
+- A tier only orders providers that passed admission. It never admits or
+  rejects one.
+- How strictly tiers order depends on the tier mode: the
+  [`scheduling` block](#scheduling-block) sets it for the deployment and a
+  job's `routing.tiers` overrides it. See
+  [Scheduling: Tiers](scheduling.md#tiers).
+- A job can match on the value as `provider.tier` in a constraint or affinity.
+- A negative tier is `Invalid provider tier`.
 
 ### Types
 
@@ -408,6 +436,31 @@ Validation:
   declared in the configuration`.
 - A namespace may sit in its own file in a configuration directory.
 
+## `scheduling` block
+
+How the server ranks providers for a job that does not say. Omitting the block
+uses every default.
+
+```hcl
+scheduling {
+  tiers = "weighted"
+}
+```
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `tiers` | string | no | `strict` | Tier mode: `strict` or `weighted` |
+
+| Mode | Ordering |
+|---|---|
+| `strict` | By provider [`tier`](#tiers), then by score. A lower tier always ranks first while any of its providers is admitted. |
+| `weighted` | By score. The tier is one more scorer, averaged with headroom and affinity, so a higher tier with more headroom can outrank a lower one. |
+
+- A job's `routing { tiers = ... }` overrides this for that job. See
+  [Job specification: `routing`](job-specification.md#routing-block).
+- Any other value is `Unknown tier mode`, listing the valid modes.
+- Scoring details: [Scheduling: Tiers](scheduling.md#tiers).
+
 ## `server` block
 
 Where `vagabond server` listens. Omitting the block uses every default.
@@ -599,6 +652,11 @@ store {
   dsn = "postgres://vagabond@db.internal:5432/vagabond?sslmode=verify-full"
 }
 
+# Tiers order strictly unless a job says otherwise; this is the default.
+scheduling {
+  tiers = "strict"
+}
+
 provider "gcp-cloud-run" {
   type = "cloud-run"
 
@@ -632,6 +690,7 @@ provider "gcp-cloud-run" {
 
 provider "aws-lambda" {
   type = "lambda"
+  tier = 1 # only when homelab and gcp-cloud-run are both rejected
 
   config {
     region = "us-east-1"

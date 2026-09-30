@@ -225,41 +225,46 @@ as `job validate` reports them.
 
 ```text
 <job>.<task> (<driver>)
-<provider>  admitted  score <0-100>  observed <time>
-<provider>  rejected  <reason>       <detail>
+<provider>  admitted  tier <n>  score <0-100>  observed <time>
+<provider>  rejected  <reason>  <detail>
+Tiers: <strict|weighted>
 Selected: <provider>
 Estimated cost: free
 ```
 
-Admitted providers come first, best score first. Rejected providers follow in
-provider-name order with their first failed [reason code](scheduling.md#reason-codes).
-`observed never observed` means the provider has no snapshot yet. A non-zero
-estimated cost is printed as a bare integer.
+Admitted providers come first, in ranked order: by tier then score under
+`strict` tiers, by score under `weighted` (see [tiers](scheduling.md#tiers)).
+`Tiers:` names the mode used. Rejected providers follow in provider-name order
+with their first failed [reason code](scheduling.md#reason-codes). `observed
+never observed` means the provider has no snapshot yet. A non-zero estimated
+cost is printed as a bare integer.
 
 ```shell
 $ vagabond job plan -meta version=v1.4.2 go-test.vagabond.hcl
 go-test.test (container)
-gcp-cloud-run  admitted  score 91            observed 2026-09-28 14:02:11Z
-homelab        admitted  score 88            observed 2026-09-28 14:02:09Z
+gcp-cloud-run  admitted  tier 0              score 91  observed 2026-09-28 14:02:11Z
+homelab        admitted  tier 0              score 88  observed 2026-09-28 14:02:09Z
 lambda         rejected  driver-unsupported  The task uses the container driver and this provider offers function.
+Tiers: strict
 Selected: gcp-cloud-run
 Estimated cost: free
 ```
 
 With `-verbose`, scorer values in [0, 1] and additional rejection reasons are
-indented under each row:
+indented under each row. Under `weighted` tiers the scorers include `tier`:
 
 ```shell
 $ vagabond job plan -verbose -meta version=v1.4.2 go-test.vagabond.hcl
 go-test.test (container)
-gcp-cloud-run  admitted  score 91  observed 2026-09-28 14:02:11Z
+gcp-cloud-run  admitted  tier 0  score 91  observed 2026-09-28 14:02:11Z
                            headroom 0.82
                            affinity 1.00
-homelab        admitted  score 88  observed 2026-09-28 14:02:09Z
+homelab        admitted  tier 0  score 88  observed 2026-09-28 14:02:09Z
                            headroom 0.75
                            affinity 1.00
 lambda         rejected  driver-unsupported  The task uses the container driver and this provider offers function.
                            image-unsupported
+Tiers: strict
 Selected: gcp-cloud-run
 Estimated cost: free
 ```

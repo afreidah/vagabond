@@ -40,26 +40,34 @@ import (
 // Execution is what the task would charge a provider's quota pools. Derived
 // here so that admission's check, the free_quota_percent attribute and the
 // dispatcher's reservation are all pricing the same thing.
+//
+// ServerTiers is the deployment's tier mode, which the job's routing may
+// override. Empty reads as the default.
 type Request struct {
-	Task      *job.Task
-	Routing   *job.Routing
-	Image     string
-	Execution quota.Execution
+	Task        *job.Task
+	Routing     *job.Routing
+	Image       string
+	Execution   quota.Execution
+	ServerTiers job.TierMode
 }
 
-// NewRequest derives a request from a task and its job's routing.
+// NewRequest derives a request from a task, its job's routing and the server's
+// tier mode.
 //
 // ctx evaluates the driver config, which is left undecoded at parse time and
 // may still reference job metadata. Diagnostics rather than an error, so a bad
 // image expression is reported against the line the author wrote.
-func NewRequest(task *job.Task, routing *job.Routing, ctx *hcl.EvalContext) (*Request, hcl.Diagnostics) {
+func NewRequest(
+	task *job.Task, routing *job.Routing, tiers job.TierMode, ctx *hcl.EvalContext,
+) (*Request, hcl.Diagnostics) {
 	image, diags := task.Image(ctx)
 
 	return &Request{
-		Task:      task,
-		Routing:   routing,
-		Image:     image,
-		Execution: executionOf(task),
+		Task:        task,
+		Routing:     routing,
+		Image:       image,
+		Execution:   executionOf(task),
+		ServerTiers: tiers,
 	}, diags
 }
 
@@ -142,6 +150,21 @@ func (r *Request) Strategy() job.Strategy {
 	}
 
 	return *r.Routing.Strategy
+}
+
+// Tiers returns how provider tiers order candidates: the job's own mode, else
+// the server's, else strict.
+func (r *Request) Tiers() job.TierMode {
+	switch {
+	case r.Routing != nil && r.Routing.Tiers != nil:
+		return *r.Routing.Tiers
+
+	case r.ServerTiers != "":
+		return r.ServerTiers
+
+	default:
+		return job.DefaultTierMode
+	}
 }
 
 // Constraints returns the job's hard requirements, which may be empty.

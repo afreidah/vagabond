@@ -97,9 +97,10 @@ check that rejected it and why. Planning reserves and runs nothing.
 
 <pre><code>$ vagabond job plan go-test.vagabond.hcl
 go-test.test (container)
-homelab        <span class="vb-ok">admitted</span>  score 90            observed 2026-09-28 07:30:59Z
-gcp-cloud-run  <span class="vb-ok">admitted</span>  score 23            observed 2026-09-28 07:30:59Z
+homelab        <span class="vb-ok">admitted</span>  tier 0              score 90  observed 2026-09-28 07:30:59Z
+gcp-cloud-run  <span class="vb-ok">admitted</span>  tier 0              score 23  observed 2026-09-28 07:30:59Z
 aws-lambda     <span class="vb-no">rejected  driver-unsupported  The task uses the container driver and this provider offers function.</span>
+Tiers: strict
 <span class="vb-pick">Selected: homelab</span>
 Estimated cost: free</code></pre>
 

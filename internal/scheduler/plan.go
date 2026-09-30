@@ -9,11 +9,15 @@
 
 package scheduler
 
-// Plan is where one task would run and why not elsewhere.
+import "github.com/afreidah/vagabond/internal/job"
+
+// Plan is where one task would run and why not elsewhere. Tiers is the mode
+// the ranking was ordered under.
 type Plan struct {
 	Ranking    Ranking
 	Rejections []Rejection
 	Retryable  bool
+	Tiers      job.TierMode
 }
 
 // PlanTask admits req against inputs and ranks what was admitted.
@@ -24,5 +28,6 @@ func PlanTask(req *Request, inputs []Input) Plan {
 		Ranking:    Rank(req, result.Candidates),
 		Rejections: result.Rejections,
 		Retryable:  result.Retryable(),
+		Tiers:      req.Tiers(),
 	}
 }

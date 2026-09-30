@@ -120,12 +120,14 @@ type TaskPlan struct {
 	Selected      string
 	EstimatedCost int64
 	Retryable     bool
+	Tiers         string // the tier mode the candidates were ordered under
 }
 
 // Candidate is an admitted provider and why it ranked where it did. Score is
 // the percentage a plan prints.
 type Candidate struct {
 	Provider string
+	Tier     int
 	Score    int
 	Scores   []Score
 	Observed time.Time

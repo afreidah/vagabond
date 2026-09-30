@@ -104,10 +104,11 @@ make build
 
 ```
 go-test.test (container)
-ibm-code-engine     admitted  score 90         observed 2026-09-21 07:30:59Z
-gcp-cloud-run       admitted  score 23         observed 2026-09-21 07:30:59Z
+ibm-code-engine     admitted  tier 0           score 90  observed 2026-09-21 07:30:59Z
+gcp-cloud-run       admitted  tier 0           score 23  observed 2026-09-21 07:30:59Z
 aws-lambda          rejected  not-allowlisted  The job routes only to ibm-code-engine, gcp-cloud-run.
 cloudflare-workers  rejected  not-allowlisted  The job routes only to ibm-code-engine, gcp-cloud-run.
+Tiers: strict
 Selected: ibm-code-engine
 Estimated cost: free
 ```

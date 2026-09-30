@@ -19,8 +19,9 @@
 package scheduler
 
 import (
+	"cmp"
 	"math"
-	"sort"
+	"slices"
 
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/quota"
@@ -37,6 +38,7 @@ import (
 const (
 	ScorerHeadroom = "headroom"
 	ScorerAffinity = "affinity"
+	ScorerTier     = "tier"
 )
 
 // Score is one scorer's verdict on a candidate, from zero to one.
@@ -106,29 +108,46 @@ func (r Ranking) Providers() []string {
 
 // Rank orders admitted candidates by how well each suits the request.
 //
+// Under strict tiers a lower tier always ranks first and scores only order
+// providers within one. Under weighted tiers the tier is one more scorer.
+//
 // Stable, and the candidates admission produced are already ordered by provider
-// name, so equal scores keep that order. Plan output for the same inputs is
+// name, so equal standings keep that order. Plan output for the same inputs is
 // byte-identical across runs, which is what lets it be diffed in CI.
 func Rank(req *Request, candidates []Candidate) Ranking {
+	mode := req.Tiers()
+	span := tierSpanOf(candidates)
 	ranked := make(Ranking, 0, len(candidates))
 
 	for i := range candidates {
-		ranked = append(ranked, score(req, &candidates[i]))
+		ranked = append(ranked, score(req, &candidates[i], mode, span))
 	}
 
-	sort.SliceStable(ranked, func(a, b int) bool {
-		return ranked[a].Score > ranked[b].Score
+	slices.SortStableFunc(ranked, func(a, b ScoredCandidate) int {
+		if mode == job.TiersStrict {
+			if c := cmp.Compare(a.Tier, b.Tier); c != 0 {
+				return c
+			}
+		}
+
+		return cmp.Compare(b.Score, a.Score)
 	})
 
 	return ranked
 }
 
 // score computes one candidate's standing and the parts it came from.
-func score(req *Request, candidate *Candidate) ScoredCandidate {
+func score(req *Request, candidate *Candidate, mode job.TierMode, span tierSpan) ScoredCandidate {
 	scores := []Score{{
 		Name:  ScorerHeadroom,
 		Value: baseScorer(req.Strategy())(candidate, req.Execution),
 	}}
+
+	// Only weighted tiers score; under strict ones the tier is the ordering
+	// itself, and a score for it would move nothing.
+	if mode == job.TiersWeighted {
+		scores = append(scores, Score{Name: ScorerTier, Value: span.score(candidate.Tier)})
+	}
 
 	// Left out entirely when the job stated no preference, rather than averaged
 	// in as a zero. A preference nobody expressed is not one every provider
@@ -192,6 +211,42 @@ func baseScorer(strategy job.Strategy) func(*Candidate, quota.Execution) float64
 // arrives next.
 func headroomScore(candidate *Candidate, e quota.Execution) float64 {
 	return clamp(float64(candidate.FreePercent(e)) / 100)
+}
+
+// -------------------------------------------------------------------------
+// TIERS
+// -------------------------------------------------------------------------
+
+// tierSpan is the lowest and highest tier among the admitted candidates.
+type tierSpan struct {
+	low, high int
+}
+
+// tierSpanOf measures the tiers the candidates cover. Measured over what was
+// admitted, so a tier that is out of the running does not compress the rest.
+func tierSpanOf(candidates []Candidate) tierSpan {
+	if len(candidates) == 0 {
+		return tierSpan{}
+	}
+
+	span := tierSpan{low: candidates[0].Tier, high: candidates[0].Tier}
+	for i := range candidates {
+		span.low = min(span.low, candidates[i].Tier)
+		span.high = max(span.high, candidates[i].Tier)
+	}
+
+	return span
+}
+
+// score places a tier on the span: the lowest scores one, the highest zero.
+// With a single tier present every candidate scores one, since none is less
+// preferred than another.
+func (s tierSpan) score(tier int) float64 {
+	if s.high == s.low {
+		return 1
+	}
+
+	return clamp(float64(s.high-tier) / float64(s.high-s.low))
 }
 
 // clamp keeps a scorer inside the range every other scorer is averaged against.

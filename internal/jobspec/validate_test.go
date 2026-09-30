@@ -428,6 +428,21 @@ func TestValidate_UnknownStrategy(t *testing.T) {
 	}
 }
 
+func TestValidate_UnknownTierMode(t *testing.T) {
+	src := strings.Replace(minimalJob, `type = "batch"`,
+		`type = "batch"
+
+  routing {
+    tiers = "loose"
+  }`, 1)
+
+	messages := validate(t, src, nil)
+
+	if !mentions(messages, "Unknown tier mode", "loose", "strict", "weighted") {
+		t.Errorf("diagnostics do not report the unknown tier mode: %v", messages)
+	}
+}
+
 // An affinity that cannot raise a score does nothing, which is more likely a
 // mistake than an intention.
 func TestValidate_NonPositiveAffinityWeight(t *testing.T) {
