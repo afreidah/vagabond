@@ -28,6 +28,41 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # VERSION
+  # ---------------------------------------------------------------------------
+  # Images are tagged from .version, so a change that reaches an image without
+  # a bump would republish under a tag that already means something else.
+  version-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Check for changes that reach an image
+        id: changes
+        run: |
+          if git diff --name-only origin/${{ github.base_ref }}...HEAD \
+            | grep -qE '\.(go|sql)$|^go\.(mod|sum)$|^sqlc\.yaml$|^web/'; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify version bump
+        if: steps.changes.outputs.has_changes == 'true'
+        run: |
+          BASE_VERSION=$(git show origin/${{ github.base_ref }}:.version 2>/dev/null || echo none)
+          PR_VERSION=$(cat .version)
+          if [ "$BASE_VERSION" = "$PR_VERSION" ]; then
+            echo "::error::.version must be incremented when Go, SQL or site files change (current: $PR_VERSION)"
+            exit 1
+          fi
+          echo "Version bumped: $BASE_VERSION -> $PR_VERSION"
+
+  # ---------------------------------------------------------------------------
   # FORMATTING AND STATIC ANALYSIS
   # ---------------------------------------------------------------------------
   lint:
@@ -72,7 +107,13 @@ jobs:
           go-version-file: go.mod
 
       - name: Test
-        run: make test
+        run: make coverage
+
+      - name: Upload unit coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: unit-coverage
+          path: coverage.out
 
   # ---------------------------------------------------------------------------
   # INTEGRATION TESTS
@@ -91,7 +132,13 @@ jobs:
           go-version-file: go.mod
 
       - name: Integration test
-        run: make integration-test
+        run: make integration-coverage
+
+      - name: Upload integration coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: integration-coverage
+          path: integration-coverage.out
 
   # ---------------------------------------------------------------------------
   # VULNERABILITY SCANNING
@@ -130,3 +177,43 @@ jobs:
 
       - name: Verify generated code is current
         run: make generate-check
+
+  # ---------------------------------------------------------------------------
+  # SONARCLOUD
+  #
+  # Combines the unit and integration coverage the test jobs uploaded. Runs on
+  # every pull request and every push to main, so main is re-analysed with
+  # fresh coverage. A test job that failed uploaded no profile, and scanning
+  # without it would report a drop that is really a missing file, so the scan
+  # is skipped then.
+  # ---------------------------------------------------------------------------
+  sonarqube:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [test, integration]
+    if: >-
+      always()
+      && github.actor != 'dependabot[bot]'
+      && !contains(fromJSON('["failure", "cancelled"]'), needs.test.result)
+      && !contains(fromJSON('["failure", "cancelled"]'), needs.integration.result)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Download unit coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: unit-coverage
+        continue-on-error: true
+
+      - name: Download integration coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: integration-coverage
+        continue-on-error: true
+
+      - name: SonarCloud scan
+        uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

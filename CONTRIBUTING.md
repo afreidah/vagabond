@@ -37,9 +37,10 @@ pinned tool versions.
 ### Unit tests
 
 ```bash
-make test        # with the race detector, as CI runs it
-make test-fast   # without, for quick iteration
-make cover       # with a coverage profile
+make test                  # with the race detector
+make test-fast             # without, for quick iteration
+make coverage              # race detector plus coverage.out, as CI runs it
+make integration-coverage  # the integration suite into integration-coverage.out
 ```
 
 The contract packages perform no I/O, so their tests need no fixtures beyond

@@ -22,11 +22,11 @@ MOCKGEN        := $(shell command -v mockgen 2>/dev/null || echo $(GOBIN)/mockge
 GOLANGCI_VERSION ?= v2.13.0
 MOCKGEN_VERSION  ?= v0.6.0
 
-COVERPROFILE   ?= cover.out
-
 # Injected into internal/version at link time, so a built binary reports what it
-# actually is rather than whatever string was last committed.
-VERSION        ?= dev
+# actually is rather than whatever string was last committed. Read from
+# .version, which CI requires a pull request to bump when it changes Go, SQL or
+# the site; dev when the file is missing.
+VERSION        ?= $(shell cat .version 2>/dev/null || echo dev)
 COMMIT         ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null)
 VERSION_PKG    := github.com/afreidah/vagabond/internal/version
 GO_LDFLAGS     := -s -w \
@@ -39,6 +39,14 @@ GO_LDFLAGS     := -s -w \
 # for reasons that have nothing to do with the change under review.
 HAVE_GO_PKGS   := [ -n "$$($(GO) list ./... 2>/dev/null)" ]
 NO_PKGS_MSG    := no Go packages yet, skipping
+
+# Images go to $(DOCKER_REGISTRY). The placeholder default means a fork never
+# publishes anywhere real by accident.
+REGISTRY       ?= $(or $(DOCKER_REGISTRY),registry.example.com)
+IMAGE          := $(REGISTRY)/vagabond
+WEB_IMAGE      := $(REGISTRY)/vagabond-web
+WEB_TAG        ?= $(VERSION)
+PLATFORMS      := linux/amd64,linux/arm64
 
 
 # -------------------------------------------------------------------------
@@ -68,6 +76,31 @@ build: ## Build the vagabond binary with version information
 		echo "built ./vagabond $(VERSION)"; \
 	else echo "$(NO_PKGS_MSG) build"; fi
 
+##@ Images
+
+# -------------------------------------------------------------------------
+# IMAGES
+# -------------------------------------------------------------------------
+
+builder: ## Ensure the buildx builder exists
+	@docker buildx inspect vagabond-builder >/dev/null 2>&1 || \
+		docker buildx create --name vagabond-builder --driver-opt network=host --use
+	@docker buildx inspect --bootstrap
+
+docker: ## Build the vagabond image for the local architecture
+	docker build --pull --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) \
+		-t $(IMAGE):$(VERSION) .
+
+scan: docker ## Scan the local vagabond image with Trivy
+	trivy image --severity CRITICAL,HIGH $(IMAGE):$(VERSION)
+
+# Tagged with the version and with latest, so a deployment can pin one or
+# follow the other.
+push: builder ## Build and push the multi-arch vagabond image
+	docker buildx build --pull --platform $(PLATFORMS) \
+		--build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) \
+		-t $(IMAGE):$(VERSION) -t $(IMAGE):latest --output type=image,push=true .
+
 ##@ Quality
 
 # -------------------------------------------------------------------------
@@ -96,12 +129,6 @@ test: ## Run Go tests with the race detector
 test-fast: ## Run Go tests without the race detector for quick iteration
 	@if $(HAVE_GO_PKGS); then $(GO) test ./...; else echo "$(NO_PKGS_MSG) test"; fi
 
-cover: ## Run tests and report total coverage
-	@if $(HAVE_GO_PKGS); then \
-		$(GO) test -race -coverprofile=$(COVERPROFILE) -covermode=atomic ./... && \
-		$(GO) tool cover -func=$(COVERPROFILE) | tail -1; \
-	else echo "$(NO_PKGS_MSG) cover"; fi
-
 # Integration tests are gated behind a build tag and manage their own
 # containers through testcontainers, so nothing needs starting by hand.
 #
@@ -110,6 +137,22 @@ cover: ## Run tests and report total coverage
 # them, not their location.
 integration-test: ## Run integration tests (requires Docker)
 	$(GO) test -race -tags=integration -timeout 10m ./...
+
+# -------------------------------------------------------------------------
+# COVERAGE
+# -------------------------------------------------------------------------
+
+# The profiles CI uploads and SonarCloud combines. -coverpkg=./... counts code
+# a test exercises in any package, not only its own, which is how an
+# integration test through the server covers dispatch and the stores; atomic
+# is what -race requires.
+COVER_FLAGS := -race -covermode=atomic -coverpkg=./...
+
+coverage: ## Write coverage.out from the unit tests
+	$(GO) test $(COVER_FLAGS) -coverprofile=coverage.out ./...
+
+integration-coverage: ## Write integration-coverage.out from the integration tests (requires Docker)
+	$(GO) test $(COVER_FLAGS) -tags=integration -timeout 10m -coverprofile=integration-coverage.out ./...
 
 # The executor drives the host's containerd, which needs root. Built as the
 # user and run with sudo, so the build cache stays the user's.
@@ -155,11 +198,6 @@ generate-check: generate ## Fail if generated code is out of date
 # WEBSITE
 # -------------------------------------------------------------------------
 
-REGISTRY       ?= $(or $(DOCKER_REGISTRY),registry.example.com)
-WEB_IMAGE      := $(REGISTRY)/vagabond-web
-WEB_TAG        ?= $(VERSION)
-PLATFORMS      := linux/amd64,linux/arm64
-
 web-serve: ## Serve the project site locally, rebuilding on change
 	cd web && hugo serve
 
@@ -167,11 +205,11 @@ web-build: ## Build the project site into web/public
 	cd web && hugo --minify
 
 web-docker: ## Build the site image for the local architecture
-	docker build --pull -f web/Dockerfile -t $(WEB_IMAGE):$(WEB_TAG) .
+	docker build --pull --build-arg VERSION=$(WEB_TAG) -f web/Dockerfile -t $(WEB_IMAGE):$(WEB_TAG) .
 
-web-push: ## Build and push the multi-arch site image
-	docker buildx build --pull --platform $(PLATFORMS) -f web/Dockerfile \
-		-t $(WEB_IMAGE):$(WEB_TAG) --output type=image,push=true .
+web-push: builder ## Build and push the multi-arch site image
+	docker buildx build --pull --platform $(PLATFORMS) --build-arg VERSION=$(WEB_TAG) -f web/Dockerfile \
+		-t $(WEB_IMAGE):$(WEB_TAG) -t $(WEB_IMAGE):latest --output type=image,push=true .
 
 ##@ Tools
 
@@ -197,7 +235,7 @@ $(MOCKGEN):
 
 clean: ## Remove build and coverage artifacts
 	$(GO) clean
-	rm -f $(COVERPROFILE) vagabond
+	rm -f coverage.out integration-coverage.out vagabond
 	rm -rf bin
 
-.PHONY: help build fmt fmt-check vet lint test test-fast cover integration-test containerd-test govulncheck check generate generate-check web-serve web-build web-docker web-push tools clean
+.PHONY: help build builder docker scan push fmt fmt-check vet lint test test-fast integration-test coverage integration-coverage containerd-test govulncheck check generate generate-check web-serve web-build web-docker web-push tools clean
