@@ -13,11 +13,12 @@
 # and something else fetches it, because an API key in a file on disk is the
 # line item in every postmortem.
 #
-#   vagabond job plan -config examples/config.hcl \
-#     -meta version=1.2.3 examples/go-test.vagabond.hcl
+#   vagabond server -dev -config examples/config.hcl &
+#   vagabond job plan -meta version=1.2.3 examples/go-test.vagabond.hcl
 
-# Where the usage ledger persists. Without it the ledger is kept in memory and
-# starts empty every run, which is fine for trying things out and nothing else.
+# Where jobs, executions and the usage ledger persist. The server requires a
+# store unless it runs with -dev, which keeps everything in memory, empty at
+# every start: fine for trying things out and nothing else.
 #
 # store {
 #   dsn = "postgres://vagabond@localhost:5432/vagabond"

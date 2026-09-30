@@ -104,30 +104,12 @@ job "go-test" {
     }
 
     # --- Environment ---
+    # Job metadata is added as VAGABOND_META_<KEY>, so the version supplied at
+    # submission reaches the task as VAGABOND_META_VERSION.
     env {
       CI          = "true"
       CGO_ENABLED = "0"
     }
-
-    # -------------------------------------------------------------------------
-    # Source
-    #
-    # The executor checks out this exact revision before the task runs.
-    #
-    # meta.version is supplied by the caller at submission time and substituted
-    # before dispatch, so the provider receives a literal revision. Task
-    # metadata is also injected into the running container as JOB_META_version,
-    # for commands that want to read it themselves.
-    # -------------------------------------------------------------------------
-
-    source {
-      type        = "git"
-      repository  = "https://git.example.com/example/service.git"
-      ref         = "${meta.version}"
-      destination = "/workspace"
-    }
-
-    working_directory = "/workspace"
 
     # -------------------------------------------------------------------------
     # Resources

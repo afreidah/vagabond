@@ -8,8 +8,8 @@
 // in the scheduler: depguard forbids that package from importing a provider
 // implementation at all, and this is the layer whose job it is to.
 //
-// Only the fakes exist so far. A real provider is added here when its plugin
-// lands, and the shape of that change is one line.
+// A new provider type is added here when its plugin lands, and the shape of
+// that change is one case.
 // -------------------------------------------------------------------------------
 
 package registry
