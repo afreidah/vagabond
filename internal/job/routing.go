@@ -24,6 +24,7 @@ type Routing struct {
 	Strategy    *Strategy    `hcl:"strategy,optional"`
 	Providers   []string     `hcl:"providers,optional"`
 	MaxCost     *Cost        `hcl:"max_cost_usd,optional"`
+	Tiers       *TierMode    `hcl:"tiers,optional"` // overrides the server's scheduling.tiers
 	Constraints []Constraint `hcl:"constraint,block"`
 	Affinities  []Affinity   `hcl:"affinity,block"`
 }

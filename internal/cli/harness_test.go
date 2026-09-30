@@ -22,6 +22,7 @@ import (
 	"github.com/afreidah/vagabond/internal/config"
 	"github.com/afreidah/vagabond/internal/nodes"
 	"github.com/afreidah/vagabond/internal/registry"
+	"github.com/afreidah/vagabond/internal/server"
 )
 
 // testServer is a running server and the registry behind it, so a test can
@@ -54,7 +55,7 @@ func serve(t *testing.T, cfg string) *testServer {
 		t.Fatalf("Refresh() = %v", err)
 	}
 
-	srv, err := devServer(ctx, reg, conns, slog.New(slog.DiscardHandler))
+	srv, err := devServer(ctx, reg, slog.New(slog.DiscardHandler), server.WithNodes(conns))
 	if err != nil {
 		t.Fatalf("devServer() = %v", err)
 	}

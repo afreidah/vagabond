@@ -106,6 +106,7 @@ type Dispatcher struct {
 	logs       io.Writer     // nil means nobody is watching, and nothing is streamed
 	progress   func(Event)   // nil means nobody is listening
 	sleep      func(ctx context.Context, d time.Duration) error
+	tiers      job.TierMode // the deployment's tier mode; empty is the default
 }
 
 // Option configures a Dispatcher.
@@ -147,6 +148,12 @@ func WithOwner(owner string) Option {
 // to lapse.
 func WithLease(ttl, renew time.Duration) Option {
 	return func(d *Dispatcher) { d.leaseTTL, d.leaseRenew = ttl, renew }
+}
+
+// WithTierMode sets how provider tiers order candidates for a job that does
+// not say, in place of job.DefaultTierMode.
+func WithTierMode(mode job.TierMode) Option {
+	return func(d *Dispatcher) { d.tiers = mode }
 }
 
 // New builds a dispatcher over a registry, charging ledger for what it runs and
@@ -315,7 +322,7 @@ func (d *Dispatcher) Run(
 func (d *Dispatcher) RunTask(
 	ctx context.Context, origin Origin, task *job.Task, routing *job.Routing, eval *hcl.EvalContext,
 ) (*TaskOutcome, error) {
-	req, diags := scheduler.NewRequest(task, routing, eval)
+	req, diags := scheduler.NewRequest(task, routing, d.tiers, eval)
 	if diags.HasErrors() {
 		return nil, fmt.Errorf("building the request: %s", diags.Error())
 	}

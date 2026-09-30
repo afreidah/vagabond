@@ -125,6 +125,7 @@ func taskPlanOf(jobName string, task *job.Task, plan scheduler.Plan) api.TaskPla
 		Candidates: make([]api.Candidate, 0, len(plan.Ranking)),
 		Rejections: make([]api.Rejection, 0, len(plan.Rejections)),
 		Retryable:  plan.Retryable,
+		Tiers:      plan.Tiers.String(),
 	}
 
 	for i := range plan.Ranking {
@@ -148,6 +149,7 @@ func taskPlanOf(jobName string, task *job.Task, plan scheduler.Plan) api.TaskPla
 func candidateOf(c *scheduler.ScoredCandidate) api.Candidate {
 	out := api.Candidate{
 		Provider: c.Provider,
+		Tier:     c.Tier,
 		Score:    c.Percent(),
 		Observed: c.Capabilities.ObservedAt.UTC(),
 	}

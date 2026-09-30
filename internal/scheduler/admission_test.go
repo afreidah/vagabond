@@ -12,6 +12,7 @@ package scheduler
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +83,24 @@ func TestInput_AttributesMergeTags(t *testing.T) {
 
 	if got := attrs[plugin.AttrFreeQuotaPercent]; got != "72" {
 		t.Errorf("tags displaced the quota attribute: %q", got)
+	}
+}
+
+// The tier comes from configuration, so it is merged here beside the quota
+// attribute. An untiered provider still publishes 0, which is the tier it
+// ranks in.
+func TestInput_AttributesMergeTier(t *testing.T) {
+	for _, tier := range []int{0, 2} {
+		in := &Input{
+			Provider:     "ibm-code-engine",
+			Capabilities: plugin.FixtureContainer(time.Now()),
+			Tier:         tier,
+		}
+
+		want := strconv.Itoa(tier)
+		if got := in.Attributes(quota.Execution{})[plugin.AttrTier]; got != want {
+			t.Errorf("attrs[%q] = %q, want %q", plugin.AttrTier, got, want)
+		}
 	}
 }
 

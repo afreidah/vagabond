@@ -64,6 +64,7 @@ type entry struct {
 	provider plugin.Provider
 	tags     map[string]string
 	limits   quota.Limits
+	tier     int
 	enabled  bool
 	healthy  bool
 
@@ -220,6 +221,7 @@ func newEntry(ctx context.Context, cfg *config.Provider, conns *nodes.Conns) (*e
 		provider: provider,
 		tags:     tags,
 		limits:   limits,
+		tier:     cfg.TierOf(),
 		enabled:  cfg.IsEnabled(),
 
 		// Healthy until a refresh says otherwise; assuming the worst before
@@ -342,6 +344,7 @@ func (r *Registry) Inputs(
 			Namespace:    namespace,
 			Share:        r.namespaces[namespace][e.name],
 			Tags:         e.tags,
+			Tier:         e.tier,
 			Enabled:      e.enabled,
 			Healthy:      healthy,
 		}

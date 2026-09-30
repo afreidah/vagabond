@@ -338,6 +338,105 @@ func TestRankAffinityCanOverturnHeadroom(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
+// TIERS
+// -------------------------------------------------------------------------
+
+// tiered is a candidate with a free-tier standing, in a tier.
+func tiered(name string, freePercent, tier int) Candidate {
+	c := candidate(name, freePercent)
+	c.Tier = tier
+
+	return c
+}
+
+// tierRequest is the baseline request under a tier mode.
+func tierRequest(mode job.TierMode) *Request {
+	req := baseRequest()
+	req.ServerTiers = mode
+
+	return req
+}
+
+// Under strict tiers the fullest fallback still loses to the emptiest primary,
+// and headroom orders providers within a tier.
+func TestRankStrictTiersOutrankScore(t *testing.T) {
+	t.Parallel()
+
+	ranking := Rank(tierRequest(job.TiersStrict), []Candidate{
+		tiered("fallback", 95, 1),
+		tiered("primary-a", 10, 0),
+		tiered("primary-b", 50, 0),
+	})
+
+	want := []string{"primary-b", "primary-a", "fallback"}
+	if diff := cmp.Diff(want, ranking.Providers()); diff != "" {
+		t.Errorf("ranking mismatch (-want +got):\n%s", diff)
+	}
+
+	// The tier is the ordering, not a scorer, so the score is headroom alone.
+	if got := rankOf(t, ranking, "fallback").Percent(); got != 95 {
+		t.Errorf("fallback score = %d, want 95", got)
+	}
+}
+
+// A request that names no mode anywhere ranks strictly.
+func TestRankDefaultsToStrictTiers(t *testing.T) {
+	t.Parallel()
+
+	ranking := Rank(baseRequest(), []Candidate{tiered("fallback", 95, 1), tiered("primary", 10, 0)})
+
+	if diff := cmp.Diff([]string{"primary", "fallback"}, ranking.Providers()); diff != "" {
+		t.Errorf("ranking mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// Under weighted tiers the tier is averaged in, so a middle tier with room can
+// beat a spent first tier where strict would not let it.
+func TestRankWeightedTiersScore(t *testing.T) {
+	t.Parallel()
+
+	candidates := []Candidate{
+		tiered("first", 0, 0),
+		tiered("middle", 100, 1),
+		tiered("last", 100, 2),
+	}
+
+	ranking := Rank(tierRequest(job.TiersWeighted), candidates)
+
+	// first (0+1)/2, middle (1+0.5)/2, last (1+0)/2.
+	want := map[string]int{"first": 50, "middle": 75, "last": 50}
+	for name, percent := range want {
+		if got := rankOf(t, ranking, name).Percent(); got != percent {
+			t.Errorf("%s score = %d, want %d", name, got, percent)
+		}
+	}
+
+	if diff := cmp.Diff([]string{"middle", "first", "last"}, ranking.Providers()); diff != "" {
+		t.Errorf("ranking mismatch (-want +got):\n%s", diff)
+	}
+
+	strict := Rank(tierRequest(job.TiersStrict), candidates)
+	if diff := cmp.Diff([]string{"first", "middle", "last"}, strict.Providers()); diff != "" {
+		t.Errorf("strict ranking mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// With one tier admitted no candidate is less preferred, so each scores one
+// whatever the tier's number.
+func TestRankWeightedSingleTierScoresOne(t *testing.T) {
+	t.Parallel()
+
+	ranking := Rank(tierRequest(job.TiersWeighted), []Candidate{tiered("a", 40, 3), tiered("b", 60, 3)})
+
+	for i := range ranking {
+		scores := ranking[i].Scores
+		if got := scores[len(scores)-1]; got != (Score{Name: ScorerTier, Value: 1}) {
+			t.Errorf("%s tier score = %+v, want 1", ranking[i].Provider, got)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------
 // DETERMINISM
 // -------------------------------------------------------------------------
 

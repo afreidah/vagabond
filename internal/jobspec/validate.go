@@ -134,6 +134,13 @@ func validateRouting(j *job.Job) hcl.Diagnostics {
 				ptr.Deref(j.Routing.Strategy), joinStrategies())))
 	}
 
+	if j.Routing.Tiers != nil && !ptr.Deref(j.Routing.Tiers).Valid() {
+		diags = append(diags, simple(
+			fmt.Sprintf("Unknown tier mode in %q", j.Name),
+			fmt.Sprintf("Tiers %q is not a mode Vagabond implements. Valid modes are %s.",
+				ptr.Deref(j.Routing.Tiers), joinTierModes())))
+	}
+
 	for i := range j.Routing.Constraints {
 		constraint := &j.Routing.Constraints[i]
 
@@ -523,6 +530,16 @@ func joinStrategies() string {
 	names := make([]string, 0, len(job.Strategies()))
 	for _, s := range job.Strategies() {
 		names = append(names, s.String())
+	}
+
+	return strings.Join(names, ", ")
+}
+
+// joinTierModes lists the valid tier modes for a diagnostic.
+func joinTierModes() string {
+	names := make([]string, 0, len(job.TierModes()))
+	for _, m := range job.TierModes() {
+		names = append(names, m.String())
 	}
 
 	return strings.Join(names, ", ")

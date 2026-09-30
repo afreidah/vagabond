@@ -32,10 +32,27 @@ import (
 
 // File is the decoded contents of one configuration file.
 type File struct {
-	Server     *ServerBlock `hcl:"server,block"`
-	Store      *StoreBlock  `hcl:"store,block"`
-	Providers  []Provider   `hcl:"provider,block"`
-	Namespaces []Namespace  `hcl:"namespace,block"`
+	Server     *ServerBlock     `hcl:"server,block"`
+	Store      *StoreBlock      `hcl:"store,block"`
+	Scheduling *SchedulingBlock `hcl:"scheduling,block"`
+	Providers  []Provider       `hcl:"provider,block"`
+	Namespaces []Namespace      `hcl:"namespace,block"`
+}
+
+// SchedulingBlock sets how the server orders the providers admission passed.
+// Absent means the defaults.
+type SchedulingBlock struct {
+	Tiers *job.TierMode `hcl:"tiers,optional"` // a job's routing.tiers overrides it
+}
+
+// TierMode returns how provider tiers order candidates when a job does not
+// say. A nil block is the default.
+func (s *SchedulingBlock) TierMode() job.TierMode {
+	if s == nil || s.Tiers == nil {
+		return job.DefaultTierMode
+	}
+
+	return *s.Tiers
 }
 
 // Where the server listens for API clients and for agents when nothing says
@@ -135,6 +152,7 @@ type Provider struct {
 	Name    string `hcl:"name,label"`
 	Type    string `hcl:"type"`
 	Enabled *bool  `hcl:"enabled,optional"`
+	Tier    *int   `hcl:"tier,optional"` // lower is tried first; 0 when unset
 
 	Config      *job.RawBlock     `hcl:"config,block"`
 	Credentials *CredentialsBlock `hcl:"credentials,block"`
@@ -256,6 +274,13 @@ func loadDir(dir string) (*File, hcl.Diagnostics) {
 		case file.Server != nil:
 			merged.Server = file.Server
 		}
+
+		switch {
+		case file.Scheduling != nil && merged.Scheduling != nil:
+			diags = append(diags, duplicate(name, "scheduling", "A deployment orders providers one way."))
+		case file.Scheduling != nil:
+			merged.Scheduling = file.Scheduling
+		}
 	}
 
 	return &merged, append(diags, merged.validate()...)
@@ -345,6 +370,15 @@ func (f *File) validate() hcl.Diagnostics {
 		})
 	}
 
+	if mode := f.Scheduling.TierMode(); !mode.Valid() {
+		diags = append(diags, &hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Unknown tier mode",
+			Detail: fmt.Sprintf("The scheduling block sets tiers to %q. Valid modes are "+
+				"strict and weighted.", mode),
+		})
+	}
+
 	seen := make(map[string]bool, len(f.Providers))
 
 	for i := range f.Providers {
@@ -428,6 +462,15 @@ func (p *Provider) validate() hcl.Diagnostics {
 			Summary:  "Missing provider type",
 			Detail: fmt.Sprintf("Provider %q does not say what kind it is, so nothing "+
 				"can be constructed for it.", p.Name),
+		})
+	}
+
+	if p.TierOf() < 0 {
+		diags = append(diags, &hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Invalid provider tier",
+			Detail: fmt.Sprintf("Provider %q has tier %d. Tiers start at 0, the most "+
+				"preferred.", p.Name, p.TierOf()),
 		})
 	}
 
@@ -518,6 +561,15 @@ func (p *Provider) IsEnabled() bool {
 	}
 
 	return *p.Enabled
+}
+
+// TierOf returns the provider's tier, 0 when unset.
+func (p *Provider) TierOf() int {
+	if p.Tier == nil {
+		return 0
+	}
+
+	return *p.Tier
 }
 
 // ConfigBody returns the provider's own configuration block, undecoded.

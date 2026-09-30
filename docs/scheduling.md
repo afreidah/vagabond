@@ -1,13 +1,14 @@
 ---
 title: "Scheduling"
 seoTitle: "Scheduling: Admission Checks and Ranking"
-description: "How admission decides which providers can run a task, how ranking orders them, and every reason code."
+description: "How admission decides which providers can run a task, how ranking orders them by tier and score, and every reason code."
 weight: 310
 ---
 
 Scheduling places one task at a time in two steps. Admission runs 13 checks
 against every configured provider and splits them into candidates and
-rejections. Ranking scores the candidates and selects the highest. `job plan`,
+rejections. Ranking scores the candidates, orders them by provider tier and
+score, and selects the first. `job plan`,
 `POST /v1/jobs/plan` and dispatch all run the same two steps; plan stops before
 reserving anything.
 
@@ -208,9 +209,10 @@ mean of the scorers that apply.
 |---|---|---|
 | `headroom` | Always | `clamp(free_quota_percent / 100)` |
 | `affinity` | Job declares at least one `affinity` | `matched weight / total weight` |
+| `tier` | Tier mode is `weighted` | `(highest tier − tier) / (highest tier − lowest tier)`, over the candidates |
 
 ```
-score = mean(headroom, affinity)   # affinity only when declared
+score = mean(headroom, affinity, tier)   # affinity only when declared, tier only when weighted
 ```
 
 **`headroom`** uses `provider.free_quota_percent` for this task: the lowest
@@ -238,10 +240,67 @@ many scorers apply.
 |---|---|
 | `free-first` (default) | `headroom` |
 
+### Tiers
+
+![Five providers in tiers 0 to 2 go through admission. aws-lambda is rejected because the task does not fit its remaining quota, and cloudflare because it does not offer the task's driver. homelab, gcp-cloud-run and ibm-code-engine are admitted. Under strict tiers they rank by tier, so homelab in tier 0 is selected with gcp-cloud-run and ibm-code-engine as fallbacks. Under weighted tiers the tier is averaged with headroom, so gcp-cloud-run scores 65 and is selected ahead of homelab at 58 and ibm-code-engine at 45.](assets/tiers.svg)
+
+A provider's [`tier`](configuration.md#tiers) is the operator's preference
+for it, lower first, default 0. The tier mode decides how much that preference
+counts. These provider tiers are unrelated to the check tiers in
+[Reason codes](#reason-codes).
+
+| Mode | Order | `tier` scorer |
+|---|---|---|
+| `strict` (default) | Tier ascending, then score descending | Not applied |
+| `weighted` | Score descending | Applied |
+
+The mode is the first of these that is set:
+
+1. The job's `routing { tiers = ... }`.
+2. The server's `scheduling { tiers = ... }`.
+3. `strict`.
+
+**`strict`:** every admitted provider in tier 0 ranks ahead of every one in
+tier 1, whatever their scores. Scores order providers within a tier. A higher
+tier is reached only when every lower-tier provider was rejected, or, at
+dispatch, refused a reservation or failed.
+
+**`weighted`:** the `tier` scorer places each candidate between the lowest and
+highest tier among this task's candidates. The lowest scores 1.00 and the
+highest 0.00, with tiers in between spaced by their numbers. It is measured
+over candidates only, so a rejected provider's tier does not change anyone's
+score. When every candidate is in one tier, each scores 1.00.
+
+| Candidates' tiers | `tier` scores |
+|---|---|
+| 0, 1, 2 | 1.00, 0.50, 0.00 |
+| 0, 4 | 1.00, 0.00 |
+| 1, 3, 3 | 1.00, 0.00, 0.00 |
+| 2, 2 | 1.00, 1.00 |
+
+In the diagram, admission has already removed `aws-lambda` (the task does not
+fit its remaining quota) and `cloudflare` (wrong driver), so neither is ranked
+in either mode. Of the three candidates, with no affinities:
+
+| Candidate | Tier | Headroom | `tier` score | Weighted score | Strict rank | Weighted rank |
+|---|---|---|---|---|---|---|
+| `homelab` | 0 | 15% | 1.00 | `mean(0.15, 1.00)` = 58 | 1, selected | 2 |
+| `gcp-cloud-run` | 1 | 80% | 0.50 | `mean(0.80, 0.50)` = 65 | 2 | 1, selected |
+| `ibm-code-engine` | 2 | 90% | 0.00 | `mean(0.90, 0.00)` = 45 | 3 | 3 |
+
+Strict keeps the task on tier 0 while tier 0 has a provider that can take it.
+Weighted trades the tier against remaining quota, so a higher tier with more
+headroom can win. With only two tiers present, headroom alone can tie the gap
+between them but not overturn it; an affinity can.
+
+A deployment that sets no `tier` has every provider in tier 0, and both modes
+rank the same.
+
 ### Selection
 
-- Candidates are sorted by score, descending, with a stable sort. Admission
-  already ordered them by provider name, so equal scores rank by name.
+- Under `strict` tiers candidates are sorted by tier, ascending, then by score,
+  descending; under `weighted`, by score alone. The sort is stable and
+  admission already ordered candidates by provider name, so ties rank by name.
 - The selected provider is the first in the ranking. With no candidates,
   nothing is selected.
 - The printed score is `round(score × 100)`.
@@ -259,7 +318,7 @@ table: candidates in ranked order, then rejections in provider name order.
 
 | Row | Columns |
 |---|---|
-| Candidate | provider, `admitted`, `score <n>`, `observed <UTC time>` (or `never observed`) |
+| Candidate | provider, `admitted`, `tier <n>`, `score <n>`, `observed <UTC time>` (or `never observed`) |
 | Rejection | provider, `rejected`, reason code, detail |
 
 `-verbose` adds, under each candidate, one line per scorer (`<name> <value>`
@@ -268,8 +327,9 @@ failed.
 
 After the table:
 
-- A selection: `Selected: <provider>` and `Estimated cost: free` (or the cost
-  as a bare integer).
+- A selection: `Tiers: <mode>`, the tier mode the candidates were ordered
+  under, then `Selected: <provider>` and `Estimated cost: free` (or the cost as
+  a bare integer).
 - No candidates: `No provider can run this task.`, plus the retryable line when
   a rejection is transient.
 
@@ -344,10 +404,10 @@ every pool, so both container providers are admitted.
 ```shell
 $ vagabond job plan -verbose -meta version=1.2.3 examples/go-test.vagabond.hcl
 go-test.test (container)
-gcp-cloud-run       admitted  score 90  observed 2026-09-28 07:31:21Z
+gcp-cloud-run       admitted  tier 0  score 90  observed 2026-09-28 07:31:21Z
                                 headroom 0.80
                                 affinity 1.00
-ibm-code-engine     admitted  score 15  observed 2026-09-28 07:31:21Z
+ibm-code-engine     admitted  tier 0  score 15  observed 2026-09-28 07:31:21Z
                                 headroom 0.30
                                 affinity 0.00
 aws-lambda          rejected  not-allowlisted  The job routes only to ibm-code-engine, gcp-cloud-run.
@@ -360,12 +420,18 @@ cloudflare-workers  rejected  not-allowlisted  The job routes only to ibm-code-e
                                 image-unsupported
                                 network-unsupported
                                 constraint-unmet
+Tiers: strict
 Selected: gcp-cloud-run
 Estimated cost: free
 ```
 
 With an empty ledger both container providers are at 100%, both score 100, and
 `gcp-cloud-run` is selected on name order.
+
+With `tier = 1` on `gcp-cloud-run`, strict tiers select `ibm-code-engine`
+despite its score of 15. Under `weighted` tiers `gcp-cloud-run` scores
+`mean(0.80, 1.00, 0.00) = 0.60` and `ibm-code-engine` scores
+`mean(0.30, 0.00, 1.00) = 0.43`, so `gcp-cloud-run` is still selected.
 
 ## Reason codes
 

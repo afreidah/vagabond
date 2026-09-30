@@ -20,6 +20,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/hashicorp/hcl/v2"
 
+	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
@@ -157,6 +158,19 @@ store { dsn = "postgres://two" }
 `,
 			want: "Duplicate store",
 		},
+		"negative tier": {
+			src: `
+provider "ibm" {
+  type = "fake-container"
+  tier = -1
+}
+`,
+			want: "Invalid provider tier",
+		},
+		"unknown tier mode": {
+			src:  `scheduling { tiers = "bogus" }`,
+			want: "Unknown tier mode",
+		},
 	}
 
 	for name, tc := range tests {
@@ -199,6 +213,57 @@ provider "on" {
 		if got := p.IsEnabled(); got != want[p.Name] {
 			t.Errorf("%s: IsEnabled() = %t, want %t", p.Name, got, want[p.Name])
 		}
+	}
+}
+
+// An untiered provider sits in tier 0 with the most preferred, so adding tiers
+// to one provider does not demote the rest.
+func TestTierOfDefaultsToZero(t *testing.T) {
+	t.Parallel()
+
+	file := load(t, `
+provider "untiered" { type = "fake-container" }
+
+provider "fallback" {
+  type = "fake-container"
+  tier = 2
+}
+`)
+
+	want := map[string]int{"untiered": 0, "fallback": 2}
+
+	for i := range file.Providers {
+		p := &file.Providers[i]
+
+		if got := p.TierOf(); got != want[p.Name] {
+			t.Errorf("%s: TierOf() = %d, want %d", p.Name, got, want[p.Name])
+		}
+	}
+}
+
+// A deployment without a scheduling block, or one naming no mode, orders
+// providers strictly.
+func TestSchedulingTierMode(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		src  string
+		want job.TierMode
+	}{
+		"no block": {src: ``, want: job.TiersStrict},
+		"empty":    {src: `scheduling {}`, want: job.TiersStrict},
+		"weighted": {src: `scheduling { tiers = "weighted" }`, want: job.TiersWeighted},
+		"explicit": {src: `scheduling { tiers = "strict" }`, want: job.TiersStrict},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := load(t, tc.src).Scheduling.TierMode(); got != tc.want {
+				t.Errorf("TierMode() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -367,6 +432,21 @@ func TestLoadPathRejectsAServerDeclaredTwice(t *testing.T) {
 	_, diags := LoadPath(dir)
 	if !diags.HasErrors() || !strings.Contains(diags.Error(), "Duplicate server") {
 		t.Errorf("diagnostics = %v, want a duplicate server", diags)
+	}
+}
+
+// Two scheduling blocks would leave file order deciding how tiers are read.
+func TestLoadPathRejectsSchedulingDeclaredTwice(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	write(t, dir, "a.hcl", `scheduling { tiers = "strict" }`)
+	write(t, dir, "b.hcl", `scheduling { tiers = "weighted" }`)
+
+	_, diags := LoadPath(dir)
+	if !diags.HasErrors() || !strings.Contains(diags.Error(), "Duplicate scheduling") {
+		t.Errorf("diagnostics = %v, want a duplicate scheduling block", diags)
 	}
 }
 

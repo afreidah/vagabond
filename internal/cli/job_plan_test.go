@@ -92,6 +92,8 @@ func TestJobPlan_RendersTheTable(t *testing.T) {
 		"aws-lambda",
 		"rejected",
 		"not-allowlisted",
+		"tier 0",
+		"Tiers: strict",
 		"Selected: gcp-cloud-run",
 		"Estimated cost: free",
 	} {
@@ -140,6 +142,52 @@ func TestJobPlan_Verbose(t *testing.T) {
 	// And a rejection shows every reason, not only the one that printed.
 	if !strings.Contains(stdout, "driver-unsupported") {
 		t.Errorf("verbose output omits the collected reasons:\n%s", stdout)
+	}
+}
+
+// -------------------------------------------------------------------------
+// TIERS
+// -------------------------------------------------------------------------
+
+// tieredConfig puts gcp-cloud-run, which wins on name order in planConfig,
+// behind ibm-code-engine.
+const tieredConfig = `
+provider "ibm-code-engine" {
+  type = "fake-container"
+}
+
+provider "gcp-cloud-run" {
+  type = "fake-container"
+  tier = 1
+}
+
+provider "aws-lambda" {
+  type = "fake-function"
+}
+`
+
+// A lower tier ranks first under strict tiers, whatever the scores.
+func TestJobPlan_StrictTiersOrderTheTable(t *testing.T) {
+	_, stdout, _ := plan(t, planJob, tieredConfig)
+
+	for _, want := range []string{"tier 1", "Tiers: strict", "Selected: ibm-code-engine"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("plan output is missing %q:\n%s", want, stdout)
+		}
+	}
+}
+
+// A job asking for weighted tiers is ranked under them, and -verbose shows the
+// tier scorer beside the others.
+func TestJobPlan_WeightedTiersShowTheScore(t *testing.T) {
+	weighted := strings.Replace(planJob, "routing {", "routing {\n    tiers = \"weighted\"\n", 1)
+
+	_, stdout, _ := plan(t, weighted, tieredConfig, "-verbose")
+
+	for _, want := range []string{"Tiers: weighted", "tier 1.00", "tier 0.00"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("plan output is missing %q:\n%s", want, stdout)
+		}
 	}
 }
 

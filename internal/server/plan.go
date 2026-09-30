@@ -41,7 +41,7 @@ func (s *Server) planJob(_ http.ResponseWriter, r *http.Request) (any, error) {
 	for i := range j.Tasks {
 		task := &j.Tasks[i]
 
-		taskReq, diags := scheduler.NewRequest(task, j.Routing, eval)
+		taskReq, diags := scheduler.NewRequest(task, j.Routing, s.tiers, eval)
 		if diags.HasErrors() {
 			return nil, invalidJob(diags)
 		}

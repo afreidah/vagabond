@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">Selection with provider tiers</title>
+  <desc id="desc">Five providers in tiers 0 to 2 go through admission. aws-lambda is rejected because the task does not fit its remaining quota, and cloudflare because it does not offer the task's driver. homelab, gcp-cloud-run and ibm-code-engine are admitted. Under strict tiers they rank by tier, so homelab in tier 0 is selected with gcp-cloud-run and ibm-code-engine as fallbacks. Under weighted tiers the tier is averaged with headroom, so gcp-cloud-run scores 65 and is selected ahead of homelab at 58 and ibm-code-engine at 45.</desc>
+  <defs>
+    <style>
+      .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:20px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.micro{font-size:13px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.dash{fill:none;stroke:#9a9ea6;stroke-width:2.5;stroke-dasharray:7 6;stroke-linecap:round;stroke-linejoin:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}.muted{fill:#15171c;stroke:#9a9ea6;stroke-width:2;stroke-dasharray:7 6}.used{fill:#fd7300}.free{fill:none;stroke:#9a9ea6;stroke-width:1.5}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#fd7300"/></marker>
+    <marker id="arrow-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#9a9ea6"/></marker>
+  </defs>
+  <g class="t">
+    <!-- Providers into admission -->
+    <path class="line" marker-end="url(#arrow)" d="M260 72H300"/>
+    <path class="line" marker-end="url(#arrow)" d="M260 150H300"/>
+    <path class="line" marker-end="url(#arrow)" d="M260 228H300"/>
+    <path class="line" marker-end="url(#arrow)" d="M260 306H300"/>
+    <path class="line" marker-end="url(#arrow)" d="M260 384H300"/>
+
+    <!-- Admission out: rejections down, candidates to both rankings -->
+    <path class="dash" marker-end="url(#arrow-grey)" d="M440 416V450"/>
+    <path class="line" marker-end="url(#arrow)" d="M580 228H605V170H630"/>
+    <path class="line" marker-end="url(#arrow)" d="M605 228V465H630"/>
+
+    <!-- Providers -->
+    <text x="30" y="26" class="micro">PROVIDERS</text>
+
+    <rect x="30" y="40" width="230" height="64" rx="18" class="card"/>
+    <text x="50" y="68" class="label">homelab</text>
+    <text x="50" y="90" class="small">tier 0 · 15% quota left</text>
+
+    <rect x="30" y="118" width="230" height="64" rx="18" class="muted"/>
+    <text x="50" y="146" class="label" style="fill:#c9ccd3">aws-lambda</text>
+    <text x="50" y="168" class="small" style="fill:#9a9ea6">tier 0 · task does not fit</text>
+
+    <rect x="30" y="196" width="230" height="64" rx="18" class="card"/>
+    <text x="50" y="224" class="label">gcp-cloud-run</text>
+    <text x="50" y="246" class="small">tier 1 · 80% quota left</text>
+
+    <rect x="30" y="274" width="230" height="64" rx="18" class="muted"/>
+    <text x="50" y="302" class="label" style="fill:#c9ccd3">cloudflare</text>
+    <text x="50" y="324" class="small" style="fill:#9a9ea6">tier 1 · function driver</text>
+
+    <rect x="30" y="352" width="230" height="64" rx="18" class="card"/>
+    <text x="50" y="380" class="label">ibm-code-engine</text>
+    <text x="50" y="402" class="small">tier 2 · 90% quota left</text>
+
+    <!-- Admission -->
+    <rect x="300" y="40" width="280" height="376" rx="30" class="core"/>
+    <text x="440" y="84" text-anchor="middle" class="micro">ADMISSION</text>
+    <text x="440" y="122" text-anchor="middle" class="label" style="font-size:24px">13 checks</text>
+    <g class="small" text-anchor="middle" style="fill:#f8fafc">
+      <text x="440" y="172">policy</text>
+      <text x="440" y="198">availability</text>
+      <text x="440" y="224">capability</text>
+      <text x="440" y="250">quota</text>
+    </g>
+    <text x="440" y="300" text-anchor="middle" class="small">tiers are not read here</text>
+    <text x="440" y="360" text-anchor="middle" class="label" style="fill:#ff8a2b">3 admitted</text>
+    <text x="440" y="388" text-anchor="middle" class="small" style="fill:#9a9ea6">2 rejected</text>
+
+    <!-- Rejected -->
+    <rect x="300" y="450" width="280" height="130" rx="24" class="muted"/>
+    <text x="320" y="484" class="micro" style="fill:#9a9ea6">REJECTED</text>
+    <text x="320" y="512" class="small">aws-lambda</text>
+    <text x="415" y="512" class="small" style="fill:#9a9ea6">quota-exhausted</text>
+    <text x="320" y="536" class="small">cloudflare</text>
+    <text x="415" y="536" class="small" style="fill:#9a9ea6">driver-unsupported</text>
+    <text x="320" y="566" class="small" style="fill:#9a9ea6">never ranked, whatever the tier</text>
+
+    <!-- Strict -->
+    <text x="630" y="26" class="micro">STRICT · TIER, THEN SCORE</text>
+
+    <rect x="630" y="40" width="540" height="64" rx="18" class="card" style="stroke-width:3"/>
+    <text x="654" y="77" class="micro">TIER 0</text>
+    <text x="730" y="70" class="label">homelab</text>
+    <text x="730" y="92" class="small">only admitted tier-0 provider</text>
+    <text x="1150" y="78" text-anchor="end" class="label" style="fill:#ff8a2b">selected</text>
+
+    <rect x="630" y="118" width="540" height="64" rx="18" class="card"/>
+    <text x="654" y="155" class="micro">TIER 1</text>
+    <text x="730" y="148" class="label">gcp-cloud-run</text>
+    <text x="730" y="170" class="small">tried if homelab fails</text>
+    <text x="1150" y="156" text-anchor="end" class="small">fallback 1</text>
+
+    <rect x="630" y="196" width="540" height="64" rx="18" class="card"/>
+    <text x="654" y="233" class="micro">TIER 2</text>
+    <text x="730" y="226" class="label">ibm-code-engine</text>
+    <text x="730" y="248" class="small">tried if both above fail</text>
+    <text x="1150" y="234" text-anchor="end" class="small">fallback 2</text>
+
+    <!-- Weighted -->
+    <text x="630" y="318" class="micro">WEIGHTED · MEAN OF HEADROOM AND TIER SCORE</text>
+
+    <rect x="630" y="332" width="540" height="76" rx="18" class="card" style="stroke-width:3"/>
+    <text x="654" y="364" class="label">gcp-cloud-run</text>
+    <text x="654" y="390" class="small">headroom 0.80 · tier 0.50</text>
+    <rect x="890" y="352" width="160" height="16" rx="4" class="free"/><rect x="890" y="352" width="104" height="16" rx="4" class="used"/>
+    <text x="1150" y="366" text-anchor="end" class="label">65</text>
+    <text x="1150" y="392" text-anchor="end" class="small" style="fill:#ff8a2b">selected</text>
+
+    <rect x="630" y="422" width="540" height="76" rx="18" class="card"/>
+    <text x="654" y="454" class="label">homelab</text>
+    <text x="654" y="480" class="small">headroom 0.15 · tier 1.00</text>
+    <rect x="890" y="442" width="160" height="16" rx="4" class="free"/><rect x="890" y="442" width="93" height="16" rx="4" class="used"/>
+    <text x="1150" y="456" text-anchor="end" class="label">58</text>
+    <text x="1150" y="482" text-anchor="end" class="small">fallback 1</text>
+
+    <rect x="630" y="512" width="540" height="76" rx="18" class="card"/>
+    <text x="654" y="544" class="label">ibm-code-engine</text>
+    <text x="654" y="570" class="small">headroom 0.90 · tier 0.00</text>
+    <rect x="890" y="532" width="160" height="16" rx="4" class="free"/><rect x="890" y="532" width="72" height="16" rx="4" class="used"/>
+    <text x="1150" y="546" text-anchor="end" class="label">45</text>
+    <text x="1150" y="572" text-anchor="end" class="small">fallback 2</text>
+  </g>
+</svg>

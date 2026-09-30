@@ -53,6 +53,7 @@ type Input struct {
 	ShareUsage   quota.PoolUsage
 	Tags         map[string]string
 	Labels       map[string]string // a pool node's labels, set while that node is judged
+	Tier         int               // the operator's preference, lower first
 	Enabled      bool
 	Healthy      bool
 }
@@ -75,6 +76,7 @@ func (in *Input) FreePercent(e quota.Execution) int {
 func (in *Input) Attributes(e quota.Execution) map[string]string {
 	attrs := in.Capabilities.Attributes()
 	attrs[plugin.AttrFreeQuotaPercent] = strconv.Itoa(in.FreePercent(e))
+	attrs[plugin.AttrTier] = strconv.Itoa(in.Tier)
 
 	// An operator's tags cannot shadow a capability, because they land under a
 	// prefix nothing else writes to. That is what makes the closed half of the

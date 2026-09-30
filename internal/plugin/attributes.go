@@ -56,6 +56,11 @@ const (
 // and admission is the only layer holding both.
 const AttrFreeQuotaPercent = Prefix + "free_quota_percent"
 
+// AttrTier is the operator's preference for a provider, lower first. Like
+// AttrFreeQuotaPercent it comes from configuration rather than the snapshot,
+// and admission adds it.
+const AttrTier = Prefix + "tier"
+
 // MetaPrefix is where an operator's own tags on a provider live.
 //
 // Everything under it is open. Nomad separates fingerprinted node attributes
@@ -89,6 +94,7 @@ var knownAttributes = []string{
 	AttrArbitraryImages,
 	AttrEstimatedCost,
 	AttrFreeQuotaPercent,
+	AttrTier,
 }
 
 // -------------------------------------------------------------------------

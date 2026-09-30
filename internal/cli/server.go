@@ -124,13 +124,15 @@ func (c *ServerCommand) Run(args []string) int {
 		err error
 	)
 
+	opts := []server.Option{server.WithNodes(conns), server.WithTierMode(cfg.Scheduling.TierMode())}
+
 	switch {
 	case dev:
 		if cfg.Store != nil {
 			c.Ui.Warn("Running with -dev: the store block is ignored and everything is kept in memory.")
 		}
 
-		srv, err = devServer(ctx, reg, conns, logger)
+		srv, err = devServer(ctx, reg, logger, opts...)
 
 	case cfg.Store == nil:
 		return c.Errorf("The server needs a store block, or -dev to keep everything in memory.")
@@ -138,7 +140,7 @@ func (c *ServerCommand) Run(args []string) int {
 	default:
 		var closeStore func()
 
-		srv, closeStore, err = storeServer(ctx, cfg.Store.DSN, reg, conns, logger)
+		srv, closeStore, err = storeServer(ctx, cfg.Store.DSN, reg, logger, opts...)
 		if err == nil {
 			defer closeStore()
 		}
@@ -207,10 +209,10 @@ func (m *Meta) loadRegistry(
 	return reg, cfg, ExitSuccess
 }
 
-// devServer builds a server over memory stores, empty at every start, tracking
-// agent nodes in conns.
+// devServer builds a server over memory stores, empty at every start, with
+// opts.
 func devServer(
-	ctx context.Context, reg *registry.Registry, conns *nodes.Conns, logger *slog.Logger,
+	ctx context.Context, reg *registry.Registry, logger *slog.Logger, opts ...server.Option,
 ) (*server.Server, error) {
 	led, err := ledger.New(ctx, reg.Budgets(), ledger.NewMemory(nil))
 	if err != nil {
@@ -219,13 +221,13 @@ func devServer(
 
 	executions := memory.NewExecutions()
 
-	return server.New(reg, led, executions, memory.NewJobs(executions), logger, server.WithNodes(conns)), nil
+	return server.New(reg, led, executions, memory.NewJobs(executions), logger, opts...), nil
 }
 
 // storeServer connects to the store, migrates it, and builds a server over it
-// tracking agent nodes in conns. The function returned closes the connection.
+// with opts. The function returned closes the connection.
 func storeServer(
-	ctx context.Context, dsn string, reg *registry.Registry, conns *nodes.Conns, logger *slog.Logger,
+	ctx context.Context, dsn string, reg *registry.Registry, logger *slog.Logger, opts ...server.Option,
 ) (*server.Server, func(), error) {
 	db, err := postgres.Open(ctx, dsn)
 	if err != nil {
@@ -250,7 +252,7 @@ func storeServer(
 		return nil, nil, fmt.Errorf("could not read quota usage: %w", err)
 	}
 
-	return server.New(reg, led, db, db, logger, server.WithNodes(conns)), db.Close, nil
+	return server.New(reg, led, db, db, logger, opts...), db.Close, nil
 }
 
 // agentListener listens where agents connect: over mutual TLS when the server
