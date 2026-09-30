@@ -69,7 +69,7 @@ func (p *Provider) openTail(ctx context.Context, job string) (*http.Response, er
 
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := p.http.Do(req)
+	resp, err := p.http.Load().Do(req)
 	if err != nil {
 		return nil, plugin.Infrastructure(fmt.Errorf("opening the log stream: %w", err))
 	}

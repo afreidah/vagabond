@@ -94,10 +94,10 @@ The `credential_process` format is what
   non-empty; otherwise startup fails with "the credential is not
   credential_process JSON with Version 1, AccessKeyId and SecretAccessKey".
 - `SessionToken` is optional.
-- `Expiration` is ignored. The credential is resolved once when the registry is
-  built and never refreshed, so a session token that expires fails later
-  invokes with a 403 until the server is restarted. Long-running servers should
-  use the default chain, which refreshes, or long-lived keys.
+- `Expiration` is ignored. When a session token expires, the next invoke is
+  rejected with a 403; the `credentials` block is resolved again, the
+  `exec` command re-run, and the invoke is made once more with the new
+  credential. See [`credentials` block](../configuration.md#credentials-block).
 
 ### IAM
 
@@ -248,7 +248,8 @@ stream or sweep.
 | HTTP 429 (`TooManyRequestsException`, concurrency or rate throttling) | infrastructure | yes | `RetryAfter` 0 |
 | HTTP 5xx (`ServiceException` and other service-side errors) | infrastructure | yes | |
 | HTTP 404 (`ResourceNotFoundException`, no such function, version or alias) | internal | no | Wraps `ErrNotFound` |
-| Other HTTP 4xx (invalid parameters, access denied, expired token, payload too large) | internal | no | |
+| HTTP 401 or 403 (access denied, expired token) | internal | no | Wraps `ErrUnauthorized`: the credential is resolved again and the call made once more |
+| Other HTTP 4xx (invalid parameters, payload too large) | internal | no | |
 | No HTTP response: network failure, DNS, or the default chain found no credential | infrastructure | yes | |
 | Function returns with `X-Amz-Function-Error` (handled or unhandled error, including the function timing out) | none | | An answer: state `failed`, exit code 1, not rerouted |
 

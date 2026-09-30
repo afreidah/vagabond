@@ -146,10 +146,11 @@ func (p *scriptedProvider) Cancel(context.Context, execution.ID) error {
 // fakeRegistry holds whatever providers a test declared, and the ledger they
 // are charged against.
 type fakeRegistry struct {
-	inputs     []scheduler.Input
-	providers  map[string]plugin.Provider
-	ledger     *ledger.Ledger
-	executions *memory.Executions
+	inputs         []scheduler.Input
+	providers      map[string]plugin.Provider
+	ledger         *ledger.Ledger
+	executions     *memory.Executions
+	recredentialed int
 }
 
 func (r *fakeRegistry) Inputs(
@@ -213,6 +214,19 @@ func (r *fakeRegistry) Provider(name string) (plugin.Provider, bool) {
 	p, ok := r.providers[name]
 
 	return p, ok
+}
+
+// Recredential hands a provider that takes one a fresh credential, as the
+// registry does after resolving its source again, and counts the refreshes.
+func (r *fakeRegistry) Recredential(ctx context.Context, name string) (bool, error) {
+	recredentialer, ok := r.providers[name].(plugin.Recredentialer)
+	if !ok {
+		return false, nil
+	}
+
+	r.recredentialed++
+
+	return true, recredentialer.Recredential(ctx, []byte("fresh"))
 }
 
 // -------------------------------------------------------------------------

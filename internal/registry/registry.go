@@ -69,6 +69,13 @@ type entry struct {
 	healthy  bool
 
 	capabilities plugin.Capabilities
+
+	// credentials is where the provider's credential comes from, resolved
+	// again when the platform rejects it; recredentialed is when that last
+	// happened, under recredential.
+	credentials    *config.CredentialsBlock
+	recredential   sync.Mutex
+	recredentialed time.Time
 }
 
 // -------------------------------------------------------------------------
@@ -217,12 +224,13 @@ func newEntry(ctx context.Context, cfg *config.Provider, conns *nodes.Conns) (*e
 	}
 
 	return &entry{
-		name:     cfg.Name,
-		provider: provider,
-		tags:     tags,
-		limits:   limits,
-		tier:     cfg.TierOf(),
-		enabled:  cfg.IsEnabled(),
+		name:        cfg.Name,
+		provider:    provider,
+		tags:        tags,
+		limits:      limits,
+		tier:        cfg.TierOf(),
+		enabled:     cfg.IsEnabled(),
+		credentials: cfg.Credentials,
 
 		// Healthy until a refresh says otherwise; assuming the worst before
 		// the first would make every provider unusable.
@@ -393,6 +401,56 @@ func (r *Registry) Provider(name string) (plugin.Provider, bool) {
 	}
 
 	return nil, false
+}
+
+// recredentialEvery is the least time between two resolutions of one
+// provider's credential, so a credential that is simply wrong does not rerun
+// its command on every call.
+const recredentialEvery = time.Minute
+
+// Recredential resolves the named provider's credential again from its source
+// and hands it to the provider, after the platform rejected the one it held.
+// It reports whether a retry can succeed: a credential is fresh now, or was
+// refreshed within recredentialEvery by a concurrent caller. False for a
+// provider with no credential or that cannot take a new one.
+func (r *Registry) Recredential(ctx context.Context, name string) (bool, error) {
+	var e *entry
+
+	for _, candidate := range r.entries {
+		if candidate.name == name {
+			e = candidate
+		}
+	}
+
+	if e == nil || e.credentials == nil {
+		return false, nil
+	}
+
+	recredentialer, ok := e.provider.(plugin.Recredentialer)
+	if !ok {
+		return false, nil
+	}
+
+	// One refresh at a time; a caller that waited on another's finds it done.
+	e.recredential.Lock()
+	defer e.recredential.Unlock()
+
+	if time.Since(e.recredentialed) < recredentialEvery {
+		return true, nil
+	}
+
+	credential, err := e.credentials.Resolve(ctx)
+	if err != nil {
+		return false, fmt.Errorf("resolving the credential of %s again: %w", name, err)
+	}
+
+	if err := recredentialer.Recredential(ctx, credential); err != nil {
+		return false, fmt.Errorf("handing %s its new credential: %w", name, err)
+	}
+
+	e.recredentialed = time.Now()
+
+	return true, nil
 }
 
 // Names returns every configured provider, enabled or not, in order.

@@ -256,6 +256,20 @@ func TestClassifyHTTP_NotFoundIsMarked(t *testing.T) {
 	}
 }
 
+// A 401 or 403 is a rejected credential, marked so dispatch can refresh it;
+// nothing else is.
+func TestClassifyHTTP_UnauthorizedIsMarked(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		if err := ClassifyHTTP(status, 0, errUnderlying); !errors.Is(err, ErrUnauthorized) {
+			t.Errorf("ClassifyHTTP(%d) = %v, want ErrUnauthorized", status, err)
+		}
+	}
+
+	if err := ClassifyHTTP(http.StatusBadRequest, 0, errUnderlying); errors.Is(err, ErrUnauthorized) {
+		t.Errorf("ClassifyHTTP(400) = %v, marked ErrUnauthorized", err)
+	}
+}
+
 // A 400 is infrastructure-shaped but must never be retried, which is why
 // Retryable is independent of Class rather than derived from it.
 func TestClassifyHTTP_BadRequestIsNotRetryable(t *testing.T) {

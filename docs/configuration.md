@@ -298,9 +298,14 @@ credentials {
 }
 ```
 
-**Resolution:** once, at startup, for every provider including disabled ones.
-The plugin receives bytes and never learns the source. A rotated secret takes
-effect on the next restart.
+**Resolution:** once at startup, for every provider including disabled ones.
+The plugin receives bytes and never learns the source. When the platform
+rejects the credential (HTTP 401 or 403), the source is resolved again: the
+file re-read, the variable re-read, the command re-run. The provider rebuilds
+its client from the result, and the call is made once more. A source is
+re-resolved at most once a minute per provider, so a credential that is
+simply wrong does not rerun its command on every call. An expired session
+token or a rotated secret therefore takes effect without a restart.
 
 | Source | Behaviour |
 |---|---|

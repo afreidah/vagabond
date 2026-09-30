@@ -105,7 +105,7 @@ func (p *Provider) call(ctx context.Context, method, url string, payload, out an
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := p.http.Do(req)
+	resp, err := p.http.Load().Do(req)
 	if err != nil {
 		return plugin.Infrastructure(fmt.Errorf("%s %s: %w", method, url, err))
 	}

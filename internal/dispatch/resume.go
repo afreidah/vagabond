@@ -76,7 +76,7 @@ func (d *Dispatcher) resume(ctx context.Context, rec *execution.Record) {
 		return
 	}
 
-	status, err := provider.Status(ctx, rec.ID)
+	status, err := d.status(ctx, provider, rec.ID)
 	if err != nil {
 		run.failed(ctx, plugin.Infrastructure(err))
 

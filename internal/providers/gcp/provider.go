@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
@@ -44,7 +45,7 @@ const namePrefix = "vagabond-"
 type Provider struct {
 	name string
 	cfg  *Config
-	http *http.Client
+	http atomic.Pointer[http.Client] // swapped whole when the credential is refreshed
 
 	runURL  string
 	logsURL string
@@ -71,13 +72,30 @@ func New(
 		})
 	}
 
-	return &Provider{
+	p := &Provider{
 		name:    name,
 		cfg:     cfg,
-		http:    client,
 		runURL:  runEndpoint,
 		logsURL: loggingEndpoint,
-	}, diags
+	}
+	p.http.Store(client)
+
+	return p, diags
+}
+
+// Recredential rebuilds the HTTP client from a key resolved again, after
+// Google rejected the one it held, as a rotated or revoked key is. The client
+// fetches its tokens on the context it was built with, so it is built on one
+// that outlives the call that asked for the refresh.
+func (p *Provider) Recredential(ctx context.Context, credential []byte) error {
+	client, err := newHTTPClient(context.WithoutCancel(ctx), credential)
+	if err != nil {
+		return err
+	}
+
+	p.http.Store(client)
+
+	return nil
 }
 
 // Name returns the routing identifier.

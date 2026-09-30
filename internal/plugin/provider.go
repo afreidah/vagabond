@@ -140,6 +140,14 @@ type Releaser interface {
 	Release(ctx context.Context, id execution.ID) error
 }
 
+// Recredentialer is implemented by providers that hold a credential. After a
+// call fails with ErrUnauthorized, the credential is resolved again from its
+// source and handed over, and the provider rebuilds whatever signs its
+// requests from it.
+type Recredentialer interface {
+	Recredential(ctx context.Context, credential []byte) error
+}
+
 // -------------------------------------------------------------------------
 // UNSUPPORTED OPERATIONS
 // -------------------------------------------------------------------------

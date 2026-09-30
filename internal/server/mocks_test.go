@@ -90,6 +90,21 @@ func (mr *MockserverRegistryMockRecorder) Provider(name any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Provider", reflect.TypeOf((*MockserverRegistry)(nil).Provider), name)
 }
 
+// Recredential mocks base method.
+func (m *MockserverRegistry) Recredential(ctx context.Context, name string) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Recredential", ctx, name)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Recredential indicates an expected call of Recredential.
+func (mr *MockserverRegistryMockRecorder) Recredential(ctx, name any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Recredential", reflect.TypeOf((*MockserverRegistry)(nil).Recredential), ctx, name)
+}
+
 // Refresh mocks base method.
 func (m *MockserverRegistry) Refresh(ctx context.Context) error {
 	m.ctrl.T.Helper()

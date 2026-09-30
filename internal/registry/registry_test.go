@@ -18,6 +18,7 @@ package registry
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -619,5 +620,158 @@ provider "bad-secret" {
 		if !strings.Contains(reported, want) {
 			t.Errorf("diagnostics stopped before %q:\n%s", want, reported)
 		}
+	}
+}
+
+// -------------------------------------------------------------------------
+// RECREDENTIAL
+// -------------------------------------------------------------------------
+
+// recredentialProvider records every credential it is handed, or refuses them
+// all with err.
+type recredentialProvider struct {
+	failingProvider
+
+	handed [][]byte
+	err    error
+}
+
+// Recredential records credential, or refuses it.
+func (p *recredentialProvider) Recredential(_ context.Context, credential []byte) error {
+	if p.err != nil {
+		return p.err
+	}
+
+	p.handed = append(p.handed, credential)
+
+	return nil
+}
+
+// withKeyFile builds a registry of one provider reading its credential from a
+// file holding "old", swaps in p, and returns the file's path.
+func withKeyFile(t *testing.T, p *recredentialProvider) (*Registry, string) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "key")
+	writeKey(t, path, "old")
+
+	r := build(t, `
+provider "cloud" {
+  type = "fake-container"
+  credentials { file = "`+path+`" }
+}
+`)
+	p.name = "cloud"
+	r.entries[0].provider = p
+
+	return r, path
+}
+
+// writeKey replaces the key file's contents.
+func writeKey(t *testing.T, path, key string) {
+	t.Helper()
+
+	if err := os.WriteFile(path, []byte(key), 0o600); err != nil {
+		t.Fatalf("writing the key: %v", err)
+	}
+}
+
+// A rejected credential is read again from its source and handed over. A
+// second rejection within recredentialEvery retries on that one rather than
+// reading the source again.
+func TestRecredential_ResolvesAgainAndHandsOver(t *testing.T) {
+	t.Parallel()
+
+	p := &recredentialProvider{}
+	r, path := withKeyFile(t, p)
+
+	writeKey(t, path, "new")
+
+	if retry, err := r.Recredential(t.Context(), "cloud"); !retry || err != nil {
+		t.Fatalf("Recredential() = %t, %v; want a retry", retry, err)
+	}
+
+	writeKey(t, path, "newer")
+
+	if retry, err := r.Recredential(t.Context(), "cloud"); !retry || err != nil {
+		t.Fatalf("second Recredential() = %t, %v; want a retry", retry, err)
+	}
+
+	if diff := cmp.Diff([][]byte{[]byte("new")}, p.handed); diff != "" {
+		t.Errorf("credentials handed over (-want +got):\n%s", diff)
+	}
+}
+
+// With nothing to refresh, a caller is told not to retry, and nothing fails.
+func TestRecredential_NothingToRefresh(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		src  string
+		name string
+	}{
+		"unknown provider": {
+			src:  `provider "cloud" { type = "fake-container" }`,
+			name: "elsewhere",
+		},
+		"no credentials block": {
+			src:  `provider "cloud" { type = "fake-container" }`,
+			name: "cloud",
+		},
+		"cannot take a credential": {
+			src: `
+provider "cloud" {
+  type = "fake-container"
+  credentials { env = "PATH" }
+}
+`,
+			name: "cloud",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			retry, err := build(t, tc.src).Recredential(t.Context(), tc.name)
+			if retry || err != nil {
+				t.Errorf("Recredential() = %t, %v; want no retry and no error", retry, err)
+			}
+		})
+	}
+}
+
+// A source that can no longer be read fails the refresh, naming the provider.
+func TestRecredential_SourceUnreadable(t *testing.T) {
+	t.Parallel()
+
+	p := &recredentialProvider{}
+	r, path := withKeyFile(t, p)
+
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("removing the key: %v", err)
+	}
+
+	retry, err := r.Recredential(t.Context(), "cloud")
+	if retry || err == nil || !strings.Contains(err.Error(), "cloud") {
+		t.Errorf("Recredential() = %t, %v; want no retry and an error naming the provider", retry, err)
+	}
+
+	if len(p.handed) != 0 {
+		t.Errorf("handed over %d credentials, want none", len(p.handed))
+	}
+}
+
+// A provider that refuses the new credential fails the refresh with its
+// error.
+func TestRecredential_ProviderRefuses(t *testing.T) {
+	t.Parallel()
+
+	unusable := errors.New("unusable key")
+	r, _ := withKeyFile(t, &recredentialProvider{err: unusable})
+
+	retry, err := r.Recredential(t.Context(), "cloud")
+	if retry || !errors.Is(err, unusable) {
+		t.Errorf("Recredential() = %t, %v; want no retry and the provider's error", retry, err)
 	}
 }

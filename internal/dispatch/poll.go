@@ -94,15 +94,19 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 // -------------------------------------------------------------------------
 
 // submit hands the task to provider: to the members admission passed, for a
-// provider made of members, or plainly otherwise.
-func submit(
+// provider made of members, or plainly otherwise. The execution ID is the
+// submission's idempotency key, so retrying it on a refreshed credential is
+// safe.
+func (d *Dispatcher) submit(
 	ctx context.Context, provider plugin.Provider, id execution.ID, task *job.Task, members []string,
 ) (plugin.Submission, error) {
-	if ms, ok := provider.(plugin.MemberSubmitter); ok && len(members) > 0 {
-		return ms.SubmitTo(ctx, id, task, members)
-	}
+	return authorized(ctx, d, provider, func() (plugin.Submission, error) {
+		if ms, ok := provider.(plugin.MemberSubmitter); ok && len(members) > 0 {
+			return ms.SubmitTo(ctx, id, task, members)
+		}
 
-	return provider.Submit(ctx, id, task)
+		return provider.Submit(ctx, id, task)
+	})
 }
 
 // answer is how an execution ended: the provider's terminal state, which is
@@ -126,7 +130,7 @@ func (d *Dispatcher) execute(
 		Task: task.Name, Provider: provider.Name(), ID: id, Attempt: run.rec.Attempt,
 	}
 
-	submission, err := submit(ctx, provider, id, task, members)
+	submission, err := d.submit(ctx, provider, id, task, members)
 	if err == nil {
 		// A plugin describing its own submission incoherently is our bug to
 		// fix, not a provider outage, so it is not sent onward.
@@ -193,7 +197,9 @@ func (d *Dispatcher) follow(
 		return answer{streamed: streamed}, err
 	}
 
-	result, err := provider.Result(ctx, id)
+	result, err := authorized(ctx, d, provider, func() (*execution.Result, error) {
+		return provider.Result(ctx, id)
+	})
 	run.finish(ctx, state, result)
 
 	if err != nil {
@@ -226,7 +232,8 @@ func (d *Dispatcher) release(provider plugin.Provider, id execution.ID) {
 	defer cancel()
 
 	if releaser, ok := provider.(plugin.Releaser); ok {
-		if err := releaser.Release(ctx, id); err != nil && !errors.Is(err, plugin.ErrUnknownExecution) {
+		err := authorizedErr(ctx, d, provider, func() error { return releaser.Release(ctx, id) })
+		if err != nil && !errors.Is(err, plugin.ErrUnknownExecution) {
 			return
 		}
 	}
@@ -244,7 +251,7 @@ func (d *Dispatcher) abandon(provider plugin.Provider, id execution.ID) {
 		abandonTimeout)
 	defer cancel()
 
-	_ = provider.Cancel(ctx, id)
+	_ = authorizedErr(ctx, d, provider, func() error { return provider.Cancel(ctx, id) })
 }
 
 // watch polls until the execution reaches a state it never leaves, recording
@@ -262,7 +269,7 @@ func (d *Dispatcher) watch(
 			return "", err
 		}
 
-		status, err := provider.Status(ctx, run.rec.ID)
+		status, err := d.status(ctx, provider, run.rec.ID)
 		if err != nil {
 			return "", err
 		}
