@@ -339,8 +339,9 @@ func (f *File) validate() hcl.Diagnostics {
 		diags = append(diags, &hcl.Diagnostic{
 			Severity: hcl.DiagError,
 			Summary:  "Empty store DSN",
-			Detail: "The store block names no database. Remove the block to keep " +
-				"the ledger in memory.",
+			Detail: "The store block names no database. Set dsn to a Postgres or " +
+				"CockroachDB connection string, or run the server with -dev to keep " +
+				"everything in memory.",
 		})
 	}
 
