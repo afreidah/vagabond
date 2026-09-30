@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	sdkaws "github.com/aws/aws-sdk-go-v2/aws"
@@ -45,7 +46,8 @@ type Provider struct {
 	plugin.CancelNotSupported
 
 	name   string
-	client *lambda.Client
+	cfg    *Config
+	client atomic.Pointer[lambda.Client] // swapped whole when the credential is refreshed
 }
 
 // New builds a Lambda provider from its configuration block.
@@ -66,7 +68,23 @@ func New(
 		})
 	}
 
-	return &Provider{name: name, client: client}, diags
+	p := &Provider{name: name, cfg: cfg}
+	p.client.Store(client)
+
+	return p, diags
+}
+
+// Recredential rebuilds the Lambda client from a credential resolved again,
+// after AWS rejected the one it held, as an expired session token is.
+func (p *Provider) Recredential(ctx context.Context, credential []byte) error {
+	client, err := newClient(ctx, p.cfg, credential)
+	if err != nil {
+		return err
+	}
+
+	p.client.Store(client)
+
+	return nil
 }
 
 // Name returns the routing identifier.
@@ -105,7 +123,7 @@ func (p *Provider) Submit(
 
 	started := time.Now()
 
-	out, err := p.client.Invoke(ctx, &lambda.InvokeInput{
+	out, err := p.client.Load().Invoke(ctx, &lambda.InvokeInput{
 		FunctionName:   sdkaws.String(function),
 		Payload:        payload,
 		InvocationType: types.InvocationTypeRequestResponse,

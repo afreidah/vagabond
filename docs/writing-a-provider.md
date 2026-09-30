@@ -203,6 +203,7 @@ is absent.
 |---|---|---|---|
 | `LogStreamer` | `StreamLogs(ctx context.Context, id execution.ID, w io.Writer) error` | Dispatch | Alongside the poll loop, when the caller asked for live output |
 | `Releaser` | `Release(ctx context.Context, id execution.ID) error` | Dispatch; the release loop | After `Result` (or after a synchronous `Submit`); for every other ending, once the execution is over |
+| `Recredentialer` | `Recredential(ctx context.Context, credential []byte) error` | Registry, for dispatch | After a call failed with `ErrUnauthorized`, with the `credentials` block resolved again |
 | `Live` | `LiveCapabilities() (Capabilities, error)` | Registry | On every plan, in place of the refreshed snapshot |
 | `MemberSubmitter` | `SubmitTo(ctx context.Context, id execution.ID, task *job.Task, members []string) (Submission, error)` | Dispatch | In place of `Submit`, when admission passed specific members |
 
@@ -233,6 +234,17 @@ is absent.
 - Idempotent: it may be called more than once for an execution. Return nil or
   `ErrUnknownExecution` when there is nothing left; any other error is retried
   on the loop's next pass.
+
+### `Recredentialer`
+
+- For a provider that holds a credential. Rebuild whatever signs requests from
+  the new bytes and swap it in atomically; calls in flight may still use the
+  old one.
+- The context is the call that was rejected. Anything built on it that
+  outlives the call, such as a token source, needs `context.WithoutCancel`.
+- Return an error when the bytes are unusable, and keep the old client.
+- Classify 401 and 403 through `ClassifyHTTP`, which marks them
+  `ErrUnauthorized`; that is what triggers the refresh.
 
 ### `Live`
 
@@ -319,6 +331,7 @@ is the default mapping for HTTP APIs. The error text is prefixed
 |---|---|---|---|
 | 408, 429 | infrastructure | passed through | |
 | 404 | internal | 0 | `plugin.ErrNotFound` |
+| 401, 403 | internal | 0 | `plugin.ErrUnauthorized` |
 | other 4xx | internal | 0 | |
 | 5xx | infrastructure | passed through | |
 | anything else | infrastructure | 0 | |
@@ -331,6 +344,7 @@ A platform that uses a status unusually builds the `*Error` directly.
 |---|---|---|
 | `plugin.ErrProvider` | Matches any `*plugin.Error` via `errors.Is` | Callers that only need "a provider call failed" |
 | `plugin.ErrNotFound` | `ClassifyHTTP` saw a 404 | The plugin, to translate into `ErrUnknownExecution` or success |
+| `plugin.ErrUnauthorized` | `ClassifyHTTP` saw a 401 or 403: the credential was rejected | Dispatch: re-resolves the credential through `Recredential` and retries the call once |
 | `plugin.ErrUnknownExecution` | The platform has no record of the execution | Quota reaper: drops the reservation |
 | `plugin.ErrUnsupported` | The platform has no such operation | Quota reaper: charges the reservation |
 | `plugin.ErrInvalidSubmission` | `Submission.Validate` failed | Dispatch |

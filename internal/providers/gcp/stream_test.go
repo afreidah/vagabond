@@ -165,9 +165,9 @@ func TestStreamLogsSendsAnArrayBody(t *testing.T) {
 	p := &Provider{
 		name:    "gcp",
 		cfg:     &Config{Project: "test-project", Region: "us-central1"},
-		http:    server.Client(),
 		logsURL: server.URL,
 	}
+	p.http.Store(server.Client())
 
 	var out bytes.Buffer
 

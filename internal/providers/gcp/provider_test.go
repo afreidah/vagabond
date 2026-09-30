@@ -73,12 +73,13 @@ func newFakeGoogle(t *testing.T) (*fakeGoogle, *Provider) {
 			Region:                "us-central1",
 			RuntimeServiceAccount: "runtime@test-project.iam.gserviceaccount.com",
 		},
-		// The real client signs requests; a test server needs no auth, and
-		// swapping it here is the point of the endpoints being fields.
-		http:    server.Client(),
 		runURL:  server.URL,
 		logsURL: server.URL,
 	}
+
+	// The real client signs requests; a test server needs no auth, and
+	// swapping it here is the point of the endpoints being fields.
+	p.http.Store(server.Client())
 
 	return g, p
 }
@@ -560,6 +561,70 @@ func TestCancelIsIdempotent(t *testing.T) {
 	// Nothing registered, so the delete 404s.
 	if err := p.Cancel(t.Context(), newID(t)); err != nil {
 		t.Errorf("cancelling a job that is already gone failed: %v", err)
+	}
+}
+
+// -------------------------------------------------------------------------
+// CREDENTIALS
+// -------------------------------------------------------------------------
+
+// serviceAccountKey is shaped like a key file. The private key is only read
+// when a token is fetched, which nothing here does.
+//
+//nolint:gosec // shaped like a key, holds no secret
+const serviceAccountKey = `{
+  "type": "service_account",
+  "client_email": "dispatcher@test-project.iam.gserviceaccount.com",
+  "private_key": "unused"
+}`
+
+// testConfig is a complete config block for New.
+const testConfig = `
+project                 = "test-project"
+region                  = "us-central1"
+runtime_service_account = "runtime@test-project.iam.gserviceaccount.com"
+`
+
+// A usable key builds a provider against the real endpoints, holding a
+// client.
+func TestNew_BuildsWithAKey(t *testing.T) {
+	t.Parallel()
+
+	p, diags := New(t.Context(), "gcp-cloud-run", body(t, testConfig), []byte(serviceAccountKey))
+	if diags.HasErrors() {
+		t.Fatalf("New() failed: %s", diags.Error())
+	}
+
+	if p.Name() != "gcp-cloud-run" || p.runURL != runEndpoint || p.logsURL != loggingEndpoint || p.http.Load() == nil {
+		t.Errorf("New() = %+v, want the name, the real endpoints and a client", p)
+	}
+}
+
+// A key that cannot be parsed is reported against the provider, since the
+// alternative is a rejection on the first call.
+func TestNew_RejectsAnUnusableKey(t *testing.T) {
+	t.Parallel()
+
+	_, diags := New(t.Context(), "gcp-cloud-run", body(t, testConfig), []byte(`not json`))
+	if !diags.HasErrors() || !strings.Contains(diags.Error(), "Unusable credential") {
+		t.Errorf("diagnostics = %v, want an unusable credential", diags)
+	}
+}
+
+// A refreshed key replaces the client; one that cannot be parsed leaves the
+// client in place.
+func TestRecredential_ReplacesTheClient(t *testing.T) {
+	t.Parallel()
+
+	_, p := newFakeGoogle(t)
+	before := p.http.Load()
+
+	if err := p.Recredential(t.Context(), []byte(`not json`)); err == nil || p.http.Load() != before {
+		t.Fatalf("Recredential(garbage) = %v, and the client changed: %v", err, p.http.Load() != before)
+	}
+
+	if err := p.Recredential(t.Context(), []byte(serviceAccountKey)); err != nil || p.http.Load() == before {
+		t.Errorf("Recredential() = %v, client replaced: %v; want it replaced", err, p.http.Load() != before)
 	}
 }
 

@@ -25,9 +25,6 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobs"
 	"github.com/afreidah/vagabond/internal/nodes"
-	"github.com/afreidah/vagabond/internal/plugin"
-	"github.com/afreidah/vagabond/internal/quota"
-	"github.com/afreidah/vagabond/internal/scheduler"
 )
 
 // -------------------------------------------------------------------------
@@ -49,8 +46,7 @@ const (
 // admission inputs, plugins by name, which namespaces exist, and refreshing
 // what providers can do.
 type serverRegistry interface {
-	Inputs(namespace string, usage func(namespace, provider string) (total, share quota.PoolUsage)) []scheduler.Input
-	Provider(name string) (plugin.Provider, bool)
+	dispatch.Registry
 	HasNamespace(namespace string) bool
 	Refresh(ctx context.Context) error
 }

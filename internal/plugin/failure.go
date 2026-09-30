@@ -89,6 +89,11 @@ var ErrProvider = errors.New("provider operation failed")
 // that does not exist from a request that failed.
 var ErrNotFound = errors.New("not found")
 
+// ErrUnauthorized marks a 401 or 403 from ClassifyHTTP: the platform rejected
+// the credential. Dispatch re-resolves the credential and tries once more,
+// since one that expired is the common cause.
+var ErrUnauthorized = errors.New("unauthorized")
+
 // Error is a failed provider operation, classified.
 //
 // Retryable is independent of Class rather than derived from it. A 429 and a
@@ -221,6 +226,9 @@ func ClassifyHTTP(status int, retryAfter time.Duration, err error) *Error {
 
 	case status == http.StatusNotFound:
 		return Internal(fmt.Errorf("%w: %w", ErrNotFound, wrapped))
+
+	case status == http.StatusUnauthorized, status == http.StatusForbidden:
+		return Internal(fmt.Errorf("%w: %w", ErrUnauthorized, wrapped))
 
 	case status >= 400 && status < 500:
 		return Internal(wrapped)

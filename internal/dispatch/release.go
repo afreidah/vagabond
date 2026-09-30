@@ -98,7 +98,7 @@ func (d *Dispatcher) releaseLeftover(ctx context.Context, rec *execution.Record)
 	// A recorded result says the execution is over. Without one, dispatch
 	// stopped following it, so the provider is asked before it is released.
 	if rec.Result == nil {
-		status, err := provider.Status(ctx, rec.ID)
+		status, err := d.status(ctx, provider, rec.ID)
 
 		switch {
 		case errors.Is(err, plugin.ErrUnknownExecution):
@@ -110,7 +110,8 @@ func (d *Dispatcher) releaseLeftover(ctx context.Context, rec *execution.Record)
 		}
 	}
 
-	if err := releaser.Release(ctx, rec.ID); err != nil && !errors.Is(err, plugin.ErrUnknownExecution) {
+	err = authorizedErr(ctx, d, provider, func() error { return releaser.Release(ctx, rec.ID) })
+	if err != nil && !errors.Is(err, plugin.ErrUnknownExecution) {
 		return false, fmt.Errorf("releasing %s on %s: %w", rec.ID, rec.Provider, err)
 	}
 
@@ -129,14 +130,16 @@ func (d *Dispatcher) reconcileLost(ctx context.Context, rec *execution.Record) e
 		return d.resolveLost(ctx, rec, execution.StateFailed, nil)
 	}
 
-	status, err := provider.Status(ctx, rec.ID)
+	status, err := d.status(ctx, provider, rec.ID)
 
 	switch {
 	case errors.Is(err, plugin.ErrUnknownExecution):
 		return d.resolveLost(ctx, rec, execution.StateFailed, nil)
 
 	case err == nil && status.State.Terminal():
-		result, resultErr := provider.Result(ctx, rec.ID)
+		result, resultErr := authorized(ctx, d, provider, func() (*execution.Result, error) {
+			return provider.Result(ctx, rec.ID)
+		})
 		if resultErr == nil {
 			return d.resolveLost(ctx, rec, status.State, result)
 		}

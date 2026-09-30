@@ -35,7 +35,7 @@ func (d *Dispatcher) resolve(ctx context.Context, h ledger.Held) (ledger.Verdict
 		return ledger.Keep, 0
 	}
 
-	status, err := provider.Status(ctx, h.ID)
+	status, err := d.status(ctx, provider, h.ID)
 
 	switch {
 	case errors.Is(err, plugin.ErrUnknownExecution):

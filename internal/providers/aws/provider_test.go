@@ -85,7 +85,10 @@ func newTestProvider(t *testing.T, f *fakeLambda) *Provider {
 		HTTPClient:   srv.Client(),
 	})
 
-	return &Provider{name: "aws-lambda", client: client}
+	p := &Provider{name: "aws-lambda"}
+	p.client.Store(client)
+
+	return p
 }
 
 // functionTask builds a task from a driver config fragment.
@@ -343,5 +346,46 @@ func TestStatus_IsUnsupported(t *testing.T) {
 
 	if _, err := p.Status(t.Context(), newID(t)); !errors.Is(err, plugin.ErrUnsupported) {
 		t.Errorf("Status() = %v, want ErrUnsupported", err)
+	}
+}
+
+// A config block and a credential build a provider holding a client; a
+// credential that cannot be read is reported against the provider.
+func TestNew_BuildsWithACredential(t *testing.T) {
+	t.Parallel()
+
+	credential := []byte(`{"Version": 1, "AccessKeyId": "AKIA", "SecretAccessKey": "s", "SessionToken": "t"}`)
+
+	p, diags := New(t.Context(), "aws-lambda", body(t, `region = "us-east-1"`), credential)
+	if diags.HasErrors() {
+		t.Fatalf("New() failed: %s", diags.Error())
+	}
+
+	if p.Name() != "aws-lambda" || p.client.Load() == nil {
+		t.Errorf("New() = %+v, want the name and a client", p)
+	}
+
+	if _, diags := New(t.Context(), "aws-lambda", body(t, `region = "us-east-1"`), []byte(`not json`)); !diags.HasErrors() {
+		t.Error("an unreadable credential was accepted")
+	}
+}
+
+// A refreshed credential replaces the client; one that cannot be read leaves
+// the client in place.
+func TestRecredential_ReplacesTheClient(t *testing.T) {
+	t.Parallel()
+
+	p := newTestProvider(t, &fakeLambda{})
+	p.cfg = &Config{Region: "us-east-1"}
+	before := p.client.Load()
+
+	if err := p.Recredential(t.Context(), []byte(`not json`)); err == nil || p.client.Load() != before {
+		t.Fatalf("Recredential(garbage) = %v, and the client changed: %v", err, p.client.Load() != before)
+	}
+
+	fresh := []byte(`{"Version": 1, "AccessKeyId": "AKIANEW", "SecretAccessKey": "new", "SessionToken": "t"}`)
+
+	if err := p.Recredential(t.Context(), fresh); err != nil || p.client.Load() == before {
+		t.Errorf("Recredential() = %v, client replaced: %v; want it replaced", err, p.client.Load() != before)
 	}
 }

@@ -384,7 +384,7 @@ within the task's retry budget and stops on `internal` ones; see
 | HTTP 404 on the tasks call | internal | no | Wraps `ErrNotFound` |
 | HTTP 404 on `Cancel` or `Release` | none | | Returns `nil` |
 | HTTP 400, e.g. a CPU and memory pairing Cloud Run does not offer | internal | no | Google's `error.message` is included |
-| HTTP 403, missing IAM permission or disabled API | internal | no | |
+| HTTP 401 or 403, rejected key, missing IAM permission or disabled API | internal | no | Wraps `ErrUnauthorized`: the key is resolved again and the call made once more |
 | HTTP 409, job name already exists | internal | no | |
 | Response body is not the expected JSON | internal | no | |
 | Task names no `image` | internal | no | Raised before any call |

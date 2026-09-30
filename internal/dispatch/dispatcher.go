@@ -40,6 +40,7 @@ import (
 type Registry interface {
 	Inputs(namespace string, usage func(namespace, provider string) (total, share quota.PoolUsage)) []scheduler.Input
 	Provider(name string) (plugin.Provider, bool)
+	Recredential(ctx context.Context, name string) (bool, error)
 }
 
 // Ledger is the account every dispatch charges, declared here for the same
