@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 env:
-  GOLANGCI_VERSION: v2.13.0
+  GOLANGCI_VERSION: v2.14.0
 
 jobs:
   # ---------------------------------------------------------------------------
