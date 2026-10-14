@@ -10,7 +10,7 @@
 # so the deployment defines its own.
 # -------------------------------------------------------------------------------
 
-FROM --platform=$BUILDPLATFORM golang:1.27.0-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine AS builder
 
 ARG VERSION=dev
 ARG COMMIT=unknown
