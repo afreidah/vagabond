@@ -1,6 +1,6 @@
 module github.com/afreidah/vagabond
 
-go 1.27.0
+go 1.27.2
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.1
@@ -182,7 +182,7 @@ require (
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20260824195058-e88cd73687aa // indirect
 	golang.org/x/mod v0.41.0 // indirect
-	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260908163034-4bcc4b2ee518 // indirect

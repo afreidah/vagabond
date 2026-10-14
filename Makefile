@@ -19,7 +19,7 @@ GOLANGCI_LINT  := $(shell command -v golangci-lint 2>/dev/null || echo $(GOBIN)/
 MOCKGEN        := $(shell command -v mockgen 2>/dev/null || echo $(GOBIN)/mockgen)
 
 # Pinned so that a lint failure is a code change rather than a tool upgrade.
-GOLANGCI_VERSION ?= v2.13.0
+GOLANGCI_VERSION ?= v2.14.0
 MOCKGEN_VERSION  ?= v0.6.0
 
 # Injected into internal/version at link time, so a built binary reports what it
