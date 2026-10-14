@@ -109,7 +109,7 @@ func SearchPath() []string {
 func stat(path, source string) (string, error) {
 	clean := filepath.Clean(path)
 
-	if _, err := os.Stat(clean); err != nil {
+	if _, err := os.Stat(clean); err != nil { //nolint:gosec // the operator named this path
 		return "", fmt.Errorf("%w: %s names %s, which cannot be read: %w",
 			ErrNotFound, source, path, err)
 	}
