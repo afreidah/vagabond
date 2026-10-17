@@ -9,7 +9,9 @@
   <br>
 </p>
 
-<br>
+<p align="center">
+  <strong><a href="https://vagabond.munchbox.cc">Project website</a></strong>
+</p>
 
 Vagabond is a compute broker for short-lived, stateless workloads. A job is
 described once in Nomad-style HCL, with parameters, constraints, and resources;
@@ -25,9 +27,7 @@ AWS Fargate, Fly Machines, or Cloudflare Workers for edge-sized tasks.
 Your own machines are a backend too. Run `vagabond agent` on one: a lightweight
 process, on bare metal or in a container, that connects to the server and joins
 a named pool of nodes. The server sends it workloads, which it runs on the
-machine's containerd, as plain containers or as Firecracker microVMs where
-stronger isolation is wanted, held to whatever CPU and memory you allow the
-agent.
+machine's containerd, held to whatever CPU and memory you allow the agent.
 
 Every decision is explainable: `job plan` shows each backend with its score, or
 the rule it failed and why. Vagabond tracks what every run uses, so a backend
@@ -41,16 +41,40 @@ Postgres or CockroachDB store, so executions survive restarts and a failed
 backend is routed around. It is an homage to HashiCorp Nomad, meant to feel
 familiar to a Nomad user, but it does not depend on Nomad.
 
+## Highlights
+
+- **Placement you can read.** `job plan` lists every backend with its score,
+  or with the rule it failed and why. Admission never calls a provider, so a
+  plan works offline and reserves nothing.
+- **Free-tier aware by default.** A quota ledger tracks what every run uses
+  against each provider's free allowance, with optional per-namespace shares.
+  `max_cost_usd` defaults to 0, so a job never lands somewhere that would bill
+  it unless it opts in.
+- **Cloud and your own hardware behind one interface.** Cloud Run Jobs, AWS
+  Lambda and your own containerd nodes are all just backends. Tiers rank them
+  in the order you prefer (for example, homelab first and cloud as overflow),
+  either strictly or weighted into the score.
+- **Built to survive failure.** Dispatches are leased and stored in Postgres or
+  CockroachDB. A server picks up the work a dead process left behind, routes
+  around a backend that stops answering, and refreshes a rejected credential
+  instead of needing a restart.
+- **Feels like Nomad.** HCL job files, `register` / `dispatch` / `status`,
+  parameterized jobs with `meta_required`, and a server that agents dial back
+  to, with no dependency on Nomad itself.
+
 ## Features
 
 - Nomad-style HCL job files, validated with line-and-column diagnostics.
 - Admission: 13 checks across policy, availability, capability and quota decide
   which providers can run a task. `max_cost_usd` defaults to 0, so work stays
   on free capacity unless a job opts in to paying.
-- Ranking: survivors are scored and one is selected. `job plan` prints every
-  provider with its score or the rule it failed.
+- Ranking: survivors are scored and one is selected. Provider tiers express
+  preference, either `strict` (a lower tier always wins) or `weighted` (tier
+  averaged into the score). `job plan` prints every provider with its score or
+  the rule it failed.
 - Dispatch: submit, watch, collect output, reroute around
-  providers that fail to answer, release what the execution left behind.
+  providers that fail to answer, release what the execution left behind. A
+  401 or 403 makes the provider re-resolve its credentials and retry once.
 - Quota ledger: free-tier pools per provider, with optional per-namespace
   shares. Reservations are atomic across processes; settlement uses what the
   platform billed when it reports it.
@@ -222,7 +246,8 @@ Details: [architecture.md](docs/architecture.md).
 | Google Cloud Run Jobs | [providers/cloud-run.md](docs/providers/cloud-run.md) |
 | AWS Lambda | [providers/lambda.md](docs/providers/lambda.md) |
 | Writing a provider plugin | [writing-a-provider.md](docs/writing-a-provider.md) |
-| Coding conventions | [style-guide.md](docs/style-guide.md) || Build, test, contribute | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| Coding conventions | [style-guide.md](docs/style-guide.md) |
+| Build, test, contribute | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## Roadmap
 
