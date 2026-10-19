@@ -82,6 +82,8 @@ enableRobotsTXT = true
   # Social card for pages with no image of their own. With one set, links
   # shared to Slack, X or LinkedIn get the large-image card.
   images = ["og-card.png"]
+  # Cloudflare Web Analytics site token (munchbox.cc); public, see custom/head-end.html.
+  webAnalyticsToken = "77f2d4d9a4724baeb678a41619d533c5"
 
   [params.navbar]
     displayTitle = false
