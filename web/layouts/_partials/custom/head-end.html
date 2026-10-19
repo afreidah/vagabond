@@ -1,4 +1,13 @@
 {{- /*
+  Cloudflare Web Analytics beacon. The edge does not inject it despite
+  auto_install, so it is emitted here. The token names the site and is public.
+  Production builds only, so a local hugo server stays out of the dataset.
+*/ -}}
+{{- if and hugo.IsProduction site.Params.webAnalyticsToken }}
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "{{ site.Params.webAnalyticsToken }}"}'></script>
+{{- end }}
+
+{{- /*
   Structured data for search engines: the project as software on the home
   page, each documentation page as a technical article.
 */ -}}
