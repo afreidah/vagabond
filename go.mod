@@ -15,7 +15,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/cli v1.1.7
 	github.com/hashicorp/go-cleanhttp v0.5.2
-	github.com/hashicorp/go-rootcerts v1.0.2
+	github.com/hashicorp/go-rootcerts v1.1.0
 	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/hashicorp/yamux v0.1.2
 	github.com/jackc/pgx/v5 v5.11.0
