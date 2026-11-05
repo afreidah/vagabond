@@ -44,21 +44,9 @@ Logs Options:
 
 // Run reads the execution's stored output and prints it to stdout.
 func (c *ExecutionLogsCommand) Run(args []string) int {
-	flags := c.FlagSet("execution logs")
-	c.clientFlags(flags)
-
-	if err := flags.Parse(args); err != nil {
+	client, ids := c.connect(c.FlagSet("execution logs"), args, oneArg("<id>"), c.Help())
+	if client == nil {
 		return ExitFailure
-	}
-
-	ids := flags.Args()
-	if len(ids) != 1 {
-		return c.Errorf("This command takes one argument: <id>\n\n%s", c.Help())
-	}
-
-	client, err := c.client()
-	if err != nil {
-		return c.Errorf("%s", err)
 	}
 
 	logs, err := client.Logs(context.Background(), ids[0])

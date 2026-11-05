@@ -582,6 +582,21 @@ func TestRefusal_ErrorReportsNaturalUnits(t *testing.T) {
 	}
 }
 
+// A paying job can take a pool past its limit, and what is left then is nothing
+// rather than a negative amount.
+func TestRefusal_ErrorFloorsWhatIsLeftAtZero(t *testing.T) {
+	l, _ := newLedger(t, midSeptember, Usage{fnCompute: 400_100 * gbSeconds})
+
+	err := l.Reserve(t.Context(), newID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, false)
+	if err == nil {
+		t.Fatal("Reserve() admitted an execution past the limit")
+	}
+
+	if want := "has 0 of 400000"; !strings.Contains(err.Error(), want) {
+		t.Errorf("Refusal.Error() = %q, want it to mention %q", err, want)
+	}
+}
+
 // -------------------------------------------------------------------------
 // CONCURRENCY
 // -------------------------------------------------------------------------

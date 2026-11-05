@@ -62,26 +62,14 @@ Register Options:
 // Run validates the job file and registers it, reporting whether it made a new
 // version.
 func (c *JobRegisterCommand) Run(args []string) int {
-	flags := c.FlagSet("job register")
-	c.clientFlags(flags)
-
-	if err := flags.Parse(args); err != nil {
+	client, paths := c.connect(c.FlagSet("job register"), args, oneArg("<path>"), c.Help())
+	if client == nil {
 		return ExitFailure
-	}
-
-	paths := flags.Args()
-	if len(paths) != 1 {
-		return c.Errorf("This command takes one argument: <path>\n\n%s", c.Help())
 	}
 
 	src, code := c.checkRegister(paths[0])
 	if src == nil {
 		return code
-	}
-
-	client, err := c.client()
-	if err != nil {
-		return c.Errorf("%s", err)
 	}
 
 	registered, err := client.Register(context.Background(), c.namespace, string(src))

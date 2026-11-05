@@ -65,13 +65,9 @@ func (c *JobValidateCommand) Run(args []string) int {
 	flags := c.FlagSet("job validate")
 	flags.Var(&meta, "meta", "job metadata as key=value, repeatable")
 
-	if err := flags.Parse(args); err != nil {
+	paths, ok := c.parse(flags, args, oneArg("<path>"), c.Help())
+	if !ok {
 		return ExitFailure
-	}
-
-	paths := flags.Args()
-	if len(paths) != 1 {
-		return c.Errorf("This command takes one argument: <path>\n\n%s", c.Help())
 	}
 
 	parsed, diags := c.parseJob(paths[0], meta)

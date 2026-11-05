@@ -172,7 +172,7 @@ func (r *Refusal) Error() string {
 
 	return fmt.Sprintf("%s has %g of %g %s left; this task needs %g",
 		owner,
-		r.Meter.Natural(r.Limit-r.Used), r.Meter.Natural(r.Limit), r.Meter.Unit(),
+		r.Meter.Natural(max(r.Limit-r.Used, 0)), r.Meter.Natural(r.Limit), r.Meter.Unit(),
 		r.Meter.Natural(r.Needed),
 	)
 }

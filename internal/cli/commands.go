@@ -18,7 +18,7 @@ import "github.com/hashicorp/cli"
 func Commands(meta *Meta) map[string]cli.CommandFactory {
 	return map[string]cli.CommandFactory{
 		"job": func() (cli.Command, error) {
-			return &JobCommand{Meta: meta}, nil
+			return &groupCommand{Meta: meta, synopsis: "Interact with jobs", help: jobHelp}, nil
 		},
 		"job validate": func() (cli.Command, error) {
 			return &JobValidateCommand{Meta: meta}, nil
@@ -45,13 +45,13 @@ func Commands(meta *Meta) map[string]cli.CommandFactory {
 			return &AgentCommand{Meta: meta}, nil
 		},
 		"node": func() (cli.Command, error) {
-			return &NodeCommand{Meta: meta}, nil
+			return &groupCommand{Meta: meta, synopsis: "Interact with agent nodes", help: nodeHelp}, nil
 		},
 		"node status": func() (cli.Command, error) {
 			return &NodeStatusCommand{Meta: meta}, nil
 		},
 		"execution": func() (cli.Command, error) {
-			return &ExecutionCommand{Meta: meta}, nil
+			return &groupCommand{Meta: meta, synopsis: "Interact with executions", help: executionHelp}, nil
 		},
 		"execution status": func() (cli.Command, error) {
 			return &ExecutionStatusCommand{Meta: meta}, nil

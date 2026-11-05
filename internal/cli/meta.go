@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/hashicorp/cli"
 
@@ -68,9 +69,65 @@ func (m *Meta) clientFlags(fs *flag.FlagSet) {
 	fs.StringVar(&m.namespace, "namespace", os.Getenv(namespaceEnv), "namespace")
 }
 
-// client returns a client for the server -address names.
-func (m *Meta) client() (*api.Client, error) {
-	return api.NewClient(m.address, nil)
+// connect parses a client command's flags and arguments and returns a client
+// for the server -address names. A command adds its own flags to fs first. A
+// nil client means the problem has been reported.
+func (m *Meta) connect(fs *flag.FlagSet, args []string, want operands, help string) (*api.Client, []string) {
+	m.clientFlags(fs)
+
+	got, ok := m.parse(fs, args, want, help)
+	if !ok {
+		return nil, nil
+	}
+
+	client, err := api.NewClient(m.address, nil)
+	if err != nil {
+		m.Ui.Error(err.Error())
+
+		return nil, nil
+	}
+
+	return client, got
+}
+
+// -------------------------------------------------------------------------
+// ARGUMENTS
+// -------------------------------------------------------------------------
+
+// operands is how many arguments a command takes, and how it says so.
+type operands struct {
+	min, max int
+	usage    string
+}
+
+// noArgs is a command that takes none.
+var noArgs = operands{usage: "no arguments."}
+
+// oneArg is a command that takes exactly the one argument name describes.
+func oneArg(name string) operands {
+	return operands{min: 1, max: 1, usage: "one argument: " + name}
+}
+
+// optionalArg is a command that takes the argument name describes, or none.
+func optionalArg(name string) operands {
+	return operands{max: 1, usage: "at most one argument: " + name}
+}
+
+// parse reads the flags and returns the arguments left, reporting a wrong
+// number of them with help. False means the problem has been reported.
+func (m *Meta) parse(fs *flag.FlagSet, args []string, want operands, help string) ([]string, bool) {
+	if err := fs.Parse(args); err != nil {
+		return nil, false
+	}
+
+	got := fs.Args()
+	if len(got) < want.min || len(got) > want.max {
+		m.Ui.Error(fmt.Sprintf("This command takes %s\n\n%s", want.usage, help))
+
+		return nil, false
+	}
+
+	return got, true
 }
 
 // apiFailure reports an error from the server and returns the failure exit
@@ -117,6 +174,18 @@ func (m *Meta) Errorf(format string, args ...any) int {
 	m.Ui.Error(fmt.Sprintf(format, args...))
 
 	return ExitFailure
+}
+
+// columns renders what write prints as aligned, tab-separated columns, with no
+// trailing newline.
+func columns(write func(w io.Writer)) string {
+	var b strings.Builder
+
+	w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
+	write(w)
+	_ = w.Flush()
+
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // uiWriter adapts a cli.Ui to io.Writer so the flag package can report through
