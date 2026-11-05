@@ -9,14 +9,15 @@
 # check.
 #
 # main is left out because a merge redeploys the server, and job dispatch exits
-# on the first status poll that fails.
+# on the first status poll that fails. Dependabot branches are left out because
+# GitHub CI checks them and each run spends free-tier quota.
 # -------------------------------------------------------------------------------
 
 name: Static analysis
 
 on:
   push:
-    branches-ignore: [main]
+    branches-ignore: [main, 'dependabot/**']
 
 jobs:
   static-analysis:
