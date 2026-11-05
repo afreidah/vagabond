@@ -91,6 +91,33 @@ func TestPlan_RanksByHeadroom(t *testing.T) {
 	}
 }
 
+// Usage already in the store reaches the API in the pool's own unit, and the
+// CLI's table shows it.
+func TestProviderStatus_ShowsStoredUsage(t *testing.T) {
+	h := newHarness(t, twoProviders)
+	h.spend("a", "runtime", 900*second, 1000*second)
+	client := h.serve()
+
+	list, err := client.Providers(context.Background())
+	if err != nil {
+		t.Fatalf("Providers() = %v", err)
+	}
+
+	spent, untouched := list.Providers[0].Pools[0], list.Providers[1].Pools[0]
+	if spent.Used != 900 || spent.Limit != 1000 || spent.FreePercent != 10 {
+		t.Errorf("a's pool = %+v, want 900 of 1000 used", spent)
+	}
+
+	if untouched.Used != 0 || untouched.FreePercent != 100 {
+		t.Errorf("b's pool = %+v, want it untouched", untouched)
+	}
+
+	code, stdout, stderr := run("provider", "status")
+	if code != cli.ExitSuccess || !strings.Contains(stdout, "900") || !strings.Contains(stdout, "10%") {
+		t.Errorf("provider status: exit %d\n%s%s", code, stdout, stderr)
+	}
+}
+
 // A pool with less left than the task needs rejects it by name, and a run of it
 // never ran.
 func TestPlan_PartlySpentPoolRejects(t *testing.T) {

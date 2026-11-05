@@ -205,6 +205,21 @@ func (c *Client) Nodes(ctx context.Context) ([]NodeListStub, error) {
 }
 
 // -------------------------------------------------------------------------
+// PROVIDERS
+// -------------------------------------------------------------------------
+
+// Providers lists the configured providers and what each has used.
+func (c *Client) Providers(ctx context.Context) (*ProviderList, error) {
+	var out ProviderList
+
+	if err := c.do(ctx, http.MethodGet, "/v1/providers", "", nil, &out); err != nil {
+		return nil, err
+	}
+
+	return &out, nil
+}
+
+// -------------------------------------------------------------------------
 // HEALTH
 // -------------------------------------------------------------------------
 

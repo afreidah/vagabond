@@ -191,6 +191,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/execution/{id}", s.wrap(s.cancelExecution))
 	mux.HandleFunc("GET /v1/health", s.health)
 	mux.HandleFunc("GET /v1/nodes", s.wrap(s.listNodes))
+	mux.HandleFunc("GET /v1/providers", s.wrap(s.listProviders))
 
 	return s.logRequests(mux)
 }

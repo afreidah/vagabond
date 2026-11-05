@@ -212,6 +212,38 @@ type NodeListStub struct {
 }
 
 // -------------------------------------------------------------------------
+// PROVIDERS
+// -------------------------------------------------------------------------
+
+// ProviderList is the body of GET /v1/providers: every configured provider, and
+// when the usage shown was last read.
+type ProviderList struct {
+	Refreshed time.Time
+	Providers []ProviderListStub
+}
+
+// ProviderListStub is one provider's standing. Pools is empty for a provider
+// with no declared budgets.
+type ProviderListStub struct {
+	Name    string
+	Tier    int
+	Enabled bool
+	Healthy bool
+	Pools   []ProviderPool
+}
+
+// ProviderPool is one budget, with Used and Limit in the unit its meter is
+// written in. They are for display; the ledger's counters stay whole numbers.
+type ProviderPool struct {
+	Name        string
+	Meter       string
+	Period      string
+	Used        float64
+	Limit       float64
+	FreePercent int
+}
+
+// -------------------------------------------------------------------------
 // HEALTH
 // -------------------------------------------------------------------------
 

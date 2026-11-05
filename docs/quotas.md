@@ -186,6 +186,7 @@ The ledger records charges against every pool. With a `store` block it lives in
 PostgreSQL or CockroachDB (tables `quota_usage` and `quota_reservations`; see
 [Database](database.md)). Without one, or under `server -dev`, it is held in
 memory under one mutex with the same rules, and is empty at every start.
+`vagabond provider status` shows what each pool has used this period.
 
 An execution's life in the ledger:
 

@@ -3,10 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// The words that only group subcommands: job, node, execution. Each is registered
-// as a command so it carries a synopsis in the top-level listing. Without one the
-// library synthesises a placeholder, and help shows a bare word that tells a
-// reader nothing.
+// The words that only group subcommands: job, node, provider, execution. Each is
+// registered as a command so it carries a synopsis in the top-level listing.
+// Without one the library synthesises a placeholder, and help shows a bare word
+// that tells a reader nothing.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -40,6 +40,19 @@ Usage: vagabond node <subcommand> [options] [args]
   List the connected nodes:
 
       $ vagabond node status
+
+  Please see the individual subcommand help for detailed usage information.
+`
+
+	providerHelp = `
+Usage: vagabond provider <subcommand> [options] [args]
+
+  Read the providers a server is configured with: where jobs can run, and how
+  much of each quota pool has been used.
+
+  List the providers and their usage:
+
+      $ vagabond provider status
 
   Please see the individual subcommand help for detailed usage information.
 `

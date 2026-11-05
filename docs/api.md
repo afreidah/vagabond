@@ -50,8 +50,8 @@ duration. 500s are logged at `error`, 503s at `warn`.
 ## Namespaces
 
 Routes that read or write jobs take `?namespace=<name>`. Routes addressed by a
-dispatch or execution ID, `/v1/nodes` and `/v1/health` ignore it: IDs are
-unique across namespaces.
+dispatch or execution ID, `/v1/nodes`, `/v1/providers` and `/v1/health` ignore
+it: IDs are unique across namespaces.
 
 | Route | Namespace used |
 |---|---|
@@ -128,6 +128,7 @@ unreachable. Routes that do not touch it keep working:
 | `POST /v1/jobs/run`, `POST /v1/job/{name}/dispatch` | 503, the dispatch record cannot be written |
 | All other job, dispatch and execution routes | 503 |
 | `GET /v1/nodes` | 200, held in server memory |
+| `GET /v1/providers` | 200, usage from the last snapshot |
 | `GET /v1/health` | 503 with `Store: "unreachable"` |
 
 A server started with `-dev` keeps everything in memory and never answers 503.
@@ -149,6 +150,7 @@ What happens to dispatches already running: [dispatch](dispatch.md).
 | `GET` | `/v1/execution/{id}/logs` | [Read execution logs](#read-execution-logs) |
 | `DELETE` | `/v1/execution/{id}` | [Cancel an execution](#cancel-an-execution) |
 | `GET` | `/v1/nodes` | [List nodes](#list-nodes) |
+| `GET` | `/v1/providers` | [List providers](#list-providers) |
 | `GET` | `/v1/health` | [Read health](#read-health) |
 
 ## Jobs
@@ -716,6 +718,78 @@ Errors: none specific; the route does not touch the store.
 curl -s http://127.0.0.1:4747/v1/nodes
 ```
 
+## Providers
+
+### List providers
+
+`GET /v1/providers`
+
+Every provider the server is configured with, sorted by name, and how much of
+each [quota pool](quotas.md) it has used this period. No provider is contacted:
+usage comes from the ledger's [snapshot](quotas.md#usage-snapshot), and
+`Refreshed` says when that was read.
+
+Figures are provider totals across every namespace. `Used` counts settled
+charges plus what running executions have reserved, at their declared resources
+for their full timeout.
+
+Response, `ProviderList`:
+
+```json
+{
+  "Refreshed": "2026-11-05T14:02:11Z",
+  "Providers": [
+    {
+      "Name": "gcp-cloud-run",
+      "Tier": 0,
+      "Enabled": true,
+      "Healthy": true,
+      "Pools": [
+        {
+          "Name": "cpu",
+          "Meter": "cpu_seconds",
+          "Period": "monthly",
+          "Used": 1179.5,
+          "Limit": 192000,
+          "FreePercent": 99
+        }
+      ]
+    },
+    {
+      "Name": "homelab",
+      "Tier": 1,
+      "Enabled": true,
+      "Healthy": true,
+      "Pools": []
+    }
+  ]
+}
+```
+
+| Field | Description |
+|---|---|
+| `Refreshed` | When the usage shown was last read from the store |
+| `Providers[].Name` | Provider label |
+| `Providers[].Tier` | Operator's preference, lower first |
+| `Providers[].Enabled` | Whether configuration enables it |
+| `Providers[].Healthy` | Whether its last health check passed |
+| `Providers[].Pools` | Its quota pools; `[]` when it declares none |
+| `Pools[].Name` | Pool name |
+| `Pools[].Meter` | What the pool counts: `executions`, `gb_seconds`, `cpu_seconds` or `seconds` |
+| `Pools[].Period` | When it resets: `daily` or `monthly` |
+| `Pools[].Used` | Charged this period, in the meter's unit |
+| `Pools[].Limit` | The pool's limit, in the meter's unit |
+| `Pools[].FreePercent` | Whole percent left, rounded down; `0` when `Used` passes `Limit` |
+
+`Used` and `Limit` are for display. The ledger counts in whole base units, so a
+figure here can differ from the stored value by rounding.
+
+Errors: none specific; the route does not touch the store.
+
+```bash
+curl -s http://127.0.0.1:4747/v1/providers
+```
+
 ## Health
 
 ### Read health
@@ -827,6 +901,7 @@ defaulting to `$VAGABOND_ADDR`; see [CLI](cli.md).
 | `Logs(ctx, id)` | `GET /v1/execution/{id}/logs`, as `[]byte` |
 | `Cancel(ctx, id)` | `DELETE /v1/execution/{id}` |
 | `Nodes(ctx)` | `GET /v1/nodes` |
+| `Providers(ctx)` | `GET /v1/providers` |
 | `Health(ctx)` | `GET /v1/health` |
 
 An empty `namespace` sends no `?namespace=`, so the server applies its default.
