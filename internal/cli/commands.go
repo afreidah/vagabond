@@ -50,6 +50,12 @@ func Commands(meta *Meta) map[string]cli.CommandFactory {
 		"node status": func() (cli.Command, error) {
 			return &NodeStatusCommand{Meta: meta}, nil
 		},
+		"provider": func() (cli.Command, error) {
+			return &groupCommand{Meta: meta, synopsis: "Interact with providers", help: providerHelp}, nil
+		},
+		"provider status": func() (cli.Command, error) {
+			return &ProviderStatusCommand{Meta: meta}, nil
+		},
 		"execution": func() (cli.Command, error) {
 			return &groupCommand{Meta: meta, synopsis: "Interact with executions", help: executionHelp}, nil
 		},

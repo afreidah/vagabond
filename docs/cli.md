@@ -25,6 +25,7 @@ Available commands are:
     execution        Interact with executions
     job              Interact with jobs
     node             Interact with agent nodes
+    provider         Interact with providers
     server           Run the Vagabond server
 ```
 
@@ -40,6 +41,7 @@ Available commands are:
 | [`execution status`](#execution-status) | Show one execution | yes |
 | [`execution logs`](#execution-logs) | Print an execution's output | yes |
 | [`node status`](#node-status) | List the connected agent nodes | yes |
+| [`provider status`](#provider-status) | List the providers and what each has used | yes |
 | [`server`](#server) | Run the Vagabond server | runs one |
 | [`agent`](#agent) | Run the agent that executes workloads on this node | dials one |
 
@@ -639,6 +641,60 @@ pi-02   homelab  10.0.4.35:40118  arm64  0/4000m     0/7680MiB      0          2
 $ vagabond node status
 No agent nodes are connected.
 ```
+
+## Provider commands
+
+### `provider status`
+
+```text
+vagabond provider status [options]
+```
+
+Lists the providers the server is configured with, whether each can take work,
+and how much of each [quota pool](quotas.md) it has used this period. Takes no
+arguments.
+
+Figures are provider totals across every namespace. No provider is contacted:
+usage comes from the server's last [snapshot](quotas.md#usage-snapshot), whose
+time is printed under the table.
+
+`USED` counts settled charges plus what running jobs have reserved, at their
+declared resources for their full timeout. It falls when those jobs settle at
+what they actually took.
+
+| Flag | Default | Description |
+|---|---|---|
+| `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server |
+
+| Column | Description |
+|---|---|
+| `NAME` | Provider label |
+| `TIER` | Operator's preference, lower first |
+| `ENABLED` | Whether configuration enables it |
+| `HEALTHY` | Whether its last health check passed |
+| `POOL` | Pool name; further pools take their own row with the provider columns blank |
+| `METER` | What the pool counts |
+| `USED` | Charged this period, in the meter's unit, to one decimal place |
+| `LIMIT` | The pool's limit, in the meter's unit |
+| `FREE` | Whole percent left, rounded down; `0%` when `USED` passes `LIMIT` |
+| `PERIOD` | When the pool resets: `daily` or `monthly` |
+
+A provider with no pools shows `-` in every pool column.
+
+```shell
+$ vagabond provider status
+NAME           TIER  ENABLED  HEALTHY  POOL    METER        USED    LIMIT   FREE  PERIOD
+gcp-cloud-run  0     true     true     cpu     cpu_seconds  1179.5  192000  99%   monthly
+                                       memory  gb_seconds   2358    360000  99%   monthly
+homelab        1     true     true     -       -            -       -       -     -
+
+Usage refreshed 2026-11-05 14:02:11Z
+```
+
+| Exit | Meaning |
+|---|---|
+| `0` | Printed |
+| `1` | Server error, or arguments given |
 
 ## `server`
 
