@@ -49,21 +49,9 @@ Status Options:
 
 // Run reads the execution and prints its record.
 func (c *ExecutionStatusCommand) Run(args []string) int {
-	flags := c.FlagSet("execution status")
-	c.clientFlags(flags)
-
-	if err := flags.Parse(args); err != nil {
+	client, ids := c.connect(c.FlagSet("execution status"), args, oneArg("<id>"), c.Help())
+	if client == nil {
 		return ExitFailure
-	}
-
-	ids := flags.Args()
-	if len(ids) != 1 {
-		return c.Errorf("This command takes one argument: <id>\n\n%s", c.Help())
-	}
-
-	client, err := c.client()
-	if err != nil {
-		return c.Errorf("%s", err)
 	}
 
 	e, err := client.Execution(context.Background(), ids[0])

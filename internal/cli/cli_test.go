@@ -139,6 +139,83 @@ func TestJobValidate_TooManyPaths(t *testing.T) {
 	}
 }
 
+// Every client command says what it takes before it contacts anything.
+func TestClientCommands_WrongArgumentsExplainThemselves(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"job", "run"}, want: "one argument: <path>"},
+		{args: []string{"job", "plan"}, want: "one argument: <path or name>"},
+		{args: []string{"job", "register"}, want: "one argument: <path>"},
+		{args: []string{"job", "dispatch"}, want: "one argument: <name>"},
+		{args: []string{"job", "stop"}, want: "one argument: <name>"},
+		{args: []string{"job", "status", "one", "two"}, want: "at most one argument: [name]"},
+		{args: []string{"execution", "status"}, want: "one argument: <id>"},
+		{args: []string{"execution", "logs"}, want: "one argument: <id>"},
+		{args: []string{"node", "status", "extra"}, want: "no arguments."},
+	}
+
+	for _, tt := range tests {
+		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
+			code, stdout, stderr := run(tt.args...)
+
+			if code != ExitFailure {
+				t.Errorf("exit code = %d, want %d", code, ExitFailure)
+			}
+
+			if !strings.Contains(stdout+stderr, tt.want) {
+				t.Errorf("output does not mention %q:\n%s%s", tt.want, stdout, stderr)
+			}
+		})
+	}
+}
+
+// An address that cannot be a URL is the operator's mistake, reported as such
+// rather than as a failed connection.
+func TestClientCommands_BadAddressIsReported(t *testing.T) {
+	code, stdout, stderr := run("job", "status", "-address", "http://[bad")
+
+	if code != ExitFailure {
+		t.Errorf("exit code = %d, want %d", code, ExitFailure)
+	}
+
+	if !strings.Contains(stdout+stderr, "server address") {
+		t.Errorf("output does not name the address:\n%s%s", stdout, stderr)
+	}
+}
+
+func TestClientCommands_UnknownFlagFails(t *testing.T) {
+	code, _, _ := run("job", "status", "-nope")
+
+	if code != ExitFailure {
+		t.Errorf("exit code = %d, want %d", code, ExitFailure)
+	}
+}
+
+// A group on its own is not an instruction, so it says what it groups.
+func TestRun_GroupsExplainThemselves(t *testing.T) {
+	tests := []struct{ group, want string }{
+		{group: "job", want: "vagabond job validate"},
+		{group: "node", want: "vagabond node status"},
+		{group: "execution", want: "vagabond execution status"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.group, func(t *testing.T) {
+			code, stdout, stderr := run(tt.group)
+
+			if code != ExitFailure {
+				t.Errorf("exit code = %d, want %d", code, ExitFailure)
+			}
+
+			if !strings.Contains(stdout+stderr, tt.want) {
+				t.Errorf("output does not mention %q:\n%s%s", tt.want, stdout, stderr)
+			}
+		})
+	}
+}
+
 // -------------------------------------------------------------------------
 // THE -meta FLAG
 // -------------------------------------------------------------------------

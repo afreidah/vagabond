@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/afreidah/vagabond/internal/api"
 	"github.com/afreidah/vagabond/internal/plugin"
 )
 
@@ -203,9 +204,9 @@ func executionID(t *testing.T, s *testServer) string {
 		t.Fatalf("no dispatch ID in:\n%s", stderr)
 	}
 
-	client, err := (&Meta{address: s.address}).client()
+	client, err := api.NewClient(s.address, nil)
 	if err != nil {
-		t.Fatalf("client() = %v", err)
+		t.Fatalf("NewClient() = %v", err)
 	}
 
 	d, err := client.DispatchStatus(t.Context(), dispatch)

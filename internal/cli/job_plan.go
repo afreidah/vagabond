@@ -16,10 +16,10 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/afreidah/vagabond/internal/api"
 )
@@ -88,17 +88,12 @@ func (c *JobPlanCommand) Run(args []string) int {
 	)
 
 	flags := c.FlagSet("job plan")
-	c.clientFlags(flags)
 	flags.Var(&meta, "meta", "job metadata as key=value, repeatable")
 	flags.BoolVar(&verbose, "verbose", false, "show each scorer's contribution")
 
-	if err := flags.Parse(args); err != nil {
+	client, paths := c.connect(flags, args, oneArg("<path or name>"), c.Help())
+	if client == nil {
 		return ExitFailure
-	}
-
-	paths := flags.Args()
-	if len(paths) != 1 {
-		return c.Errorf("This command takes one argument: <path or name>\n\n%s", c.Help())
 	}
 
 	req := api.PlanRequest{Name: paths[0], Meta: meta}
@@ -110,11 +105,6 @@ func (c *JobPlanCommand) Run(args []string) int {
 		}
 
 		req = api.PlanRequest{Source: string(src), Meta: meta}
-	}
-
-	client, err := c.client()
-	if err != nil {
-		return c.Errorf("%s", err)
 	}
 
 	plan, err := client.Plan(context.Background(), c.namespace, req)
@@ -186,12 +176,17 @@ func (c *JobPlanCommand) renderTask(t *api.TaskPlan, verbose bool) bool {
 // candidates first because the answer is at the top, rejections in provider
 // order so the same plan diffs cleanly against itself.
 func table(t *api.TaskPlan, verbose bool) string {
-	var b strings.Builder
+	return columns(func(w io.Writer) {
+		candidateRows(w, t.Candidates, verbose)
+		rejectionRows(w, t.Rejections, verbose)
+	})
+}
 
-	w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
-
-	for i := range t.Candidates {
-		cand := &t.Candidates[i]
+// candidateRows writes one row per admitted provider, each followed by its
+// scorers' contributions when verbose.
+func candidateRows(w io.Writer, candidates []api.Candidate, verbose bool) {
+	for i := range candidates {
+		cand := &candidates[i]
 
 		_, _ = fmt.Fprintf(w, "%s\tadmitted\ttier %d\tscore %d\t%s\n",
 			cand.Provider, cand.Tier, cand.Score, observed(cand))
@@ -202,9 +197,13 @@ func table(t *api.TaskPlan, verbose bool) string {
 			}
 		}
 	}
+}
 
-	for i := range t.Rejections {
-		r := &t.Rejections[i]
+// rejectionRows writes one row per rejected provider, each followed by its
+// other rejection reasons when verbose.
+func rejectionRows(w io.Writer, rejections []api.Rejection, verbose bool) {
+	for i := range rejections {
+		r := &rejections[i]
 
 		_, _ = fmt.Fprintf(w, "%s\trejected\t%s\t%s\n", r.Provider, r.Reason, r.Detail)
 
@@ -214,10 +213,6 @@ func table(t *api.TaskPlan, verbose bool) string {
 			}
 		}
 	}
-
-	_ = w.Flush()
-
-	return strings.TrimRight(b.String(), "\n")
 }
 
 // observed says how old the snapshot behind a verdict is, since a plan is

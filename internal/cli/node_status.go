@@ -10,11 +10,10 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strings"
-	"text/tabwriter"
 )
 
 // NodeStatusCommand implements `vagabond node status`.
@@ -48,20 +47,9 @@ Status Options:
 
 // Run lists the connected nodes as a table, or says there are none.
 func (c *NodeStatusCommand) Run(args []string) int {
-	flags := c.FlagSet("node status")
-	c.clientFlags(flags)
-
-	if err := flags.Parse(args); err != nil {
+	client, _ := c.connect(c.FlagSet("node status"), args, noArgs, c.Help())
+	if client == nil {
 		return ExitFailure
-	}
-
-	if len(flags.Args()) != 0 {
-		return c.Errorf("This command takes no arguments.\n\n%s", c.Help())
-	}
-
-	client, err := c.client()
-	if err != nil {
-		return c.Errorf("%s", err)
 	}
 
 	nodes, err := client.Nodes(context.Background())
@@ -75,20 +63,16 @@ func (c *NodeStatusCommand) Run(args []string) int {
 		return ExitSuccess
 	}
 
-	var b bytes.Buffer
+	c.Ui.Output(columns(func(w io.Writer) {
+		_, _ = fmt.Fprintln(w, "NAME\tPOOL\tADDRESS\tARCH\tCPU USED\tMEMORY USED\tWORKLOADS\tCONNECTED")
 
-	w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "NAME\tPOOL\tADDRESS\tARCH\tCPU USED\tMEMORY USED\tWORKLOADS\tCONNECTED")
-
-	for i := range nodes {
-		n := &nodes[i]
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d/%dm\t%d/%dMiB\t%d\t%s\n",
-			n.Name, n.Pool, n.Address, n.Architecture,
-			n.UsedCPU, n.CPU, n.UsedMemory, n.Memory, n.Executions, stamp(n.Connected))
-	}
-
-	_ = w.Flush()
-	c.Ui.Output(strings.TrimRight(b.String(), "\n"))
+		for i := range nodes {
+			n := &nodes[i]
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d/%dm\t%d/%dMiB\t%d\t%s\n",
+				n.Name, n.Pool, n.Address, n.Architecture,
+				n.UsedCPU, n.CPU, n.UsedMemory, n.Memory, n.Executions, stamp(n.Connected))
+		}
+	}))
 
 	return ExitSuccess
 }

@@ -85,27 +85,17 @@ func (c *JobRunCommand) Run(args []string) int {
 	)
 
 	flags := c.FlagSet("job run")
-	c.clientFlags(flags)
 	flags.Var(&meta, "meta", "job metadata as key=value, repeatable")
 	flags.BoolVar(&noLogs, "no-logs", false, "do not print the task's output")
 
-	if err := flags.Parse(args); err != nil {
+	client, paths := c.connect(flags, args, oneArg("<path>"), c.Help())
+	if client == nil {
 		return ExitFailure
-	}
-
-	paths := flags.Args()
-	if len(paths) != 1 {
-		return c.Errorf("This command takes one argument: <path>\n\n%s", c.Help())
 	}
 
 	src, code := c.checkJob(paths[0], meta)
 	if src == nil {
 		return code
-	}
-
-	client, err := c.client()
-	if err != nil {
-		return c.Errorf("%s", err)
 	}
 
 	// Interrupt stops the execution rather than the command alone, so that a

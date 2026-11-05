@@ -10,11 +10,10 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/afreidah/vagabond/internal/api"
@@ -55,21 +54,9 @@ Status Options:
 // Run lists the namespace's jobs with no argument, or shows the one job it
 // names.
 func (c *JobStatusCommand) Run(args []string) int {
-	flags := c.FlagSet("job status")
-	c.clientFlags(flags)
-
-	if err := flags.Parse(args); err != nil {
+	client, names := c.connect(c.FlagSet("job status"), args, optionalArg("[name]"), c.Help())
+	if client == nil {
 		return ExitFailure
-	}
-
-	names := flags.Args()
-	if len(names) > 1 {
-		return c.Errorf("This command takes at most one argument: [name]\n\n%s", c.Help())
-	}
-
-	client, err := c.client()
-	if err != nil {
-		return c.Errorf("%s", err)
 	}
 
 	if len(names) == 0 {
@@ -102,18 +89,14 @@ func (c *JobStatusCommand) list(ctx context.Context, client *api.Client) int {
 		return ExitSuccess
 	}
 
-	var b bytes.Buffer
+	c.Ui.Output(columns(func(w io.Writer) {
+		_, _ = fmt.Fprintln(w, "NAME\tVERSION\tSTATUS\tUPDATED")
 
-	w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "NAME\tVERSION\tSTATUS\tUPDATED")
-
-	for i := range all {
-		j := &all[i]
-		_, _ = fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", j.Name, j.Version, standing(j), stamp(j.Updated))
-	}
-
-	_ = w.Flush()
-	c.Ui.Output(strings.TrimRight(b.String(), "\n"))
+		for i := range all {
+			j := &all[i]
+			_, _ = fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", j.Name, j.Version, standing(j), stamp(j.Updated))
+		}
+	}))
 
 	return ExitSuccess
 }
@@ -126,38 +109,36 @@ func (c *JobStatusCommand) show(ctx context.Context, client *api.Client, name st
 		return c.apiFailure(err)
 	}
 
-	var b bytes.Buffer
+	var b strings.Builder
 
 	_, _ = fmt.Fprintf(&b, "Name      = %s\nNamespace = %s\nVersion   = %d\nStatus    = %s\n\nVersions\n",
 		status.Name, status.Namespace, status.Version, standing(&status.Job))
 
-	w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "VERSION\tREGISTERED")
+	b.WriteString(columns(func(w io.Writer) {
+		_, _ = fmt.Fprintln(w, "VERSION\tREGISTERED")
 
-	for _, v := range status.Versions {
-		_, _ = fmt.Fprintf(w, "%d\t%s\n", v.Version, stamp(v.Registered))
-	}
+		for _, v := range status.Versions {
+			_, _ = fmt.Fprintf(w, "%d\t%s\n", v.Version, stamp(v.Registered))
+		}
+	}))
 
-	_ = w.Flush()
-
-	b.WriteString("\nRecent executions\n")
+	b.WriteString("\n\nRecent executions\n")
 
 	if len(status.Executions) == 0 {
-		b.WriteString("None.\n")
+		b.WriteString("None.")
 	} else {
-		w = tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
-		_, _ = fmt.Fprintln(w, "DISPATCH\tVERSION\tTASK\tPROVIDER\tSTATE\tCREATED")
+		b.WriteString(columns(func(w io.Writer) {
+			_, _ = fmt.Fprintln(w, "DISPATCH\tVERSION\tTASK\tPROVIDER\tSTATE\tCREATED")
 
-		for i := range status.Executions {
-			e := &status.Executions[i]
-			_, _ = fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\t%s\n",
-				short(e.DispatchID), e.JobVersion, e.Task, e.Provider, e.State, stamp(e.Created))
-		}
-
-		_ = w.Flush()
+			for i := range status.Executions {
+				e := &status.Executions[i]
+				_, _ = fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\t%s\n",
+					short(e.DispatchID), e.JobVersion, e.Task, e.Provider, e.State, stamp(e.Created))
+			}
+		}))
 	}
 
-	c.Ui.Output(strings.TrimRight(b.String(), "\n"))
+	c.Ui.Output(b.String())
 
 	return ExitSuccess
 }

@@ -52,21 +52,9 @@ Stop Options:
 
 // Run stops the named job. Its executions already running are left alone.
 func (c *JobStopCommand) Run(args []string) int {
-	flags := c.FlagSet("job stop")
-	c.clientFlags(flags)
-
-	if err := flags.Parse(args); err != nil {
+	client, names := c.connect(c.FlagSet("job stop"), args, oneArg("<name>"), c.Help())
+	if client == nil {
 		return ExitFailure
-	}
-
-	names := flags.Args()
-	if len(names) != 1 {
-		return c.Errorf("This command takes one argument: <name>\n\n%s", c.Help())
-	}
-
-	client, err := c.client()
-	if err != nil {
-		return c.Errorf("%s", err)
 	}
 
 	stopped, err := client.StopJob(context.Background(), c.namespace, names[0])
