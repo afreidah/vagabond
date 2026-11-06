@@ -24,6 +24,12 @@ make build
 `make build` writes `./vagabond` in the repository root with the version
 stamped in.
 
+To put it on your `PATH` instead, `make install` builds it and copies it to
+`BINDIR`, which defaults to `/usr/local/bin` and needs sudo.
+`make install BINDIR=$HOME/.local/bin` installs without it, and `make uninstall`
+with the same `BINDIR` removes it. This page runs `./vagabond` from the
+repository root either way.
+
 ## Start a dev server
 
 ```bash

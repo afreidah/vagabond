@@ -33,6 +33,11 @@ GO_LDFLAGS     := -s -w \
 	-X $(VERSION_PKG).Version=$(VERSION) \
 	-X $(VERSION_PKG).Commit=$(COMMIT)
 
+# Where install puts the binary. The default needs sudo; set
+# BINDIR=$(HOME)/.local/bin to install without it.
+PREFIX         ?= /usr/local
+BINDIR         ?= $(PREFIX)/bin
+
 # Go tooling exits non-zero when ./... matches nothing, so every target that
 # operates on packages is guarded. The contract packages do not exist yet and
 # CI runs on every pull request in the meantime; without this the build is red
@@ -75,6 +80,15 @@ build: ## Build the vagabond binary with version information
 		$(GO) build -ldflags "$(GO_LDFLAGS)" -o vagabond ./cmd/vagabond; \
 		echo "built ./vagabond $(VERSION)"; \
 	else echo "$(NO_PKGS_MSG) build"; fi
+
+install: build ## Install the binary to BINDIR (default /usr/local/bin; needs sudo, or set BINDIR=$(HOME)/.local/bin)
+	install -d $(BINDIR)
+	install -m 0755 vagabond $(BINDIR)/vagabond
+	@echo "installed vagabond $(VERSION) -> $(BINDIR)/vagabond"
+
+uninstall: ## Remove the installed binary from BINDIR
+	rm -f $(BINDIR)/vagabond
+	@echo "removed $(BINDIR)/vagabond"
 
 ##@ Images
 
@@ -238,4 +252,4 @@ clean: ## Remove build and coverage artifacts
 	rm -f coverage.out integration-coverage.out vagabond
 	rm -rf bin
 
-.PHONY: help build builder docker scan push fmt fmt-check vet lint test test-fast integration-test coverage integration-coverage containerd-test govulncheck check generate generate-check web-serve web-build web-docker web-push tools clean
+.PHONY: help build install uninstall builder docker scan push fmt fmt-check vet lint test test-fast integration-test coverage integration-coverage containerd-test govulncheck check generate generate-check web-serve web-build web-docker web-push tools clean
