@@ -49,8 +49,9 @@ type agentExecutor interface {
 // -------------------------------------------------------------------------
 
 // executions serves the executor to the server. capacity is what the node may
-// use; mu makes checking room and starting a workload one step, and changed
-// tells the agent its workloads changed and it should report them.
+// use; mu guards checking room and recording in-flight submissions in reserved
+// while image pulls run outside the lock, and changed tells the agent its
+// workloads changed and it should report them.
 type executions struct {
 	agentrpc.UnimplementedAgentExecutionsServer
 
@@ -58,6 +59,14 @@ type executions struct {
 	capacity *agentrpc.Resources
 	changed  chan<- struct{}
 	mu       sync.Mutex
+	reserved map[string]*reservation
+}
+
+// reservation holds a workload's declared size while its start is in flight
+// outside mu, and closes done once the reservation is released.
+type reservation struct {
+	spec *executor.Spec
+	done chan struct{}
 }
 
 // Submit starts a workload that fits in what the node has left, and answers
@@ -66,14 +75,13 @@ type executions struct {
 func (e *executions) Submit(ctx context.Context, req *agentrpc.SubmitRequest) (*agentrpc.Submission, error) {
 	id, spec := req.GetExecutionId(), specOf(req.GetWorkload())
 
-	// Held across the check and the start, so two submissions racing for the
-	// last room cannot both see it free.
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if err := e.fits(ctx, id, spec); err != nil {
+	// Reserve capacity under the lock so two submissions racing for the
+	// last room cannot both see it free, while image pulls run outside it.
+	release, err := e.reserve(ctx, id, spec)
+	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	if err := e.exec.Submit(ctx, id, spec); err != nil {
 		return nil, failure(err)
@@ -90,8 +98,53 @@ func (e *executions) Submit(ctx context.Context, req *agentrpc.SubmitRequest) (*
 	return &agentrpc.Submission{State: string(st.State), ProviderId: st.ProviderID}, nil
 }
 
-// fits refuses a workload the node's running workloads leave no room for. A
-// workload already held under id is a resubmission and always fits.
+// reserve claims room for id, waiting when another submission for the same
+// execution is already in flight, and returns a function that releases it.
+func (e *executions) reserve(ctx context.Context, id string, spec *executor.Spec) (func(), error) {
+	for {
+		res, wait, err := e.tryClaim(ctx, id, spec)
+		if err != nil {
+			return nil, err
+		}
+		if res != nil {
+			return func() {
+				e.mu.Lock()
+				delete(e.reserved, id)
+				e.mu.Unlock()
+				close(res.done)
+			}, nil
+		}
+
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+	}
+}
+
+// tryClaim makes one attempt to reserve room. When another submission for id
+// is in flight, it returns that submission's done channel to wait on.
+func (e *executions) tryClaim(ctx context.Context, id string, spec *executor.Spec) (*reservation, <-chan struct{}, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if inflight, busy := e.reserved[id]; busy {
+		return nil, inflight.done, nil
+	}
+
+	if err := e.fits(ctx, id, spec); err != nil {
+		return nil, nil, err
+	}
+
+	res := &reservation{spec: spec, done: make(chan struct{})}
+	e.reserved[id] = res
+
+	return res, nil, nil
+}
+
+// fits refuses a workload the node's running and reserved workloads leave no
+// room for. A workload already held under id is a resubmission and always fits.
 func (e *executions) fits(ctx context.Context, id string, spec *executor.Spec) error {
 	held, err := e.exec.Held(ctx)
 	if err != nil {
@@ -107,10 +160,15 @@ func (e *executions) fits(ctx context.Context, id string, spec *executor.Spec) e
 		}
 
 		// A finished workload keeps its container until released, but no
-		// longer uses the node.
-		if h.Running {
+		// longer uses the node. Reserved workloads are counted below, so
+		// don't count them twice.
+		if _, reserved := e.reserved[h.ID]; h.Running && !reserved {
 			cpu, memory = cpu+h.CPU, memory+h.Memory
 		}
+	}
+
+	for _, r := range e.reserved {
+		cpu, memory = cpu+r.spec.CPU, memory+r.spec.Memory
 	}
 
 	// Declared sizes, not live usage: each workload is capped at what it

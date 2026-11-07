@@ -119,7 +119,7 @@ func (a *Agent) connect(ctx context.Context) error {
 
 	// The server calls this endpoint down the session the agent opened.
 	srv := grpc.NewServer()
-	agentrpc.RegisterAgentExecutionsServer(srv, &executions{exec: a.exec, capacity: capacity, changed: changed})
+	agentrpc.RegisterAgentExecutionsServer(srv, &executions{exec: a.exec, capacity: capacity, changed: changed, reserved: make(map[string]*reservation)})
 
 	go func() { _ = session.Serve(srv) }()
 	defer srv.Stop()
