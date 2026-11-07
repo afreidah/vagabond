@@ -425,10 +425,13 @@ Reservations are in memory, per server process.
 
 ### Refusal and retry
 
-The agent checks room itself, holding a lock across the check and the start:
-its running workloads' declared sizes plus the new one must fit capacity. A
-resubmission of an execution it already holds always fits and starts nothing
-new.
+The agent checks room itself, holding a lock to verify capacity and record an
+in-flight reservation before starting the workload outside the lock: its
+running and reserved workloads' declared sizes plus the new one must fit
+capacity, and the reservation is dropped when Submit returns. A concurrent
+submission for the same execution waits for the in-flight one to finish; a
+resubmission of an execution the agent already holds always fits and starts
+nothing new.
 
 | Agent answer | Pool does |
 |---|---|
