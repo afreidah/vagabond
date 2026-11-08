@@ -138,7 +138,8 @@ Estimated cost: free
 ```
 
 The example config uses fake providers, so this needs no cloud account.
-See [quickstart.md](docs/quickstart.md).
+See [quickstart.md](docs/quickstart.md). `make install` puts the binary on your
+`PATH`; `make install BINDIR=$HOME/.local/bin` does so without sudo.
 
 ## Commands
 
