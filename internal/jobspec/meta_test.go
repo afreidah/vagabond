@@ -4,8 +4,8 @@
 // Author: Alex Freidah
 //
 // The behaviour worth pinning is that an unsupplied value is refused rather
-// than substituted. Nomad refuses the same case, and the alternative is a job
-// that validates and then interpolates nothing at submission.
+// than substituted, since the alternative is a job that validates and then
+// interpolates nothing at submission.
 // -------------------------------------------------------------------------------
 
 package jobspec
@@ -19,6 +19,10 @@ import (
 
 	"github.com/afreidah/vagabond/internal/ptr"
 )
+
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
 
 const parameterizedJob = `
 job "build" {
@@ -46,6 +50,7 @@ job "build" {
 }
 `
 
+// bodyOf parses src into an hcl.Body, failing the test on a syntax error.
 func bodyOf(t *testing.T, src string) hcl.Body {
 	t.Helper()
 
@@ -61,6 +66,7 @@ func bodyOf(t *testing.T, src string) hcl.Body {
 // DECLARED METADATA
 // -------------------------------------------------------------------------
 
+// A job's required keys are read along with the range that declared them.
 func TestRequiredMeta(t *testing.T) {
 	required, diags := RequiredMeta(bodyOf(t, parameterizedJob))
 	if diags.HasErrors() {
@@ -81,8 +87,7 @@ func TestRequiredMeta(t *testing.T) {
 		t.Errorf("Keys = %v, want [version]", req.Keys)
 	}
 
-	// The range is what lets a missing-metadata message point at the line that
-	// asked for it rather than at the expression that first referenced one.
+	// The range lets a missing-metadata message point at the declaring line
 	if req.Range.Start.Line == 0 {
 		t.Error("the requirement carries no source range")
 	}
@@ -169,6 +174,7 @@ job "build" {
 // ENFORCEMENT
 // -------------------------------------------------------------------------
 
+// Only a required key absent from supplied is reported; an empty value counts.
 func TestCheckRequiredMeta(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -220,8 +226,7 @@ func TestCheckRequiredMeta(t *testing.T) {
 	}
 }
 
-// The message has to name the job, the missing keys, and how to supply them.
-// An author who has to consult the README has been failed by the error.
+// The message names the job, the missing keys, and how to supply them.
 func TestCheckRequiredMeta_MessageIsActionable(t *testing.T) {
 	diags := CheckRequiredMeta(
 		[]Requirement{{Job: "deploy", Keys: []string{"environment", "version"}}},
@@ -245,8 +250,8 @@ func TestCheckRequiredMeta_MessageIsActionable(t *testing.T) {
 // THROUGH THE PARSER
 // -------------------------------------------------------------------------
 
-// Matching Nomad: a job referencing metadata nobody supplied is refused rather
-// than carrying a placeholder that would interpolate to nothing at submission.
+// A job referencing metadata nobody supplied is refused rather than carrying a
+// placeholder that would interpolate to nothing at submission.
 func TestParse_UnsuppliedMetaFails(t *testing.T) {
 	_, diags := Parse(Config{
 		Filename: "test.vagabond.hcl",
@@ -262,6 +267,7 @@ func TestParse_UnsuppliedMetaFails(t *testing.T) {
 	}
 }
 
+// A supplied value is interpolated where the job references it.
 func TestParse_SuppliedMetaSucceeds(t *testing.T) {
 	file, diags := Parse(Config{
 		Filename: "test.vagabond.hcl",
@@ -278,9 +284,8 @@ func TestParse_SuppliedMetaSucceeds(t *testing.T) {
 	}
 }
 
-// A reference to a key nobody declared or supplied fails at the reference
-// itself, which is the whole reason only supplied keys are registered. This is
-// the shape a typo takes.
+// A reference to a key nobody declared or supplied, the shape a typo takes,
+// fails at the reference itself.
 func TestParse_UndeclaredMetaFailsAtTheReference(t *testing.T) {
 	src := strings.Replace(parameterizedJob, "${meta.version}", "${meta.vrsion}", 1)
 

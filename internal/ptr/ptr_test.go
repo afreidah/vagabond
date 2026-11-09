@@ -11,6 +11,7 @@ package ptr
 
 import "testing"
 
+// Deref returns the pointed-at value, or zero for nil.
 func TestDeref(t *testing.T) {
 	if got := Deref(new(7)); got != 7 {
 		t.Errorf("Deref(new(7)) = %d, want 7", got)
@@ -22,6 +23,7 @@ func TestDeref(t *testing.T) {
 	}
 }
 
+// DerefOr takes the fallback only when unset, never over an explicit zero.
 func TestDerefOr(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -43,8 +45,8 @@ func TestDerefOr(t *testing.T) {
 	}
 }
 
-// An explicitly false bool must not silently take a true default. This is the
-// case that a value-typed field would get wrong.
+// An explicitly false bool does not take a true default, the case a value-typed
+// field would get wrong.
 func TestDerefOr_ExplicitFalse(t *testing.T) {
 	if got := DerefOr(new(false), true); got {
 		t.Error("DerefOr(new(false), true) = true, want false")

@@ -5,8 +5,7 @@
 //
 // The reroute decision is the reason this taxonomy exists, so it is asserted as
 // a property of the class rather than only through examples. The HTTP mapping
-// gets status-by-status coverage because three plugins written months apart
-// will otherwise drift.
+// gets status-by-status coverage because every plugin shares it.
 // -------------------------------------------------------------------------------
 
 package plugin
@@ -19,12 +18,14 @@ import (
 	"time"
 )
 
+// errUnderlying stands in for whatever a provider SDK returned.
 var errUnderlying = errors.New("connection reset")
 
 // -------------------------------------------------------------------------
 // CLASSES
 // -------------------------------------------------------------------------
 
+// Only the two recorded classes are valid, matched case-sensitively.
 func TestClass_Valid(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -47,9 +48,8 @@ func TestClass_Valid(t *testing.T) {
 	}
 }
 
-// Only infrastructure may be rerouted. An internal failure reproduces wherever
-// it is sent, so rerouting one spends free-tier capacity to reach the same
-// answer again.
+// Only infrastructure may be rerouted; an internal failure reproduces wherever
+// it is sent.
 func TestClass_Reroutable(t *testing.T) {
 	if !ClassInfrastructure.Reroutable() {
 		t.Error("infrastructure failures are not reroutable")
@@ -76,6 +76,7 @@ func TestClass_OnlyOneClassIsReroutable(t *testing.T) {
 	}
 }
 
+// String returns the persisted spelling of each class.
 func TestClass_String(t *testing.T) {
 	if got := ClassInfrastructure.String(); got != "infrastructure" {
 		t.Errorf("ClassInfrastructure.String() = %q, want %q", got, "infrastructure")
@@ -86,6 +87,7 @@ func TestClass_String(t *testing.T) {
 	}
 }
 
+// A caller mutating the returned slice cannot reach the package vocabulary.
 func TestClasses_ReturnsCopy(t *testing.T) {
 	first := Classes()
 	first[0] = "mutated"
@@ -119,6 +121,7 @@ func TestError_UnwrapsToCause(t *testing.T) {
 	}
 }
 
+// errors.As recovers the *Error and its class from a plain error value.
 func TestError_AsRecoversClassification(t *testing.T) {
 	var err error = Internal(errUnderlying)
 
@@ -132,6 +135,7 @@ func TestError_AsRecoversClassification(t *testing.T) {
 	}
 }
 
+// The message names the class, provider, operation and cause.
 func TestError_MessageNamesProviderAndOp(t *testing.T) {
 	err := Infrastructure(errUnderlying).WithContext("ibm-code-engine", "submit")
 	msg := err.Error()
@@ -171,6 +175,7 @@ func TestInternal_IsNeverRetryable(t *testing.T) {
 	}
 }
 
+// An infrastructure failure is both retryable and reroutable.
 func TestInfrastructure_IsRetryable(t *testing.T) {
 	err := Infrastructure(errUnderlying)
 
@@ -187,6 +192,7 @@ func TestInfrastructure_IsRetryable(t *testing.T) {
 // HTTP CLASSIFICATION
 // -------------------------------------------------------------------------
 
+// Each status maps to the class and retryability ClassifyHTTP documents.
 func TestClassifyHTTP(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -270,8 +276,7 @@ func TestClassifyHTTP_UnauthorizedIsMarked(t *testing.T) {
 	}
 }
 
-// A 400 is infrastructure-shaped but must never be retried, which is why
-// Retryable is independent of Class rather than derived from it.
+// A 400 must never be retried, which is why Retryable is independent of Class.
 func TestClassifyHTTP_BadRequestIsNotRetryable(t *testing.T) {
 	err := ClassifyHTTP(http.StatusBadRequest, 0, errUnderlying)
 
@@ -289,6 +294,7 @@ func TestClassifyHTTP_CarriesRetryAfter(t *testing.T) {
 	}
 }
 
+// The message carries the status and the cause stays reachable.
 func TestClassifyHTTP_PreservesStatusAndCause(t *testing.T) {
 	err := ClassifyHTTP(http.StatusServiceUnavailable, 0, errUnderlying)
 

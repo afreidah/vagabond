@@ -23,6 +23,10 @@ import (
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
+
 // pendingRecord is a first attempt, just created.
 func pendingRecord(t *testing.T) *execution.Record {
 	t.Helper()
@@ -49,6 +53,10 @@ func advance(t *testing.T, r *execution.Record, next execution.State) {
 		t.Fatalf("To(%s) = %v", next, err)
 	}
 }
+
+// -------------------------------------------------------------------------
+// EXECUTIONS
+// -------------------------------------------------------------------------
 
 // A finished record, binary output and bill included, reads back as written
 // from a fresh read.
@@ -158,6 +166,10 @@ func TestExecutions_CreateTwiceFails(t *testing.T) {
 		})
 	}
 }
+
+// -------------------------------------------------------------------------
+// DISPATCHES
+// -------------------------------------------------------------------------
 
 // A run's record round-trips, finishes once, and keeps why it got no answer.
 func TestDispatches_FinishOnce(t *testing.T) {
@@ -272,7 +284,10 @@ func TestDispatches_LeaseClaim(t *testing.T) {
 	}
 }
 
-// TestExecutions_GetUnknown reads an ID nothing recorded.
+// -------------------------------------------------------------------------
+// RELEASE AND LOOKUPS
+// -------------------------------------------------------------------------
+
 // A record is unreleased until marked, only once it is older than the cutoff,
 // and an update after marking leaves the mark alone.
 func TestExecutions_Release(t *testing.T) {
@@ -360,6 +375,7 @@ func TestExecutions_Reserved(t *testing.T) {
 	}
 }
 
+// Reading an ID nothing recorded is ErrNotFound.
 func TestExecutions_GetUnknown(t *testing.T) {
 	for _, e := range engines() {
 		t.Run(e.Name, func(t *testing.T) {

@@ -20,6 +20,10 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
+
 // rawBlock builds a block from a snippet.
 func rawBlock(t *testing.T, src string) *RawBlock {
 	t.Helper()
@@ -32,6 +36,11 @@ func rawBlock(t *testing.T, src string) *RawBlock {
 	return &RawBlock{Body: f.Body}
 }
 
+// -------------------------------------------------------------------------
+// ATTRIBUTES
+// -------------------------------------------------------------------------
+
+// String attributes decode into the map unchanged.
 func TestRawBlock_Attributes(t *testing.T) {
 	block := rawBlock(t, `
 CI               = "true"
@@ -85,9 +94,8 @@ func TestRawBlock_AttributesRejectsNonScalar(t *testing.T) {
 	}
 }
 
-// An unresolved reference is skipped rather than reported. Validation runs
-// before values are supplied, and a job that interpolates metadata is not
-// wrong for doing so.
+// An unresolved reference is skipped rather than reported, because validation
+// runs before metadata values are supplied.
 func TestRawBlock_AttributesSkipsUnknownValues(t *testing.T) {
 	block := rawBlock(t, `ref = meta.version`)
 
@@ -128,9 +136,8 @@ func TestRawBlock_AttributesSkipsNull(t *testing.T) {
 // IMAGE
 // -------------------------------------------------------------------------
 
-// The config block's shape belongs to the driver, with one exception: whether a
-// task names an image is something admission has to know, because a provider
-// can run containers without running anyone's container.
+// Image reads the one config key admission needs and reports nothing when the
+// block names no image or is absent.
 func TestTask_Image(t *testing.T) {
 	tests := map[string]struct {
 		config *RawBlock

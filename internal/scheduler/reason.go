@@ -3,14 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// These strings are permanent surface. They appear in job plan output, in API
-// responses, and in whatever a CI system branches on when Vagabond declines
-// work, so they are expensive to change and are designed rather than grown.
-//
-// One code per distinct cause. A vocabulary small enough to be convenient makes
-// the plan table useless, and being diagnostic is the only reason that table
-// exists: "driver container unsupported" tells an author what to do, while
-// "unsupported" tells them to go reading.
+// These strings are permanent surface: they appear in job plan output, in API
+// responses, and in whatever a CI system branches on, so they are designed
+// rather than grown. Each code names one distinct cause, so the plan table
+// tells an author what to fix.
 // -------------------------------------------------------------------------------
 
 package scheduler
@@ -29,14 +25,10 @@ import (
 // Reason is why a provider cannot run a task.
 type Reason string
 
-// The reasons admission can give.
-//
-// They fall into three groups, which is worth knowing when reading plan output.
-// A task mismatch means this job will never run on this provider whatever
-// happens. A policy rejection means the job asked Vagabond not to. A provider
-// condition is temporary and the same job may be admitted an hour later.
+// The reasons admission can give, in three groups: task mismatches are
+// permanent for the pairing, policy rejections are the job declining the
+// provider, and provider conditions may clear without the job changing.
 const (
-	// Task mismatches: permanent for this pairing.
 	ReasonDriverUnsupported  Reason = "driver-unsupported"
 	ReasonArchUnsupported    Reason = "arch-unsupported"
 	ReasonResourcesExceeded  Reason = "resources-exceeded"
@@ -46,16 +38,15 @@ const (
 	ReasonAttributeUnknown   Reason = "attribute-unknown"
 	ReasonConstraintUnmet    Reason = "constraint-unmet"
 
-	// Policy: the job declined this provider.
 	ReasonNotAllowlisted Reason = "not-allowlisted"
 	ReasonCostPolicy     Reason = "cost-policy"
 
-	// Provider conditions: may change without the job changing.
 	ReasonQuotaExhausted   Reason = "quota-exhausted"
 	ReasonProviderDisabled Reason = "provider-disabled"
 	ReasonUnhealthy        Reason = "provider-unhealthy"
 )
 
+// reasonNames is the vocabulary, in the order Reasons returns it.
 var reasonNames = []Reason{
 	ReasonDriverUnsupported,
 	ReasonArchUnsupported,
@@ -73,9 +64,7 @@ var reasonNames = []Reason{
 }
 
 // transientReasons are the rejections a provider can recover from without the
-// job changing. A caller deciding whether to retry later rather than fail reads
-// this, and it is the difference between waiting for a quota period to reset
-// and waiting forever for a Wasm runtime to grow a container engine.
+// job changing, which tells a caller to retry later rather than fail.
 var transientReasons = []Reason{
 	ReasonQuotaExhausted,
 	ReasonProviderDisabled,
@@ -89,10 +78,8 @@ var ErrUnknownReason = errors.New("unknown rejection reason")
 // VOCABULARY
 // -------------------------------------------------------------------------
 
-// Reasons returns every rejection reason, grouped mismatch, policy, condition.
-//
-// The returned slice is a copy, so a caller rendering it cannot reorder the
-// vocabulary for everyone else.
+// Reasons returns every rejection reason, grouped mismatch, policy, condition,
+// as a copy a caller cannot reorder for everyone else.
 func Reasons() []Reason {
 	return slices.Clone(reasonNames)
 }
@@ -144,6 +131,7 @@ func (r *Reason) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// unknownReason wraps ErrUnknownReason with name and the valid vocabulary.
 func unknownReason(name string) error {
 	valid := make([]string, 0, len(reasonNames))
 	for _, r := range reasonNames {

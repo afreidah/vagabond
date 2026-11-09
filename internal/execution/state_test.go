@@ -21,6 +21,7 @@ import (
 // VOCABULARY
 // -------------------------------------------------------------------------
 
+// Only recorded states validate; retired and foreign spellings do not.
 func TestState_Valid(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -44,6 +45,7 @@ func TestState_Valid(t *testing.T) {
 	}
 }
 
+// Succeeded, failed and cancelled are terminal; the rest are not.
 func TestState_Terminal(t *testing.T) {
 	terminal := map[State]bool{
 		StateSucceeded: true,
@@ -76,6 +78,7 @@ func TestState_LostIsNotTerminal(t *testing.T) {
 // TRANSITIONS
 // -------------------------------------------------------------------------
 
+// Every transition the lifecycle depends on is permitted.
 func TestState_TransitionLegal(t *testing.T) {
 	legal := []struct {
 		from State
@@ -105,6 +108,7 @@ func TestState_TransitionLegal(t *testing.T) {
 	}
 }
 
+// A refused transition wraps ErrIllegalTransition and names both states.
 func TestState_TransitionIllegal(t *testing.T) {
 	illegal := []struct {
 		name string
@@ -156,9 +160,8 @@ func TestState_TerminalStatesAreSinks(t *testing.T) {
 	}
 }
 
-// The machine must stay acyclic. Cycles are what would make a hand-written
-// table unpleasant, and every future feature that looked like it needed one
-// belongs in a separate entity instead.
+// No state transitions to itself; anything that seems to need a cycle belongs
+// in a separate entity.
 func TestState_NoSelfTransitions(t *testing.T) {
 	for _, s := range States() {
 		if s.CanTransition(s) {
@@ -192,6 +195,7 @@ func TestState_AllStatesReachableFromPending(t *testing.T) {
 	}
 }
 
+// An unknown source or target state fails with ErrUnknownState.
 func TestState_TransitionRejectsUnknownStates(t *testing.T) {
 	if err := State("bogus").Transition(StateRunning); !errors.Is(err, ErrUnknownState) {
 		t.Errorf("unknown source state error = %v, want ErrUnknownState", err)
@@ -206,6 +210,7 @@ func TestState_TransitionRejectsUnknownStates(t *testing.T) {
 // TEXT ENCODING
 // -------------------------------------------------------------------------
 
+// Every state survives a MarshalText and UnmarshalText round trip.
 func TestState_TextRoundTrip(t *testing.T) {
 	for _, want := range States() {
 		t.Run(want.String(), func(t *testing.T) {
@@ -226,6 +231,7 @@ func TestState_TextRoundTrip(t *testing.T) {
 	}
 }
 
+// The zero value is not a state and does not marshal.
 func TestState_MarshalTextRejectsZeroValue(t *testing.T) {
 	var s State
 
@@ -234,6 +240,7 @@ func TestState_MarshalTextRejectsZeroValue(t *testing.T) {
 	}
 }
 
+// A state outside the vocabulary fails with ErrUnknownState.
 func TestParseState_Invalid(t *testing.T) {
 	for _, input := range []string{"", "timed-out", "Running", "complete"} {
 		t.Run(input, func(t *testing.T) {
@@ -249,6 +256,7 @@ func TestParseState_Invalid(t *testing.T) {
 	}
 }
 
+// Mutating the returned slice leaves the vocabulary untouched.
 func TestStates_ReturnsCopy(t *testing.T) {
 	first := States()
 	first[0] = "mutated"
@@ -258,6 +266,7 @@ func TestStates_ReturnsCopy(t *testing.T) {
 	}
 }
 
+// A refused unmarshal wraps ErrUnknownState and leaves the state empty.
 func TestState_UnmarshalTextRejectsUnknown(t *testing.T) {
 	var s State
 
@@ -279,9 +288,8 @@ func TestState_UnmarshalTextRejectsUnknown(t *testing.T) {
 // ACCEPTED
 // -------------------------------------------------------------------------
 
-// Accepted sits between submitted and running so that work a provider queued
-// and then dropped is distinguishable from work that actually ran. The quota
-// ledger reads that difference.
+// Accepted moves only forward, so the ledger can tell work a provider queued
+// and dropped from work that ran.
 func TestState_AcceptedTransitions(t *testing.T) {
 	legal := []State{StateRunning, StateSucceeded, StateFailed, StateCancelled, StateLost}
 	for _, next := range legal {

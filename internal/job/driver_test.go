@@ -23,6 +23,7 @@ import (
 // VALIDATION
 // -------------------------------------------------------------------------
 
+// Only the exact lowercase driver names validate.
 func TestDriverName_Valid(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -51,6 +52,7 @@ func TestDriverName_Valid(t *testing.T) {
 	}
 }
 
+// Every driver name parses to its constant.
 func TestParseDriverName(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -76,9 +78,8 @@ func TestParseDriverName(t *testing.T) {
 	}
 }
 
-// A rejected name must yield the zero value rather than the string that was
-// refused, so that a caller ignoring the error cannot carry an invalid driver
-// forward.
+// A rejected name yields the zero value, so a caller ignoring the error cannot
+// carry an invalid driver forward.
 func TestParseDriverName_Invalid(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -195,6 +196,7 @@ func TestDrivers_MatchesConstants(t *testing.T) {
 // TEXT ENCODING
 // -------------------------------------------------------------------------
 
+// Valid drivers marshal to their name; the zero value and unknown names fail.
 func TestDriverName_MarshalText(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -232,6 +234,7 @@ func TestDriverName_MarshalText(t *testing.T) {
 	}
 }
 
+// Every driver name unmarshals to its constant.
 func TestDriverName_UnmarshalText(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -257,6 +260,7 @@ func TestDriverName_UnmarshalText(t *testing.T) {
 	}
 }
 
+// Unmarshalling a name outside the vocabulary fails with ErrUnknownDriver.
 func TestDriverName_UnmarshalTextInvalid(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -328,6 +332,7 @@ func TestDriverName_JSONRejectsUnknown(t *testing.T) {
 	}
 }
 
+// String returns the name as a job file writes it.
 func TestDriverName_String(t *testing.T) {
 	if got := DriverContainer.String(); got != "container" {
 		t.Errorf("DriverContainer.String() = %q, want %q", got, "container")

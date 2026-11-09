@@ -3,11 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// The interesting behaviour here is what happens when a provider does not
-// answer, so most of these scenarios are failures. The shared fake in
-// internal/plugin cannot express them: it advances only when a test tells it
-// to, which is right for a registry test and useless for one that has to watch
-// a provider fail twice and recover on the third attempt.
+// Most scenarios here are a provider failing to answer. They run on a
+// scripted provider rather than the shared fake in internal/plugin, which
+// advances only when a test tells it to.
 // -------------------------------------------------------------------------------
 
 package dispatch
@@ -34,29 +32,21 @@ import (
 // DOUBLES
 // -------------------------------------------------------------------------
 
-// scriptedProvider answers however a test needs it to.
+// scriptedProvider answers however a test needs it to: each *Err field fails
+// the call it names, and the counters record the calls made.
 type scriptedProvider struct {
 	name string
 
-	// Failures, in order of the call that returns them.
 	submitErr error
 	statusErr error
 	resultErr error
 
-	// pollsToFinish is how many Status calls happen before a terminal state.
-	pollsToFinish int
+	pollsToFinish int // Status calls before a terminal state
 	finalState    execution.State
 	exitCode      int
-
-	// noExitCode leaves the result without one, as a worker, or a task
-	// stopped before its process ran, has none.
-	noExitCode bool
-
-	// synchronous providers finish inside Submit, like a function invocation.
-	synchronous bool
-
-	// billed is what the platform reports it charged, nil for most.
-	billed *quota.Execution
+	noExitCode    bool             // no exit code, as a worker has none
+	synchronous   bool             // finishes inside Submit, like a function
+	billed        *quota.Execution // what the platform charged; usually nil
 
 	submits int
 	polls   int
@@ -64,6 +54,7 @@ type scriptedProvider struct {
 	cancels int
 }
 
+// Name returns the provider's configured name.
 func (p *scriptedProvider) Name() string { return p.name }
 
 // exit is the result's exit code: exitCode, or none with noExitCode.
@@ -75,10 +66,12 @@ func (p *scriptedProvider) exit() *int {
 	return new(p.exitCode)
 }
 
+// Capabilities reports a fresh container fixture.
 func (p *scriptedProvider) Capabilities(context.Context) (plugin.Capabilities, error) {
 	return plugin.FixtureContainer(time.Now()), nil
 }
 
+// Submit accepts the task, or finishes it at once when synchronous.
 func (p *scriptedProvider) Submit(
 	_ context.Context, id execution.ID, _ *job.Task,
 ) (plugin.Submission, error) {
@@ -102,6 +95,7 @@ func (p *scriptedProvider) Submit(
 	}, nil
 }
 
+// Status reports running until pollsToFinish calls, then finalState.
 func (p *scriptedProvider) Status(
 	_ context.Context, id execution.ID,
 ) (execution.Status, error) {
@@ -119,6 +113,7 @@ func (p *scriptedProvider) Status(
 	return execution.Status{ID: id, State: state}, nil
 }
 
+// Result returns a one-second run with the scripted exit code and billing.
 func (p *scriptedProvider) Result(
 	_ context.Context, id execution.ID,
 ) (*execution.Result, error) {
@@ -137,6 +132,7 @@ func (p *scriptedProvider) Result(
 	}, nil
 }
 
+// Cancel counts the call and succeeds.
 func (p *scriptedProvider) Cancel(context.Context, execution.ID) error {
 	p.cancels++
 
@@ -153,6 +149,7 @@ type fakeRegistry struct {
 	recredentialed int
 }
 
+// Inputs returns the declared inputs with each provider's usage filled in.
 func (r *fakeRegistry) Inputs(
 	namespace string, usage func(namespace, provider string) (total, share quota.PoolUsage),
 ) []scheduler.Input {
@@ -167,6 +164,30 @@ func (r *fakeRegistry) Inputs(
 
 	return inputs
 }
+
+// Provider returns the named provider, if the test declared it.
+func (r *fakeRegistry) Provider(name string) (plugin.Provider, bool) {
+	p, ok := r.providers[name]
+
+	return p, ok
+}
+
+// Recredential hands a provider that takes one a fresh credential, as the
+// registry does after resolving its source again, and counts the refreshes.
+func (r *fakeRegistry) Recredential(ctx context.Context, name string) (bool, error) {
+	recredentialer, ok := r.providers[name].(plugin.Recredentialer)
+	if !ok {
+		return false, nil
+	}
+
+	r.recredentialed++
+
+	return true, recredentialer.Recredential(ctx, []byte("fresh"))
+}
+
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
 
 // ns is the namespace every dispatch here runs in. It declares no shares.
 const ns = "default"
@@ -210,34 +231,9 @@ func usageOf(reg *fakeRegistry, provider string) quota.PoolUsage {
 	return usage
 }
 
-func (r *fakeRegistry) Provider(name string) (plugin.Provider, bool) {
-	p, ok := r.providers[name]
-
-	return p, ok
-}
-
-// Recredential hands a provider that takes one a fresh credential, as the
-// registry does after resolving its source again, and counts the refreshes.
-func (r *fakeRegistry) Recredential(ctx context.Context, name string) (bool, error) {
-	recredentialer, ok := r.providers[name].(plugin.Recredentialer)
-	if !ok {
-		return false, nil
-	}
-
-	r.recredentialed++
-
-	return true, recredentialer.Recredential(ctx, []byte("fresh"))
-}
-
-// -------------------------------------------------------------------------
-// HELPERS
-// -------------------------------------------------------------------------
-
-// newRegistry registers providers, each healthy with container budgets.
-//
-// Each is charged a little more of its request pool than the one before, so
-// free quota descends, ranking order matches declaration order, and a test can
-// say "the second one" and mean it.
+// newRegistry registers providers, each healthy with container budgets and
+// charged a little more than the one before, so ranking follows declaration
+// order.
 func newRegistry(providers ...*scriptedProvider) *fakeRegistry {
 	reg := &fakeRegistry{providers: map[string]plugin.Provider{}, executions: memory.NewExecutions()}
 
@@ -279,6 +275,7 @@ func newDispatcher(t *testing.T, reg *fakeRegistry) *Dispatcher {
 	}))
 }
 
+// rawBlock parses src as the body of a task's config block.
 func rawBlock(t *testing.T, src string) *job.RawBlock {
 	t.Helper()
 
@@ -313,6 +310,7 @@ func reroutingRetry(n int) *job.Retry {
 // THE HAPPY PATH
 // -------------------------------------------------------------------------
 
+// A submitted task is polled until terminal and its result fetched once.
 func TestRunTaskPollsUntilTerminal(t *testing.T) {
 	t.Parallel()
 
@@ -458,15 +456,13 @@ func TestInfrastructureFailureReroutes(t *testing.T) {
 		t.Error("the reroute was not recorded")
 	}
 
-	// The abandoned attempt keeps its failure, which is what explains the
-	// reroute to whoever reads the outcome.
+	// The abandoned attempt keeps the failure that explains the reroute
 	if outcome.Attempts[0].Err == nil {
 		t.Error("the first attempt recorded no error")
 	}
 }
 
-// Our own bug reproduces everywhere, so sending it onward spends capacity to
-// fail identically.
+// An internal failure reproduces on every provider, so it is not rerouted.
 func TestInternalFailureDoesNotReroute(t *testing.T) {
 	t.Parallel()
 
@@ -582,6 +578,7 @@ func TestBudgetIsCappedByCandidates(t *testing.T) {
 // NOWHERE TO RUN
 // -------------------------------------------------------------------------
 
+// A task no provider admits fails with ErrNoCandidates and its rejections.
 func TestNoCandidates(t *testing.T) {
 	t.Parallel()
 
@@ -626,6 +623,7 @@ type refusingLedger struct {
 	refuse map[string]bool
 }
 
+// Reserve refuses a named provider and reserves on the real ledger otherwise.
 func (l *refusingLedger) Reserve(
 	ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution, pays bool,
 ) error {
@@ -644,10 +642,12 @@ type brokenLedger struct {
 	*ledger.Ledger
 }
 
+// Reserve fails as a store that is down does.
 func (brokenLedger) Reserve(context.Context, execution.ID, string, string, quota.Execution, bool) error {
 	return errors.New("store down")
 }
 
+// noWait is a sleeper that returns at once.
 func noWait(context.Context, time.Duration) error { return nil }
 
 // The reservation is the declared timeout; the settled charge is what the run
@@ -852,6 +852,7 @@ func TestUnrecordableReservationDispatchesNothing(t *testing.T) {
 // JOBS
 // -------------------------------------------------------------------------
 
+// A task that fails on its own answer stops the job before the next task.
 func TestRunStopsAtTheFirstFailingTask(t *testing.T) {
 	t.Parallel()
 
@@ -887,6 +888,7 @@ func TestRunStopsAtTheFirstFailingTask(t *testing.T) {
 	}
 }
 
+// Every task of a passing job runs, in declaration order.
 func TestRunExecutesEveryTaskInOrder(t *testing.T) {
 	t.Parallel()
 

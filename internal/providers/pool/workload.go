@@ -26,8 +26,7 @@ import (
 var defaultResources = plugin.Resources{CPU: 1000, Memory: 1024}
 
 // workloadOf translates a task into the workload an agent runs. A task with no
-// image, or an unreadable timeout, is our failure to have admitted it, not the
-// node's.
+// image, or an unreadable timeout, is an admission failure, not the node's.
 func workloadOf(task *job.Task) (*agentrpc.Workload, error) {
 	image, ok := task.ConfigString(job.ConfigImage)
 	if !ok {

@@ -3,9 +3,8 @@
 //
 // Author: Alex Freidah
 //
-// Deregisters a job, as nomad job stop does: it can no longer be dispatched,
-// its versions and executions are kept, and registering it again revives it.
-// Purging arrives with garbage collection.
+// Deregisters a job so it can no longer be dispatched. Its versions and
+// executions are kept, and registering it again revives it.
 // -------------------------------------------------------------------------------
 
 package cli

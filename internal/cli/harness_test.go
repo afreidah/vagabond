@@ -63,8 +63,7 @@ func serve(t *testing.T, cfg string) *testServer {
 	httpServer := httptest.NewServer(srv.Handler())
 	t.Cleanup(httpServer.Close)
 
-	// Nothing may come from the environment, or a developer's own settings
-	// would change what these tests assert.
+	// Clear the environment so a developer's own settings cannot leak in
 	t.Setenv(addressEnv, "")
 	t.Setenv(namespaceEnv, "")
 

@@ -40,8 +40,7 @@ type Conn struct {
 // MiB, and how many there are, as the agent last reported them.
 func (c *Conn) Used() (cpu, memory int64, running int) {
 	for _, h := range c.Node.GetHeld() {
-		// A finished workload keeps its container until released, but no
-		// longer uses the node.
+		// A finished workload is held until released but no longer uses the node.
 		if h.GetRunning() {
 			cpu += h.GetResources().GetCpu()
 			memory += h.GetResources().GetMemory()
@@ -84,8 +83,7 @@ func (c *Conns) Report(node *agentrpc.NodeRegisterRequest, session *agentrpc.Ses
 	name := node.GetName()
 	delete(c.left, name)
 
-	// The same connection reporting again: only what it reported changes. The
-	// entry is replaced, not modified, since readers hold the old one unlocked.
+	// Replaced, not modified, since readers hold the old entry unlocked.
 	if old, ok := c.conns[name]; ok && old.Session == session {
 		updated := *old
 		updated.Node = node
@@ -116,8 +114,7 @@ func (c *Conns) Remove(session *agentrpc.Session) []string {
 	var removed []string
 
 	for name, conn := range c.conns {
-		// A node that already reconnected on a new session is not removed
-		// when its old session closes.
+		// A node already reconnected on a new session outlives its old one.
 		if conn.Session == session {
 			delete(c.conns, name)
 			c.left[name] = c.now()

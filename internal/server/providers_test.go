@@ -18,6 +18,10 @@ import (
 	"github.com/afreidah/vagabond/internal/scheduler"
 )
 
+// -------------------------------------------------------------------------
+// FIXTURES
+// -------------------------------------------------------------------------
+
 // Base units per natural unit: a vCPU-second is a thousand millicores for a
 // thousand milliseconds, a GB-second 1024 MiB for the same.
 const (
@@ -41,6 +45,10 @@ func meteredInput(t *testing.T, usage quota.PoolUsage) *scheduler.Input {
 		Provider: "gcp", Tier: 2, Enabled: true, Healthy: true, Limits: limits, Usage: usage,
 	}
 }
+
+// -------------------------------------------------------------------------
+// TESTS
+// -------------------------------------------------------------------------
 
 // Every configured provider is listed with the time usage was read.
 func TestProviders_ListsEveryProvider(t *testing.T) {

@@ -46,6 +46,10 @@ const second = 1000
 // runTimeout bounds waiting for a run to end.
 const runTimeout = 30 * time.Second
 
+// -------------------------------------------------------------------------
+// SUITE
+// -------------------------------------------------------------------------
+
 // TestMain starts Postgres once for the package and stops it after.
 func TestMain(m *testing.M) {
 	pgtest.Main(m)

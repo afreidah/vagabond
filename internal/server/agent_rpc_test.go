@@ -49,10 +49,13 @@ type fakeExecutor struct {
 	output    string
 }
 
+// newFakeExecutor returns an executor holding nothing, whose workloads exit 0
+// printing hello.
 func newFakeExecutor() *fakeExecutor {
 	return &fakeExecutor{workloads: map[string]*executor.Spec{}, cancelled: map[string]bool{}, output: "hello\n"}
 }
 
+// Submit records the workload under id.
 func (f *fakeExecutor) Submit(_ context.Context, id string, spec *executor.Spec) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -62,6 +65,8 @@ func (f *fakeExecutor) Submit(_ context.Context, id string, spec *executor.Spec)
 	return nil
 }
 
+// Status reports a held workload succeeded, or cancelled once Cancel was
+// called on it.
 func (f *fakeExecutor) Status(_ context.Context, id string) (execution.Status, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -78,6 +83,7 @@ func (f *fakeExecutor) Status(_ context.Context, id string) (execution.Status, e
 	return execution.Status{State: state, ProviderID: id}, nil
 }
 
+// Result returns a held workload's exit code and output.
 func (f *fakeExecutor) Result(ctx context.Context, id string) (*execution.Result, error) {
 	if _, err := f.Status(ctx, id); err != nil {
 		return nil, err
@@ -86,6 +92,7 @@ func (f *fakeExecutor) Result(ctx context.Context, id string) (*execution.Result
 	return &execution.Result{ExitCode: new(f.exitCode), Duration: time.Second, Logs: []byte(f.output)}, nil
 }
 
+// Cancel marks the workload cancelled.
 func (f *fakeExecutor) Cancel(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -95,6 +102,7 @@ func (f *fakeExecutor) Cancel(_ context.Context, id string) error {
 	return nil
 }
 
+// Release forgets the workload.
 func (f *fakeExecutor) Release(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -104,6 +112,7 @@ func (f *fakeExecutor) Release(_ context.Context, id string) error {
 	return nil
 }
 
+// Logs writes the output from offset on.
 func (f *fakeExecutor) Logs(_ context.Context, _ string, offset int64, w io.Writer) error {
 	_, err := io.WriteString(w, f.output[min(offset, int64(len(f.output))):])
 
@@ -123,6 +132,7 @@ func (f *fakeExecutor) Held(context.Context) ([]executor.Held, error) {
 	return held, nil
 }
 
+// Runtimes advertises the default runtime.
 func (f *fakeExecutor) Runtimes() []string { return []string{executor.DefaultRuntime} }
 
 // -------------------------------------------------------------------------

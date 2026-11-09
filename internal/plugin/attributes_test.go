@@ -22,6 +22,7 @@ import (
 // PROJECTION
 // -------------------------------------------------------------------------
 
+// Every typed field the function fixture advertises appears under its name.
 func TestCapabilities_Attributes(t *testing.T) {
 	c := FixtureFunction(time.Now())
 	attrs := c.Attributes()
@@ -83,6 +84,7 @@ func TestCapabilities_AttributesAlwaysIncludeBooleans(t *testing.T) {
 	}
 }
 
+// Each call builds a fresh map, so mutating one cannot change the next.
 func TestCapabilities_AttributesAreDerived(t *testing.T) {
 	c := Capabilities{Drivers: []job.DriverName{job.DriverContainer}}
 
@@ -98,6 +100,7 @@ func TestCapabilities_AttributesAreDerived(t *testing.T) {
 // ATTRIBUTE QUERIES
 // -------------------------------------------------------------------------
 
+// Only the architecture and driver attributes are sets.
 func TestSetValued(t *testing.T) {
 	tests := []struct {
 		name string
@@ -135,6 +138,7 @@ func TestSetValuedAttributesRenderCommaSeparated(t *testing.T) {
 	}
 }
 
+// Reserved claims names under Prefix and nothing that merely resembles it.
 func TestReserved(t *testing.T) {
 	tests := []struct {
 		name string
@@ -160,8 +164,8 @@ func TestReserved(t *testing.T) {
 // FIXTURES
 // -------------------------------------------------------------------------
 
-// The fixtures encode the distinctions Chunk 3 depends on. If these drift, the
-// admission tests stop testing what they claim to.
+// The fixtures encode the distinctions the admission tests depend on. If these
+// drift, those tests stop testing what they claim to.
 func TestFixtures_EncodeTheFamilyDistinctions(t *testing.T) {
 	now := time.Now()
 
@@ -215,6 +219,7 @@ func TestKnownAttributes_IncludesTheQuotaAttribute(t *testing.T) {
 	}
 }
 
+// A caller mutating the returned slice cannot reach the package vocabulary.
 func TestKnownAttributes_ReturnsCopy(t *testing.T) {
 	first := KnownAttributes()
 	first[0] = "mutated"
@@ -224,9 +229,8 @@ func TestKnownAttributes_ReturnsCopy(t *testing.T) {
 	}
 }
 
-// The closed set is checkable; the operator's own prefix is not. That split is
-// what lets a typo be caught without forbidding an operator from tagging a
-// provider with whatever they like.
+// The closed set is checkable and the operator's own prefix is not, so a typo
+// is caught while an operator still tags a provider with anything.
 func TestMatchable(t *testing.T) {
 	tests := []struct {
 		name string

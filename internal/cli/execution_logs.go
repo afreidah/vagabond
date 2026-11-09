@@ -38,8 +38,9 @@ func (c *ExecutionLogsCommand) Help() string {
 Usage: vagabond execution logs [options] <id>
 
   Prints the output stored for an execution, once it has a result. The last
-  64 KiB is kept. With -f, streams the output while the execution runs and
-  exits when it ends.
+  64 KiB is kept. With -f, streams the output while the execution runs, on
+  providers that can stream it (Cloud Run and agent pools), prints what did
+  not stream once it ends, and exits.
 
 Logs Options:
 

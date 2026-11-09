@@ -3,14 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// The acceptance test is the first one: a configuration file naming one
-// provider per execution family has to reach admission as inputs, with nothing
-// in the path needing a cloud account.
-//
-// The rest are about the decisions a registry makes when something is wrong. A
-// provider that fails a refresh must survive it, a disabled provider must
-// survive being disabled, and both must still be visible to a plan that has to
-// explain why they were not used.
+// The acceptance test is first: a configuration naming one provider per
+// execution family reaches admission as inputs, with no cloud account in the
+// path. The rest cover what a registry does when something is wrong: a provider
+// that fails a refresh or is disabled survives, and stays visible to a plan.
 // -------------------------------------------------------------------------------
 
 package registry
@@ -33,6 +29,10 @@ import (
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/scheduler"
 )
+
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
 
 // fixturePath is the deployment registering all three families.
 var fixturePath = filepath.Join("testdata", "providers.hcl")
@@ -59,6 +59,8 @@ func build(t *testing.T, src string) *Registry {
 // ACCEPTANCE
 // -------------------------------------------------------------------------
 
+// The fixture deployment reaches admission as inputs, ordered, tagged, and
+// with its disabled provider kept.
 func TestFixtureLoadsIntoInputs(t *testing.T) {
 	t.Parallel()
 
@@ -112,8 +114,7 @@ func TestFixtureLoadsIntoInputs(t *testing.T) {
 		t.Errorf("provider.meta.region = %q, want us-south", got)
 	}
 
-	// A disabled provider is kept rather than dropped, because a plan that
-	// omits it cannot say why it was not considered.
+	// A disabled provider is kept, so a plan can say why it was not used.
 	worker := inputs[2]
 	if worker.Enabled {
 		t.Error("worker-primary is enabled, want it off")
@@ -125,8 +126,8 @@ func TestFixtureLoadsIntoInputs(t *testing.T) {
 	}
 }
 
-// The example an operator is pointed at has to work. One that does not is worse
-// than no example, and nothing else checks it.
+// The example configuration an operator is pointed at loads and builds;
+// nothing else checks it.
 func TestExampleConfigBuilds(t *testing.T) {
 	t.Parallel()
 
@@ -151,6 +152,7 @@ func TestExampleConfigBuilds(t *testing.T) {
 // CONSTRUCTION
 // -------------------------------------------------------------------------
 
+// A nil configuration builds an empty registry.
 func TestNewNilConfig(t *testing.T) {
 	t.Parallel()
 
@@ -168,6 +170,8 @@ func TestNewNilConfig(t *testing.T) {
 	}
 }
 
+// An unknown provider type is refused, naming the type, the provider and the
+// known types.
 func TestNewUnknownType(t *testing.T) {
 	t.Parallel()
 
@@ -183,8 +187,7 @@ provider "mystery" { type = "fake-quantum" }
 		t.Fatal("an unknown provider type was accepted")
 	}
 
-	// The message has to name what was asked for and what exists, because the
-	// operator reading it is looking at a typo.
+	// The operator reading it is looking at a typo.
 	for _, want := range []string{"fake-quantum", "mystery", TypeFakeContainer} {
 		if !strings.Contains(diags.Error(), want) {
 			t.Errorf("diagnostics %q do not mention %q", diags.Error(), want)
@@ -192,6 +195,7 @@ provider "mystery" { type = "fake-quantum" }
 	}
 }
 
+// A tag that is not a string fails construction.
 func TestNewRejectsBadTags(t *testing.T) {
 	t.Parallel()
 
@@ -213,6 +217,7 @@ provider "tagged" {
 	}
 }
 
+// Providers are held in name order, whatever order they were configured in.
 func TestNewSortsByName(t *testing.T) {
 	t.Parallel()
 
@@ -372,18 +377,23 @@ type failingProvider struct {
 	err  error
 }
 
+// Name returns the name the provider was given.
 func (p *failingProvider) Name() string { return p.name }
 
+// Capabilities fails with err.
 func (p *failingProvider) Capabilities(context.Context) (plugin.Capabilities, error) {
 	return plugin.Capabilities{}, p.err
 }
 
+// Submit fails with err.
 func (p *failingProvider) Submit(
 	context.Context, execution.ID, *job.Task,
 ) (plugin.Submission, error) {
 	return plugin.Submission{}, p.err
 }
 
+// A provider that fails a refresh is marked unhealthy but kept with its last
+// snapshot, and the providers after it are still refreshed.
 func TestRefreshKeepsFailingProvider(t *testing.T) {
 	t.Parallel()
 
@@ -411,8 +421,7 @@ provider "steady" { type = "fake-function" }
 		t.Error("flaky is healthy after failing a refresh")
 	}
 
-	// The provider survives, and so does what was last known about it: a
-	// transient outage must not become a job that cannot be placed later.
+	// A transient outage must not leave the provider unplaceable later.
 	if inputs[0].Capabilities.Drivers == nil {
 		t.Error("flaky lost its last known capabilities")
 	}
@@ -423,6 +432,7 @@ provider "steady" { type = "fake-function" }
 	}
 }
 
+// A disabled provider is not asked, so a failing one fails no refresh.
 func TestRefreshSkipsDisabled(t *testing.T) {
 	t.Parallel()
 
@@ -436,7 +446,6 @@ provider "off" {
 	boom := errors.New("connection refused")
 	r.entries[0].provider = &failingProvider{name: "off", err: boom}
 
-	// A provider nobody wants used is not one worth failing a refresh over.
 	if err := r.Refresh(context.Background()); err != nil {
 		t.Fatalf("refresh failed on a disabled provider: %s", err)
 	}
@@ -446,6 +455,7 @@ provider "off" {
 // QUERIES
 // -------------------------------------------------------------------------
 
+// A configured provider is found by name, and an unconfigured name is not.
 func TestProviderLookup(t *testing.T) {
 	t.Parallel()
 
@@ -465,6 +475,8 @@ func TestProviderLookup(t *testing.T) {
 	}
 }
 
+// Every Inputs call hands out its own copy of the cached snapshot, so a caller
+// that changes its drivers does not change what the next one sees.
 func TestInputsAreIndependent(t *testing.T) {
 	t.Parallel()
 
@@ -474,9 +486,6 @@ func TestInputsAreIndependent(t *testing.T) {
 		t.Fatalf("refresh failed: %s", err)
 	}
 
-	// Admission runs across every candidate against one cached snapshot, so a
-	// caller that sorted the drivers it was handed must not change what the
-	// next one sees.
 	first := r.Inputs(job.DefaultNamespace, nil)[0]
 	first.Capabilities.Drivers[0] = job.DriverWorker
 
@@ -486,12 +495,11 @@ func TestInputsAreIndependent(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
-// TYPES
+// PROVIDER TYPES
 // -------------------------------------------------------------------------
 
-// Every fake builds from nothing but a name, which is what keeps the registry
-// and job plan runnable with no cloud account. A real provider needs its own
-// config block and is covered by that plugin's own tests.
+// Every fake builds from nothing but a name, so the registry and job plan run
+// with no cloud account.
 func TestBuild(t *testing.T) {
 	t.Parallel()
 
@@ -511,8 +519,8 @@ func TestBuild(t *testing.T) {
 	}
 }
 
-// A real provider needs configuration, and saying so is more useful than
-// three complaints about absent attributes.
+// A real provider built with no configuration names the missing config block,
+// rather than each absent attribute.
 func TestBuildRealProviderNeedsConfig(t *testing.T) {
 	t.Parallel()
 
@@ -526,6 +534,7 @@ func TestBuildRealProviderNeedsConfig(t *testing.T) {
 	}
 }
 
+// Changing the slice Types returns does not change the vocabulary.
 func TestTypesIsACopy(t *testing.T) {
 	t.Parallel()
 
@@ -563,9 +572,8 @@ provider "needs-a-key" {
 	}
 }
 
-// A credential that cannot be obtained stops that provider and says which one,
-// because the alternative is an authentication rejection several steps later
-// with nothing naming the cause.
+// A credential that cannot be resolved fails its provider at build, naming the
+// provider and the source, rather than as a rejection later.
 func TestNewReportsCredentialFailure(t *testing.T) {
 	t.Parallel()
 
@@ -591,8 +599,7 @@ provider "unreachable-secret" {
 	}
 }
 
-// One broken provider does not hide the next one's problem: an operator fixing
-// a configuration should see everything wrong with it in one run.
+// One broken provider does not hide the next one's problem.
 func TestNewCollectsEveryProblem(t *testing.T) {
 	t.Parallel()
 
@@ -609,8 +616,7 @@ provider "bad-secret" {
 
 	_, diags = New(t.Context(), cfg)
 
-	// Diagnostics.Error renders only the first, so read them all rather than
-	// asserting against the summary.
+	// Diagnostics.Error renders only the first, so read every one.
 	var reported string
 	for _, d := range diags {
 		reported += d.Summary + " " + d.Detail + "\n"

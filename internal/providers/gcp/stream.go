@@ -3,10 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// entries:tail, which is a bidirectional streaming method reachable over plain
-// HTTP through gRPC transcoding. Two details cost an attempt each to find: the
-// request body is a JSON array because the body is a stream of requests, and
-// the response is a JSON array that stays open rather than one object per line.
+// entries:tail, a bidirectional streaming method reachable over plain HTTP
+// through gRPC transcoding. The request body is a JSON array because the body
+// is a stream of requests, and the response is a JSON array that stays open
+// rather than one object per line.
 // -------------------------------------------------------------------------------
 
 package gcp
@@ -23,11 +23,17 @@ import (
 	"github.com/afreidah/vagabond/internal/plugin"
 )
 
-// bufferWindow is how long Cloud Logging holds entries to order them.
-//
-// Latency traded for correct ordering. Below about a second, stderr starts
-// arriving before the stdout that preceded it.
+// -------------------------------------------------------------------------
+// CONSTANTS
+// -------------------------------------------------------------------------
+
+// bufferWindow is how long Cloud Logging holds entries to order them. Below
+// about a second, stderr arrives before the stdout that preceded it.
 const bufferWindow = "1s"
+
+// -------------------------------------------------------------------------
+// STREAMING
+// -------------------------------------------------------------------------
 
 // StreamLogs writes a running execution's output to w as it arrives. A tail
 // starts at what is being logged now, so it cannot resume from an offset.
@@ -47,13 +53,10 @@ func (p *Provider) StreamLogs(
 	return copyTail(resp.Body, w)
 }
 
-// openTail starts the stream.
-//
-// Not routed through call, which reads the whole body: the point here is a
-// response that never ends.
+// openTail starts the stream. Not routed through call, which reads the whole
+// body, because this response never ends.
 func (p *Provider) openTail(ctx context.Context, job string) (*http.Response, error) {
-	// An array, because a streaming method's body is a stream of requests. A
-	// bare object is rejected as "Invalid value (Object)".
+	// A bare object is rejected as "Invalid value (Object)"
 	payload := []map[string]any{{
 		"resourceNames": []string{"projects/" + p.cfg.Project},
 		"filter": fmt.Sprintf(
@@ -91,14 +94,12 @@ func (p *Provider) openTail(ctx context.Context, job string) (*http.Response, er
 	return resp, nil
 }
 
-// copyTail decodes the open array, writing each entry's text as it arrives.
-//
-// Decode blocks until a whole element has been received, which is what makes
-// this a stream rather than a poll.
-//
-// A read failure ends the copy without reporting one. Once the stream is open,
-// every way it stops is the same to the caller, and none is a reason to fail
-// work the provider is still doing.
+// -------------------------------------------------------------------------
+// DECODING
+// -------------------------------------------------------------------------
+
+// copyTail decodes the open array, writing each entry's text as it arrives. A
+// read failure ends the copy quietly: no way a stream stops fails the work.
 func copyTail(body io.Reader, w io.Writer) error {
 	dec := json.NewDecoder(body)
 

@@ -20,6 +20,11 @@ import (
 	"github.com/hashicorp/hcl/v2"
 )
 
+// -------------------------------------------------------------------------
+// HARNESS
+// -------------------------------------------------------------------------
+
+// validJob is the smallest specification that passes every rule.
 const validJob = `
 job "build" {
   type = "batch"
@@ -51,6 +56,7 @@ func writeJob(t *testing.T, src string) string {
 // THE HAPPY PATH
 // -------------------------------------------------------------------------
 
+// A valid file exits zero and says so.
 func TestJobValidate_ValidFile(t *testing.T) {
 	code, stdout, stderr := run("job", "validate", writeJob(t, validJob))
 
@@ -63,6 +69,7 @@ func TestJobValidate_ValidFile(t *testing.T) {
 	}
 }
 
+// A file that does not exist fails with a read error, not a parse error.
 func TestJobValidate_MissingFile(t *testing.T) {
 	code, _, stderr := run("job", "validate", filepath.Join(t.TempDir(), "absent.hcl"))
 
@@ -79,6 +86,7 @@ func TestJobValidate_MissingFile(t *testing.T) {
 // FAILURES
 // -------------------------------------------------------------------------
 
+// A syntax error fails and reports something.
 func TestJobValidate_SyntaxError(t *testing.T) {
 	code, _, stderr := run("job", "validate", writeJob(t, `job "broken" {`))
 
@@ -111,8 +119,8 @@ func TestJobValidate_ValidationError(t *testing.T) {
 	}
 }
 
-// Every problem is reported, not just the first. Fixing a file one line per run
-// is the thing a validator exists to avoid.
+// Every problem is reported, not just the first, so a file is fixed in one
+// pass.
 func TestJobValidate_ReportsEveryProblem(t *testing.T) {
 	src := `
 job "broken" {
@@ -138,6 +146,7 @@ job "broken" {
 // METADATA
 // -------------------------------------------------------------------------
 
+// parameterizedFile requires a version supplied with -meta.
 const parameterizedFile = `
 job "build" {
   type = "batch"
@@ -162,6 +171,7 @@ job "build" {
 }
 `
 
+// Required metadata supplied with -meta validates.
 func TestJobValidate_MetaSupplied(t *testing.T) {
 	path := writeJob(t, parameterizedFile)
 
@@ -176,8 +186,8 @@ func TestJobValidate_MetaSupplied(t *testing.T) {
 	}
 }
 
-// Matching Nomad: a job referencing metadata nobody supplied is refused rather
-// than validating and then interpolating nothing at submission.
+// A job requiring metadata nobody supplied is refused rather than validating
+// and then interpolating nothing at submission.
 func TestJobValidate_MetaMissing(t *testing.T) {
 	code, _, stderr := run("job", "validate", writeJob(t, parameterizedFile))
 
@@ -250,8 +260,8 @@ func TestFormatDiagnostic_SummaryOnly(t *testing.T) {
 // STANDARD INPUT
 // -------------------------------------------------------------------------
 
-// runStdin executes the CLI with a specification piped in, matching what
-// "nomad job validate -" accepts.
+// runStdin executes the CLI with src piped to standard input and returns the
+// exit code and what was written to each stream.
 func runStdin(src string, args ...string) (code int, stdout, stderr string) {
 	var out, errOut bytes.Buffer
 
@@ -260,6 +270,7 @@ func runStdin(src string, args ...string) (code int, stdout, stderr string) {
 	return code, out.String(), errOut.String()
 }
 
+// A specification piped to "-" is validated like a file.
 func TestJobValidate_ReadsStdin(t *testing.T) {
 	code, stdout, stderr := runStdin(validJob, "job", "validate", "-")
 
@@ -286,6 +297,7 @@ func TestJobValidate_StdinDiagnosticsNameTheInput(t *testing.T) {
 	}
 }
 
+// -meta applies to a piped specification as it does to a file.
 func TestJobValidate_StdinWithMeta(t *testing.T) {
 	code, _, stderr := runStdin(parameterizedFile,
 		"job", "validate", "-meta", "version=1.4.2", "-")

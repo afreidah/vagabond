@@ -25,6 +25,10 @@ import (
 	db "github.com/afreidah/vagabond/internal/state/postgres/sqlc"
 )
 
+// -------------------------------------------------------------------------
+// RECORDS
+// -------------------------------------------------------------------------
+
 // Create records a new execution. The ID is the primary key, so recording one
 // twice fails rather than overwriting.
 func (s *Store) Create(ctx context.Context, r *execution.Record) error {

@@ -22,8 +22,11 @@ import (
 	"github.com/afreidah/vagabond/internal/jobspec"
 )
 
-// stdinPath is the argument that means "read the specification from a pipe",
-// matching what nomad job validate and nomad job plan accept.
+// -------------------------------------------------------------------------
+// CONSTANTS
+// -------------------------------------------------------------------------
+
+// stdinPath is the argument that means "read the specification from a pipe".
 const stdinPath = "-"
 
 // -------------------------------------------------------------------------

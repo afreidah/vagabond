@@ -57,9 +57,7 @@ func (p *expiringProvider) Recredential(context.Context, []byte) error {
 func TestAuthorized_RefreshesAndRetries(t *testing.T) {
 	t.Parallel()
 
-	p := &expiringProvider{scriptedProvider: scriptedProvider{
-		name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded,
-	}}
+	p := &expiringProvider{name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded}
 
 	reg := newRegistry(&p.scriptedProvider)
 	reg.providers["a"] = p
@@ -81,8 +79,8 @@ func TestAuthorized_RefreshFails(t *testing.T) {
 
 	unusable := errors.New("unusable key")
 	p := &expiringProvider{
-		scriptedProvider: scriptedProvider{name: "a"},
-		recredentialErr:  unusable,
+		name:            "a",
+		recredentialErr: unusable,
 	}
 
 	reg := newRegistry(&p.scriptedProvider)

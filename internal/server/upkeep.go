@@ -6,8 +6,8 @@
 // What the CLI does once per call, the server does on timers: refreshing
 // provider capabilities and quota usage, reaping stale reservations, releasing
 // what providers still hold for finished executions, and claiming dispatches
-// whose owner died. Each task logs its own failures and
-// waits for its next tick, so one failing never stops another.
+// whose owner died. Each task logs its own failures and waits for its next
+// tick, so one failing never stops another.
 // -------------------------------------------------------------------------------
 
 package server
@@ -49,7 +49,7 @@ func (s *Server) startUpkeep(ctx context.Context) *sync.WaitGroup {
 }
 
 // every calls fn each interval until ctx is done. The first call is one
-// interval in, since the server did each once before serving.
+// interval in; a task that needs a pass at startup gets it before serving.
 func every(ctx context.Context, interval time.Duration, fn func(context.Context)) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

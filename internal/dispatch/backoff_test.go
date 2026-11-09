@@ -22,6 +22,7 @@ import (
 // POLLING
 // -------------------------------------------------------------------------
 
+// The poll interval doubles from Initial and holds at Max.
 func TestPollIntervalDoublesToACeiling(t *testing.T) {
 	t.Parallel()
 
@@ -57,6 +58,7 @@ func TestPollIntervalRespectsALowCeiling(t *testing.T) {
 // RETRY BACKOFF
 // -------------------------------------------------------------------------
 
+// Retry backoff is zero for the first attempt, then doubles up to max.
 func TestRetryBackoff(t *testing.T) {
 	t.Parallel()
 
@@ -82,6 +84,7 @@ func TestRetryBackoff(t *testing.T) {
 // POLICY
 // -------------------------------------------------------------------------
 
+// A task with no retry block gets one attempt, no reroute and default backoff.
 func TestRetryPolicyDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -100,6 +103,7 @@ func TestRetryPolicyDefaults(t *testing.T) {
 	}
 }
 
+// Every field a retry block sets reaches the policy.
 func TestRetryPolicyReadsTheBlock(t *testing.T) {
 	t.Parallel()
 
@@ -124,9 +128,8 @@ func TestRetryPolicyReadsTheBlock(t *testing.T) {
 	}
 }
 
-// A job already passed validation, so a bad duration here means something
-// upstream changed. Refusing to run the work over a backoff interval would be
-// the wrong trade.
+// An unusable backoff duration falls back to the default rather than failing
+// a job that already passed validation.
 func TestRetryPolicyIgnoresUnusableDurations(t *testing.T) {
 	t.Parallel()
 
@@ -164,6 +167,7 @@ func TestRetryPolicyIgnoresZeroAttempts(t *testing.T) {
 // SLEEPING
 // -------------------------------------------------------------------------
 
+// A cancelled context ends the sleep with an error.
 func TestSleepContextReturnsWhenCancelled(t *testing.T) {
 	t.Parallel()
 
@@ -175,6 +179,7 @@ func TestSleepContextReturnsWhenCancelled(t *testing.T) {
 	}
 }
 
+// A live context sleeps for at least the requested duration.
 func TestSleepContextWaits(t *testing.T) {
 	t.Parallel()
 

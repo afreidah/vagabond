@@ -28,6 +28,10 @@ import (
 	"github.com/afreidah/vagabond/internal/state/postgres/pgtest"
 )
 
+// -------------------------------------------------------------------------
+// FIXTURES
+// -------------------------------------------------------------------------
+
 // sleepyJob runs on the container provider until the test advances it.
 const sleepyJob = `
 job "sleepy" {
@@ -50,6 +54,10 @@ const (
 	outageRenew = 500 * time.Millisecond
 	outageClaim = 500 * time.Millisecond
 )
+
+// -------------------------------------------------------------------------
+// OUTAGE
+// -------------------------------------------------------------------------
 
 // A store outage refuses new dispatches and reports degraded health, while
 // plans answer and the run in flight finishes. When the store returns, that
@@ -124,6 +132,10 @@ func TestStoreOutage_RefusesNewWorkAndRecovers(t *testing.T) {
 		t.Errorf("runtime used = %d, want the settled %d", got, second)
 	}
 }
+
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
 
 // submitted waits for a dispatch's first execution to be submitted and returns
 // its ID.

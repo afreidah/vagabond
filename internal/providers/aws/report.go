@@ -22,6 +22,7 @@ import (
 	"time"
 )
 
+// The REPORT line fields read from a log tail.
 var (
 	reportDuration = regexp.MustCompile(`\tDuration: ([0-9.]+) ms`)
 	reportBilled   = regexp.MustCompile(`\tBilled Duration: ([0-9]+) ms`)

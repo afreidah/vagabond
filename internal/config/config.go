@@ -56,7 +56,7 @@ func (s *SchedulingBlock) TierMode() job.TierMode {
 }
 
 // Where the server listens for API clients and for agents when nothing says
-// otherwise: localhost only, until the API has authentication.
+// otherwise: localhost only, since the API has no authentication.
 const (
 	DefaultBind      = "127.0.0.1:4747"
 	DefaultAgentBind = "127.0.0.1:4748"
@@ -133,21 +133,11 @@ type StoreBlock struct {
 
 // Provider is one backend a deployment can dispatch to.
 //
-// Name is the routing identifier a job's provider list refers to, and Type is
-// which plugin implements it. They are separate so that one deployment can
-// register the same plugin twice, against two accounts or two regions, and a
-// job can name them apart.
-//
-// Enabled is a pointer so that an omitted value means the default rather than
-// false. A provider listed in configuration and silently off would be the
-// worst reading of a missing attribute.
-//
-// Config is left undecoded because its shape belongs to the plugin. Cloud Run
-// needs a project, a region and a runtime identity; Code Engine needs a region
-// and a project GUID; Azure would need a subscription and a resource group.
-// Declaring any of them here makes every provider carry another's fields, so
-// the plugin decodes its own block and reports its own diagnostics. The same
-// reasoning as a task's driver config, for the same reason.
+// Name is the routing identifier a job refers to and Type is the plugin that
+// implements it, so one plugin can be registered twice against two accounts.
+// Enabled is a pointer so an omitted value means enabled, not false. Config is
+// undecoded because its shape belongs to the plugin, which decodes and reports
+// on its own block.
 type Provider struct {
 	Name    string `hcl:"name,label"`
 	Type    string `hcl:"type"`
@@ -163,10 +153,8 @@ type Provider struct {
 // PoolBlock is one usage budget an operator declares for a provider, in the
 // unit that provider itself meters.
 //
-// Nothing ships a default. The limit encodes how much an operator is willing to
-// spend on a backend, which for most is the free tier exactly and for some is
-// deliberately more, so there is no correct number to supply. A provider with
-// no pools enforces nothing.
+// Nothing ships a default, since the limit encodes how much an operator is
+// willing to use. A provider with no pools enforces nothing.
 type PoolBlock struct {
 	Name   string `hcl:"name,label"`
 	Meter  string `hcl:"meter"`
@@ -174,11 +162,8 @@ type PoolBlock struct {
 	Period string `hcl:"period"`
 }
 
-// MetaBlock holds an operator's own tags for a provider.
-//
-// These reach admission as provider.meta.* attributes, the open half of the
-// attribute namespace. Vagabond never interprets them; a job may constrain on
-// them and that is the whole contract.
+// MetaBlock holds an operator's own tags for a provider. They reach admission
+// as provider.meta.* attributes, which Vagabond never interprets.
 type MetaBlock struct {
 	Body hcl.Body `hcl:",remain"`
 }
@@ -187,16 +172,8 @@ type MetaBlock struct {
 // LOADING
 // -------------------------------------------------------------------------
 
-// LoadPath reads configuration from a file or a directory.
-//
-// A directory loads every .hcl file inside it, sorted by name, and merges them
-// into one configuration. Nomad's agent config works the same way, and it is
-// what makes a provider per file possible: /etc/vagabond.d/ibm.hcl beside
-// lambda.hcl, each one reviewable on its own.
-//
-// Merging concatenates providers. Two files declaring the same provider name
-// are caught by the duplicate check that already runs, and reported once rather
-// than per file. A store may be declared in one file only.
+// LoadPath reads configuration from a file, or from every .hcl file in a
+// directory merged in name order, so each provider can live in its own file.
 func LoadPath(path string) (*File, hcl.Diagnostics) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -216,9 +193,7 @@ func LoadPath(path string) (*File, hcl.Diagnostics) {
 
 // loadDir merges every .hcl file in a directory.
 func loadDir(dir string) (*File, hcl.Diagnostics) {
-	// Sorted, because two files disagreeing should be reported the same way
-	// every run, and because a reader looking for where a provider came from
-	// should not have to know the order a filesystem happened to return.
+	// Sorted so a conflict between files is reported the same way every run
 	names, err := filepath.Glob(filepath.Join(dir, "*"+Extension))
 	if err != nil {
 		return nil, hcl.Diagnostics{{
@@ -245,9 +220,7 @@ func loadDir(dir string) (*File, hcl.Diagnostics) {
 	)
 
 	for _, name := range names {
-		// Decoded without validating, so that a provider declared twice across
-		// two files is reported once by the merged check below rather than
-		// slipping past a per-file one.
+		// Unvalidated, so a cross-file duplicate is reported once below
 		file, fileDiags := decode(name)
 		diags = append(diags, fileDiags...)
 
@@ -258,9 +231,7 @@ func loadDir(dir string) (*File, hcl.Diagnostics) {
 		merged.Providers = append(merged.Providers, file.Providers...)
 		merged.Namespaces = append(merged.Namespaces, file.Namespaces...)
 
-		// A second store or server block is refused rather than letting file
-		// order decide which database a deployment writes to or where it
-		// listens.
+		// A second singleton block is refused rather than chosen by file order
 		switch {
 		case file.Store != nil && merged.Store != nil:
 			diags = append(diags, duplicate(name, "store", "A deployment has one ledger."))
@@ -310,10 +281,8 @@ func LoadFile(path string) (*File, hcl.Diagnostics) {
 	return Load(path, src)
 }
 
-// Load decodes configuration from source.
-//
-// Returns whatever decoded alongside its diagnostics, so that a file with one
-// bad provider still reports the rest.
+// Load decodes configuration from source, returning what decoded alongside its
+// diagnostics so one bad provider does not hide the rest.
 func Load(filename string, src []byte) (*File, hcl.Diagnostics) {
 	file, diags := decodeSource(filename, src)
 	if file == nil {
@@ -323,10 +292,8 @@ func Load(filename string, src []byte) (*File, hcl.Diagnostics) {
 	return file, append(diags, file.validate()...)
 }
 
-// decode reads and decodes one file without validating it.
-//
-// Separate from Load so that a directory can validate the merged result
-// instead, and report a provider declared in two files once.
+// decode reads and decodes one file without validating it, so a directory can
+// validate the merged result instead.
 func decode(path string) (*File, hcl.Diagnostics) {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -480,12 +447,8 @@ func (p *Provider) validate() hcl.Diagnostics {
 	return diags
 }
 
-// validatePools reports budgets that cannot be enforced. owner names whose
-// pools they are, for the diagnostic.
-//
-// Every attribute is required. A pool with no limit refuses nothing, and a
-// daily budget left to default to monthly is enforced twelve times too
-// loosely, which is the direction that spends money.
+// validatePools reports budgets that cannot be enforced, owner naming whose
+// they are. Every attribute is required, since no default is safe to assume.
 func validatePools(owner string, pools []PoolBlock) hcl.Diagnostics {
 	var diags hcl.Diagnostics
 
@@ -527,8 +490,7 @@ func poolDiag(owner, pool, problem string) *hcl.Diagnostic {
 	}
 }
 
-// joinMeters and joinPeriods list the vocabulary for a diagnostic, so the
-// message stays correct when the vocabulary grows.
+// joinMeters lists the known meters for a diagnostic.
 func joinMeters() string {
 	names := make([]string, 0, len(quota.Meters()))
 	for _, m := range quota.Meters() {
@@ -538,6 +500,7 @@ func joinMeters() string {
 	return strings.Join(names, ", ")
 }
 
+// joinPeriods lists the known periods for a diagnostic.
 func joinPeriods() string {
 	names := make([]string, 0, len(quota.Periods()))
 	for _, p := range quota.Periods() {
@@ -551,10 +514,8 @@ func joinPeriods() string {
 // QUERIES
 // -------------------------------------------------------------------------
 
-// IsEnabled reports whether the provider should be considered.
-//
-// Enabled by default. An operator who took the trouble to write a provider
-// block meant it to be used, and turning it off is the deliberate act.
+// IsEnabled reports whether the provider should be considered. It defaults to
+// true, so turning a declared provider off is the deliberate act.
 func (p *Provider) IsEnabled() bool {
 	if p.Enabled == nil {
 		return true
@@ -572,11 +533,8 @@ func (p *Provider) TierOf() int {
 	return *p.Tier
 }
 
-// ConfigBody returns the provider's own configuration block, undecoded.
-//
-// Nil when the provider declared none, which is correct for anything needing
-// no settings. A plugin that requires some reports that itself, against the
-// block it was expecting.
+// ConfigBody returns the provider's own configuration block, undecoded, or nil
+// when none was declared; a plugin that needs one reports that itself.
 func (p *Provider) ConfigBody() hcl.Body {
 	if p.Config == nil {
 		return nil
@@ -585,11 +543,8 @@ func (p *Provider) ConfigBody() hcl.Body {
 	return p.Config.Body
 }
 
-// PoolSpecs returns the declared budgets in the form quota compiles.
-//
-// Field mapping only. Whether the meter and period are ones Vagabond knows is
-// the validate pass's business, so that an operator sees every problem with
-// their file in one run rather than the first one at startup.
+// PoolSpecs returns the declared budgets in the form quota compiles. It maps
+// fields only; validate checks the meters and periods.
 func (p *Provider) PoolSpecs() []quota.PoolSpec {
 	return poolSpecs(p.Pools)
 }

@@ -217,9 +217,8 @@ type agentCerts struct {
 	ca, cert, key, serverName string
 }
 
-// identify builds the agent's TLS and settles the node's name. With TLS the
-// node is its certificate's name: the default when -name was not given, and
-// the only name the server accepts when it was.
+// identify builds the agent's TLS and settles the node's name: with TLS it is
+// the certificate's common name, which a given -name must match.
 func (a *agentCerts) identify(server, name string, nameGiven bool) (*tls.Config, string, error) {
 	tlsConfig, err := a.config(server)
 	if err != nil || tlsConfig == nil {
@@ -261,8 +260,7 @@ func (a *agentCerts) config(server string) (*tls.Config, error) {
 		return nil, errors.New("-tls-ca, -tls-cert and -tls-key go together: set all three or none")
 	}
 
-	// The server's certificate is checked against the name it was dialled by,
-	// unless told otherwise.
+	// The server's certificate must carry the dialled host by default
 	serverName := a.serverName
 	if serverName == "" {
 		host, _, err := net.SplitHostPort(server)

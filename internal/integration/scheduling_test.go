@@ -20,6 +20,10 @@ import (
 	"github.com/afreidah/vagabond/internal/cli"
 )
 
+// -------------------------------------------------------------------------
+// FIXTURES
+// -------------------------------------------------------------------------
+
 // twoProviders are identical container providers with a 1000-second runtime
 // pool each.
 const twoProviders = `
@@ -61,6 +65,10 @@ job "ci" {
 }
 `
 }
+
+// -------------------------------------------------------------------------
+// SCHEDULING
+// -------------------------------------------------------------------------
 
 // The provider with more of its pool left ranks first, and the CLI selects
 // what the API plans.

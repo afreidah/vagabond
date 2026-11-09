@@ -3,10 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// The accessors are mostly exercised by the admission table, so what is here is
-// the two things that table cannot reach: deriving the image out of an
-// undecoded driver config, and the paid path, where a job that budgeted for
-// capacity is admitted to a provider a free-only job would be refused.
+// What the admission table cannot reach: deriving the image from an undecoded
+// driver config, and the paid path, where a job that budgeted for capacity is
+// admitted to a provider a free-only job is refused.
 // -------------------------------------------------------------------------------
 
 package scheduler
@@ -25,6 +24,10 @@ import (
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
+
 // configBlock parses a driver config the way the job parser leaves it: decoded
 // as a block, with its attributes still expressions.
 func configBlock(t *testing.T, src string) *job.RawBlock {
@@ -42,6 +45,7 @@ func configBlock(t *testing.T, src string) *job.RawBlock {
 // DERIVATION
 // -------------------------------------------------------------------------
 
+// The image is read out of a container task's driver config.
 func TestNewRequestDerivesImage(t *testing.T) {
 	t.Parallel()
 
@@ -64,11 +68,11 @@ command = "go test ./..."
 	}
 }
 
+// An image referencing job metadata is evaluated against the context, since
+// the config block is left undecoded at parse time.
 func TestNewRequestInterpolatesImage(t *testing.T) {
 	t.Parallel()
 
-	// The config block is left undecoded at parse time, so an image tagged with
-	// job metadata is still an expression when admission needs its value.
 	task := &job.Task{
 		Name:   "test",
 		Driver: job.DriverContainer,
@@ -89,11 +93,11 @@ func TestNewRequestInterpolatesImage(t *testing.T) {
 	}
 }
 
+// A function task names a handler, not an image, so its request has none and
+// a provider running only its own images does not reject it.
 func TestNewRequestWithoutImage(t *testing.T) {
 	t.Parallel()
 
-	// A function task names a handler, not an image, and must not be rejected
-	// by a provider that runs only its own.
 	task := &job.Task{
 		Name:   "test",
 		Driver: job.DriverFunction,
@@ -110,6 +114,7 @@ func TestNewRequestWithoutImage(t *testing.T) {
 	}
 }
 
+// A task with no driver config builds a request with no image.
 func TestNewRequestWithoutConfig(t *testing.T) {
 	t.Parallel()
 
@@ -127,9 +132,8 @@ func TestNewRequestWithoutConfig(t *testing.T) {
 // PAYING
 // -------------------------------------------------------------------------
 
-// A job that stated no ceiling gets the one this project exists to enforce.
-// Free is the default and paying is the deliberate act, the same way disabling
-// a provider is.
+// A job that stated no ceiling pays nothing; one that set a ceiling pays up
+// to it.
 func TestMaxCostDefaultsToFree(t *testing.T) {
 	t.Parallel()
 
@@ -154,9 +158,8 @@ func TestMaxCostDefaultsToFree(t *testing.T) {
 	}
 }
 
-// An exhausted free tier is not a provider being unable to run the work, it is
-// the work costing money from here on. Only a job that will not pay is refused
-// for it.
+// A spent free tier refuses only a job that will not pay; a paying job is
+// still admitted.
 func TestPayingJobSurvivesAnExhaustedFreeTier(t *testing.T) {
 	t.Parallel()
 
@@ -176,9 +179,8 @@ func TestPayingJobSurvivesAnExhaustedFreeTier(t *testing.T) {
 	}
 }
 
-// Budgeting is not unlimited. A provider charging more than the job allows is
-// still refused, which is what keeps max_cost_usd a ceiling rather than a
-// waiver.
+// A provider charging more than a paying job allows is still refused, so
+// max_cost_usd is a ceiling rather than a waiver.
 func TestPayingJobStillHasACeiling(t *testing.T) {
 	t.Parallel()
 
@@ -238,9 +240,8 @@ func TestProviderWithoutPoolsIsAdmitted(t *testing.T) {
 // MALFORMED INPUT
 // -------------------------------------------------------------------------
 
-// A timeout that does not parse is a job file error, reported by jobspec
-// validation against the line the author wrote. Admission passing it over is
-// what keeps a plan from blaming a provider for it.
+// A timeout that does not parse is passed over rather than blamed on a
+// provider, since jobspec validation reports it.
 func TestUnparseableTimeoutIsNotAProviderRejection(t *testing.T) {
 	t.Parallel()
 

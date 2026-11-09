@@ -4,15 +4,10 @@
 // Author: Alex Freidah
 //
 // Every cloud backend implements this, and the dispatcher is written against it
-// and nothing else. A plugin is translation plus classification: it turns a
-// normalized task into whatever its platform requires, and turns that
-// platform's failures into a classified error. Scheduling, retry, quota
-// accounting, and provider selection all stay in the control plane.
-//
-// This is the one producer-declared interface in the tree. Everywhere else a
-// consumer declares the narrow interface it needs, but plugin authors write
-// against this without being able to see the consumers, so it is declared once,
-// here, and implementations are written to it rather than the reverse.
+// and nothing else. A plugin is translation plus classification; scheduling,
+// retry, quota accounting, and provider selection stay in the control plane.
+// This is the one producer-declared interface in the tree, because plugin
+// authors write against it without seeing the consumers.
 // -------------------------------------------------------------------------------
 
 package plugin
@@ -67,12 +62,8 @@ func (s *Submission) Synchronous() bool {
 	return s.Result != nil
 }
 
-// Validate checks that a provider reported something coherent.
-//
-// The dispatcher calls this on every submission, because a plugin that reports
-// a terminal state with no result, or a result alongside a state that says the
-// work is still queued, will otherwise be discovered as a stuck execution hours
-// later rather than as a bug at the call site.
+// Validate checks that a provider reported something coherent, so a plugin bug
+// surfaces at the call site rather than as a stuck execution hours later.
 func (s *Submission) Validate() error {
 	if !s.State.Valid() {
 		return fmt.Errorf("%w: submission state %q", ErrInvalidSubmission, s.State)
@@ -95,12 +86,8 @@ func (s *Submission) Validate() error {
 	return nil
 }
 
-// submittableStates are the states a provider may report from Submit.
-//
-// Pending and submitted are Vagabond's own bookkeeping from before the call.
-// Lost is something only the control plane concludes. Cancelled is the result
-// of a Cancel that has not happened yet. None of them can be the answer to a
-// submission.
+// submittableStates are the states a provider may report from Submit. The rest
+// are the control plane's own bookkeeping or conclusions.
 var submittableStates = []execution.State{
 	execution.StateAccepted,
 	execution.StateRunning,
@@ -116,9 +103,9 @@ var submittableStates = []execution.State{
 // output before it finishes. A live view, never the record: Result stays
 // authoritative, and a broken stream is not a failed execution.
 //
-// offset is how many bytes of output the caller already has. A provider whose
-// stream can only start at what is being written now returns ErrNoResume for
-// any offset above zero, before writing anything, rather than start elsewhere.
+// offset is how many bytes the caller already has. A stream that can only
+// start at the present returns ErrNoResume for any offset above zero, before
+// writing anything.
 type LogStreamer interface {
 	StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error
 }
@@ -157,10 +144,7 @@ type Recredentialer interface {
 // -------------------------------------------------------------------------
 
 // ErrUnsupported reports an operation the platform has no equivalent for.
-//
-// Distinct from a failure: nothing went wrong, and retrying or rerouting will
-// not help. A worker invocation cannot be cancelled mid-request because there
-// is nothing to cancel, not because Cloudflare was unreachable.
+// Nothing went wrong, so retrying or rerouting does not help.
 var ErrUnsupported = errors.New("operation not supported by this provider")
 
 // ErrInvalidSubmission reports a provider describing its own submission

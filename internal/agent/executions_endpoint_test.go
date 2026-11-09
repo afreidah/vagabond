@@ -38,9 +38,8 @@ import (
 // under the race detector.
 const signalTimeout = 2 * time.Second
 
-// fakeExecutor keeps submitted workloads in memory and exposes hooks before
-// and after a workload enters held so tests can pause during an image pull or
-// during the handoff window while Submit still holds its reservation.
+// fakeExecutor keeps workloads in memory, with hooks before and after one
+// enters held so a test can pause mid-pull or while Submit still reserves it.
 type fakeExecutor struct {
 	mu         sync.Mutex
 	held       []executor.Held
@@ -327,8 +326,7 @@ func TestSubmit_HandoffDoesNotDoubleCountHeldReservation(t *testing.T) {
 
 	waitSignal(t, handoffReached, signalTimeout, "timed out waiting for sub-1 to reach held-and-reserved handoff")
 
-	// sub-1 is now both in Held (600/600) and still reserved (600/600).
-	// Counting it once leaves 400/400 free for sub-2, then 0/0 for sub-3.
+	// sub-1 is held and reserved; counted once, it leaves 400/400 for sub-2.
 	if _, err := ep.Submit(t.Context(), submitRequest("sub-2", "image-2:latest", 400, 400)); err != nil {
 		t.Fatalf("sub-2 Submit() during handoff = %v, want nil", err)
 	}

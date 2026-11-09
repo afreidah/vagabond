@@ -24,11 +24,9 @@ func (d *Dispatcher) Reap(ctx context.Context) (int, error) {
 	return d.ledger.Reap(ctx, d.resolve)
 }
 
-// resolve asks the execution's provider what it did.
-//
-// Anything short of an answer keeps the reservation, which is the over-count.
-// A provider with no status, whose work finished inside Submit, did run, for a
-// time nobody recorded, so its estimate stands as the charge.
+// resolve asks the execution's provider what it did. Anything short of an
+// answer keeps the reservation; a provider with no status ran inside Submit
+// for an unrecorded time, so its estimate stands.
 func (d *Dispatcher) resolve(ctx context.Context, h ledger.Held) (ledger.Verdict, time.Duration) {
 	provider, ok := d.registry.Provider(h.Provider)
 	if !ok {

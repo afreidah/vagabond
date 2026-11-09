@@ -204,7 +204,7 @@ func TestStreamer(t *testing.T) {
 	}{
 		{"following a running execution", "follow=true", execution.Record{Status: running, Provider: "box"}, true},
 		{"not following", "", execution.Record{Status: running, Provider: "box"}, false},
-		{"ended", "follow=true", execution.Record{Status: execution.Status{State: execution.StateSucceeded}, Provider: "box"}, false},
+		{"ended", "follow=true", execution.Record{State: execution.StateSucceeded, Provider: "box"}, false},
 		{"provider no longer configured", "follow=true", execution.Record{Status: running, Provider: "gone"}, false},
 		{"provider cannot stream", "follow=true", execution.Record{Status: running, Provider: "fn"}, false},
 	}
@@ -274,7 +274,7 @@ func TestEndFollow(t *testing.T) {
 	s := New(reg, led, store, NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler))
 	s.followPoll, s.followLinger = time.Millisecond, 100*time.Millisecond
 
-	rec := &execution.Record{Status: execution.Status{ID: newExecutionID(t), State: execution.StateRunning}}
+	rec := &execution.Record{ID: newExecutionID(t), State: execution.StateRunning}
 	if err := store.Create(t.Context(), rec); err != nil {
 		t.Fatalf("Create() = %v", err)
 	}
@@ -382,8 +382,7 @@ func TestLogRequests_Flushes(t *testing.T) {
 		err := http.NewResponseController(w).Flush()
 		flushed <- err
 
-		// A failed flush lets the response end, so the test reports it rather
-		// than waiting on headers that never arrive.
+		// On a failed flush the response ends, so the test can report it.
 		if err == nil {
 			<-release
 		}

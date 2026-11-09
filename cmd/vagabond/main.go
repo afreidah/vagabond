@@ -16,6 +16,7 @@ import (
 	"github.com/afreidah/vagabond/internal/cli"
 )
 
+// main runs the command line and exits with the code it returns.
 func main() {
 	os.Exit(cli.Run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }

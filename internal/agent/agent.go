@@ -143,8 +143,7 @@ func (a *Agent) connect(ctx context.Context) error {
 		case <-ticker.C:
 		}
 
-		// A failed report is not fatal: the next one carries everything, and a
-		// connection that is really gone ends through session.Done.
+		// Not fatal: the next report carries everything; a dead session ends via Done.
 		if err := a.register(ctx, session, capacity); err != nil {
 			a.logger.WarnContext(ctx, "reporting workloads", "error", err)
 		}

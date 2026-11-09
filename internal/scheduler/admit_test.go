@@ -3,13 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// Every rejection reason has to be reachable, and the table below is what
-// proves it: a baseline that every checker admits, and one case per reason that
-// changes exactly one thing. A reason that stops being producible fails here
-// rather than quietly becoming vocabulary nothing emits.
-//
-// Nothing constructs a provider. Admission is a pure function over snapshots,
-// and a test that needed a plugin to reach a verdict would mean it is not.
+// Every rejection reason has to be reachable: a baseline every checker admits,
+// and one case per reason that changes exactly one thing. Nothing constructs a
+// provider, since admission is a pure function over snapshots.
 // -------------------------------------------------------------------------------
 
 package scheduler
@@ -24,6 +20,10 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 )
+
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
 
 // observed is a fixed point in time, so that a snapshot counts as observed
 // without any test depending on when it ran.
@@ -70,7 +70,7 @@ func admitOnly(t *testing.T, req *Request, in *Input) *Result {
 	return &result
 }
 
-// applyCase builds the request and provider one table case describes.
+// apply builds the request and provider one table case describes.
 func (tc reasonCase) apply() (*Request, Input) {
 	req := baseRequest()
 	if tc.request != nil {
@@ -89,6 +89,7 @@ func (tc reasonCase) apply() (*Request, Input) {
 // BASELINE
 // -------------------------------------------------------------------------
 
+// The baseline request is admitted by the baseline provider, and only there.
 func TestAdmitBaseline(t *testing.T) {
 	t.Parallel()
 
@@ -281,9 +282,8 @@ func assertRejection(t *testing.T, got *Rejection, want Reason) {
 	}
 }
 
-// Every reason the vocabulary declares has to be claimed by a case above.
-// Without this, adding a reason and never emitting it would go unnoticed, which
-// is the failure the reason codes exist to prevent.
+// Every reason the vocabulary declares is claimed by a case above, so a reason
+// nothing emits fails here.
 func TestEveryReasonIsCovered(t *testing.T) {
 	t.Parallel()
 
@@ -361,8 +361,8 @@ func TestAdmitDetailsOnlyTheFirst(t *testing.T) {
 // THE THREE FIXTURES
 // -------------------------------------------------------------------------
 
-// A real container task against all three execution families. This is the case
-// the fixtures were written in Chunk 1 to be compared against.
+// A real container task against all three execution families: only the
+// container family admits it, and each other rejection says why.
 func TestAdmitContainerTaskAcrossFixtures(t *testing.T) {
 	t.Parallel()
 
@@ -396,16 +396,14 @@ func TestAdmitContainerTaskAcrossFixtures(t *testing.T) {
 		rejections[r.Provider] = r
 	}
 
-	// Both refuse on the driver, which is the most explanatory thing either can
-	// say, and the collected reasons are where they differ.
+	// Both refuse on the driver; the collected reasons are where they differ
 	for _, name := range []string{"lambda", "workers"} {
 		if got := rejections[name].Reason; got != ReasonDriverUnsupported {
 			t.Errorf("%s: reason = %s, want %s", name, got, ReasonDriverUnsupported)
 		}
 	}
 
-	// Lambda offers both architectures, so it fails on the image, its fifteen
-	// minute limit, and its CPU ceiling. Workers offers no architecture at all.
+	// Lambda offers both architectures; Workers offers none
 	lambda := rejections["lambda"].Also
 	if slices.Contains(lambda, ReasonArchUnsupported) {
 		t.Errorf("lambda rejected on architecture it offers: %v", lambda)
@@ -424,9 +422,6 @@ func TestAdmitContainerTaskAcrossFixtures(t *testing.T) {
 }
 
 // fixtureInput wraps a capability fixture in an otherwise healthy provider.
-//
-// Takes the fixture rather than its result, so that a call site reads as the
-// family it is standing up and no 112 byte snapshot is copied to get there.
 func fixtureInput(name string, fixture func(time.Time) plugin.Capabilities) Input {
 	in := Input{
 		Provider:     name,
@@ -483,9 +478,8 @@ func TestAdmitIsOrderedByProvider(t *testing.T) {
 	}
 }
 
-// Admission must not change what it was handed. It runs against snapshots the
-// registry holds and reuses, so a checker that sorted a slice in place would
-// change what every later plan sees.
+// Admission leaves its inputs unchanged, since the registry reuses the
+// snapshots across plans.
 func TestAdmitDoesNotMutateInputs(t *testing.T) {
 	t.Parallel()
 
@@ -498,8 +492,7 @@ func TestAdmitDoesNotMutateInputs(t *testing.T) {
 		t.Errorf("admission changed its input (-before +after):\n%s", diff)
 	}
 
-	// The candidate carries its own copy, so a caller sorting it changes
-	// nothing the registry still holds.
+	// The candidate carries its own copy of the snapshot
 	result.Candidates[0].Capabilities.Drivers[0] = job.DriverWorker
 
 	if inputs[0].Capabilities.Drivers[0] != job.DriverContainer {
@@ -533,8 +526,7 @@ func TestCheckerOrder(t *testing.T) {
 		t.Errorf("checker order mismatch (-want +got):\n%s", diff)
 	}
 
-	// One checker per reason, so no reason is unreachable and none is produced
-	// by a rule with no name of its own.
+	// One checker per reason, so every reason has a named rule
 	if len(got) != len(Reasons()) {
 		t.Errorf("%d checkers for %d reasons", len(got), len(Reasons()))
 	}

@@ -18,14 +18,9 @@ import "time"
 
 // Status is the current state of one dispatched execution.
 //
-// ProviderID is the provider's own identifier, carried alongside ID rather than
-// replacing it. It is unique only within that provider, is assigned too late to
-// be useful for idempotency, and is absent entirely when a submission fails
-// before returning.
-//
-// The State field is exported so that persistence and JSON stay boring, but To
-// is the only path that checks a change. Assigning State directly compiles and
-// is visibly off the normal path.
+// ProviderID is the provider's own identifier, carried alongside ID. State is
+// exported so persistence and JSON stay simple, but To is the only path that
+// checks a change.
 type Status struct {
 	ID         ID
 	State      State
@@ -40,11 +35,8 @@ type Status struct {
 // TRANSITIONS
 // -------------------------------------------------------------------------
 
-// To moves the execution into next, or refuses and leaves it untouched.
-//
-// StartedAt and EndedAt are set here rather than by callers, because a status
-// whose timestamps disagree with its state is worse than one missing them: the
-// quota ledger reads both.
+// To moves the execution into next, or refuses and leaves it untouched. It sets
+// StartedAt and EndedAt itself, since the quota ledger reads both.
 func (s *Status) To(next State, now time.Time) error {
 	if err := s.State.Transition(next); err != nil {
 		return err
@@ -73,26 +65,14 @@ func (s *Status) Terminal() bool {
 	return s.State.Terminal()
 }
 
-// ConsumedCapacity reports whether this execution should be charged against the
-// provider's free-tier allowance.
-//
-// True once the execution reached running, which StartedAt records, and true
-// while it is lost. A workload that ran and failed still burned the capacity it
-// used, so the charge does not depend on the outcome. Work the provider
-// accepted and then dropped before starting cost nothing and is not charged.
-//
-// A lost execution is charged because nothing is known about it, and the ledger
-// errs toward over-counting: wasting free capacity is recoverable, and drifting
-// toward paid capacity is the one failure this project exists to prevent.
+// ConsumedCapacity reports whether the execution is charged: once it reached
+// running, whatever the outcome, or while lost, since the ledger over-counts.
 func (s *Status) ConsumedCapacity() bool {
 	return !s.StartedAt.IsZero() || s.State == StateLost
 }
 
 // LostExpired reports whether a lost execution has waited out the grace period
-// and should now be recorded as failed.
-//
-// False for every other state, so a caller can ask this of any status without
-// checking first.
+// and should be recorded as failed. It is false for every other state.
 func (s *Status) LostExpired(now time.Time) bool {
 	if s.State != StateLost {
 		return false
