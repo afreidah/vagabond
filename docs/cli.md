@@ -299,8 +299,19 @@ to finish. The job is not registered. The server makes the same selection
   far as the task's [`retry`](job-specification.md#retry-block) block allows.
   A task that ran and exited non-zero is never retried.
 - The CLI polls the run every second. Progress lines (`==> ...`) go to
-  stderr. Each task's output goes to stdout when the task finishes, not while
-  it runs.
+  stderr and each task's output to stdout, so redirecting stdout captures the
+  build alone.
+- Output streams while the task runs, from the moment its execution leaves
+  `pending`, on providers that can stream: Cloud Run and pools. A stream that
+  ends before the task does is reopened a second later from the bytes already
+  printed. Once the task has a result, the CLI waits for the stream to finish,
+  then prints whatever of the stored copy did not stream, then the verdict
+  line. On a provider that cannot stream, all of the output is printed when the
+  task finishes.
+- A Cloud Run tail can only start at what is being logged now, so it cannot be
+  reopened from where it stopped. Once a Cloud Run stream ends early, the CLI
+  stops streaming that task and prints the rest from the stored copy when the
+  task finishes.
 - Interrupting the command (SIGINT or SIGTERM) cancels the unfinished
   execution on the server, waiting up to 30 seconds for the cancel, then exits
   2.
@@ -328,7 +339,8 @@ to finish. The job is not registered. The server makes the same selection
 | `... (<class> failure)` | Appended when the execution failed without a result (`infrastructure`, `internal`) |
 | `==> <task> succeeded on <provider> in <duration>` | The task exited 0 |
 | `==> <task> failed (exit <n>) on <provider> in <duration>` | The task exited non-zero |
-| `Output was truncated.` | Stored output hit its limit; only the tail is kept |
+| `Output was truncated.` | Nothing streamed and the stored output hit its limit; only the tail is printed |
+| `Live output was interrupted. vagabond execution logs <id> has its stored tail.` | A stream broke and the stored copy is truncated, so where it left off cannot be found in it |
 | `Job "<job>" did not run: <error>` | The run ended with no answer; followed by `Run vagabond job plan to see where it can run.` |
 | `Job "<job>" was interrupted. The execution was stopped.` | Interrupted |
 
@@ -592,18 +604,34 @@ vagabond execution logs [options] <id>
 Prints the output stored for an execution once it has a result: the last
 64 KiB. Nothing is printed for an execution with no stored output.
 
+With `-f`, follows the output while the execution runs, the same way
+[`job run`](#job-run) does: streamed once the execution leaves `pending`,
+reopened from the bytes already printed when a stream ends early, and finished
+from the stored copy once the execution ends, when the command exits. An
+execution that has already ended prints its stored output. On Cloud Run, a
+follow started after the task has begun printing starts at what is being
+logged now, so the stored output printed at the end can repeat some of it. An
+interrupt stops following and leaves the execution running;
+[`DELETE /v1/execution/{id}`](api.md#cancel-an-execution) stops it.
+
 | Flag | Default | Description |
 |---|---|---|
 | `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server |
+| `-f` | `false` | Follow the output until the execution ends |
 
 ```shell
 $ vagabond execution logs 01926f3a-7c4e-7b1a-9d2e-5b8f4c1e9a2f
 ok  	example.com/service/api	0.398s
+
+$ vagabond execution logs -f 01926f3a-7c4e-7b1a-9d2e-5b8f4c1e9a2f
+=== RUN   TestStore
+--- PASS: TestStore (1.04s)
+ok  	example.com/service/store	1.087s
 ```
 
 | Exit | Meaning |
 |---|---|
-| `0` | Printed, or nothing stored |
+| `0` | Printed, or nothing stored; with `-f`, the execution ended or the follow was interrupted |
 | `1` | Not found, server error, or wrong number of arguments |
 
 ## Node commands

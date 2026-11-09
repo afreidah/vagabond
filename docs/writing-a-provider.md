@@ -16,7 +16,7 @@ registered in `internal/registry`.
 |---|---|---|
 | Cloud Run Jobs | `internal/providers/gcp` | Asynchronous family, `LogStreamer`, `Releaser`, raw HTTP against `httptest` |
 | AWS Lambda | `internal/providers/aws` | Synchronous family, the `NotSupported` embeds, `Result.Billed`, a cloud SDK against `httptest` |
-| Pool | `internal/providers/pool` | `Live`, `MemberSubmitter`, `Capabilities.Members` |
+| Pool | `internal/providers/pool` | `Live`, `MemberSubmitter`, `LogStreamer` with `offset`, `Capabilities.Members` |
 | Fakes | `internal/plugin/fake.go` | The smallest implementations of both families |
 
 ## Package boundaries
@@ -201,7 +201,7 @@ is absent.
 
 | Interface | Method | Called by | When |
 |---|---|---|---|
-| `LogStreamer` | `StreamLogs(ctx context.Context, id execution.ID, w io.Writer) error` | Dispatch | Alongside the poll loop, when the caller asked for live output |
+| `LogStreamer` | `StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error` | Server | While a client follows a running execution's output |
 | `Releaser` | `Release(ctx context.Context, id execution.ID) error` | Dispatch; the release loop | After `Result` (or after a synchronous `Submit`); for every other ending, once the execution is over |
 | `Recredentialer` | `Recredential(ctx context.Context, credential []byte) error` | Registry, for dispatch | After a call failed with `ErrUnauthorized`, with the `credentials` block resolved again |
 | `Live` | `LiveCapabilities() (Capabilities, error)` | Registry | On every plan, in place of the refreshed snapshot |
@@ -209,15 +209,21 @@ is absent.
 
 ### `LogStreamer`
 
-- Write output to `w` as it arrives. Return when the execution ends, the stream
-  closes or `ctx` is cancelled.
-- Dispatch cancels `ctx` after the execution reaches a terminal state and a
-  5-second linger, then waits for `StreamLogs` to return.
-- The return value is discarded. A broken stream never fails an execution.
+- Write output to `w` as it arrives, from byte `offset` on: the caller already
+  has the bytes before it.
+- A stream that can only start at what is being written now, such as a log
+  tail, returns `plugin.ErrNoResume` for an `offset` above zero, before writing
+  anything. Never start somewhere else: the caller's count would stop being a
+  position. The server answers `416`, and the client finishes from the stored
+  copy.
+- Return when the execution ends, the stream closes or `ctx` is cancelled.
+- The server calls it for each `GET /v1/execution/{id}/logs?follow=true` on an
+  execution that has not ended. It cancels `ctx` 5 seconds after it sees the
+  execution end, when the client goes, or when shutdown begins.
+- An error is logged and ends the client's response. It never touches the
+  execution.
 - Once the stream is open, treat every way it stops as the end rather than as
-  an error.
-- If anything was written, the CLI does not print `Result.Logs` again. If
-  nothing was written, it does.
+  an error. The client reopens it from the bytes it has.
 - Synchronous providers have nothing to stream and should not implement it.
 
 ### `Releaser`
@@ -361,7 +367,7 @@ A platform that uses a status unusually builds the `*Error` directly.
 | `Status` reports `cancelled` | `Result` read, `Release` called | `cancelled` | Treated as `infrastructure`: reroute if allowed |
 | `Result` returns an error | Released later by the loop | Terminal state from `Status`, no result | Reroute if `infrastructure`, else stop |
 | `Status` reports `succeeded` or `failed`, `Result` returns | `Release` called | Terminal state and result | Task ends; a non-zero exit stops the job |
-| `StreamLogs` returns an error | Ignored | Unchanged | None |
+| `StreamLogs` returns an error | Logged; the client's response ends | Unchanged | None |
 | `Release` returns an error | Retried by the loop | Unchanged | None |
 
 Retry budgets, backoff and reroute rules are in [Dispatch](dispatch.md).

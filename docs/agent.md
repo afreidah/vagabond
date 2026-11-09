@@ -534,8 +534,12 @@ with its result.
 - containerd writes stdout and stderr to `<data-dir>/logs/<execution-id>.log`.
 - `Result` carries the last 64 KiB, with a truncated flag when earlier output
   was cut.
-- The pool provider does not stream live output. Output appears when the
-  execution finishes.
+- While the workload runs, the pool streams its output through
+  `AgentExecutions.StreamLogs`, from the byte offset the client asks for, so a
+  `?follow=true` request ([API](api.md#read-execution-logs)) shows it live and
+  a reopened stream resumes where the last one stopped.
+- The stream ends when the workload ends, or when it is released mid-stream,
+  after copying whatever the log file still holds.
 
 ### Timeouts
 
@@ -644,11 +648,12 @@ regenerate with `make generate`.
 | `AgentExecutions.Result` | `execution_id` | `exit_code` (unset if never exited), `duration`, `logs` (last 64 KiB), `logs_truncated` |
 | `AgentExecutions.Cancel` | `execution_id` | empty |
 | `AgentExecutions.Release` | `execution_id` | empty |
-| `AgentExecutions.StreamLogs` | `execution_id` | stream of `data` chunks, polled every 250 ms until the workload ends |
+| `AgentExecutions.StreamLogs` | `execution_id`, `offset` (bytes the server already has) | stream of `data` chunks from `offset`, polled every 250 ms until the workload ends or is released |
 
 States travel as their names (`accepted`, `running`, `succeeded`, ...).
 `runtime` is left empty by the server and defaults to `io.containerd.runc.v2`.
-`StreamLogs` is served but not called by the pool provider.
+An agent that predates `offset` reads the request as an `execution_id` alone
+and streams from the start.
 
 ### Status codes
 
@@ -759,10 +764,19 @@ Server-side log lines: `serving agents address=...` at start,
 ## Testing
 
 ```bash
-make containerd-test
+make containerd-test       # the executor tests, verbose
+make containerd-coverage   # the same, into containerd-coverage.out, as CI runs it
 ```
 
 Builds the executor's tests with `-race` and the `containerd` build tag into
 `bin/executor.test` as your user, then runs it with `sudo` and a 5 minute
 timeout. It runs real workloads on containerd at
-`/run/containerd/containerd.sock`, and skips when containerd is unavailable.
+`/run/containerd/containerd.sock`, pulling `alpine:3.20`, in the
+`vagabond-test` namespace and the `/vagabond-test` cgroup. It skips when
+containerd is unavailable. `containerd-coverage` hands the root-written profile
+back to your user.
+
+CI's `containerd` job runs `make containerd-coverage` on the runner's own
+containerd, the one Docker uses, and fails first with `sudo ctr version` if it
+is unreachable, so a skip never passes for a run. The profile joins the unit
+and integration ones in SonarCloud.

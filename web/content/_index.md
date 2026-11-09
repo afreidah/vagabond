@@ -181,8 +181,8 @@ box2  homelab  10.0.0.22:3877  arm64  0/4000m     0/8192MiB      0          2026
 ### Execution history
 
 Every dispatch and attempt is recorded in Postgres or CockroachDB, with its
-output. Dispatches are leased, so a server resumes those a dead one left
-running.
+output, which streams live while a task runs. Dispatches are leased, so a
+server resumes those a dead one left running.
 
 </div>
 <div>

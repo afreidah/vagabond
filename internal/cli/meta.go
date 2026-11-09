@@ -32,14 +32,16 @@ import (
 //
 // Stdin is held separately because a command reading a specification from a
 // pipe needs the reader itself, not the line-oriented prompting a cli.Ui
-// offers. ErrStream is held only to ask whether it is a terminal, which decides
-// colour, and for the server's log.
+// offers. Stdout is held for output streamed as it arrives, which a cli.Ui
+// would break into lines. ErrStream is held only to ask whether it is a
+// terminal, which decides colour, and for the server's log.
 //
 // address and namespace are set by clientFlags for commands that talk to a
 // server.
 type Meta struct {
 	Ui        cli.Ui
 	Stdin     io.Reader
+	Stdout    io.Writer
 	ErrStream io.Writer
 
 	address   string

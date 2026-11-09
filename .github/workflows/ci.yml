@@ -4,8 +4,8 @@
 # Author: Alex Freidah
 #
 # Runs on push to main and on pull requests. Formatting, vet, lint, and tests
-# are the same gates `make check` runs locally, plus the integration suite, so
-# a change that passes locally passes here. The golangci-lint version is pinned to match the Makefile; a
+# are the same gates `make check` runs locally, plus the integration suite and
+# the containerd executor tests, so a change that passes locally passes here. The golangci-lint version is pinned to match the Makefile; a
 # mismatch would mean local lint and CI lint disagree.
 # -------------------------------------------------------------------------------
 
@@ -141,6 +141,37 @@ jobs:
           path: integration-coverage.out
 
   # ---------------------------------------------------------------------------
+  # CONTAINERD EXECUTOR
+  #
+  # The agent's executor against the runner's own containerd, which Docker on
+  # the runner already runs. It needs root, so the test binary is built as the
+  # runner user and run with sudo, as `make containerd-coverage` does locally.
+  # ---------------------------------------------------------------------------
+  containerd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version-file: go.mod
+
+      # The tests skip when containerd cannot be reached, which would pass here
+      # having run nothing.
+      - name: Check containerd
+        run: sudo ctr version
+
+      - name: Containerd test
+        run: make containerd-coverage
+
+      - name: Upload containerd coverage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: containerd-coverage
+          path: containerd-coverage.out
+
+  # ---------------------------------------------------------------------------
   # VULNERABILITY SCANNING
   #
   # govulncheck is pinned by the tool directive in go.mod, so this runs the
@@ -181,21 +212,22 @@ jobs:
   # ---------------------------------------------------------------------------
   # SONARCLOUD
   #
-  # Combines the unit and integration coverage the test jobs uploaded. Runs on
-  # every pull request and every push to main, so main is re-analysed with
-  # fresh coverage. A test job that failed uploaded no profile, and scanning
-  # without it would report a drop that is really a missing file, so the scan
-  # is skipped then.
+  # Combines the unit, integration and containerd coverage the test jobs
+  # uploaded. Runs on every pull request and every push to main, so main is
+  # re-analysed with fresh coverage. A test job that failed uploaded no
+  # profile, and scanning without it would report a drop that is really a
+  # missing file, so the scan is skipped then.
   # ---------------------------------------------------------------------------
   sonarqube:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [test, integration]
+    needs: [test, integration, containerd]
     if: >-
       always()
       && github.actor != 'dependabot[bot]'
       && !contains(fromJSON('["failure", "cancelled"]'), needs.test.result)
       && !contains(fromJSON('["failure", "cancelled"]'), needs.integration.result)
+      && !contains(fromJSON('["failure", "cancelled"]'), needs.containerd.result)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
@@ -211,6 +243,12 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: integration-coverage
+        continue-on-error: true
+
+      - name: Download containerd coverage
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: containerd-coverage
         continue-on-error: true
 
       - name: SonarCloud scan

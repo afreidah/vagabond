@@ -255,12 +255,11 @@ Details: [architecture.md](docs/architecture.md).
 
 Not implemented yet. Tracked in [issues](https://github.com/afreidah/vagabond/issues).
 
-- Own nodes: how nodes rank against cloud backends, log streaming from agents,
-  a Firecracker runtime.
+- Own nodes: how nodes rank against cloud backends, a Firecracker runtime.
 - Server: API authentication, degraded mode that keeps dispatching through a
   store outage.
-- Operations: periodic jobs, an event stream with live log streaming, blocking
-  queries, disabling a provider at runtime.
+- Operations: periodic jobs, an event stream, blocking queries, disabling a
+  provider at runtime.
 - Jobs: submission hooks, variables and workload identity, execution garbage
   collection, fetching a job's source on the node.
 - Providers: a `worker` plugin.

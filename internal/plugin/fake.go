@@ -17,12 +17,16 @@ package plugin
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 )
+
+// fakeOutput is what every fake container run prints.
+const fakeOutput = "fake execution output\n"
 
 // -------------------------------------------------------------------------
 // ASYNCHRONOUS FAKE
@@ -32,12 +36,14 @@ import (
 // like IBM Code Engine or Google Cloud Run Jobs.
 //
 // SubmitErr and Capabilities are exported so a test can make the provider fail
-// or advertise something unusual without a constructor per scenario.
+// or advertise something unusual without a constructor per scenario. NoResume
+// makes its log stream refuse an offset, as a live tail does.
 type FakeContainerProvider struct {
 	ProviderName string
 	Caps         Capabilities
 	SubmitErr    error
 	ExitCode     int
+	NoResume     bool
 
 	mu    sync.Mutex
 	runs  map[execution.ID]execution.Status
@@ -149,8 +155,37 @@ func (p *FakeContainerProvider) Result(
 		ID:       id,
 		ExitCode: new(p.ExitCode),
 		Duration: time.Second,
-		Logs:     []byte("fake execution output\n"),
+		Logs:     []byte(fakeOutput),
 	}, nil
+}
+
+// StreamLogs writes a recorded run's output from offset on, then holds the
+// stream open until the run ends or ctx does.
+func (p *FakeContainerProvider) StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error {
+	if _, err := p.Status(ctx, id); err != nil {
+		return err
+	}
+
+	if p.NoResume && offset > 0 {
+		return ErrNoResume
+	}
+
+	if _, err := io.WriteString(w, fakeOutput[min(offset, int64(len(fakeOutput))):]); err != nil {
+		return err
+	}
+
+	for {
+		status, err := p.Status(ctx, id)
+		if err != nil || status.Terminal() {
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 // Advance moves a recorded run into the given state, standing in for whatever

@@ -15,7 +15,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
@@ -103,9 +102,6 @@ type Dispatcher struct {
 	leaseRenew time.Duration // how often a held lease is renewed
 	now        func() time.Time
 	poll       Poll
-	linger     time.Duration // how long to keep a stream open past the last poll
-	logs       io.Writer     // nil means nobody is watching, and nothing is streamed
-	progress   func(Event)   // nil means nobody is listening
 	sleep      func(ctx context.Context, d time.Duration) error
 	tiers      job.TierMode // the deployment's tier mode; empty is the default
 }
@@ -121,21 +117,6 @@ func WithPoll(p Poll) Option {
 // WithSleeper replaces waiting, for tests.
 func WithSleeper(sleep func(ctx context.Context, d time.Duration) error) Option {
 	return func(d *Dispatcher) { d.sleep = sleep }
-}
-
-// WithLogs streams a running execution's output to w, where the provider can.
-func WithLogs(w io.Writer) Option {
-	return func(d *Dispatcher) { d.logs = writerOrNil(w) }
-}
-
-// WithLinger replaces how long a stream is held open past the last poll.
-func WithLinger(d time.Duration) Option {
-	return func(disp *Dispatcher) { disp.linger = d }
-}
-
-// WithProgress reports state changes as they happen.
-func WithProgress(fn func(Event)) Option {
-	return func(d *Dispatcher) { d.progress = fn }
 }
 
 // WithOwner names who this dispatcher's dispatches are leased to, in place of
@@ -172,7 +153,6 @@ func New(registry Registry, ledger Ledger, executions Executions, opts ...Option
 		leaseRenew: LeaseRenew,
 		now:        time.Now,
 		poll:       DefaultPoll,
-		linger:     DefaultLinger,
 		sleep:      sleepContext,
 	}
 
@@ -410,7 +390,6 @@ func (d *Dispatcher) attempt(
 			outcome.ID = id
 			outcome.State = ended.state
 			outcome.Result = ended.result
-			outcome.Streamed = ended.streamed
 
 			return outcome, nil
 		}

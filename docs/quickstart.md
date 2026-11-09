@@ -250,15 +250,16 @@ Output format:
 |---|---|
 | `==> dispatch <id> of "<job>"` | The server accepted the run |
 | `==> <task> <state> on <provider>` | A poll sees the execution in a new non-terminal state; ` (attempt N)` is appended from the second attempt, ` (<class> failure)` when one is recorded |
-| task output | The execution has a result, unless `-no-logs` |
+| task output | While the task runs on a provider that streams, otherwise once it has a result; never with `-no-logs` |
 | `==> <task> succeeded on <provider> in <duration>` | The task exited 0 |
 | `==> <task> failed (exit N) on <provider> in <duration>` | The task exited non-zero |
 | `Job "<job>" did not run: <error>` | The dispatch ended `unanswered` |
 
 Progress lines go to stderr and task output to stdout, so redirecting stdout
-captures the task's output alone. Output is printed once the task finishes, not
-streamed. A state line such as `==> greet submitted on aws-lambda` appears
-before the verdict when a poll lands between submission and result.
+captures the task's output alone. Cloud Run and pools stream output while the
+task runs; Lambda's arrives with its result. A state line such as
+`==> greet submitted on aws-lambda` appears before the verdict when a poll
+lands between submission and result.
 
 | Exit code | Meaning |
 |---|---|

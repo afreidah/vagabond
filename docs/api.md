@@ -305,9 +305,11 @@ continues in the server after the response.
 
 **Following a run:** poll `GET /v1/dispatch/{id}` until `State` is not
 `running`. Executions appear as each task is reserved and recorded, so a
-multi-task job's later tasks show up as earlier ones finish. Read an execution's
-output from [`/logs`](#read-execution-logs) once `HasResult` is `true`. The CLI
-polls once a second. There is no streaming or blocking query.
+multi-task job's later tasks show up as earlier ones finish. Stream an
+execution's output with [`/logs?follow=true`](#read-execution-logs) while it
+runs, and once `HasResult` is `true`, read whatever did not stream with
+`/logs?offset=<bytes received>`. The CLI polls the dispatch once a second.
+There is no blocking query.
 
 **Ownership:** the server that accepted the request runs the dispatch and holds
 a lease on it. The run is not tied to the HTTP request: a client disconnecting
@@ -623,15 +625,50 @@ Errors: 400 (malformed ID), 404, 503.
 
 `GET /v1/execution/{id}/logs`
 
-The execution's stored output as `text/plain`: the last 64 KiB of combined
-output, stored once the execution has a result. Before then the body is empty
-with status 200. Errors use the JSON error body.
+The execution's combined stdout and stderr as `text/plain`. Errors use the
+JSON error body.
 
-| Parameter | In | Description |
+| Parameter | In | Default | Description |
+|---|---|---|---|
+| `id` | path | | Execution ID |
+| `offset` | query | `0` | Bytes of output the caller already has. The body starts after them |
+| `follow` | query | `false` | `true` streams the output while the execution runs |
+
+**Stored output.** Without `follow`, or once the execution has ended, the body
+is the stored copy: the last 64 KiB, kept once the execution has a result.
+Before then the body is empty with status 200.
+
+| Stored copy | `offset` | Body |
 |---|---|---|
-| `id` | path | Execution ID |
+| Complete | `0` | All of it |
+| Complete | Inside it | From `offset` on |
+| Complete | At or past its end | Empty |
+| Truncated (`LogsTruncated`) | `0` | The last 64 KiB |
+| Truncated | Above `0` | Empty. The copy no longer starts at byte 0, so `offset` cannot be placed in it |
 
-Errors: 400 (malformed ID), 404, 503.
+**Following.** With `follow=true` on an execution that has not ended, on a
+provider that can stream ([`LogStreamer`](writing-a-provider.md#logstreamer)),
+the server opens the provider's stream from `offset` and writes output as it
+arrives, flushing each write. Headers go out with the first output.
+
+- The response ends 5 s after the server sees the execution end, which it
+  checks every second, because some providers' logs trail the work: Cloud
+  Logging runs seconds behind the container. A stream the
+  provider ends itself, as an agent does when its workload exits, ends the
+  response at once.
+- It also ends when the client disconnects or the server begins shutting down.
+- A provider stream that breaks ends the response early, still with status
+  200, and the server logs `log stream ended early`. Reconnect with `offset`
+  set to the bytes received.
+- The pool honours `offset`. A Cloud Run tail can only start at what is being
+  logged now, so a follow from an `offset` above zero there is answered `416`
+  with the JSON error body, before any output. Read the rest from the stored
+  copy with `?offset=` once the execution ends.
+- A provider that cannot stream, or an execution that has ended, gets the
+  stored output as above, so a client can always ask to follow.
+
+Errors: 400 (malformed ID; `offset "<value>" is not a byte count`), 404, 416
+(`this provider's log stream cannot resume from an offset`), 503.
 
 ### Cancel an execution
 
@@ -662,6 +699,8 @@ Errors:
 ```bash
 curl -s http://127.0.0.1:4747/v1/execution/0192a4c8-8a01-7c55-a1b2-c3d4e5f60718
 curl -s http://127.0.0.1:4747/v1/execution/0192a4c8-8a01-7c55-a1b2-c3d4e5f60718/logs
+curl -sN 'http://127.0.0.1:4747/v1/execution/0192a4c8-8a01-7c55-a1b2-c3d4e5f60718/logs?follow=true'
+curl -s 'http://127.0.0.1:4747/v1/execution/0192a4c8-8a01-7c55-a1b2-c3d4e5f60718/logs?offset=4096'
 curl -s -X DELETE http://127.0.0.1:4747/v1/execution/0192a4c8-8a01-7c55-a1b2-c3d4e5f60718
 ```
 
@@ -898,7 +937,8 @@ defaulting to `$VAGABOND_ADDR`; see [CLI](cli.md).
 | `Plan(ctx, namespace, PlanRequest)` | `POST /v1/jobs/plan` |
 | `DispatchStatus(ctx, id)` | `GET /v1/dispatch/{id}` |
 | `Execution(ctx, id)` | `GET /v1/execution/{id}` |
-| `Logs(ctx, id)` | `GET /v1/execution/{id}/logs`, as `[]byte` |
+| `Logs(ctx, id, offset)` | `GET /v1/execution/{id}/logs?offset=`, as `[]byte` |
+| `FollowLogs(ctx, id, offset, w)` | `GET /v1/execution/{id}/logs?follow=true&offset=`, copied to `w` until the server ends the stream. An error means it broke |
 | `Cancel(ctx, id)` | `DELETE /v1/execution/{id}` |
 | `Nodes(ctx)` | `GET /v1/nodes` |
 | `Providers(ctx)` | `GET /v1/providers` |

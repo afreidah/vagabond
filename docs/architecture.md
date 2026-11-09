@@ -45,7 +45,7 @@ them, dispatches to the best, and records what the run used.
 | Ranking | `scheduler` | Score each candidate with `headroom` and any affinities; the score is their mean |
 | Reserve | `dispatch`, `ledger` | Charge the task's declared worst case against every pool it meters, provider total and namespace share; a refusal moves to the next candidate without spending a retry |
 | Submit | `dispatch`, `providers/*` | Hand the task to the plugin under a fresh execution ID |
-| Watch | `dispatch` | Poll status from 2 s backing off to 15 s, stream output when the plugin can |
+| Watch | `dispatch` | Poll status from 2 s backing off to 15 s |
 | Settle | `dispatch`, `ledger` | Replace the reservation with what the result says was used |
 | Release | `dispatch` | Ask the plugin to delete what the execution left behind |
 | Reroute | `dispatch` | On an `infrastructure` failure, move to the next ranked provider within the task's `retry` budget |
@@ -184,7 +184,7 @@ Optional interfaces, detected by type assertion:
 
 | Interface | Method | Used for | Implemented by |
 |---|---|---|---|
-| `plugin.LogStreamer` | `StreamLogs` | Output before the execution ends | `cloud-run` |
+| `plugin.LogStreamer` | `StreamLogs` | Output before the execution ends, for `GET /v1/execution/{id}/logs?follow=true` | `cloud-run`, `pool` |
 | `plugin.Releaser` | `Release` | Deleting what an execution left behind, after its result is read | `cloud-run`, `pool` |
 | `plugin.Live` | `LiveCapabilities` | Capabilities read on every plan instead of on the refresh timer | `pool` |
 | `plugin.MemberSubmitter` | `SubmitTo` | Submitting only to the members admission passed | `pool` |
@@ -212,7 +212,7 @@ One server process runs these concurrently:
 | Agent listener | Until shutdown | Accepts agent connections, one goroutine per session |
 | Dispatch | One per running dispatch | Runs the job's tasks to the end on a context that outlives the request that started it |
 | Lease renewal | One per running dispatch | Renews the dispatch lease every 20 seconds; the lease runs 60 seconds |
-| Log stream | One per watched execution on a `LogStreamer` provider | Copies output while the execution runs |
+| Log stream | One per open `?follow=true` request on a `LogStreamer` provider | Copies output to the client while the execution runs; ends 5 s after the execution does, or at once when shutdown begins |
 | Upkeep | Four tickers until shutdown | Capability refresh (1 min), usage refresh (15 s), reservation reaping (5 min), lapsed-lease claiming (30 s) |
 
 **Startup order:** load configuration, build the registry and refresh every

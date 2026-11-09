@@ -115,8 +115,12 @@ var submittableStates = []execution.State{
 // LogStreamer is implemented by providers that can show a running execution's
 // output before it finishes. A live view, never the record: Result stays
 // authoritative, and a broken stream is not a failed execution.
+//
+// offset is how many bytes of output the caller already has. A provider whose
+// stream can only start at what is being written now returns ErrNoResume for
+// any offset above zero, before writing anything, rather than start elsewhere.
 type LogStreamer interface {
-	StreamLogs(ctx context.Context, id execution.ID, w io.Writer) error
+	StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error
 }
 
 // Live is implemented by providers whose capabilities change between
@@ -167,6 +171,10 @@ var ErrInvalidSubmission = errors.New("invalid submission")
 // reaper reads it as never having run, so it drops the quota reservation. Wrap
 // it only when the platform says so, never for a lookup that merely failed.
 var ErrUnknownExecution = errors.New("unknown execution")
+
+// ErrNoResume reports a log stream that cannot start at an offset, so a caller
+// resuming one finishes from the stored output instead.
+var ErrNoResume = errors.New("this provider's log stream cannot resume from an offset")
 
 // StatusNotSupported is embedded by providers whose work finishes inside
 // Submit, so that declaring the fact is one line rather than a method body

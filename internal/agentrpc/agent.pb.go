@@ -680,6 +680,61 @@ func (x *ExecutionResult) GetLogsTruncated() bool {
 	return false
 }
 
+// LogsRequest's offset is how many bytes of output the caller already has.
+// Its first field matches ExecutionRequest, so an agent that predates it reads
+// the request as one and streams from the start.
+type LogsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ExecutionId   string                 `protobuf:"bytes,1,opt,name=execution_id,json=executionId,proto3" json:"execution_id,omitempty"`
+	Offset        int64                  `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LogsRequest) Reset() {
+	*x = LogsRequest{}
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LogsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LogsRequest) ProtoMessage() {}
+
+func (x *LogsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LogsRequest.ProtoReflect.Descriptor instead.
+func (*LogsRequest) Descriptor() ([]byte, []int) {
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *LogsRequest) GetExecutionId() string {
+	if x != nil {
+		return x.ExecutionId
+	}
+	return ""
+}
+
+func (x *LogsRequest) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
 type LogChunk struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
@@ -689,7 +744,7 @@ type LogChunk struct {
 
 func (x *LogChunk) Reset() {
 	*x = LogChunk{}
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[10]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -701,7 +756,7 @@ func (x *LogChunk) String() string {
 func (*LogChunk) ProtoMessage() {}
 
 func (x *LogChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[10]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -714,7 +769,7 @@ func (x *LogChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogChunk.ProtoReflect.Descriptor instead.
 func (*LogChunk) Descriptor() ([]byte, []int) {
-	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{10}
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *LogChunk) GetData() []byte {
@@ -732,7 +787,7 @@ type Empty struct {
 
 func (x *Empty) Reset() {
 	*x = Empty{}
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[11]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -744,7 +799,7 @@ func (x *Empty) String() string {
 func (*Empty) ProtoMessage() {}
 
 func (x *Empty) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[11]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -757,7 +812,7 @@ func (x *Empty) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Empty.ProtoReflect.Descriptor instead.
 func (*Empty) Descriptor() ([]byte, []int) {
-	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{11}
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{12}
 }
 
 var File_internal_agentrpc_agent_proto protoreflect.FileDescriptor
@@ -821,20 +876,23 @@ const file_internal_agentrpc_agent_proto_rawDesc = "" +
 	"\x04logs\x18\x03 \x01(\fR\x04logs\x12%\n" +
 	"\x0elogs_truncated\x18\x04 \x01(\bR\rlogsTruncatedB\f\n" +
 	"\n" +
-	"_exit_code\"\x1e\n" +
+	"_exit_code\"H\n" +
+	"\vLogsRequest\x12!\n" +
+	"\fexecution_id\x18\x01 \x01(\tR\vexecutionId\x12\x16\n" +
+	"\x06offset\x18\x02 \x01(\x03R\x06offset\"\x1e\n" +
 	"\bLogChunk\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"\a\n" +
 	"\x05Empty2c\n" +
 	"\x04Node\x12[\n" +
-	"\bRegister\x12&.vagabond.agent.v1.NodeRegisterRequest\x1a'.vagabond.agent.v1.NodeRegisterResponse2\xe7\x03\n" +
+	"\bRegister\x12&.vagabond.agent.v1.NodeRegisterRequest\x1a'.vagabond.agent.v1.NodeRegisterResponse2\xe2\x03\n" +
 	"\x0fAgentExecutions\x12I\n" +
 	"\x06Submit\x12 .vagabond.agent.v1.SubmitRequest\x1a\x1d.vagabond.agent.v1.Submission\x12Q\n" +
 	"\x06Status\x12#.vagabond.agent.v1.ExecutionRequest\x1a\".vagabond.agent.v1.ExecutionStatus\x12Q\n" +
 	"\x06Result\x12#.vagabond.agent.v1.ExecutionRequest\x1a\".vagabond.agent.v1.ExecutionResult\x12G\n" +
 	"\x06Cancel\x12#.vagabond.agent.v1.ExecutionRequest\x1a\x18.vagabond.agent.v1.Empty\x12H\n" +
-	"\aRelease\x12#.vagabond.agent.v1.ExecutionRequest\x1a\x18.vagabond.agent.v1.Empty\x12P\n" +
+	"\aRelease\x12#.vagabond.agent.v1.ExecutionRequest\x1a\x18.vagabond.agent.v1.Empty\x12K\n" +
 	"\n" +
-	"StreamLogs\x12#.vagabond.agent.v1.ExecutionRequest\x1a\x1b.vagabond.agent.v1.LogChunk0\x01B0Z.github.com/afreidah/vagabond/internal/agentrpcb\x06proto3"
+	"StreamLogs\x12\x1e.vagabond.agent.v1.LogsRequest\x1a\x1b.vagabond.agent.v1.LogChunk0\x01B0Z.github.com/afreidah/vagabond/internal/agentrpcb\x06proto3"
 
 var (
 	file_internal_agentrpc_agent_proto_rawDescOnce sync.Once
@@ -848,7 +906,7 @@ func file_internal_agentrpc_agent_proto_rawDescGZIP() []byte {
 	return file_internal_agentrpc_agent_proto_rawDescData
 }
 
-var file_internal_agentrpc_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_internal_agentrpc_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_internal_agentrpc_agent_proto_goTypes = []any{
 	(*NodeRegisterRequest)(nil),   // 0: vagabond.agent.v1.NodeRegisterRequest
 	(*Held)(nil),                  // 1: vagabond.agent.v1.Held
@@ -860,39 +918,40 @@ var file_internal_agentrpc_agent_proto_goTypes = []any{
 	(*ExecutionRequest)(nil),      // 7: vagabond.agent.v1.ExecutionRequest
 	(*ExecutionStatus)(nil),       // 8: vagabond.agent.v1.ExecutionStatus
 	(*ExecutionResult)(nil),       // 9: vagabond.agent.v1.ExecutionResult
-	(*LogChunk)(nil),              // 10: vagabond.agent.v1.LogChunk
-	(*Empty)(nil),                 // 11: vagabond.agent.v1.Empty
-	nil,                           // 12: vagabond.agent.v1.NodeRegisterRequest.LabelsEntry
-	nil,                           // 13: vagabond.agent.v1.Workload.EnvEntry
-	(*durationpb.Duration)(nil),   // 14: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil), // 15: google.protobuf.Timestamp
+	(*LogsRequest)(nil),           // 10: vagabond.agent.v1.LogsRequest
+	(*LogChunk)(nil),              // 11: vagabond.agent.v1.LogChunk
+	(*Empty)(nil),                 // 12: vagabond.agent.v1.Empty
+	nil,                           // 13: vagabond.agent.v1.NodeRegisterRequest.LabelsEntry
+	nil,                           // 14: vagabond.agent.v1.Workload.EnvEntry
+	(*durationpb.Duration)(nil),   // 15: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil), // 16: google.protobuf.Timestamp
 }
 var file_internal_agentrpc_agent_proto_depIdxs = []int32{
-	12, // 0: vagabond.agent.v1.NodeRegisterRequest.labels:type_name -> vagabond.agent.v1.NodeRegisterRequest.LabelsEntry
+	13, // 0: vagabond.agent.v1.NodeRegisterRequest.labels:type_name -> vagabond.agent.v1.NodeRegisterRequest.LabelsEntry
 	2,  // 1: vagabond.agent.v1.NodeRegisterRequest.capacity:type_name -> vagabond.agent.v1.Resources
 	1,  // 2: vagabond.agent.v1.NodeRegisterRequest.held:type_name -> vagabond.agent.v1.Held
 	2,  // 3: vagabond.agent.v1.Held.resources:type_name -> vagabond.agent.v1.Resources
-	13, // 4: vagabond.agent.v1.Workload.env:type_name -> vagabond.agent.v1.Workload.EnvEntry
+	14, // 4: vagabond.agent.v1.Workload.env:type_name -> vagabond.agent.v1.Workload.EnvEntry
 	2,  // 5: vagabond.agent.v1.Workload.resources:type_name -> vagabond.agent.v1.Resources
-	14, // 6: vagabond.agent.v1.Workload.timeout:type_name -> google.protobuf.Duration
+	15, // 6: vagabond.agent.v1.Workload.timeout:type_name -> google.protobuf.Duration
 	4,  // 7: vagabond.agent.v1.SubmitRequest.workload:type_name -> vagabond.agent.v1.Workload
-	15, // 8: vagabond.agent.v1.ExecutionStatus.started_at:type_name -> google.protobuf.Timestamp
-	15, // 9: vagabond.agent.v1.ExecutionStatus.ended_at:type_name -> google.protobuf.Timestamp
-	14, // 10: vagabond.agent.v1.ExecutionResult.duration:type_name -> google.protobuf.Duration
+	16, // 8: vagabond.agent.v1.ExecutionStatus.started_at:type_name -> google.protobuf.Timestamp
+	16, // 9: vagabond.agent.v1.ExecutionStatus.ended_at:type_name -> google.protobuf.Timestamp
+	15, // 10: vagabond.agent.v1.ExecutionResult.duration:type_name -> google.protobuf.Duration
 	0,  // 11: vagabond.agent.v1.Node.Register:input_type -> vagabond.agent.v1.NodeRegisterRequest
 	5,  // 12: vagabond.agent.v1.AgentExecutions.Submit:input_type -> vagabond.agent.v1.SubmitRequest
 	7,  // 13: vagabond.agent.v1.AgentExecutions.Status:input_type -> vagabond.agent.v1.ExecutionRequest
 	7,  // 14: vagabond.agent.v1.AgentExecutions.Result:input_type -> vagabond.agent.v1.ExecutionRequest
 	7,  // 15: vagabond.agent.v1.AgentExecutions.Cancel:input_type -> vagabond.agent.v1.ExecutionRequest
 	7,  // 16: vagabond.agent.v1.AgentExecutions.Release:input_type -> vagabond.agent.v1.ExecutionRequest
-	7,  // 17: vagabond.agent.v1.AgentExecutions.StreamLogs:input_type -> vagabond.agent.v1.ExecutionRequest
+	10, // 17: vagabond.agent.v1.AgentExecutions.StreamLogs:input_type -> vagabond.agent.v1.LogsRequest
 	3,  // 18: vagabond.agent.v1.Node.Register:output_type -> vagabond.agent.v1.NodeRegisterResponse
 	6,  // 19: vagabond.agent.v1.AgentExecutions.Submit:output_type -> vagabond.agent.v1.Submission
 	8,  // 20: vagabond.agent.v1.AgentExecutions.Status:output_type -> vagabond.agent.v1.ExecutionStatus
 	9,  // 21: vagabond.agent.v1.AgentExecutions.Result:output_type -> vagabond.agent.v1.ExecutionResult
-	11, // 22: vagabond.agent.v1.AgentExecutions.Cancel:output_type -> vagabond.agent.v1.Empty
-	11, // 23: vagabond.agent.v1.AgentExecutions.Release:output_type -> vagabond.agent.v1.Empty
-	10, // 24: vagabond.agent.v1.AgentExecutions.StreamLogs:output_type -> vagabond.agent.v1.LogChunk
+	12, // 22: vagabond.agent.v1.AgentExecutions.Cancel:output_type -> vagabond.agent.v1.Empty
+	12, // 23: vagabond.agent.v1.AgentExecutions.Release:output_type -> vagabond.agent.v1.Empty
+	11, // 24: vagabond.agent.v1.AgentExecutions.StreamLogs:output_type -> vagabond.agent.v1.LogChunk
 	18, // [18:25] is the sub-list for method output_type
 	11, // [11:18] is the sub-list for method input_type
 	11, // [11:11] is the sub-list for extension type_name
@@ -912,7 +971,7 @@ func file_internal_agentrpc_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_agentrpc_agent_proto_rawDesc), len(file_internal_agentrpc_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

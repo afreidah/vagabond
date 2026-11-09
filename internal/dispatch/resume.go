@@ -76,8 +76,7 @@ func (d *Dispatcher) resume(ctx context.Context, rec *execution.Record) {
 		return
 	}
 
-	status, err := d.status(ctx, provider, rec.ID)
-	if err != nil {
+	if _, err := d.status(ctx, provider, rec.ID); err != nil {
 		run.failed(ctx, plugin.Infrastructure(err))
 
 		return
@@ -87,11 +86,7 @@ func (d *Dispatcher) resume(ctx context.Context, rec *execution.Record) {
 		run.to(ctx, execution.StateSubmitted)
 	}
 
-	event := Event{
-		Task: rec.Task, Provider: rec.Provider, ID: rec.ID, Attempt: rec.Attempt, State: status.State,
-	}
-
-	ended, _ := d.follow(ctx, provider, run, event)
+	ended, _ := d.follow(ctx, provider, run)
 	d.charge(ctx, &run.rec, ended.result)
 }
 

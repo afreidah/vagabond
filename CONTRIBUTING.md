@@ -41,6 +41,7 @@ make test                  # with the race detector
 make test-fast             # without, for quick iteration
 make coverage              # race detector plus coverage.out, as CI runs it
 make integration-coverage  # the integration suite into integration-coverage.out
+make containerd-coverage   # the containerd executor tests, with sudo, into containerd-coverage.out
 ```
 
 The contract packages perform no I/O, so their tests need no fixtures beyond

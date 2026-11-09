@@ -104,8 +104,8 @@ func (f *fakeExecutor) Release(_ context.Context, id string) error {
 	return nil
 }
 
-func (f *fakeExecutor) Logs(_ context.Context, _ string, w io.Writer) error {
-	_, err := io.WriteString(w, f.output)
+func (f *fakeExecutor) Logs(_ context.Context, _ string, offset int64, w io.Writer) error {
+	_, err := io.WriteString(w, f.output[min(offset, int64(len(f.output))):])
 
 	return err
 }
@@ -297,14 +297,14 @@ func TestAgent_ExecutionsAreCalledBack(t *testing.T) {
 		t.Errorf("Result() = %+v, %v; want exit 3 with output", res, err)
 	}
 
-	stream, err := calls.StreamLogs(ctx, &agentrpc.ExecutionRequest{ExecutionId: "run-1"})
+	stream, err := calls.StreamLogs(ctx, &agentrpc.LogsRequest{ExecutionId: "run-1", Offset: 2})
 	if err != nil {
 		t.Fatalf("StreamLogs() = %v", err)
 	}
 
 	chunk, err := stream.Recv()
-	if err != nil || string(chunk.GetData()) != "hello\n" {
-		t.Errorf("first chunk = %q, %v", chunk.GetData(), err)
+	if err != nil || string(chunk.GetData()) != "llo\n" {
+		t.Errorf("first chunk from offset 2 = %q, %v", chunk.GetData(), err)
 	}
 
 	if _, err := calls.Cancel(ctx, &agentrpc.ExecutionRequest{ExecutionId: "run-1"}); err != nil {

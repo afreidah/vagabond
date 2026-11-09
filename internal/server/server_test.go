@@ -11,10 +11,12 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -91,10 +93,12 @@ job "sleepy" {
 }
 `
 
-// harness is a server under test and the mocked job store behind it.
+// harness is a server under test, the mocked job store behind it, and its
+// container provider, which a test moves runs along on.
 type harness struct {
 	url  string
 	jobs *MockserverJobs
+	box  *plugin.FakeContainerProvider
 }
 
 // fixtures builds the registry from testConfig, refreshed, and an empty
@@ -149,7 +153,41 @@ func newHarness(t *testing.T) *harness {
 	srv := httptest.NewServer(New(reg, led, memory.NewExecutions(), jobStore, logger).Handler())
 	t.Cleanup(srv.Close)
 
-	return &harness{url: srv.URL, jobs: jobStore}
+	box, _ := reg.Provider("box")
+
+	return &harness{url: srv.URL, jobs: jobStore, box: box.(*plugin.FakeContainerProvider)}
+}
+
+// openLogs requests an execution's output with query and returns the status
+// and the body, which is closed when the test ends.
+func (h *harness) openLogs(t *testing.T, id, query string) (int, *bufio.Reader) {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, h.url+"/v1/execution/"+id+"/logs?"+query, nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET logs: %v", err)
+	}
+
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	return resp.StatusCode, bufio.NewReader(resp.Body)
+}
+
+// readLogs reads the rest of a logs body.
+func readLogs(t *testing.T, body io.Reader) string {
+	t.Helper()
+
+	logs, err := io.ReadAll(body)
+	if err != nil {
+		t.Fatalf("reading logs: %v", err)
+	}
+
+	return string(logs)
 }
 
 // call sends body as JSON and decodes the response into out, returning the

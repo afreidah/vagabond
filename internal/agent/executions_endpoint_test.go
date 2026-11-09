@@ -116,7 +116,7 @@ func (f *fakeExecutor) Release(_ context.Context, _ string) error {
 }
 
 // Logs is a no-op stub satisfying agentExecutor.
-func (f *fakeExecutor) Logs(_ context.Context, _ string, _ io.Writer) error {
+func (f *fakeExecutor) Logs(_ context.Context, _ string, _ int64, _ io.Writer) error {
 	return nil
 }
 

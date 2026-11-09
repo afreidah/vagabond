@@ -244,11 +244,13 @@ every 15s.
 
 - A record keeps the last 64 KiB (65536 bytes) of output. `LogsTruncated` is
   `true` when anything before that was cut.
-- Output is fetched with the result, once the execution is terminal. Read it
+- Output is stored with the result, once the execution is terminal. Read it
   from `GET /v1/execution/{id}/logs` (plain text, empty until there is a
   result) or with `vagabond execution logs` ([CLI](cli.md)).
-- The server does not stream output while an execution runs. `vagabond job
-  run` prints each execution's output once its result is recorded.
+- Dispatch itself never streams. While an execution runs, a client streams its
+  output with `GET /v1/execution/{id}/logs?follow=true`, which the server
+  serves from the provider's `LogStreamer` ([API](api.md#read-execution-logs)).
+  `vagabond job run` and `vagabond execution logs -f` follow it that way.
 - Agent nodes cap a workload's output at the same 64 KiB tail
   ([agent](agent.md)).
 

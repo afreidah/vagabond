@@ -39,7 +39,7 @@ type agentExecutor interface {
 	Result(ctx context.Context, id string) (*execution.Result, error)
 	Cancel(ctx context.Context, id string) error
 	Release(ctx context.Context, id string) error
-	Logs(ctx context.Context, id string, w io.Writer) error
+	Logs(ctx context.Context, id string, offset int64, w io.Writer) error
 	Held(ctx context.Context) ([]executor.Held, error)
 	Runtimes() []string
 }
@@ -242,10 +242,10 @@ func (e *executions) Release(ctx context.Context, req *agentrpc.ExecutionRequest
 	return &agentrpc.Empty{}, failure(e.exec.Release(ctx, req.GetExecutionId()))
 }
 
-// StreamLogs sends a workload's output as it is written, until it ends or the
-// server stops listening.
-func (e *executions) StreamLogs(req *agentrpc.ExecutionRequest, stream agentrpc.AgentExecutions_StreamLogsServer) error {
-	return failure(e.exec.Logs(stream.Context(), req.GetExecutionId(), chunkWriter{stream}))
+// StreamLogs sends a workload's output from the requested offset on as it is
+// written, until it ends or the server stops listening.
+func (e *executions) StreamLogs(req *agentrpc.LogsRequest, stream agentrpc.AgentExecutions_StreamLogsServer) error {
+	return failure(e.exec.Logs(stream.Context(), req.GetExecutionId(), req.GetOffset(), chunkWriter{stream}))
 }
 
 // -------------------------------------------------------------------------
