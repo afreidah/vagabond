@@ -6,15 +6,16 @@ weight: 420
 ---
 
 Vagabond ships as one binary, `vagabond`, that runs the server, the agent and
-the CLI. The repository ships no container image, package or service manager
-manifest for it; build the binary and run it under a supervisor.
+the CLI. The repository has a `Dockerfile` for an image of it but publishes no
+image, package or systemd unit; build the binary or the image and run it under
+a supervisor.
 
 ## Building
 
-Requires the Go version in `go.mod` (1.27).
+Requires the Go version in `go.mod` (1.27.3).
 
 ```bash
-make build                       # ./vagabond, version "dev"
+make build                       # ./vagabond, version from .version (dev if the file is missing)
 make build VERSION=v0.4.0        # stamps the version
 ./vagabond -version
 ```
@@ -28,6 +29,33 @@ Install it where the unit files below expect it:
 ```bash
 sudo install -m 0755 vagabond /usr/local/bin/vagabond
 ```
+
+Or `make install`, which runs `make build` and installs to `$(BINDIR)` (default
+`/usr/local/bin`); `make uninstall` removes it. `sudo make install` builds as
+root; `make install BINDIR=$HOME/.local/bin` needs no sudo.
+
+### Container image
+
+```bash
+make docker                                   # $(REGISTRY)/vagabond:$(VERSION), local architecture
+make push DOCKER_REGISTRY=registry.internal   # linux/amd64 and linux/arm64, tagged $(VERSION) and latest
+```
+
+| | |
+|---|---|
+| Build / run base | `golang:1.27.3-alpine` / `alpine:3.21` with `ca-certificates` |
+| User | `appuser`, UID 10001 |
+| Entrypoint | `vagabond`; pass `server ...` or `agent ...` |
+| Ports | `EXPOSE 4747 4748` |
+| Health check | None; use `GET /v1/health` for a server |
+| Registry | `REGISTRY`, else `$DOCKER_REGISTRY`, else `registry.example.com` |
+
+- `bind` and `agent_bind` default to loopback; set a non-loopback address to
+  reach them from outside the container, and add `agent_tls` for `agent_bind`.
+- The server is PID 1; give each server container a distinct hostname
+  ([Multiple servers](#multiple-servers)).
+- An agent runs as root and privileged ([agent](agent.md)), so it needs the
+  user overridden.
 
 ## Running the server
 
@@ -47,20 +75,22 @@ What startup does, in order:
 
 1. Discovers and decodes the configuration; any diagnostic exits 1.
 2. Builds every provider, resolving credentials.
-3. Asks every enabled provider for capabilities. Failures print `Some
-   providers did not answer: ...` and the server continues with those
+3. Asks every enabled provider except pools for capabilities. Failures print
+   `Some providers did not answer: ...` and the server continues with those
    providers unhealthy.
 4. Opens the store, applies migrations, verifies the schema version, reads
    quota usage ([database](database.md#startup)).
-5. Listens for agents on `agent_bind`.
-6. Claims dispatches whose lease lapsed, reaps stale quota reservations, then
-   serves the API on `bind`.
+5. Loads the `tls` certificate, then listens for agents on `agent_bind`.
+6. Binds `bind`, claims dispatches whose lease lapsed, reaps stale quota
+   reservations, starts the upkeep loops, then serves the API.
 
 On `SIGINT` or `SIGTERM` the server stops accepting requests and gives
 in-flight ones 10 seconds to finish. Dispatches it is running are not
 cancelled: their executions keep running at the providers, their leases lapse,
 and the next server to claim them follows them to the end. See
-[dispatch](dispatch.md#resuming).
+[dispatch](dispatch.md#resuming). Live output streams end at once, the upkeep
+loops stop, and the agent listener closes every session; agents reconnect with
+backoff.
 
 ### systemd
 
@@ -160,12 +190,15 @@ configured providers, not with registered jobs.
 | Load | Per | Cost |
 |---|---|---|
 | Lease renewal | Running dispatch | One `UPDATE` every 20s |
-| Execution polling | Running execution on a cloud provider | One provider `Status` call, interval doubling from 2s to 15s |
+| Execution polling | Running execution on Cloud Run or a pool | One provider `Status` call, interval doubling from 2s to 15s |
 | Capability refresh | Enabled non-pool provider | One provider call per minute, 30s timeout |
 | Usage refresh | Server | One read of current-period quota rows every 15s |
 | Lease claim | Server | One `UPDATE ... RETURNING` every 30s |
 | Reaper | Server | One locking read of reservations older than 1 hour every 5 minutes, plus a provider `Status` call per stale reservation |
 | Record writes | Execution | A few `INSERT`/`UPDATE`s per state change; the final one carries up to 64 KiB of output |
+| Provider release | Server | Every 5 minutes: one read of every unreleased execution unchanged for 10 minutes; per candidate a reservation lookup, a provider `Status` when it has no result, then `Release` and an `UPDATE` |
+| Live output | Followed request | One execution read per second, plus the provider's stream |
+| Dispatch follow | `job run` / `job dispatch` | One `GET /v1/dispatch/{id}` per second: the dispatch and all of its executions |
 
 - Database connections: pgxpool, at most `pool_max_conns` (default the
   greater of 4 and the CPU count). Every write is a serializable transaction;
@@ -291,8 +324,8 @@ time=2026-09-28T14:03:12.540Z level=INFO msg="dispatch started" dispatch=... job
 | Level | Server events |
 |---|---|
 | `debug` | Every API request: `method`, `path`, `status`, `duration` |
-| `info` | `serving`, `serving agents`, `stopped`, `node registered`, `dispatch started`, `dispatch finished`, `dispatch resumed`, `resumed dispatch finished`, `resolved abandoned quota reservations` |
-| `warn` | `dispatch finished without an answer`, `store unreachable`, `node disconnected`, `agent connection`, `refreshing provider capabilities`, `refreshing quota usage`, `resolving abandoned quota reservations`, `claiming abandoned dispatches`, `resuming dispatch` |
+| `info` | `serving`, `serving agents`, `stopped`, `node registered`, `dispatch started`, `dispatch finished`, `dispatch resumed`, `resumed dispatch finished`, `resolved abandoned quota reservations`, `released provider leftovers` |
+| `warn` | `dispatch finished without an answer`, `store unreachable`, `node disconnected`, `agent connection`, `refreshing provider capabilities`, `refreshing quota usage`, `resolving abandoned quota reservations`, `releasing provider leftovers`, `claiming abandoned dispatches`, `resuming dispatch`, `log stream ended early` |
 | `error` | `request failed`: an API request that answered 500 |
 
 Startup errors, configuration diagnostics, and the `Some providers did not

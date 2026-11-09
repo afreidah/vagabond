@@ -220,6 +220,8 @@ provider "aws-lambda" {
 | `fake-worker` | In-memory worker provider | ignored | resolved, unused |
 
 Any other value is `Unknown provider type`, listing the known types.
+`type = ""` is `Missing provider type`; omitting `type` is
+`Missing required argument`.
 
 The fakes run admission, ranking and dispatch with no cloud account.
 `examples/config.hcl` uses them.
@@ -305,7 +307,11 @@ file re-read, the variable re-read, the command re-run. The provider rebuilds
 its client from the result, and the call is made once more. A source is
 re-resolved at most once a minute per provider, so a credential that is
 simply wrong does not rerun its command on every call. An expired session
-token or a rotated secret therefore takes effect without a restart.
+token or a rotated secret therefore takes effect without a restart. This covers
+every call dispatch, the reaper and the release loop make.
+`DELETE /v1/execution/{id}` for an execution no dispatch on this server is
+running, and live output streams, call the provider directly: a rejected
+credential fails them until a dispatch call has re-resolved it.
 
 | Source | Behaviour |
 |---|---|
@@ -524,8 +530,9 @@ must present a certificate `ca` signed.
 - Required when `agent_bind` is not a loopback address. Without it the server
   refuses to start: `agent_bind <addr> is reachable beyond this machine: add an
   agent_tls block to the server block so agents must present a certificate, or
-  bind to 127.0.0.1`. An empty host (`:4748`) listens everywhere and counts as
-  not loopback.
+  bind to 127.0.0.1`. `localhost`, any `127.0.0.0/8` address and `::1` count
+  as loopback. An empty host (`:4748`) listens everywhere and counts as not
+  loopback.
 - An agent registers only under its certificate's common name. Registering
   another name is refused with `PermissionDenied`, so a node can only be
   replaced by an agent holding its certificate.
@@ -553,6 +560,7 @@ store {
 | Condition | Result |
 |---|---|
 | Block absent | `vagabond server` exits: `The server needs a store block, or -dev to keep everything in memory.` |
+| `store {}` | `Missing required argument` for `dsn` |
 | `dsn = ""` | `Empty store DSN` |
 | Block present with `-dev` | Warning; the block is ignored and everything is kept in memory |
 | Database unreachable at startup | `could not open the store: ...`, exit 1 |
@@ -609,8 +617,15 @@ budget.
 
 Configuration is decoded with the same HCL machinery job files use.
 
-- Every problem is reported in one run, not the first only.
-- A provider that fails to build does not stop the others from being reported.
+- Problems are reported in two passes. Decoding and validation (syntax,
+  unknown blocks, duplicates, tiers, pools, credential sources, namespace
+  quotas) report every problem at once; any error exits before a provider is
+  built. Building then reports every provider's problems at once: `meta`
+  values, credential resolution, its `config` block, unknown types.
+- A provider with an invalid `meta` is not built further; its credential and
+  `config` problems appear on the next run.
+- Each `pool` block reports its first problem only: duplicate label, then
+  meter, period, limit.
 - Parse and decode errors carry file, line and column. Validation errors
   (duplicates, pools, credentials) name the provider, namespace or pool
   instead.
@@ -628,8 +643,16 @@ Other startup errors:
 | Message | Cause |
 |---|---|
 | `No providers are configured, so there is nothing to run on.` | Configuration decoded with zero `provider` blocks |
-| `Listening for agents on <addr>: ...` | `agent_bind` in use or not bindable |
+| `listening for agents on <addr>: ...` | `agent_bind` in use or not bindable |
 | `listening on <addr>: ...` | `bind` in use or not bindable |
+| `Invalid -log-level "x": use debug, info, warn or error.` | Bad `-log-level` |
+| `Cannot read configuration` | A discovered path that cannot be read |
+| `loading the server certificate: ...` | `tls` pair unreadable or mismatched |
+| `loading the agent listener's certificate: ...` | `agent_tls` pair unreadable or mismatched |
+| `loading the CA from <path>: ...` | `agent_tls` `ca` unreadable |
+| `agent_bind <addr> is reachable beyond this machine: ...` | Non-loopback `agent_bind` without `agent_tls` |
+
+Certificates load after the store is opened and migrated.
 
 ## Complete example
 

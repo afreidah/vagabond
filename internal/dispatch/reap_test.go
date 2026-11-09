@@ -28,10 +28,12 @@ type statusProvider struct {
 	err    error
 }
 
+// Status returns the case's status and error.
 func (p *statusProvider) Status(context.Context, execution.ID) (execution.Status, error) {
 	return p.status, p.err
 }
 
+// Each provider answer resolves to the verdict and run time the ledger needs.
 func TestResolve(t *testing.T) {
 	t.Parallel()
 

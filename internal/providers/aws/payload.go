@@ -34,10 +34,8 @@ type event struct {
 	Env         map[string]string `json:"env,omitempty"`
 }
 
-// invocation reads the function a task names and builds its event.
-//
-// A task naming no function is a caller error, not something to default:
-// Vagabond will not guess what to run.
+// invocation reads the function a task names and builds its event. A task
+// naming no function is a caller error, never defaulted.
 func invocation(id execution.ID, task *job.Task) (string, []byte, error) {
 	function, ok := configValue(task, ConfigFunction, cty.String)
 	if !ok || function.AsString() == "" {
@@ -68,9 +66,8 @@ func invocation(id execution.ID, task *job.Task) (string, []byte, error) {
 	return function.AsString(), payload, nil
 }
 
-// configValue reads one attribute from the driver config as want.
-//
-// PartialContent, so a field meant for another driver is left alone.
+// configValue reads one attribute from the driver config as want, through
+// PartialContent so a field meant for another driver is left alone.
 func configValue(task *job.Task, name string, want cty.Type) (cty.Value, bool) {
 	if task.Config == nil || task.Config.Body == nil {
 		return cty.NilVal, false

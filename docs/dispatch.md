@@ -7,8 +7,8 @@ weight: 330
 
 Dispatch runs what [admission and ranking](scheduling.md) selected: reserve
 quota, record the attempt, submit to the provider, poll until the execution is
-terminal, fetch the result, settle quota and release what the provider left
-behind. An infrastructure failure moves the task to the next ranked provider
+terminal, fetch the result, release what the provider left behind and settle
+quota. An infrastructure failure moves the task to the next ranked provider
 when the task's retry policy allows it.
 
 The server does all dispatching. `POST /v1/jobs/run` and
@@ -16,7 +16,10 @@ The server does all dispatching. `POST /v1/jobs/run` and
 goroutine and return its ID; the run is read back from `GET /v1/dispatch/{id}`
 (see [API](api.md)).
 
-![A job file is validated, admitted against every provider and ranked. Dispatch then reserves quota, submits to the selected provider, watches the execution, settles what it used and releases what it left behind. An infrastructure failure moves the task to the next ranked provider.](assets/task-path.svg)
+![A job file is validated, admitted against every provider and ranked. Dispatch then reserves quota, submits to the selected provider, watches the execution, releases what it left behind and settles what it used. An infrastructure failure moves the task to the next ranked provider.](assets/task-path.svg)
+
+Interactive version, with notes on each stage:
+[Task path](https://vagabond.munchbox.cc/diagrams/task-path/).
 
 ## Dispatch records
 
@@ -71,6 +74,9 @@ charged without the job ([Quotas](quotas.md)).
 
 ## Execution states
 
+Every transition, with what records it:
+[Execution states](https://vagabond.munchbox.cc/diagrams/execution-states/).
+
 | State | Terminal | Meaning |
 |---|---|---|
 | `pending` | no | Recorded and reserved; `Submit` not yet called |
@@ -78,9 +84,9 @@ charged without the job ([Quotas](quotas.md)).
 | `accepted` | no | The provider queued the work but has not started it |
 | `running` | no | The work started |
 | `succeeded` | yes | The provider reported success |
-| `failed` | yes | The provider reported failure, or the attempt failed before submission |
+| `failed` | yes | The provider reported failure, the attempt failed before submission, or a `lost` execution was given up on |
 | `cancelled` | yes | Stopped by Vagabond or by the provider |
-| `lost` | no | Submitted, then a status call failed. The work may still be running; [reconciled](#lost-executions) later |
+| `lost` | no | Submitted, then a `Status` call failed, or `Status` reported `lost` (a `pool` whose node has been gone less than 5 minutes). The work may still be running; [reconciled](#lost-executions) later |
 
 Legal transitions:
 
@@ -114,6 +120,7 @@ terminal state only with a result. A submission that breaks this is an
 | Terminal state with the result | The provider reported a terminal state and `Result` was called |
 | `failed` with `Failure` | `Submit` failed |
 | `lost` with `Failure` | A `Status` call failed after submission |
+| `lost`, no `Failure` | `Status` reported `lost`. Written on change; polling continues |
 | `cancelled` | The dispatch was cancelled while polling |
 
 - Every write after `pending` is best effort, on its own context with a 10s
@@ -150,17 +157,22 @@ repeat anywhere.
 
 | Failure | Behaviour |
 |---|---|
-| Non-zero exit code | Ends the task and the job. Never retried |
+| Provider reports `failed` with a result (a non-zero exit, a function error) | Ends the task and the job. Never retried |
 | `infrastructure` | Next ranked provider, if the retry budget allows |
 | `internal` | Stops the task immediately |
-| Unclassified error | Treated as not reroutable |
+| Unclassified error | Treated as not reroutable, and recorded with `Failure` `internal` |
+| Credential rejected (HTTP 401 or 403) | The credential is resolved again and the same call is made once more on the same provider. A second rejection is `internal`. See [`credentials` block](configuration.md#credentials-block) |
+| `Result` fails | Classified like any error. `infrastructure` reroutes; the terminal state is recorded without a result and the reservation stands for the reaper |
+| Driver config fails to evaluate | Stops the task before admission: `building the request: <diagnostics>` |
 | Provider reports `cancelled` | `infrastructure`: the provider gave no verdict |
 | Quota reservation refused | Provider skipped. Not a submission, no record, no budget spent |
 | Ranked provider not registered | Stops the task with `ErrNoProvider` |
 
 A provider that fails a `Status` call leaves the execution `lost`. The run is
 not cancelled on that provider, and its quota reservation stands until the
-[reaper](background-services.md#reservation-reaper) resolves it.
+[reaper](background-services.md#reservation-reaper) resolves it. A `lost`
+that `Status` reports does not end the attempt: polling continues, and a later
+terminal state is written with its result.
 
 ### Lost executions
 
@@ -341,7 +353,7 @@ For each execution that is not terminal:
 |---|---|
 | Provider no longer configured | `failed` if `pending`, else `lost`; `Failure` is `internal` |
 | `Status` call fails, including an unknown execution | `failed` if `pending`, else `lost`; `Failure` is `infrastructure` |
-| `Status` answers | Moved from `pending` to `submitted` if needed, polled to a terminal state, result recorded, quota settled, released |
+| `Status` answers | Moved from `pending` to `submitted` if needed, polled to a terminal state, result recorded, released, quota settled |
 
 The reservation of a `failed` or `lost` execution is left to the reaper.
 
@@ -350,9 +362,9 @@ The dispatch then ends by its last execution:
 | Last execution | Dispatch | `Error` |
 |---|---|---|
 | None | `unanswered` | `interrupted before any task was submitted` |
-| Result with success, every task has a record | `succeeded` | |
-| Result with success, tasks remain | `unanswered` | `interrupted after <n> of <m> tasks` |
-| Result with non-zero exit | `failed` | |
+| `succeeded` with a result and no `Failure`, every task has a record | `succeeded` | |
+| `succeeded` with a result and no `Failure`, tasks remain | `unanswered` | `interrupted after <n> of <m> tasks` |
+| `failed` with a result and no `Failure` | `failed` | |
 | Anything else | `unanswered` | `interrupted; execution <id> ended <state>` |
 
 If the executions cannot be read, the resume stops and the dispatch stays

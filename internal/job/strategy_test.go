@@ -3,9 +3,8 @@
 //
 // Author: Alex Freidah
 //
-// The vocabulary holds one entry in phase 1, so these tests exist mostly to
-// make adding a second one safe: the copy and error-message guarantees are what
-// a later strategy inherits for free.
+// The vocabulary holds one entry, so these tests mostly guard the copy and
+// error-message guarantees that any added strategy inherits.
 // -------------------------------------------------------------------------------
 
 package job
@@ -16,6 +15,7 @@ import (
 	"testing"
 )
 
+// Only the exact free-first spelling validates.
 func TestStrategy_Valid(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -38,6 +38,7 @@ func TestStrategy_Valid(t *testing.T) {
 	}
 }
 
+// The free-first spelling parses to StrategyFreeFirst.
 func TestParseStrategy(t *testing.T) {
 	got, err := ParseStrategy("free-first")
 	if err != nil {
@@ -49,6 +50,7 @@ func TestParseStrategy(t *testing.T) {
 	}
 }
 
+// A strategy outside the vocabulary fails with ErrUnknownStrategy.
 func TestParseStrategy_Invalid(t *testing.T) {
 	for _, input := range []string{"", "cheapest", "free_first"} {
 		t.Run(input, func(t *testing.T) {
@@ -64,6 +66,7 @@ func TestParseStrategy_Invalid(t *testing.T) {
 	}
 }
 
+// The parse error names every valid strategy.
 func TestStrategy_ErrorListsVocabulary(t *testing.T) {
 	_, err := ParseStrategy("cheapest")
 	if err == nil {
@@ -77,6 +80,7 @@ func TestStrategy_ErrorListsVocabulary(t *testing.T) {
 	}
 }
 
+// Mutating the returned slice leaves the vocabulary untouched.
 func TestStrategies_ReturnsCopy(t *testing.T) {
 	first := Strategies()
 	first[0] = "mutated"
@@ -86,6 +90,7 @@ func TestStrategies_ReturnsCopy(t *testing.T) {
 	}
 }
 
+// Every strategy survives a MarshalText and UnmarshalText round trip.
 func TestStrategy_TextRoundTrip(t *testing.T) {
 	for _, want := range Strategies() {
 		t.Run(want.String(), func(t *testing.T) {
@@ -106,6 +111,7 @@ func TestStrategy_TextRoundTrip(t *testing.T) {
 	}
 }
 
+// The zero value is not a strategy and does not marshal.
 func TestStrategy_MarshalTextRejectsZeroValue(t *testing.T) {
 	var s Strategy
 
@@ -114,6 +120,7 @@ func TestStrategy_MarshalTextRejectsZeroValue(t *testing.T) {
 	}
 }
 
+// Unmarshalling an unknown strategy fails with ErrUnknownStrategy.
 func TestStrategy_UnmarshalTextRejectsUnknown(t *testing.T) {
 	var s Strategy
 

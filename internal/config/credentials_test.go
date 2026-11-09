@@ -4,10 +4,9 @@
 // Author: Alex Freidah
 //
 // Two properties matter here and the rest is plumbing. A block naming two
-// sources must be refused, because whichever won would silently decide what a
-// provider authenticates with. And a helper's trailing newline must not reach
-// the credential, because an API key with a newline on the end fails
-// authentication in a way nobody diagnoses quickly.
+// sources is refused, because whichever won would silently decide what a
+// provider authenticates with, and a helper's trailing newline never reaches
+// the credential.
 // -------------------------------------------------------------------------------
 
 package config
@@ -21,6 +20,10 @@ import (
 
 	"github.com/afreidah/vagabond/internal/ptr"
 )
+
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
 
 // resolve is the common shape: resolve a block and fail on any error.
 func resolve(t *testing.T, c *CredentialsBlock) string {
@@ -38,6 +41,7 @@ func resolve(t *testing.T, c *CredentialsBlock) string {
 // SOURCES
 // -------------------------------------------------------------------------
 
+// A file source resolves to the file's contents.
 func TestResolveFile(t *testing.T) {
 	t.Parallel()
 
@@ -52,6 +56,7 @@ func TestResolveFile(t *testing.T) {
 	}
 }
 
+// An env source resolves to the variable's value.
 func TestResolveEnv(t *testing.T) {
 	t.Setenv("VAGABOND_TEST_SECRET", "a-secret")
 
@@ -61,6 +66,7 @@ func TestResolveEnv(t *testing.T) {
 	}
 }
 
+// An exec source resolves to the command's standard output.
 func TestResolveExec(t *testing.T) {
 	t.Parallel()
 
@@ -117,6 +123,7 @@ func TestResolveExecKeepsInteriorNewlines(t *testing.T) {
 // FAILURE
 // -------------------------------------------------------------------------
 
+// Every source's failure names the path, variable, or command that was tried.
 func TestResolveFailures(t *testing.T) {
 	t.Parallel()
 
@@ -151,8 +158,7 @@ func TestResolveFailures(t *testing.T) {
 				t.Fatal("expected resolution to fail")
 			}
 
-			// The error names what was tried, because the operator reading it
-			// is looking for a typo in a path or a variable name.
+			// The operator reading this is looking for a typo
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error %q does not mention %q", err, tc.want)
 			}
@@ -192,9 +198,8 @@ func TestResolveExecIgnoresStderrOnSuccess(t *testing.T) {
 	}
 }
 
-// An empty block reaching Resolve is a bug rather than a configuration error,
-// since validation refuses it first, so it is a sentinel rather than a
-// diagnostic.
+// An empty block reaching Resolve is a bug, since validation refuses it first,
+// so it is a sentinel rather than a diagnostic.
 func TestResolveEmptyBlock(t *testing.T) {
 	t.Parallel()
 
@@ -236,6 +241,7 @@ provider "gcp" {
 	}
 }
 
+// A credentials block naming no source is refused.
 func TestValidateRejectsEmptyCredentialsBlock(t *testing.T) {
 	t.Parallel()
 
@@ -251,6 +257,7 @@ provider "gcp" {
 	}
 }
 
+// A provider with no credentials block loads cleanly.
 func TestValidateAcceptsNoCredentialsBlock(t *testing.T) {
 	t.Parallel()
 
@@ -261,6 +268,7 @@ func TestValidateAcceptsNoCredentialsBlock(t *testing.T) {
 // DECODING
 // -------------------------------------------------------------------------
 
+// Each of the three sources decodes into its field.
 func TestCredentialsDecode(t *testing.T) {
 	t.Parallel()
 

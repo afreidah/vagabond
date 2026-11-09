@@ -4,10 +4,10 @@
 // Author: Alex Freidah
 //
 // Status, results, live output, cancellation and release, each sent to the node
-// holding the execution. Which node that is comes from this process's own placements, or
-// from what the nodes report holding, so it survives a server restart without
-// being stored. A node that drops is given a grace period to come back before
-// its executions are given up on.
+// holding the execution. Which node that is comes from this process's own
+// placements, or from what the nodes report holding, so it survives a server
+// restart without being stored. A node that drops is given a grace period to
+// come back before its executions are given up on.
 // -------------------------------------------------------------------------------
 
 package pool
@@ -27,6 +27,10 @@ import (
 	"github.com/afreidah/vagabond/internal/nodes"
 	"github.com/afreidah/vagabond/internal/plugin"
 )
+
+// -------------------------------------------------------------------------
+// CONSTANTS
+// -------------------------------------------------------------------------
 
 // leftGrace is how long a node may be gone before its executions are given up
 // on. Its executions report lost meanwhile, which keeps a run waiting for an
@@ -177,8 +181,7 @@ func (p *Provider) holder(id execution.ID) (*nodes.Conn, bool, error) {
 	node, known := p.locate(id.String())
 
 	if !known {
-		// Nodes reconnect after a server restart within seconds of each other;
-		// one holding this execution may not have reported yet.
+		// After a server restart, the node holding it may not have reported yet
 		if p.now().Sub(p.created) < leftGrace {
 			return nil, true, nil
 		}

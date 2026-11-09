@@ -3,9 +3,8 @@
 //
 // Author: Alex Freidah
 //
-// The acceptance test for these types is that the plan table in the README can
-// be built from them and nothing else. That is at the bottom of this file, and
-// it is what proves the shapes carry enough to be useful.
+// Input attributes, result ordering and retryability, ending with the
+// acceptance test that the README's plan table renders from these types alone.
 // -------------------------------------------------------------------------------
 
 package scheduler
@@ -20,6 +19,10 @@ import (
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
 )
+
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
 
 // setFreePercent gives in one pool of a hundred executions with percent left.
 // Every execution charges it, so FreePercent reads percent whatever the task.
@@ -39,9 +42,8 @@ func setFreePercent(in *Input, percent int) {
 // ATTRIBUTES
 // -------------------------------------------------------------------------
 
-// The quota-derived attribute is merged here because this is the only layer
-// holding both the capabilities and the ledger. A capability model could never
-// know it.
+// The quota-derived attribute merges into the capability attributes without
+// displacing them.
 func TestInput_AttributesMergeQuota(t *testing.T) {
 	in := &Input{
 		Provider:     "ibm-code-engine",
@@ -60,9 +62,8 @@ func TestInput_AttributesMergeQuota(t *testing.T) {
 	}
 }
 
-// An operator's tags reach a job under the open half of the namespace, which is
-// what makes the closed half checkable. A tag landing anywhere else could shadow
-// a capability and no validation would catch it.
+// An operator's tags reach a job under the meta prefix, so a tag cannot shadow
+// a capability.
 func TestInput_AttributesMergeTags(t *testing.T) {
 	in := &Input{
 		Provider:     "ibm-code-engine",
@@ -86,9 +87,8 @@ func TestInput_AttributesMergeTags(t *testing.T) {
 	}
 }
 
-// The tier comes from configuration, so it is merged here beside the quota
-// attribute. An untiered provider still publishes 0, which is the tier it
-// ranks in.
+// The configured tier is published beside the quota attribute; an untiered
+// provider publishes 0, the tier it ranks in.
 func TestInput_AttributesMergeTier(t *testing.T) {
 	for _, tier := range []int{0, 2} {
 		in := &Input{
@@ -120,6 +120,7 @@ func TestAttrFreeQuotaPercent_IsReserved(t *testing.T) {
 // RESULT
 // -------------------------------------------------------------------------
 
+// A result is admitted exactly when it holds a candidate.
 func TestResult_Admitted(t *testing.T) {
 	empty := &Result{}
 	if empty.Admitted() {
@@ -132,8 +133,7 @@ func TestResult_Admitted(t *testing.T) {
 	}
 }
 
-// Retryable is the difference between waiting for a quota reset and looping
-// forever against a provider that will never support the driver.
+// Only a transient rejection, with nothing admitted, makes a result retryable.
 func TestResult_Retryable(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -223,8 +223,7 @@ func TestResult_SortIsDeterministic(t *testing.T) {
 // CANDIDATE
 // -------------------------------------------------------------------------
 
-// Every candidate is free while max_cost_usd = 0 is the only policy, and the
-// zero cost must read as free without interpretation.
+// A zero-value candidate's cost reads as free without interpretation.
 func TestCandidate_CostIsFreeByDefault(t *testing.T) {
 	var c Candidate
 

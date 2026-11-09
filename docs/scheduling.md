@@ -16,6 +16,9 @@ reserving anything.
 
 ![Every provider is checked in four tiers: policy, availability, mismatch and capacity. A provider that fails a check is rejected with that check's reason code. The providers that pass every check are the candidates, which ranking scores to select one.](assets/admission.svg)
 
+Interactive version, with notes on each check and scorer:
+[Admission and ranking](https://vagabond.munchbox.cc/diagrams/admission/).
+
 **Inputs**, one per configured provider:
 
 | Input | Source |
@@ -24,6 +27,7 @@ reserving anything.
 | `enabled` | Provider's `enabled` attribute |
 | Healthy | Whether the last capability refresh succeeded |
 | Tags | Provider's `meta` block, as `provider.meta.*` |
+| Tier | Provider's `tier` attribute; ranking reads it, and constraints and affinities see it as `provider.tier` |
 | Quota pools and usage | Provider's pools and the namespace's share, with the ledger's last usage snapshot; see [Quotas](quotas.md) |
 
 Admission calls no provider, reads no clock and reserves nothing. It is a pure
@@ -51,7 +55,7 @@ Every checker runs against every provider, in this order.
 | 8 | network | mismatch | `network-unsupported` | `internet = true` without egress, or `private = true` without private networking |
 | 9 | resources | mismatch | `resources-exceeded` | CPU or memory exceeds the provider's maximum |
 | 10 | duration | mismatch | `duration-exceeded` | `timeout` exceeds the provider's maximum duration |
-| 11 | attribute | mismatch | `attribute-unknown` | A constraint or affinity names an unpublished `provider.*` attribute |
+| 11 | attribute | mismatch | `attribute-unknown` | A constraint or affinity names an attribute Vagabond does not publish |
 | 12 | constraint | mismatch | `constraint-unmet` | A constraint evaluates false |
 | 13 | quota | capacity | `quota-exhausted` | The task does not fit a quota pool and the job will not pay |
 
@@ -157,9 +161,13 @@ arm64 node and a 16 GiB node would admit a task that needs both.
 
 ### Unknown attributes
 
-A constraint or affinity naming an attribute under `provider.` that Vagabond
-does not publish is rejected as `attribute-unknown` on every provider. The
-detail lists the published attributes.
+A constraint or affinity naming an attribute Vagabond does not publish is
+rejected as `attribute-unknown` on every provider. This covers any name outside
+the published `provider.*` set, `provider.meta.*` and `node.label.*`, with or
+without the `provider.` prefix. The detail lists the published attributes. Job
+validation refuses the same names first (`Unknown constraint attribute`,
+`Unknown affinity attribute`), so a job file reaching `job plan` or dispatch
+never fails this check; it is a backstop.
 
 Exempt, and never checked:
 
@@ -198,7 +206,8 @@ diffed in CI.
 
 Ranking scores every candidate and orders them best first. The full ordering is
 kept: dispatch tries candidates in ranked order, moving to the next when a
-reservation is refused or a provider fails (see [Dispatch](dispatch.md)).
+reservation is refused, or when a provider fails with `infrastructure` and the
+task's retry budget allows rerouting (see [Dispatch](dispatch.md)).
 
 ### Scorers
 
@@ -263,7 +272,8 @@ The mode is the first of these that is set:
 **`strict`:** every admitted provider in tier 0 ranks ahead of every one in
 tier 1, whatever their scores. Scores order providers within a tier. A higher
 tier is reached only when every lower-tier provider was rejected, or, at
-dispatch, refused a reservation or failed.
+dispatch, refused a reservation or failed with `infrastructure` under
+`reroute = true`.
 
 **`weighted`:** the `tier` scorer places each candidate between the lowest and
 highest tier among this task's candidates. The lowest scores 1.00 and the
@@ -284,7 +294,7 @@ in either mode. Of the three candidates, with no affinities:
 
 | Candidate | Tier | Headroom | `tier` score | Weighted score | Strict rank | Weighted rank |
 |---|---|---|---|---|---|---|
-| `homelab` | 0 | 15% | 1.00 | `mean(0.15, 1.00)` = 58 | 1, selected | 2 |
+| `homelab` | 0 | 16% | 1.00 | `mean(0.16, 1.00)` = 58 | 1, selected | 2 |
 | `gcp-cloud-run` | 1 | 80% | 0.50 | `mean(0.80, 0.50)` = 65 | 2 | 1, selected |
 | `ibm-code-engine` | 2 | 90% | 0.00 | `mean(0.90, 0.00)` = 45 | 3 | 3 |
 
@@ -447,7 +457,7 @@ despite its score of 15. Under `weighted` tiers `gcp-cloud-run` scores
 | `network-unsupported` | mismatch | no | The provider cannot satisfy the `network` block |
 | `resources-exceeded` | mismatch | no | The task asks for more CPU or memory than the provider offers |
 | `duration-exceeded` | mismatch | no | The task's `timeout` exceeds the provider's maximum |
-| `attribute-unknown` | mismatch | no | A constraint or affinity names an unpublished `provider.*` attribute |
+| `attribute-unknown` | mismatch | no | A constraint or affinity names an attribute Vagabond does not publish |
 | `constraint-unmet` | mismatch | no | A constraint evaluated false |
 | `quota-exhausted` | capacity | yes | A pool has no room for this task and the job will not pay |
 

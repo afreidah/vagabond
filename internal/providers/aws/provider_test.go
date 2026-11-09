@@ -32,6 +32,10 @@ import (
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
+// -------------------------------------------------------------------------
+// FAKE LAMBDA
+// -------------------------------------------------------------------------
+
 // fakeLambda answers one invoke with whatever a test sets.
 type fakeLambda struct {
 	status        int
@@ -45,6 +49,8 @@ type fakeLambda struct {
 	calls   int
 }
 
+// ServeHTTP records the invoke and answers with the configured refusal, or with
+// the function error and log tail.
 func (f *fakeLambda) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.calls++
 	f.path = r.URL.Path
@@ -108,6 +114,8 @@ func functionTask(t *testing.T, config, env string) *job.Task {
 	return task
 }
 
+// rawBlock parses an HCL fragment into a block with its attributes still
+// expressions, as the job parser leaves a driver config.
 func rawBlock(t *testing.T, src string) *job.RawBlock {
 	t.Helper()
 
@@ -119,6 +127,7 @@ func rawBlock(t *testing.T, src string) *job.RawBlock {
 	return &job.RawBlock{Body: f.Body}
 }
 
+// newID returns a fresh execution id, failing the test if one cannot be made.
 func newID(t *testing.T) execution.ID {
 	t.Helper()
 
@@ -134,6 +143,8 @@ func newID(t *testing.T) execution.ID {
 // SUBMIT
 // -------------------------------------------------------------------------
 
+// Submit invokes the named function synchronously, with a log tail, sending the
+// execution id, args and env as the event.
 func TestSubmit_InvokesSynchronouslyWithTheEvent(t *testing.T) {
 	t.Parallel()
 
@@ -264,6 +275,7 @@ func TestSubmit_FunctionErrorIsAFailedTask(t *testing.T) {
 	}
 }
 
+// A task naming no function fails as internal without invoking anything.
 func TestSubmit_TaskNamingNoFunction(t *testing.T) {
 	t.Parallel()
 
@@ -286,6 +298,7 @@ func TestSubmit_TaskNamingNoFunction(t *testing.T) {
 // FAILURES
 // -------------------------------------------------------------------------
 
+// Each refusal is classified by its status, and the SDK invokes only once.
 func TestSubmit_ClassifiesRefusals(t *testing.T) {
 	t.Parallel()
 
@@ -348,6 +361,10 @@ func TestStatus_IsUnsupported(t *testing.T) {
 		t.Errorf("Status() = %v, want ErrUnsupported", err)
 	}
 }
+
+// -------------------------------------------------------------------------
+// CREDENTIALS
+// -------------------------------------------------------------------------
 
 // A config block and a credential build a provider holding a client; a
 // credential that cannot be read is reported against the provider.

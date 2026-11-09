@@ -16,7 +16,7 @@ tail and the billed duration all come back from `Submit`.
 | Package | `internal/providers/aws` |
 | Drivers | `function` |
 | Execution family | synchronous: `Submit` returns a terminal state and the result |
-| Optional interfaces | none |
+| Optional interfaces | Recredentialer |
 | API | Lambda `Invoke`, through `aws-sdk-go-v2` |
 
 ## Configuration
@@ -66,7 +66,8 @@ provider and is documented in [Configuration](../configuration.md).
 | `region` absent | HCL's missing-attribute diagnostic |
 | An unknown attribute | HCL's unsupported-argument diagnostic |
 | `region` set to `""` or whitespace | `Empty provider setting`: "Provider "aws-lambda" sets region to an empty string." |
-| Credential unparseable | `Unusable credential`: "Provider "aws-lambda": ..." |
+| Credential unparseable, or the SDK cannot load its configuration | `Unusable credential`: "Provider "aws-lambda": ..." |
+| The credentials source cannot be read | `Cannot resolve credentials`: "Provider "aws-lambda": ..." |
 
 The region is not checked against AWS at startup. A function that does not
 exist in it fails the first invoke with a 404.
@@ -75,7 +76,7 @@ exist in it fails the first invoke with a 404.
 
 | `credentials` block | Credential used |
 |---|---|
-| absent | The SDK default chain: environment variables, shared config and credentials files (`AWS_PROFILE` included), SSO, and the rest of the SDK's chain |
+| absent | The SDK default chain: environment variables, shared config and credentials files (`AWS_PROFILE` included), SSO, and the rest of the SDK's chain; never resolved again by Vagabond on a 401 or 403 |
 | present | `credential_process` JSON, read from the file, environment variable or command the block names |
 
 The `credential_process` format is what
@@ -176,7 +177,8 @@ task "test" {
 | `function` | string | yes | Function name, partial ARN or full ARN, optionally suffixed with `:<version>` or `:<alias>` |
 | `args` | list of strings | no | Passed through in the event |
 
-Other keys are ignored. Values are evaluated against the job's variables.
+Other keys are ignored, and so is an `args` that is not a list of strings.
+Values are evaluated against the job's variables.
 
 ### The event
 
@@ -248,7 +250,7 @@ stream or sweep.
 | HTTP 429 (`TooManyRequestsException`, concurrency or rate throttling) | infrastructure | yes | `RetryAfter` 0 |
 | HTTP 5xx (`ServiceException` and other service-side errors) | infrastructure | yes | |
 | HTTP 404 (`ResourceNotFoundException`, no such function, version or alias) | internal | no | Wraps `ErrNotFound` |
-| HTTP 401 or 403 (access denied, expired token) | internal | no | Wraps `ErrUnauthorized`: the credential is resolved again and the call made once more |
+| HTTP 401 or 403 (access denied, expired token) | internal | no | Wraps `ErrUnauthorized`. With a `credentials` block, the block is resolved again and the call made once more; with the default chain, the error is returned as is |
 | Other HTTP 4xx (invalid parameters, payload too large) | internal | no | |
 | No HTTP response: network failure, DNS, or the default chain found no credential | infrastructure | yes | |
 | Function returns with `X-Amz-Function-Error` (handled or unhandled error, including the function timing out) | none | | An answer: state `failed`, exit code 1, not rerouted |

@@ -21,6 +21,10 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 )
 
+// -------------------------------------------------------------------------
+// TYPES
+// -------------------------------------------------------------------------
+
 // Executions holds dispatches and execution records by ID.
 type Executions struct {
 	mu         sync.Mutex
@@ -35,6 +39,10 @@ func NewExecutions() *Executions {
 		records:    make(map[execution.ID]execution.Record),
 	}
 }
+
+// -------------------------------------------------------------------------
+// DISPATCHES
+// -------------------------------------------------------------------------
 
 // CreateDispatch records a run as it starts. An ID already recorded is
 // refused.
@@ -132,6 +140,10 @@ func (s *Executions) GetDispatch(_ context.Context, id execution.ID) (*execution
 
 	return &stored, nil
 }
+
+// -------------------------------------------------------------------------
+// RECORDS
+// -------------------------------------------------------------------------
 
 // Create records a new execution. An ID already recorded is refused, since the
 // ID is the submission idempotency key.
@@ -260,6 +272,10 @@ func (s *Executions) jobExecutions(namespace, job string, limit int) []*executio
 
 	return out[:min(limit, len(out))]
 }
+
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
 
 // clone copies r so neither the caller nor the store can change the other's.
 func clone(r *execution.Record) execution.Record {

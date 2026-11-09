@@ -18,6 +18,10 @@ import (
 	"github.com/afreidah/vagabond/internal/scheduler"
 )
 
+// -------------------------------------------------------------------------
+// JOBS
+// -------------------------------------------------------------------------
+
 // jobOf converts a registered job's standing to its wire form.
 func jobOf(j *jobs.Job) api.Job {
 	return api.Job{
@@ -33,6 +37,10 @@ func jobOf(j *jobs.Job) api.Job {
 func versionOf(v *jobs.Version) api.JobVersion {
 	return api.JobVersion{Version: v.Version, Registered: v.Created.UTC()}
 }
+
+// -------------------------------------------------------------------------
+// EXECUTIONS
+// -------------------------------------------------------------------------
 
 // dispatchOf converts a run's record with the executions it created.
 func dispatchOf(d *execution.Dispatch, runs []*execution.Record) api.Dispatch {
@@ -114,6 +122,10 @@ func executionOf(r *execution.Record) api.Execution {
 
 	return out
 }
+
+// -------------------------------------------------------------------------
+// PLANS
+// -------------------------------------------------------------------------
 
 // taskPlanOf converts one task's plan: candidates best first, rejections by
 // provider, and the selection when there is one.

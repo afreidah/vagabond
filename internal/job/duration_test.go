@@ -17,6 +17,7 @@ import (
 	"time"
 )
 
+// Well-formed spans, including zero, parse to the expected duration.
 func TestDuration_Std(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -43,6 +44,7 @@ func TestDuration_Std(t *testing.T) {
 	}
 }
 
+// Empty, unitless, nonsense and negative values fail Std and Valid alike.
 func TestDuration_StdInvalid(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -89,6 +91,7 @@ func TestFromDuration_RoundTrips(t *testing.T) {
 	}
 }
 
+// A valid duration survives a text round trip exactly as written.
 func TestDuration_TextRoundTrip(t *testing.T) {
 	for _, input := range []Duration{"15m", "5s", "30s", "1h0m0s"} {
 		t.Run(input.String(), func(t *testing.T) {
@@ -110,8 +113,7 @@ func TestDuration_TextRoundTrip(t *testing.T) {
 }
 
 // JSON and database columns go through these, so an unparseable value must not
-// enter the model that way. HCL is deliberately the exception, and validation
-// is what covers it.
+// enter the model that way. Validation covers HCL, which bypasses them.
 func TestDuration_TextEncodingRejectsInvalid(t *testing.T) {
 	var d Duration
 

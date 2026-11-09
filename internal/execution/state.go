@@ -5,12 +5,9 @@
 //
 // One state machine across three execution families: an asynchronous batch job,
 // a synchronous function invocation, and an HTTP call to an edge worker. Only
-// the first can go missing, which is why StateLost exists.
-//
-// The machine is acyclic. Anything that waits or spawns becomes a separate
-// entity rather than a state here, which is how Nomad models periodic jobs,
-// retries, and blocked work. Keeping that property is what lets a transition
-// table stay the whole implementation.
+// the first can go missing, which is why StateLost exists. The machine is
+// acyclic: anything that waits or spawns is a separate entity, so a transition
+// table stays the whole implementation.
 // -------------------------------------------------------------------------------
 
 package execution
@@ -28,13 +25,8 @@ import (
 // -------------------------------------------------------------------------
 
 // LostGracePeriod is how long a lost execution stays open for reconciliation
-// before it is recorded as failed.
-//
-// Without a bound, lost rows accumulate forever and each one is charged its
-// full declared timeout against the free-tier ledger permanently. A day is
-// longer than any task Vagabond dispatches and longer than most provider log
-// retention, so an execution unresolved by then is one nothing further will be
-// learned about.
+// before it is recorded as failed, so lost rows are not charged forever. A day
+// outlasts any dispatched task and most provider log retention.
 const LostGracePeriod = 24 * time.Hour
 
 // -------------------------------------------------------------------------
@@ -47,27 +39,14 @@ type State string
 // The states an execution passes through.
 //
 // StatePending is recorded before Submit is called, so a crash in between is
-// recoverable. StateSubmitted means the call was made and its outcome is not
-// yet known; StateAccepted means the provider acknowledged the work and queued
-// it, which is not the same as starting it.
+// recoverable. StateAccepted means the provider queued the work, not started
+// it; capacity is consumed from StateRunning, so work dropped before starting
+// costs nothing. A synchronous invocation skips both middle states.
 //
-// That distinction is what makes quota derivable. Capacity is consumed once an
-// execution reaches StateRunning, so a provider that accepts work and then
-// drops it before starting has cost nothing, and the ledger can tell that from
-// the status alone without consulting an error.
-//
-// Both middle states are skippable: a synchronous invocation goes from
-// submitted straight to a terminal state, while a container job passes through
-// them as Status is polled.
-//
-// StateLost is an execution that was submitted and then stopped answering. It
-// is not terminal, because reconciliation may still learn what happened, and it
-// is not failed, because it may still be running and consuming capacity that
-// has to be accounted for.
-//
-// There is no timed-out state. A task that ran past its own timeout failed, and
-// why it failed is carried by the failure classification rather than by a
-// second terminal state meaning nearly the same thing.
+// StateLost is an execution that stopped answering. It is not terminal, since
+// reconciliation may still learn what happened, and not failed, since it may
+// still be consuming capacity. A task past its timeout is failed, with the
+// failure classification saying why.
 const (
 	StatePending   State = "pending"
 	StateSubmitted State = "submitted"
@@ -90,9 +69,8 @@ var stateNames = []State{
 	StateLost,
 }
 
-// terminalStates are the states an execution never leaves. StateLost is
-// deliberately absent: it is an open question, and the grace period is what
-// turns it into an answer.
+// terminalStates are the states an execution never leaves. StateLost is absent:
+// the grace period is what turns it into an answer.
 var terminalStates = []State{StateSucceeded, StateFailed, StateCancelled}
 
 // legalTransitions is the state machine, written out so it can be read.
@@ -121,10 +99,7 @@ var ErrIllegalTransition = errors.New("illegal state transition")
 // VOCABULARY
 // -------------------------------------------------------------------------
 
-// States returns the valid states in lifecycle order.
-//
-// The returned slice is a copy, so a caller rendering it cannot reorder the
-// vocabulary for everyone else.
+// States returns the valid states in lifecycle order, as a copy.
 func States() []State {
 	return slices.Clone(stateNames)
 }
@@ -139,7 +114,7 @@ func (s State) String() string {
 	return string(s)
 }
 
-// Terminal reports whether an execution in this state will never change again.
+// Terminal reports whether an execution in this state never changes again.
 func (s State) Terminal() bool {
 	return slices.Contains(terminalStates, s)
 }
@@ -175,6 +150,8 @@ func (s *State) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// unknownState builds the ErrUnknownState failure for name, listing the valid
+// set.
 func unknownState(name string) error {
 	valid := make([]string, 0, len(stateNames))
 	for _, s := range stateNames {
@@ -194,10 +171,8 @@ func (s State) CanTransition(next State) bool {
 	return slices.Contains(legalTransitions[s], next)
 }
 
-// Transition checks a state change and explains a refusal.
-//
-// The error names both states, because the useful question when this fires is
-// which caller believed the execution was somewhere it was not.
+// Transition checks a state change, naming both states in a refusal so the
+// caller that believed the execution was elsewhere can be found.
 func (s State) Transition(next State) error {
 	if !s.Valid() {
 		return unknownState(string(s))

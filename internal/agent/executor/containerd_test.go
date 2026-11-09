@@ -24,6 +24,10 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 )
 
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
+
 // testImage is small and has a shell.
 const testImage = "alpine:3.20"
 
@@ -106,6 +110,10 @@ func (g *gatedWriter) Write(p []byte) (int, error) {
 
 	return g.buf.Write(p)
 }
+
+// -------------------------------------------------------------------------
+// TESTS
+// -------------------------------------------------------------------------
 
 // A workload runs, exits with its own code, and its output and duration come
 // back; released, it is gone.
@@ -194,8 +202,7 @@ func TestContainerd_LogsFollowsThroughRelease(t *testing.T) {
 		t.Fatal("Logs() wrote nothing")
 	}
 
-	// The follower is held inside its first write while the workload ends and
-	// its container goes.
+	// The follower waits in its first write while the workload ends and goes.
 	finished(t, c, id)
 
 	if err := c.Release(t.Context(), id); err != nil {

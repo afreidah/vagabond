@@ -10,6 +10,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/afreidah/vagabond/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/afreidah/vagabond/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=afreidah_vagabond"><img alt="Coverage" src="https://sonarcloud.io/api/project_badges/measure?project=afreidah_vagabond&metric=coverage"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=afreidah_vagabond"><img alt="Quality Gate" src="https://sonarcloud.io/api/project_badges/measure?project=afreidah_vagabond&metric=alert_status"></a>
+</p>
+
+<p align="center">
   <strong><a href="https://vagabond.munchbox.cc">Project website</a></strong>
 </p>
 
@@ -75,13 +81,17 @@ familiar to a Nomad user, but it does not depend on Nomad.
 - Dispatch: submit, watch, collect output, reroute around
   providers that fail to answer, release what the execution left behind. A
   401 or 403 makes the provider re-resolve its credentials and retry once.
-- Quota ledger: free-tier pools per provider, with optional per-namespace
+- Quota ledger: budget pools per provider, in executions, GB-seconds,
+  CPU-seconds or seconds, reset daily or monthly, with optional per-namespace
   shares. Reservations are atomic across processes; settlement uses what the
   platform billed when it reports it.
 - Registered jobs: versioned on change, dispatched by name, parameterized with
   `meta_required` and `meta_optional`. Tasks receive `VAGABOND_META_<KEY>`.
 - Namespaces, declared in configuration.
 - Execution history: every dispatch and attempt recorded, with output.
+- Live output: `job run`, `job dispatch` and `execution logs -f` stream a
+  running task's output from Cloud Run and agent nodes, and finish from the
+  stored copy, the last 64 KiB.
 - Server: an HTTP API over the same operations. Dispatches are leased, so a
   server resumes the ones a dead process left running.
 - Store outages fail closed: new work is refused with 503, running work
@@ -106,7 +116,8 @@ The `worker` driver is modeled and admitted; no plugin implements it yet.
 
 - `vagabond server` holds the providers, stores and scheduling, and serves the
   [HTTP API](docs/api.md).
-- Every other command is an API client, finding the server with `-address` or
+- Every command but `server`, `agent` and `job validate` is an API client,
+  finding the server with `-address` or
   `$VAGABOND_ADDR` (default `http://127.0.0.1:4747`). Runners need an address,
   not cloud or database credentials.
 - `vagabond server -dev` keeps every store in memory, for development and
@@ -156,7 +167,7 @@ See [quickstart.md](docs/quickstart.md). `make install` puts the binary on your
 | `provider status` | Configured providers and their quota usage |
 | `agent` | Run the agent on a node that executes workloads ([agent.md](docs/agent.md)) |
 | `execution status <id>` | One execution's record and result |
-| `execution logs <id>` | One execution's stored output |
+| `execution logs <id>` | One execution's stored output, or with `-f` its live output |
 | `server [-dev]` | Serve the [HTTP API](docs/api.md) and accept agents |
 
 ## Job file
@@ -208,8 +219,8 @@ job "go-test" {
   |     |      --> rejections: reason, detail      |
   |  ranking   scorers in [0,1], score is the mean |
   |     |                                          |
-  |  dispatch  reserve, submit, watch, settle,     |
-  |            release; reroute on outage          |
+  |  dispatch  reserve, submit, watch, release,    |
+  |            settle; reroute on outage           |
   +------------------------------------------------+
         |                  |                   |
         v                  v                   v
@@ -234,6 +245,7 @@ Details: [architecture.md](docs/architecture.md).
 |---|---|
 | First run | [quickstart.md](docs/quickstart.md) |
 | Architecture and boundaries | [architecture.md](docs/architecture.md) |
+| Interactive diagrams of each part | [vagabond.munchbox.cc/diagrams](https://vagabond.munchbox.cc/diagrams/) |
 | Job file syntax | [job-specification.md](docs/job-specification.md) |
 | Commands and flags | [cli.md](docs/cli.md) |
 | HTTP API | [api.md](docs/api.md) |
@@ -255,7 +267,7 @@ Details: [architecture.md](docs/architecture.md).
 
 Not implemented yet. Tracked in [issues](https://github.com/afreidah/vagabond/issues).
 
-- Own nodes: how nodes rank against cloud backends, a Firecracker runtime.
+- Own nodes: a Firecracker runtime.
 - Server: API authentication, degraded mode that keeps dispatching through a
   store outage.
 - Operations: periodic jobs, an event stream, blocking queries, disabling a

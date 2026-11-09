@@ -4,19 +4,9 @@
 // Author: Alex Freidah
 //
 // Holds the text a job file carries, such as "15m", rather than a parsed
-// int64. That is not the first choice: Chunk 1 declared this as a
-// time.Duration, and recorded an objection that a typed duration loses the HCL
-// source range when a value parses but is nonsensical.
-//
-// The objection turned out to understate the cost. Upstream gohcl decodes
-// through gocty, which converts by reflected kind and consults neither
-// encoding.TextUnmarshaler nor any custom decoder, so an int64-kinded Duration
-// simply rejects "15m" with "a number is required". Nomad solves this with
-// RegisterExpressionDecoder on gohcl.Decoder, which is an addition in their
-// fork of HCL rather than something upstream offers.
-//
-// So the value stays text until validation proves it parses, which is also the
-// honest description of what is in the file.
+// int64. Upstream gohcl converts by reflected kind and consults no
+// encoding.TextUnmarshaler, so an int64-kinded Duration would reject "15m". The
+// value stays text until validation proves it parses.
 // -------------------------------------------------------------------------------
 
 package job
@@ -39,14 +29,8 @@ func FromDuration(d time.Duration) Duration {
 	return Duration(d.String())
 }
 
-// Std parses the value into a standard library duration.
-//
-// Returns an error rather than a zero, because a zero timeout and an
-// unparseable one mean opposite things and silently conflating them is how a
-// task ends up with no bound at all. Validation checks this before anything
-// schedules against it, so a caller past that point is handling an error that
-// cannot happen, which is the right cost for not being able to produce a wrong
-// answer.
+// Std parses the value into a standard library duration. It returns an error
+// rather than zero, since a zero timeout and an unparseable one differ.
 func (d Duration) Std() (time.Duration, error) {
 	parsed, err := time.ParseDuration(string(d))
 	if err != nil {
@@ -81,12 +65,8 @@ func (d Duration) MarshalText() ([]byte, error) {
 	return []byte(d), nil
 }
 
-// UnmarshalText implements encoding.TextUnmarshaler.
-//
-// Validates, so that an unparseable duration cannot enter the model through
-// JSON or a database column. HCL is the exception: gohcl assigns the string
-// directly without consulting this, which is why validation checks durations
-// explicitly rather than trusting decoding to have done it.
+// UnmarshalText implements encoding.TextUnmarshaler and validates. gohcl
+// assigns the string without calling this, so validation checks it itself.
 func (d *Duration) UnmarshalText(text []byte) error {
 	parsed := Duration(text)
 	if !parsed.Valid() {

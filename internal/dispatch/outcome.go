@@ -3,10 +3,8 @@
 //
 // Author: Alex Freidah
 //
-// What a dispatch produced, including the providers it gave up on. A caller
-// that only ever sees the provider which answered cannot tell a clean first
-// attempt from a job that limped through two outages to get there, and the
-// second is worth knowing about before it becomes every job.
+// What a dispatch produced, including the providers it gave up on, so a
+// caller can tell a clean first attempt from a job rerouted around outages.
 // -------------------------------------------------------------------------------
 
 package dispatch
@@ -22,11 +20,8 @@ import (
 // ERRORS
 // -------------------------------------------------------------------------
 
-// ErrNoCandidates reports a task no configured provider can run.
-//
-// Distinct from every provider failing: nothing was attempted, because nothing
-// was eligible. The rejections carried on the outcome say why, and they are
-// the actionable part.
+// ErrNoCandidates reports a task no configured provider can run, so nothing
+// was attempted; the outcome's rejections say why.
 var ErrNoCandidates = errors.New("no provider can run this task")
 
 // ErrExhausted reports that every attempt ended in an infrastructure failure.
@@ -40,14 +35,8 @@ var ErrNoProvider = errors.New("provider is not registered")
 // OUTCOMES
 // -------------------------------------------------------------------------
 
-// Attempt is one provider's turn at a task.
-//
-// Err is nil on the attempt that produced a result. Every other attempt
-// carries the failure that ended it, which is what the decision to try
-// somewhere else was made on.
-//
-// Refused marks a provider passed over because the ledger would not reserve
-// its quota. Nothing was submitted, so it is not counted as a try.
+// Attempt is one provider's turn at a task. A refused attempt is not counted
+// as a try.
 type Attempt struct {
 	Provider string
 	ID       execution.ID
@@ -55,13 +44,9 @@ type Attempt struct {
 	Refused  bool  // the ledger refused; nothing was submitted
 }
 
-// TaskOutcome is what became of one task.
-//
-// Result is nil when no attempt produced one, in which case the error returned
-// alongside says whether nothing was eligible or everything failed.
-//
-// Rejections is carried so that a task with nowhere to run explains itself the
-// way a plan does, rather than reporting only that it found nothing.
+// TaskOutcome is what became of one task. Result is nil when no attempt
+// produced one, and the error returned alongside says whether nothing was
+// eligible or everything failed.
 type TaskOutcome struct {
 	Task       string
 	Provider   string
@@ -73,11 +58,7 @@ type TaskOutcome struct {
 }
 
 // Succeeded reports whether the task ran and the provider reported it
-// succeeded. The state is the verdict: an exit code is what the task said, and
-// a task that never ran has none.
-//
-// False when no result was produced at all, so a caller can ask this without
-// checking for nil first.
+// succeeded. False when no result was produced, so no nil check is needed.
 func (o *TaskOutcome) Succeeded() bool {
 	return o.Result != nil && o.State == execution.StateSucceeded
 }
@@ -101,21 +82,16 @@ func (o *TaskOutcome) Tried() int {
 	return n
 }
 
-// JobOutcome is what became of every task in a job.
-//
-// Tasks are in the order they ran, which is the order they were declared. A
-// job that stopped early has fewer outcomes than it has tasks. Dispatch is the
-// ID every task's execution records carry.
+// JobOutcome is what became of every task in a job, in declaration order. A
+// job that stopped early has fewer outcomes than tasks.
 type JobOutcome struct {
 	Job      string
 	Dispatch execution.ID
 	Tasks    []TaskOutcome
 }
 
-// Succeeded reports whether every task ran and reported success.
-//
-// False for a job that stopped early, because the tasks that never ran cannot
-// be said to have passed, and false for a job with no tasks at all.
+// Succeeded reports whether every task ran and reported success. False for a
+// job that stopped early or has no tasks.
 func (o *JobOutcome) Succeeded() bool {
 	if len(o.Tasks) == 0 {
 		return false

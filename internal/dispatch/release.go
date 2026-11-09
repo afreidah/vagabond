@@ -5,12 +5,9 @@
 //
 // Some providers leave a resource behind for every execution, as Cloud Run
 // leaves a Job and a pool node a stopped container. Dispatch releases it after
-// reading the result; every other ending, a cancelled run, a provider that
-// stopped answering, a process that died, leaves it. The execution records know
-// every execution not yet released, so this finds them and releases each once
-// it is known to be over and its charge is settled. A lost execution is among
-// them, and is reconciled on the way: its result recorded if the provider has
-// one, failed once nothing more can be learned.
+// reading the result; any other ending leaves it for this loop, which releases
+// each unreleased execution once it is over and settled, reconciling a lost
+// one on the way.
 // -------------------------------------------------------------------------------
 
 package dispatch
@@ -24,6 +21,10 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/plugin"
 )
+
+// -------------------------------------------------------------------------
+// RELEASE LOOP
+// -------------------------------------------------------------------------
 
 // ReleaseAfter is how long an execution must go unchanged before the loop
 // takes it up, so it never races a dispatch still reading the result.
@@ -64,8 +65,7 @@ func (d *Dispatcher) ReleaseLeftovers(ctx context.Context) (int, error) {
 // because the reaper settles it by asking the provider what it did, which a
 // released execution can no longer answer.
 func (d *Dispatcher) releaseLeftover(ctx context.Context, rec *execution.Record) (bool, error) {
-	// A lost execution is resolved first, so its result is recorded before
-	// releasing could destroy it.
+	// Resolve a lost execution first, before releasing destroys its result
 	if rec.State == execution.StateLost {
 		if err := d.reconcileLost(ctx, rec); err != nil {
 			return false, err
@@ -86,8 +86,7 @@ func (d *Dispatcher) releaseLeftover(ctx context.Context, rec *execution.Record)
 		return false, nil
 	}
 
-	// A provider no longer configured cannot be asked, and one that is no
-	// Releaser left nothing behind; either way there is nothing to do.
+	// An unconfigured provider cannot be asked; a non-Releaser left nothing
 	provider, ok := d.registry.Provider(rec.Provider)
 	releaser, releases := provider.(plugin.Releaser)
 
@@ -95,8 +94,7 @@ func (d *Dispatcher) releaseLeftover(ctx context.Context, rec *execution.Record)
 		return true, d.markReleased(ctx, rec.ID)
 	}
 
-	// A recorded result says the execution is over. Without one, dispatch
-	// stopped following it, so the provider is asked before it is released.
+	// Without a recorded result, ask the provider whether it is over
 	if rec.Result == nil {
 		status, err := d.status(ctx, provider, rec.ID)
 
@@ -118,11 +116,13 @@ func (d *Dispatcher) releaseLeftover(ctx context.Context, rec *execution.Record)
 	return true, d.markReleased(ctx, rec.ID)
 }
 
-// reconcileLost learns what became of an execution dispatch lost track of. One
-// the provider reports over has its state and result recorded; one it has no
-// record of, or that is still unresolved past execution.LostGracePeriod, is
-// recorded failed. Anything else stays lost for the next pass. rec is updated
-// in place.
+// -------------------------------------------------------------------------
+// LOST EXECUTIONS
+// -------------------------------------------------------------------------
+
+// reconcileLost learns what became of a lost execution, updating rec in place.
+// One the provider reports over is recorded with its result; one it does not
+// know, or still unresolved past execution.LostGracePeriod, is recorded failed.
 func (d *Dispatcher) reconcileLost(ctx context.Context, rec *execution.Record) error {
 	provider, ok := d.registry.Provider(rec.Provider)
 	if !ok {
@@ -147,8 +147,7 @@ func (d *Dispatcher) reconcileLost(ctx context.Context, rec *execution.Record) e
 		err = resultErr
 	}
 
-	// Still running, or the provider is not answering: give up only once the
-	// grace period is over.
+	// Still running or not answering: fail it only past the grace period
 	if rec.LostExpired(d.now()) {
 		return d.resolveLost(ctx, rec, execution.StateFailed, nil)
 	}
@@ -181,6 +180,10 @@ func (d *Dispatcher) resolveLost(
 
 	return nil
 }
+
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
 
 // markReleased records that id's leftovers are gone.
 func (d *Dispatcher) markReleased(ctx context.Context, id execution.ID) error {

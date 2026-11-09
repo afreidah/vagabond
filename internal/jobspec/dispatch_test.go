@@ -14,6 +14,10 @@ import (
 	"testing"
 )
 
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
+
 const optionalJob = `
 job "build" {
   type = "batch"
@@ -55,6 +59,7 @@ job "nightly" {
 }
 `
 
+// declared reads src's declaration, failing the test on any diagnostic.
 func declared(t *testing.T, src string) Declaration {
 	t.Helper()
 
@@ -66,6 +71,11 @@ func declared(t *testing.T, src string) Declaration {
 	return d
 }
 
+// -------------------------------------------------------------------------
+// REGISTRATION
+// -------------------------------------------------------------------------
+
+// Declared reads both metadata lists, and a plain job as not parameterized.
 func TestDeclared(t *testing.T) {
 	d := declared(t, optionalJob)
 
@@ -112,6 +122,11 @@ func TestReferences_UndeclaredReferenceFails(t *testing.T) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// DISPATCH
+// -------------------------------------------------------------------------
+
+// A dispatch with unpermitted metadata or a missing required key is refused.
 func TestCheckDispatch(t *testing.T) {
 	parameterized := declared(t, optionalJob)
 	plain := declared(t, plainJob)

@@ -27,6 +27,10 @@ import (
 	"github.com/afreidah/vagabond/internal/server"
 )
 
+// -------------------------------------------------------------------------
+// FIXTURES
+// -------------------------------------------------------------------------
+
 // containerProvider has a runtime pool large enough never to refuse.
 const containerProvider = `
 provider "box" {
@@ -42,6 +46,10 @@ provider "box" {
 
 // reserved is what each abandoned execution holds: its declared hour.
 const reserved = 3600 * second
+
+// -------------------------------------------------------------------------
+// SEEDING
+// -------------------------------------------------------------------------
 
 // abandon seeds a dispatch a dead CLI left mid-execution, whose execution the
 // provider has since finished, and returns its ID.
@@ -94,6 +102,10 @@ func (h *harness) abandon() execution.ID {
 
 	return dispatchID
 }
+
+// -------------------------------------------------------------------------
+// RESUME
+// -------------------------------------------------------------------------
 
 // A server starting on the store resumes the abandoned dispatch, records it
 // succeeded under its own lease, and settles the execution at what it ran

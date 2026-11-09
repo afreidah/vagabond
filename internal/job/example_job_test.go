@@ -28,11 +28,8 @@ import (
 // HELPERS
 // -------------------------------------------------------------------------
 
-// body parses src into an hcl.Body for the blocks Vagabond keeps undecoded.
-//
-// Real bodies rather than hcl.EmptyBody, because a body that carries no source
-// range would not catch a change that drops range information, which is the
-// property RawBlock exists to preserve.
+// body parses src into a real hcl.Body rather than hcl.EmptyBody, so a change
+// that drops source ranges, which RawBlock exists to keep, is caught.
 func body(t *testing.T, src string) hcl.Body {
 	t.Helper()
 
@@ -44,9 +41,7 @@ func body(t *testing.T, src string) hcl.Body {
 	return f.Body
 }
 
-// exampleJob is a job using every block and attribute the specification
-// defines. It mirrors internal/jobspec/testdata/complete.vagabond.hcl, which is
-// what the parser is tested against.
+// exampleJob uses every block and attribute the specification defines.
 func exampleJob(t *testing.T) Job {
 	t.Helper()
 
@@ -114,10 +109,26 @@ func exampleJob(t *testing.T) Job {
 	}
 }
 
+// assertDuration parses a specification duration and compares it, so that a
+// value which fails to parse is reported as that rather than as a mismatch.
+func assertDuration(t *testing.T, field string, got Duration, want time.Duration) {
+	t.Helper()
+
+	parsed, err := got.Std()
+	if err != nil {
+		t.Fatalf("%s = %q, which does not parse: %v", field, got, err)
+	}
+
+	if parsed != want {
+		t.Errorf("%s = %v, want %v", field, parsed, want)
+	}
+}
+
 // -------------------------------------------------------------------------
 // COVERAGE
 // -------------------------------------------------------------------------
 
+// Name, type, tasks and the parameterized block survive construction.
 func TestExampleJob_TopLevel(t *testing.T) {
 	j := exampleJob(t)
 
@@ -138,8 +149,7 @@ func TestExampleJob_TopLevel(t *testing.T) {
 	}
 }
 
-// The job declares max_cost_usd = 0, which is the guarantee the whole project
-// rests on. It must read as free without any further interpretation.
+// A job declaring max_cost_usd = 0 reads as free without interpretation.
 func TestExampleJob_IsFree(t *testing.T) {
 	j := exampleJob(t)
 
@@ -148,6 +158,7 @@ func TestExampleJob_IsFree(t *testing.T) {
 	}
 }
 
+// Strategy, providers, constraint and weighted affinity survive construction.
 func TestExampleJob_Routing(t *testing.T) {
 	r := exampleJob(t).Routing
 
@@ -168,6 +179,7 @@ func TestExampleJob_Routing(t *testing.T) {
 	}
 }
 
+// The task's driver, timeout, architecture and resources survive construction.
 func TestExampleJob_Task(t *testing.T) {
 	task := exampleJob(t).Tasks[0]
 
@@ -203,21 +215,6 @@ func TestExampleJob_RetryPolicy(t *testing.T) {
 	assertDuration(t, "Backoff.Max", ptr.Deref(retry.Backoff.Max), 30*time.Second)
 }
 
-// assertDuration parses a specification duration and compares it, so that a
-// value which fails to parse is reported as that rather than as a mismatch.
-func assertDuration(t *testing.T, field string, got Duration, want time.Duration) {
-	t.Helper()
-
-	parsed, err := got.Std()
-	if err != nil {
-		t.Fatalf("%s = %q, which does not parse: %v", field, got, err)
-	}
-
-	if parsed != want {
-		t.Errorf("%s = %v, want %v", parsed, got, want)
-	}
-}
-
 // The config block must keep a usable body. Losing it would mean a later decode
 // error could not point at the line the author wrote.
 func TestExampleJob_ConfigRetainsBody(t *testing.T) {
@@ -237,9 +234,8 @@ func TestExampleJob_ConfigRetainsBody(t *testing.T) {
 	}
 }
 
-// Meta and env are bodies rather than maps, so that a bad value can be reported
-// against its own source range. Attributes is what turns one into the string
-// map a consumer actually wants.
+// Meta and env are bodies rather than maps, and Attributes turns each into the
+// string map a consumer wants.
 func TestExampleJob_MetaAndEnv(t *testing.T) {
 	j := exampleJob(t)
 

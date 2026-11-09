@@ -3,10 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// One attempt against one provider, from submission to result. The polling
-// schedule matters more than it looks: a measured Cloud Run job spent about
-// 110 seconds provisioning before its container started, so a fixed short
-// interval spends a dozen API calls learning nothing.
+// One attempt against one provider, from submission to result. Status is
+// polled on a backoff because a container can spend minutes provisioning, and
+// a fixed short interval spends API calls learning nothing.
 // -------------------------------------------------------------------------------
 
 package dispatch
@@ -26,11 +25,8 @@ import (
 // SCHEDULE
 // -------------------------------------------------------------------------
 
-// Poll is how often a running execution is asked about.
-//
-// Backing off rather than a fixed interval, because the wait is dominated by
-// provisioning the caller cannot influence, and because the provider is the
-// one paying for the request.
+// Poll is how often a running execution is asked about: from Initial,
+// doubling up to Max.
 type Poll struct {
 	Initial time.Duration
 	Max     time.Duration
@@ -43,10 +39,8 @@ const (
 	releaseTimeout = 30 * time.Second
 )
 
-// DefaultPoll starts responsive and settles into something cheap.
-//
-// Two seconds catches a function invocation that finished almost immediately;
-// fifteen is a reasonable ceiling against a container that will be minutes.
+// DefaultPoll starts at two seconds, for an invocation that finishes almost at
+// once, and settles at fifteen for a container that runs for minutes.
 var DefaultPoll = Poll{
 	Initial: 2 * time.Second,
 	Max:     15 * time.Second,
@@ -121,8 +115,7 @@ func (d *Dispatcher) execute(
 
 	submission, err := d.submit(ctx, provider, id, task, members)
 	if err == nil {
-		// A plugin describing its own submission incoherently is our bug to
-		// fix, not a provider outage, so it is not sent onward.
+		// An incoherent submission is a plugin bug, not an outage, so no reroute
 		if invalid := submission.Validate(); invalid != nil {
 			err = plugin.Internal(invalid)
 		}
@@ -154,8 +147,7 @@ func (d *Dispatcher) follow(ctx context.Context, provider plugin.Provider, run *
 
 	state, err := d.watch(ctx, provider, run)
 	if err != nil {
-		// The caller gave up rather than the provider failing, so the work is
-		// still out there. Stop it, or it keeps running and billing.
+		// The caller gave up, so stop the work before it keeps billing
 		if ctx.Err() != nil {
 			d.abandon(provider, id)
 			run.to(ctx, execution.StateCancelled)
@@ -180,8 +172,7 @@ func (d *Dispatcher) follow(ctx context.Context, provider plugin.Provider, run *
 
 	ended := answer{state: state, result: result}
 
-	// A provider that reported cancelled produced no verdict about the work,
-	// so it is not an answer even though a result came back.
+	// Cancelled by the provider is no verdict, even with a result
 	if state == execution.StateCancelled {
 		return ended, plugin.Infrastructure(fmt.Errorf("execution %s was cancelled by the provider", id))
 	}
@@ -189,12 +180,9 @@ func (d *Dispatcher) follow(ctx context.Context, provider plugin.Provider, run *
 	return ended, nil
 }
 
-// release frees whatever the provider left behind, for providers that leave
-// anything, and records that it was done.
-//
-// Best effort and on its own context, so that a caller who has already stopped
-// waiting still gets the resource cleaned up. A failure here has not failed the
-// execution: the record stays unreleased, and the release loop tries again.
+// release frees what the provider left behind, if anything, and records that
+// it was done. Best effort on its own context; a failure leaves the record
+// unreleased for the release loop to retry.
 func (d *Dispatcher) release(provider plugin.Provider, id execution.ID) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()),
 		releaseTimeout)
@@ -210,11 +198,8 @@ func (d *Dispatcher) release(provider plugin.Provider, id execution.ID) {
 	_ = d.executions.MarkReleased(ctx, id, d.now())
 }
 
-// abandon stops an execution the caller stopped waiting for.
-//
-// On its own context, because the one that was cancelled is why we are here.
-// Best effort: nothing is left to report a failure to. What the provider still
-// holds for it is released by the release loop once it is over.
+// abandon cancels an execution the caller stopped waiting for, best effort and
+// on its own context since the caller's is cancelled.
 func (d *Dispatcher) abandon(provider plugin.Provider, id execution.ID) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()),
 		abandonTimeout)
@@ -223,11 +208,9 @@ func (d *Dispatcher) abandon(provider plugin.Provider, id execution.ID) {
 	_ = authorizedErr(ctx, d, provider, func() error { return provider.Cancel(ctx, id) })
 }
 
-// watch polls until the execution reaches a state it never leaves, recording
-// each state it passes through.
-//
-// Returns the terminal state unrecorded, because the caller records it with
-// the result that goes with it.
+// watch polls until the execution reaches a terminal state, recording each
+// state on the way. The terminal one is left for the caller to record with its
+// result.
 func (d *Dispatcher) watch(ctx context.Context, provider plugin.Provider, run *tracked) (execution.State, error) {
 	for n := 0; ; n++ {
 		if err := d.sleep(ctx, d.poll.interval(n)); err != nil {
@@ -243,8 +226,7 @@ func (d *Dispatcher) watch(ctx context.Context, provider plugin.Provider, run *t
 			return status.State, nil
 		}
 
-		// Writes only on a change, so a job that provisions for two minutes is
-		// recorded once rather than every poll.
+		// Writes only on a change, not on every poll
 		run.to(ctx, status.State)
 	}
 }

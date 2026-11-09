@@ -2,6 +2,9 @@
 // Exit Code Tests
 //
 // Author: Alex Freidah
+//
+// Pins which exit codes reach the shell. A CI system branches on them, so an
+// undocumented code from the library must not leak through.
 // -------------------------------------------------------------------------------
 
 package cli

@@ -16,7 +16,8 @@ of this API; everything it does to a server goes through the routes below.
 **Field names:** the Go field names of the types in `internal/api`, untagged,
 so keys are `PascalCase` (`DispatchID`, `JobVersion`). Only `Health.StoreError`,
 `Error.Diagnostics` and `Diagnostic.Range` are omitted when empty; every other
-field is always present, as `null` when unset.
+field is always present: unset strings as `""`, numbers as `0`, and unset
+times, lists and maps as `null`.
 
 **Decoding:** request bodies are decoded with Go's `encoding/json`. Keys match
 case-insensitively, unknown keys are ignored, and the body is capped at 1 MiB;
@@ -45,7 +46,8 @@ default bind is loopback for this reason. Bind to a wider address only behind a
 network or proxy you control.
 
 **Logging:** every request is logged at `debug` with method, path, status and
-duration. 500s are logged at `error`, 503s at `warn`.
+duration. 500s are logged at `error`; a 503 for an unreachable store at `warn`,
+except on `/v1/health`.
 
 ## Namespaces
 
@@ -101,9 +103,10 @@ Every non-2xx response from a route in the table below has this body:
 | Status | Cause |
 |---|---|
 | 200 | Success. Every route answers 200; none use 201 or 204 |
-| 400 | Unreadable or oversized body; invalid job file (with `Diagnostics`); metadata the job does not permit; conflicting or undeclared namespace; malformed dispatch or execution ID; plan with both `Source` and `Name` |
+| 400 | Unreadable or oversized body; invalid job file (with `Diagnostics`); metadata the job does not permit; conflicting or undeclared namespace; malformed dispatch or execution ID; plan with both `Source` and `Name`; an `offset` that is not a byte count |
 | 404 | Job not registered in the namespace; no such dispatch or execution |
 | 409 | Dispatching or planning (by `Name`) a stopped job |
+| 416 | `GET /v1/execution/{id}/logs?follow=true` with `offset` above 0 on a running execution whose provider cannot resume its stream (Cloud Run). Sent before any output |
 | 500 | Anything else: a provider refusing a cancel, a provider no longer configured, an internal error. Logged by the server |
 | 503 | The store is unreachable: connection refused, broken or timed out. Nothing was written; the same request can be retried once the store is back. Other store errors are 500 |
 
@@ -160,7 +163,8 @@ What happens to dispatches already running: [dispatch](dispatch.md).
 `POST /v1/jobs`
 
 Parses and validates the job file in full, then stores it as a new version when
-its source differs from the current version. Declared `${meta.<key>}` references
+it differs from the current version once both are formatted; reformatting a
+file alone adds no version. Declared `${meta.<key>}` references
 are validated as placeholders; values arrive at dispatch. Registering a stopped
 job always creates a new version and un-stops it.
 
@@ -196,7 +200,7 @@ Response, `RegisterResponse`:
 | `Namespace` | Namespace the job was registered in |
 | `Name` | Job name from the file |
 | `Version` | Current version after the call |
-| `Changed` | `false` when the source matched the current version and nothing was stored |
+| `Changed` | `false` when the formatted source matched the current version and nothing was stored |
 
 Errors: 400 (invalid job, namespace), 503.
 
@@ -625,6 +629,9 @@ Errors: 400 (malformed ID), 404, 503.
 
 `GET /v1/execution/{id}/logs`
 
+Interactive version of how output streams, end to end:
+[Live output](https://vagabond.munchbox.cc/diagrams/live-output/).
+
 The execution's combined stdout and stderr as `text/plain`. Errors use the
 JSON error body.
 
@@ -811,7 +818,7 @@ Response, `ProviderList`:
 | `Providers[].Name` | Provider label |
 | `Providers[].Tier` | Operator's preference, lower first |
 | `Providers[].Enabled` | Whether configuration enables it |
-| `Providers[].Healthy` | Whether its last health check passed |
+| `Providers[].Healthy` | Whether it answered its last capability refresh; for a `pool`, whether any node is connected now |
 | `Providers[].Pools` | Its quota pools; `[]` when it declares none |
 | `Pools[].Name` | Pool name |
 | `Pools[].Meter` | What the pool counts: `executions`, `gb_seconds`, `cpu_seconds` or `seconds` |

@@ -33,6 +33,7 @@ import (
 // CONSTANTS
 // -------------------------------------------------------------------------
 
+// The images each engine runs.
 const (
 	postgresImage  = "postgres:17"
 	cockroachImage = "cockroachdb/cockroach:latest-v24.3"
@@ -197,11 +198,8 @@ func startPostgres(ctx context.Context) (string, testcontainers.Container, error
 	return dsn, container, nil
 }
 
-// startCockroach brings up a single insecure node and returns its DSN.
-//
-// No testcontainers module for it, so the generic container API drives the
-// image directly. The readiness probe is the HTTP endpoint rather than a log
-// line, because the SQL port accepts connections before the node will serve.
+// startCockroach brings up a single insecure node and returns its DSN. It waits
+// on the HTTP probe, since the SQL port accepts connections before it serves.
 func startCockroach(ctx context.Context) (string, testcontainers.Container, error) {
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		Image:        cockroachImage,

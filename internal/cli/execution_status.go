@@ -18,6 +18,10 @@ import (
 	"github.com/afreidah/vagabond/internal/api"
 )
 
+// -------------------------------------------------------------------------
+// COMMAND
+// -------------------------------------------------------------------------
+
 // ExecutionStatusCommand implements `vagabond execution status`.
 type ExecutionStatusCommand struct {
 	*Meta
@@ -63,6 +67,10 @@ func (c *ExecutionStatusCommand) Run(args []string) int {
 
 	return ExitSuccess
 }
+
+// -------------------------------------------------------------------------
+// RENDERING
+// -------------------------------------------------------------------------
 
 // record renders an execution as aligned fields, leaving out what it does not
 // have yet.

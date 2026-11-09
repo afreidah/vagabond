@@ -3,13 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// Maps a configured type to the plugin that implements it. The one place in the
-// tree that knows every provider by name, which is why it is here rather than
-// in the scheduler: depguard forbids that package from importing a provider
-// implementation at all, and this is the layer whose job it is to.
-//
-// A new provider type is added here when its plugin lands, and the shape of
-// that change is one case.
+// Maps a configured type to the plugin that implements it. This is the one
+// place in the tree that knows every provider by name; depguard forbids the
+// scheduler from importing a provider implementation. A new provider type is
+// one case in Build.
 // -------------------------------------------------------------------------------
 
 package registry
@@ -30,21 +27,18 @@ import (
 )
 
 // -------------------------------------------------------------------------
-// TYPES
+// CONSTANTS
 // -------------------------------------------------------------------------
 
-// The provider types configuration can name.
-//
-// The fakes exist so that admission, scheduling, and a plan can be exercised
-// with no cloud account configured anywhere. That is not only a testing
-// convenience: if the test suite needed credentials, the plugin boundary would
-// already have failed.
+// The fake provider types, which let admission, scheduling and a plan run with
+// no cloud account configured.
 const (
 	TypeFakeContainer = "fake-container"
 	TypeFakeFunction  = "fake-function"
 	TypeFakeWorker    = "fake-worker"
 )
 
+// providerTypes is every type Build constructs, in the order errors list them.
 var providerTypes = []string{
 	gcp.Type,
 	aws.Type,
@@ -59,24 +53,19 @@ var providerTypes = []string{
 // CONSTRUCTION
 // -------------------------------------------------------------------------
 
-// Types returns every provider type configuration can name.
-//
-// The returned slice is a copy, so a caller rendering it into an error cannot
-// reorder the vocabulary for everyone else.
+// Types returns every provider type configuration can name, as a copy a
+// caller may reorder.
 func Types() []string {
 	return slices.Clone(providerTypes)
 }
 
 // Settings is everything a plugin constructor is handed.
 //
-// Config is the provider's own block, still undecoded. Passing the body rather
-// than a decoded map is what lets a plugin report a typo against the line the
-// operator wrote it on, and what keeps its field names out of internal/config.
-//
-// Credentials is already resolved to bytes, so a plugin never learns whether
-// its secret came from a file, an environment variable or a command. Nil for
-// providers that need none, which every fake does. Nodes is the server's
-// connected agent nodes, which a pool is made of; nil outside a server.
+// Config is the provider's block still undecoded, so a plugin can report a
+// typo against its line and its field names stay out of internal/config.
+// Credentials is already resolved to bytes, nil for a provider that needs
+// none. Nodes is the server's connected agent nodes, which a pool is made of;
+// nil outside a server.
 type Settings struct {
 	Name        string
 	Config      hcl.Body
@@ -84,23 +73,15 @@ type Settings struct {
 	Nodes       *nodes.Conns
 }
 
-// Build constructs the plugin for a configured type.
-//
-// The name is passed through rather than derived from the type, so that one
-// deployment can register the same plugin twice against two accounts and a job
-// can name them apart.
-//
-// Diagnostics rather than an error, because a plugin decoding its own config
-// reports against source ranges and a caller flattening that to a string would
-// throw away the line number.
+// Build constructs the plugin for a configured type under the configured name,
+// so one type can be registered twice against two accounts. It returns
+// diagnostics rather than an error so a config mistake keeps its source range.
 func Build(
 	ctx context.Context, providerType string, settings Settings,
 ) (plugin.Provider, hcl.Diagnostics) {
 	switch providerType {
 	case gcp.Type:
-		// Returned through the interface rather than concretely, so a nil
-		// *gcp.Provider from a failed build does not become a non-nil
-		// plugin.Provider that later panics.
+		// A failed build returns a nil interface, not one holding a nil pointer.
 		p, diags := gcp.New(ctx, settings.Name, settings.Config, settings.Credentials)
 		if diags.HasErrors() {
 			return nil, diags
@@ -117,8 +98,7 @@ func Build(
 		return p, diags
 
 	case pool.Type:
-		// A pool is made of the nodes connected to a server, so only a server
-		// can have one.
+		// A pool is made of a server's connected nodes, so only a server has one.
 		if settings.Nodes == nil {
 			return nil, hcl.Diagnostics{{
 				Severity: hcl.DiagError,

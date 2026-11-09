@@ -3,12 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// job run and job dispatch start a run on the server and wait for it here,
-// reading it back until it ends. Progress goes to stderr and each task's
-// output to stdout, so redirecting stdout captures the build alone. Output
-// streams as each task runs, a stream that ends early is reopened from what
-// has arrived, and whatever did not stream is read from the stored copy once
-// the task finishes.
+// job run and job dispatch start a run on the server and follow it here until
+// it ends. Progress goes to stderr and each task's output to stdout. Output
+// streams as each task runs, and whatever did not stream is read from the
+// stored copy once the task finishes.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -173,7 +171,7 @@ type live struct {
 }
 
 // watch follows a submitted execution's output, once, unless -no-logs, and
-// stops following one that ended with no result, since nothing more will come.
+// stops following one that ended with no result, since nothing more can come.
 func (f *follower) watch(ctx context.Context, e *api.Execution) {
 	l, followed := f.live[e.ID]
 
@@ -188,9 +186,8 @@ func (f *follower) watch(ctx context.Context, e *api.Execution) {
 	}
 }
 
-// start follows id's output to stdout, reopening the stream from what has
-// arrived whenever it ends before the execution does. A provider that cannot
-// resume is answered 416, and the stored copy finishes the output instead.
+// start follows id's output to stdout, reopening the stream from what arrived
+// when it ends early, and leaves the rest to the stored copy on a 416.
 func (f *follower) start(ctx context.Context, id string) *live {
 	ended := make(chan struct{})
 
@@ -227,17 +224,14 @@ func (f *follower) start(ctx context.Context, id string) *live {
 	return l
 }
 
-// rest prints what of a finished execution's stored output did not stream:
-// all of it when nothing did, and otherwise what came after the stream
-// stopped. A truncated copy cannot say where a broken stream left off, so
-// that is reported instead.
+// rest prints what of a finished execution's stored output did not stream, and
+// warns when truncation hides where a broken stream left off.
 func (f *follower) rest(ctx context.Context, e *api.Execution) {
 	out := &output{mu: &f.stdout, w: f.Stdout}
 	broke := false
 
 	if l, ok := f.live[e.ID]; ok {
-		// The server ends the stream once the execution has ended, so its
-		// last lines arrive before the verdict.
+		// The stream ends with the execution, so its tail precedes the verdict
 		l.end()
 		<-l.done
 
@@ -268,9 +262,8 @@ func (f *follower) rest(ctx context.Context, e *api.Execution) {
 	}
 }
 
-// output is one execution's share of stdout. It counts what it has written,
-// which is where a reopened stream resumes, and remembers whether that ended
-// a line. Every execution's output shares one lock, so writes never interleave.
+// output is one execution's share of stdout. It counts what it wrote, where a
+// reopened stream resumes, under one lock every output shares.
 type output struct {
 	mu   *sync.Mutex
 	w    io.Writer
@@ -308,6 +301,10 @@ func (o *output) endsLine() bool {
 
 	return o.last == '\n'
 }
+
+// -------------------------------------------------------------------------
+// OUTCOME
+// -------------------------------------------------------------------------
 
 // finished reports how the run ended and returns its exit code: success, a
 // task that failed, or a run that got no answer.

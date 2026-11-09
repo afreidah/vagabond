@@ -20,11 +20,8 @@ import (
 // Arch is a CPU architecture a task requires or a provider offers.
 type Arch string
 
-// The architectures Vagabond schedules against.
-//
-// The set is closed and deliberately small. A provider offering something else
-// cannot be matched by a job that cannot name it, so widening this is a change
-// to the workload model rather than provider configuration.
+// The architectures Vagabond schedules against. The set is closed, so widening
+// it is a change to the workload model rather than to provider configuration.
 const (
 	ArchAMD64 Arch = "amd64"
 	ArchARM64 Arch = "arm64"
@@ -35,10 +32,7 @@ var archNames = []Arch{ArchAMD64, ArchARM64}
 // ErrUnknownArch is the sentinel behind every unknown-architecture failure.
 var ErrUnknownArch = errors.New("unknown architecture")
 
-// Arches returns the valid architectures in declaration order.
-//
-// The returned slice is a copy, so a caller rendering it into an error cannot
-// reorder the vocabulary for everyone else.
+// Arches returns the valid architectures in declaration order, as a copy.
 func Arches() []Arch {
 	return slices.Clone(archNames)
 }
@@ -63,9 +57,8 @@ func ParseArch(s string) (Arch, error) {
 	return a, nil
 }
 
-// MarshalText implements encoding.TextMarshaler, validating for the same reason
-// DriverName does: an unset value written to a column defers the failure to
-// whatever reads it back, where the context that would explain it is gone.
+// MarshalText implements encoding.TextMarshaler and validates, so an unset
+// value fails here rather than in whatever reads the stored text back.
 func (a Arch) MarshalText() ([]byte, error) {
 	if !a.Valid() {
 		return nil, unknownArch(string(a))
@@ -86,6 +79,7 @@ func (a *Arch) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// unknownArch builds the ErrUnknownArch failure for name, listing valid ones.
 func unknownArch(name string) error {
 	valid := make([]string, 0, len(archNames))
 	for _, a := range archNames {

@@ -45,6 +45,7 @@ dsn = "postgres://vagabond@crdb.internal:26257/vagabond?sslmode=verify-full&sslr
 | `pool_min_conns` | 0 | pgxpool parameter |
 | `pool_max_conn_lifetime` | 1h | pgxpool parameter |
 | `pool_max_conn_idle_time` | 30m | pgxpool parameter |
+| `pool_health_check_period` | 1m | pgxpool parameter; a background check of idle connections |
 
 Standard libpq environment variables fill anything the DSN leaves out
 (`PGHOST`, `PGUSER`, `PGSSLMODE`, ...).
@@ -85,7 +86,7 @@ server under a supervisor that restarts it.
 | Applied | At every `vagabond server` start, pending ones only |
 | Version table | `goose_db_version`, created by goose |
 | Expected version | `7` in this release (`SchemaVersion`) |
-| Connection | A separate `database/sql` connection opened for the migration and closed after |
+| Connection | A separate `database/sql` connection opened from the DSN as written and closed after; the 5s `connect_timeout` default does not apply to it |
 
 After migrating, the server reads `MAX(version_id)` from `goose_db_version`
 where `is_applied` is true, and requires it to equal the version it was built
@@ -94,8 +95,8 @@ for:
 | Database version | Result |
 |---|---|
 | Equal | Starts |
-| Lower | Refuses: `older than the 6 this binary expects; a migration may have failed partway` |
-| Higher | Refuses: `newer than the 6 this binary expects; upgrade vagabond` |
+| Lower | Refuses: `older than the 7 this binary expects; a migration may have failed partway` |
+| Higher | Refuses: `newer than the 7 this binary expects; upgrade vagabond` |
 
 - There is no command to migrate down. The files carry `Down` sections, but
   the binary never runs them. Rolling back a release means restoring a backup
@@ -107,18 +108,21 @@ for:
 
 | Version | File | Change |
 |---|---|---|
-| 1 | `00001_quota.sql` | `quota_usage`, `quota_reservations` |
-| 2 | `00002_quota_namespaces.sql` | `namespace` on both quota tables, in their primary keys |
+| 1 | `00001_quota.sql` | `quota_usage`, `quota_reservations`; index `quota_reservations_pool (provider, pool, period)` |
+| 2 | `00002_quota_namespaces.sql` | `namespace` on both quota tables, in their primary keys; `quota_reservations_pool` rebuilt as `(namespace, provider, pool, period)` |
 | 3 | `00003_executions.sql` | `executions` |
-| 4 | `00004_jobs.sql` | `jobs`, `job_versions`, `executions.dispatch_id` |
+| 4 | `00004_jobs.sql` | `jobs`, `job_versions`, `executions.dispatch_id`; index `executions_job` |
 | 5 | `00005_dispatches.sql` | `dispatches` |
-| 6 | `00006_dispatch_leases.sql` | `dispatches.tasks`, `owner`, `lease_until`; `executions.cpu`, `memory` |
+| 6 | `00006_dispatch_leases.sql` | `dispatches.tasks`, `owner`, `lease_until`; index `dispatches_lease`; `executions.cpu`, `memory` |
 | 7 | `00007_execution_release.sql` | `executions.released_at`, backfilled for rows with a result; index `executions_unreleased` |
 
 ## Schema
 
 No sequences, triggers or foreign keys; relationships are by ID only. Every
 timestamp is `TIMESTAMPTZ`.
+
+Interactive version, with columns and indexes on each table:
+[Database schema](https://vagabond.munchbox.cc/diagrams/database-schema/).
 
 | Table | Primary key | Holds |
 |---|---|---|
@@ -173,9 +177,12 @@ holder can end a run. Claiming is one `UPDATE ... RETURNING`. See
 | `billed_cpu`, `billed_memory`, `billed_ms` | What the provider reported billing, when it reports it |
 | `logs`, `logs_truncated` | Last 64 KiB of output (`BYTEA`), and whether it was cut |
 | `released_at` | When what the provider left behind was released; null until then |
+| `created_at`, `started_at`, `ended_at` | From the ID; on reaching `running`; on a terminal state |
+| `updated_at` | Last state change; the release loop takes rows unchanged for 10m |
 
 Updates match the state the writer read, so two writers cannot overwrite each
-other, and never touch `released_at`, which only the release path writes.
+other, and never touch `released_at`, which only a release writes: dispatch
+after reading a result, or the release loop.
 Index `executions_job (namespace, job, created_at)` serves job status; the
 partial index `executions_unreleased (updated_at) WHERE released_at IS NULL`
 serves the [release loop](background-services.md#provider-release).
@@ -190,6 +197,11 @@ serves the [release loop](background-services.md#provider-release).
 | `used`, `amount` | Base units: executions; MiB·ms for `gb_seconds`; millicore·ms for `cpu_seconds`; ms for `seconds` |
 | `quota_reservations.cpu`, `memory` | Declared shape, so the reaper can price a run it did not dispatch |
 | `quota_reservations.created_at` | Reservations older than 1 hour are reaped |
+
+Index `quota_reservations_pool (namespace, provider, pool, period)` serves the
+per-pool sum in the reserve statement. Nothing indexes `period` alone or
+`quota_reservations.created_at`, so the usage read and the reaper's select
+scan their tables.
 
 A new period is a key no row has yet, so rollover needs no job. Reserving is
 one `INSERT ... SELECT` that writes rows only when every pool has room;
@@ -216,8 +228,11 @@ the quota reservation exact on Postgres: under its default isolation two
 reservations could both read room.
 
 A serialization failure (SQLSTATE `40001`) is retried whole, up to 10
-attempts, waiting a random time up to 5 ms doubling to a 500 ms ceiling.
-After 10 the call fails with `gave up after 10 serialization failures`.
+attempts in all. Before retry *n* the wait is random, up to
+min(5 ms × 2ⁿ, 500 ms): up to 10 ms before the first, 500 ms from the seventh.
+A context cancelled during the wait ends the call with its error. After 10
+attempts the call fails with `gave up after 10 serialization failures: ...`.
+Other errors are not retried.
 
 ## sqlc
 
@@ -267,7 +282,8 @@ unreachable`.
 |---|---|
 | New dispatch or run, register, stop | 503 |
 | Status, list, logs | 503, as every query's connection failure is classified unreachable |
-| Plan | Answers from the last usage snapshot |
+| Plan of a job file | Answers from the last usage snapshot |
+| Plan of a registered job by name | 503: the job is read from the store |
 | Dispatch already running | Continues; record writes after `pending` are best effort |
 | `GET /v1/health` | 503, `"Store": "unreachable"` |
 | Usage refresh (15s) | Fails with a warning, keeps the last snapshot |
@@ -309,9 +325,10 @@ Restoring an older backup:
 
 Supported with the same code and migrations. Differences the code accounts for:
 
-- Migrations 2, 4 and 6 run outside a transaction (`-- +goose NO
+- Migrations 2, 4, 6 and 7 run outside a transaction (`-- +goose NO
   TRANSACTION`). CockroachDB refuses a primary key change in the same
-  transaction as the column it adds.
+  transaction as the column it adds (2); 4, 6 and 7 follow suit so each schema
+  change applies on its own.
 - The schema uses no sequences, triggers or foreign keys.
 - CockroachDB raises `40001` for any contended transaction, not only under
   serializable conflicts on Postgres; the same retry covers both.

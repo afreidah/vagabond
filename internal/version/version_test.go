@@ -3,9 +3,8 @@
 //
 // Author: Alex Freidah
 //
-// A version string is the first thing asked for in a bug report, so the cases
-// that matter are the ones where the build carried no information: it must
-// still say something rather than nothing.
+// The version string with and without injected values, including a build
+// that carried no VCS information and must still report something.
 // -------------------------------------------------------------------------------
 
 package version
@@ -15,21 +14,21 @@ import (
 	"testing"
 )
 
+// The rendered string always carries the version itself.
 func TestString_IncludesVersion(t *testing.T) {
 	if !strings.Contains(String(), Version) {
 		t.Errorf("String() = %q, want it to contain %q", String(), Version)
 	}
 }
 
-// A binary built without ldflags reports itself as a development build. That is
-// honest; a hardcoded version committed and forgotten would claim to be a
-// release.
+// A binary built without ldflags reports itself as a development build.
 func TestString_DefaultIsDevelopmentBuild(t *testing.T) {
 	if Version != "dev" {
 		t.Errorf("Version = %q, want the uninjected default to be dev", Version)
 	}
 }
 
+// An injected commit appears beside the version.
 func TestString_WithCommit(t *testing.T) {
 	original := Commit
 	t.Cleanup(func() { Commit = original })
@@ -42,6 +41,7 @@ func TestString_WithCommit(t *testing.T) {
 	}
 }
 
+// A full hash is cut to twelve characters, and a shorter one is left alone.
 func TestShortRevision(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -74,8 +74,8 @@ func TestShortRevision(t *testing.T) {
 	}
 }
 
-// A test binary carries no VCS revision, so this must return empty rather than
-// panic or report something invented.
+// A test binary carries no VCS revision, so this returns empty rather than
+// panicking or inventing one.
 func TestVCSRevision_ToleratesMissingBuildInfo(t *testing.T) {
 	if rev := vcsRevision(); len(rev) > 12 {
 		t.Errorf("vcsRevision() = %q, want an empty or short revision", rev)

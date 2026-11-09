@@ -15,20 +15,24 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 )
 
-// Defaults for a task that declared no retry block.
-//
-// One attempt, because a task that said nothing about retrying asked for the
-// work to be done once. Anything else spends capacity nobody authorised.
+// -------------------------------------------------------------------------
+// CONSTANTS
+// -------------------------------------------------------------------------
+
+// Defaults for a task that declared no retry block: one attempt, since a task
+// that said nothing about retrying asked for the work to be done once.
 const (
 	defaultAttempts       = 1
 	defaultBackoffInitial = 5 * time.Second
 	defaultBackoffMax     = 30 * time.Second
 )
 
-// policy is a task's retry block, resolved.
-//
-// Attempts is total attempts, not attempts after the first: the field is
-// spelled attempts, and two attempts is two.
+// -------------------------------------------------------------------------
+// POLICY
+// -------------------------------------------------------------------------
+
+// policy is a task's retry block, resolved. attempts counts every attempt,
+// the first included.
 type policy struct {
 	attempts int
 	reroute  bool
@@ -37,12 +41,9 @@ type policy struct {
 	max     time.Duration
 }
 
-// retryPolicy reads a task's retry block.
-//
-// An unparseable duration falls back to the default rather than failing the
-// dispatch. The job already passed validation, so reaching this with a bad
-// duration means something upstream changed, and refusing to run the work over
-// a backoff interval would be the wrong trade.
+// retryPolicy reads a task's retry block. An unparseable duration falls back
+// to the default, since the job already passed validation and refusing the
+// work over a backoff interval is the wrong trade.
 func retryPolicy(task *job.Task) policy {
 	p := policy{
 		attempts: defaultAttempts,
@@ -88,10 +89,8 @@ func (p policy) budget() int {
 	return p.attempts
 }
 
-// backoff returns how long to wait before attempt n, counting from zero.
-//
-// Doubling from the initial interval, capped. The first attempt never waits,
-// so this is only ever asked about attempt one onward.
+// backoff returns how long to wait before attempt n, counting from zero: none
+// for the first, then doubling from initial up to max.
 func (p policy) backoff(attempt int) time.Duration {
 	if attempt < 1 {
 		return 0
@@ -108,6 +107,10 @@ func (p policy) backoff(attempt int) time.Duration {
 
 	return wait
 }
+
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
 
 // duration converts a job duration, reporting whether it was usable.
 func duration(d *job.Duration) (time.Duration, bool) {

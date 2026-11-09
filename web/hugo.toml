@@ -3,9 +3,10 @@
 #
 # Author: Alex Freidah
 #
-# The project site: a landing page from web/content and the documentation from
-# the repository's docs/, mounted in place so the same Markdown renders on
-# GitHub and here. The Hextra theme is a Hugo module, pinned in web/go.mod.
+# The project site: a landing page and the diagrams from web/content, and the
+# documentation from the repository's docs/, mounted in place so the same
+# Markdown renders on GitHub and here. The Hextra theme is a Hugo module, pinned
+# in web/go.mod.
 # -------------------------------------------------------------------------------
 
 baseURL = "https://vagabond.munchbox.cc/"
@@ -54,7 +55,7 @@ enableRobotsTXT = true
 
 [markup]
   [markup.goldmark.renderer]
-    # The landing page is HTML around shortcodes.
+    # The landing page and the diagrams are HTML around shortcodes.
     unsafe = true
   [markup.highlight]
     noClasses = false
@@ -65,14 +66,22 @@ enableRobotsTXT = true
     pageRef = "/docs"
     weight = 1
   [[menu.main]]
-    name = "Search"
+    name = "Diagrams"
+    pageRef = "/diagrams"
     weight = 2
+  [[menu.main]]
+    name = "alexfreidah.com"
+    url = "https://alexfreidah.com"
+    weight = 3
+  [[menu.main]]
+    name = "Search"
+    weight = 4
     [menu.main.params]
       type = "search"
   [[menu.main]]
     name = "GitHub"
     url = "https://github.com/afreidah/vagabond"
-    weight = 3
+    weight = 5
     [menu.main.params]
       icon = "github"
 

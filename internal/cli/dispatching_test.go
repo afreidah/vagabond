@@ -25,6 +25,10 @@ import (
 	"github.com/afreidah/vagabond/internal/api"
 )
 
+// -------------------------------------------------------------------------
+// HARNESS
+// -------------------------------------------------------------------------
+
 // stubLogs is a client for a server whose logs route answers with answer,
 // given the offset asked for.
 func stubLogs(t *testing.T, answer func(offset string) (int, string)) *api.Client {
@@ -50,9 +54,12 @@ func stubLogs(t *testing.T, answer func(offset string) (int, string)) *api.Clien
 	return client
 }
 
-// A follow whose provider cannot resume stops reopening the stream at the
-// server's 416, keeping what it printed, and leaves the rest to the stored
-// copy.
+// -------------------------------------------------------------------------
+// LIVE OUTPUT
+// -------------------------------------------------------------------------
+
+// A follow stops reopening the stream at the server's 416, keeping what it
+// printed and leaving the rest to the stored copy.
 func TestFollower_StopsWhenTheStreamCannotResume(t *testing.T) {
 	client := stubLogs(t, func(offset string) (int, string) {
 		if offset == "" {
@@ -141,8 +148,7 @@ func TestFollower_Rest(t *testing.T) {
 }
 
 // watch follows an execution only once it leaves pending and never with
-// -no-logs, and tells a follow its execution ended when it ends with no
-// result.
+// -no-logs, and ends a follow whose execution ended with no result.
 func TestFollower_Watch(t *testing.T) {
 	f := (&Meta{}).newFollower(nil, false)
 

@@ -10,13 +10,15 @@ A provider plugin translates a normalized task into one platform's API and
 classifies that platform's failures. Scheduling, retry, rerouting and quota
 accounting stay in the control plane. The contract is declared in
 `internal/plugin`; plugins live in `internal/providers/<name>` and are
-registered in `internal/registry`.
+registered in `internal/registry`. Plugins are compiled into the `vagabond`
+binary and selected by the `provider` block's `type`; nothing is loaded at run
+time.
 
 | Reference | Package | Shows |
 |---|---|---|
-| Cloud Run Jobs | `internal/providers/gcp` | Asynchronous family, `LogStreamer`, `Releaser`, raw HTTP against `httptest` |
-| AWS Lambda | `internal/providers/aws` | Synchronous family, the `NotSupported` embeds, `Result.Billed`, a cloud SDK against `httptest` |
-| Pool | `internal/providers/pool` | `Live`, `MemberSubmitter`, `LogStreamer` with `offset`, `Capabilities.Members` |
+| Cloud Run Jobs | `internal/providers/gcp` | Asynchronous family, `LogStreamer` refusing an offset with `ErrNoResume`, `Releaser`, `Recredentialer`, raw HTTP against `httptest` |
+| AWS Lambda | `internal/providers/aws` | Synchronous family, the `NotSupported` embeds, `Result.Billed`, `Recredentialer`, a cloud SDK against `httptest` |
+| Pool | `internal/providers/pool` | `Live`, `MemberSubmitter`, `LogStreamer` with `offset`, `Releaser`, `Capabilities.Members` |
 | Fakes | `internal/plugin/fake.go` | The smallest implementations of both families |
 
 ## Package boundaries
@@ -33,8 +35,10 @@ Consequences for a plugin:
 
 - Cloud SDK imports go in the plugin's package and nowhere else. No SDK type may
   appear in a signature the plugin exports to the rest of the tree.
-- A plugin may import `internal/plugin`, `internal/execution`, `internal/job`
-  and `internal/quota`. It has no store access.
+- A plugin normally imports `internal/plugin`, `internal/execution`,
+  `internal/job` and, to report a bill, `internal/quota`; the pool also imports
+  `internal/nodes` and `internal/agentrpc`. `state-boundary` keeps it from the
+  store.
 - `internal/registry` is the only package that imports every plugin.
 
 ## The `Provider` interface
@@ -121,7 +125,8 @@ dispatch polls `Status`.
 ### `Status`
 
 Where an execution has reached. Polled by dispatch at 2s, doubling to a 15s
-ceiling; also called by the quota reaper and when a dispatch is resumed.
+ceiling; also called by the quota reaper, the provider release loop, and when a
+dispatch is resumed.
 
 | `execution.Status` field | Set to |
 |---|---|
@@ -142,8 +147,9 @@ ceiling; also called by the quota reaper and when a dispatch is resumed.
 
 ### `Result`
 
-What a finished execution produced. Called once, after `Status` reports a
-terminal state, and before `Release`.
+What a finished execution produced. Called after `Status` reports a terminal
+state and before `Release`: by dispatch, or by the release loop for a `lost`
+execution it reconciles, which retries a failed call on its next pass.
 
 | `execution.Result` field | Meaning |
 |---|---|
@@ -203,7 +209,7 @@ is absent.
 |---|---|---|---|
 | `LogStreamer` | `StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error` | Server | While a client follows a running execution's output |
 | `Releaser` | `Release(ctx context.Context, id execution.ID) error` | Dispatch; the release loop | After `Result` (or after a synchronous `Submit`); for every other ending, once the execution is over |
-| `Recredentialer` | `Recredential(ctx context.Context, credential []byte) error` | Registry, for dispatch | After a call failed with `ErrUnauthorized`, with the `credentials` block resolved again |
+| `Recredentialer` | `Recredential(ctx context.Context, credential []byte) error` | Registry, for dispatch | After a dispatch call (`Submit`, `SubmitTo`, `Status`, `Result`, dispatch's `Cancel`, `Release`) failed with `ErrUnauthorized`, when the provider block has a `credentials` block; at most once a minute per provider |
 | `Live` | `LiveCapabilities() (Capabilities, error)` | Registry | On every plan, in place of the refreshed snapshot |
 | `MemberSubmitter` | `SubmitTo(ctx context.Context, id execution.ID, task *job.Task, members []string) (Submission, error)` | Dispatch | In place of `Submit`, when admission passed specific members |
 
@@ -251,6 +257,12 @@ is absent.
 - Return an error when the bytes are unusable, and keep the old client.
 - Classify 401 and 403 through `ClassifyHTTP`, which marks them
   `ErrUnauthorized`; that is what triggers the refresh.
+- Never called for a provider block with no `credentials` block: there is
+  nothing to resolve again.
+- Called at most once a minute per provider. A rejection within a minute of the
+  last refresh is retried on the credential already in place.
+- Only dispatch's calls are retried. A rejection from `StreamLogs`, or from the
+  `Cancel` behind `DELETE /v1/execution/{id}`, is returned as is.
 
 ### `Live`
 
@@ -291,13 +303,18 @@ Reason codes are listed in [Scheduling](scheduling.md#reason-codes).
 
 - **Units:** CPU in millicores (1000 = 1 vCPU), memory in MiB, matching
   `job.Resources`.
-- **Zero means unlimited** for the resource and duration limits. A platform
-  that derives CPU from memory advertises the CPU its largest tier implies
-  rather than 0, as Lambda advertises 6000.
+- **Limits:** a nil `MaxResources.CPU` or `MaxResources.Memory` advertises no
+  limit; `0` is a real limit that admits nothing, as a full pool node reports.
+  A zero `MaxDuration` advertises no limit. A platform that derives CPU from
+  memory advertises the CPU its largest tier implies rather than nil, as Lambda
+  advertises 6000.
 - **Attributes:** the dotted names are what job `constraint` and `affinity`
-  blocks match. Limits left at zero are omitted from the attribute map;
-  booleans and `estimated_cost` are always present. `provider.free_quota_percent`
-  is added by admission from the ledger, not by the plugin.
+  blocks match. A nil resource limit and a zero `MaxDuration` are omitted from
+  the attribute map; a limit of `0` is published as `0`. Booleans and
+  `estimated_cost` are always present. Admission adds
+  `provider.free_quota_percent` from the ledger, `provider.tier` from the
+  provider block, and `provider.meta.<key>` from its `meta` block; a plugin
+  publishes none of them. Every name under `provider.` is reserved to Vagabond.
 - **Members:** each `plugin.Member` has a `Name`, its own `Capabilities` and
   `Labels`, matched as `node.label.<key>`.
 
@@ -330,8 +347,9 @@ code.
 ### `ClassifyHTTP`
 
 `plugin.ClassifyHTTP(status int, retryAfter time.Duration, err error) *Error`
-is the default mapping for HTTP APIs. The error text is prefixed
-`http <status>: `.
+is the default mapping for HTTP APIs. The error text reads
+`http <status>: <err>`, preceded by `not found: ` for a 404 and
+`unauthorized: ` for a 401 or 403.
 
 | Status | Class | `RetryAfter` | Also wraps |
 |---|---|---|---|
@@ -350,10 +368,11 @@ A platform that uses a status unusually builds the `*Error` directly.
 |---|---|---|
 | `plugin.ErrProvider` | Matches any `*plugin.Error` via `errors.Is` | Callers that only need "a provider call failed" |
 | `plugin.ErrNotFound` | `ClassifyHTTP` saw a 404 | The plugin, to translate into `ErrUnknownExecution` or success |
-| `plugin.ErrUnauthorized` | `ClassifyHTTP` saw a 401 or 403: the credential was rejected | Dispatch: re-resolves the credential through `Recredential` and retries the call once |
+| `plugin.ErrUnauthorized` | `ClassifyHTTP` saw a 401 or 403: the credential was rejected | Dispatch: for a `Recredentialer` whose block has `credentials`, re-resolves the credential and retries the call once |
 | `plugin.ErrUnknownExecution` | The platform has no record of the execution | Quota reaper: drops the reservation |
 | `plugin.ErrUnsupported` | The platform has no such operation | Quota reaper: charges the reservation |
 | `plugin.ErrInvalidSubmission` | `Submission.Validate` failed | Dispatch |
+| `plugin.ErrNoResume` | The log stream cannot start at the requested offset | Server: answers 416 when nothing was written yet; the client finishes from the stored output |
 
 ### How dispatch reacts
 
@@ -404,8 +423,9 @@ Driver `config` in the task is read with helpers on `*job.Task`:
 
 The registry resolves the `credentials` block before calling the constructor
 and passes bytes in `registry.Settings.Credentials`. The plugin never learns
-whether they came from a file, an environment variable or a command, and they
-are resolved once per registry build.
+whether they came from a file, an environment variable or a command. They are
+resolved when the registry is built, and again for a `Recredentialer` after a
+dispatch call fails with `ErrUnauthorized`.
 
 - `nil` when the provider block has no `credentials` block. Either fail with a
   diagnostic or fall back to the platform's default chain, and document which.
@@ -477,8 +497,9 @@ func Build(ctx context.Context, providerType string, settings Settings) (plugin.
 - `registry.Settings` also carries `Nodes`, the server's connected agents,
   which only the `pool` type uses.
 
-Nothing else is wired by hand. The server and CLI build the registry from
-configuration, refresh it, and hand each provider to admission and dispatch.
+Nothing else is wired by hand. `vagabond server` builds the registry from
+configuration at startup, refreshes it, and hands each provider to admission
+and dispatch.
 
 ## Skeleton
 
@@ -753,10 +774,10 @@ exercises request building, headers, encoding and status classification.
 p := &Provider{
     name:    "gcp-cloud-run",
     cfg:     &Config{Project: "test-project", Region: "us-central1", RuntimeServiceAccount: "runtime@test-project.iam.gserviceaccount.com"},
-    http:    server.Client(),
     runURL:  server.URL,
     logsURL: server.URL,
 }
+p.http.Store(server.Client()) // an atomic.Pointer, swapped by Recredential
 
 // An SDK, as internal/providers/aws does.
 client := lambda.New(lambda.Options{
@@ -766,6 +787,8 @@ client := lambda.New(lambda.Options{
     Retryer:      sdkaws.NopRetryer{},
     HTTPClient:   srv.Client(),
 })
+p := &Provider{name: "aws-lambda"}
+p.client.Store(client)
 ```
 
 Cover at least:
@@ -807,6 +830,11 @@ above the boundary: `NewFakeContainerProvider`, `NewFakeFunctionProvider` and
 `FixtureFunction` and `FixtureWorker`. They are also registered as the
 `fake-container`, `fake-function` and `fake-worker` types, which the
 integration tests (`make integration-test`) and `examples/config.hcl` use.
+`FakeContainerProvider` exposes `Caps`, `SubmitErr`, `ExitCode` and `NoResume`,
+which makes `StreamLogs` return `ErrNoResume` for an offset above zero.
+`Advance(id, state)` moves a recorded run as the platform would between polls.
+`FakeSyncProvider` exposes `Caps`, `SubmitErr` and `ExitCode`; a nil `ExitCode`
+succeeds.
 
 **Before a PR:** `make check` runs formatting, vet, lint (including depguard),
 the race-enabled tests and govulncheck.

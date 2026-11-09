@@ -3,10 +3,8 @@
 //
 // Author: Alex Freidah
 //
-// Only the fields this plugin reads, not Google's whole schema. A generated
-// client would carry all of it; these were taken from what a spike actually
-// got back, so every one of them is known to exist rather than assumed from
-// documentation.
+// Only the fields this plugin reads, not Google's whole schema. Each was taken
+// from a real API response rather than assumed from documentation.
 // -------------------------------------------------------------------------------
 
 package gcp
@@ -26,11 +24,8 @@ import (
 // EXECUTIONS
 // -------------------------------------------------------------------------
 
-// runExecution is one run of a job.
-//
-// Name is Google's, not ours: a job called vagabond-<uuid> produces an
-// execution called vagabond-<uuid>-nhrzk, and the suffix is theirs to choose.
-// That is why it has to be listed rather than derived.
+// runExecution is one run of a job. Google picks its Name: vagabond-<uuid>
+// runs as vagabond-<uuid>-nhrzk, so it is listed rather than derived.
 type runExecution struct {
 	Name           string `json:"name"`
 	StartTime      string `json:"startTime"`
@@ -42,26 +37,17 @@ type runExecution struct {
 	CancelledCount int `json:"cancelledCount"`
 }
 
-// state translates Cloud Run's counters into ours.
-//
-// Counters rather than conditions, because a condition's state is prose that
-// has changed spelling between API versions while the counts have not. An
-// execution with a completion time and nothing succeeded has failed, whatever
-// it says about itself.
+// state translates Cloud Run's counters into an execution state. Counters
+// rather than conditions, whose prose has changed between API versions.
 func (e *runExecution) state() execution.State {
 	switch {
 	case e.CompletionTime == "":
-		// StartTime as well as the counter, because runningCount drops to zero
-		// when the container exits and before completionTime is written. On
-		// the counter alone the execution reports accepted again, having
-		// already run.
+		// runningCount hits zero before completionTime is set
 		if e.RunningCount > 0 || e.StartTime != "" {
 			return execution.StateRunning
 		}
 
-		// Accepted rather than running: Cloud Run spends a minute or more
-		// provisioning before a container starts, and reporting that as
-		// running would make a stuck pull look like a slow test suite.
+		// Provisioning takes a minute; running would hide a stuck pull
 		return execution.StateAccepted
 
 	case e.CancelledCount > 0:
@@ -75,15 +61,11 @@ func (e *runExecution) state() execution.State {
 	}
 }
 
-// execution finds the single execution belonging to one of our jobs.
+// execution finds the newest execution of a Vagabond job; there is normally
+// one, since Submit creates a job per execution.
 //
-// Listing rather than addressing, because the name is Google's. Submit creates
-// one job per execution, so more than one here would mean somebody ran the job
-// by hand and the newest is the one we care about.
-//
-// No job, or a job with no execution, is plugin.ErrUnknownExecution: Submit
-// died before running it. The class of the empty case stays infrastructure,
-// because right after Submit it can be the listing lagging the run.
+// No job, or no execution, is plugin.ErrUnknownExecution. The empty case stays
+// infrastructure, since right after Submit the listing can lag the run.
 func (p *Provider) execution(ctx context.Context, jobName string) (*runExecution, error) {
 	var out struct {
 		Executions []runExecution `json:"executions"`
@@ -128,19 +110,14 @@ type runTask struct {
 	} `json:"lastAttemptResult"`
 }
 
-// exitCode returns what the container exited with.
-//
-// A pointer because absence is meaningful: a task killed before its process
-// ran has no exit code, and reporting zero would call that a success.
+// exitCode returns what the container exited with, nil for a task killed before
+// its process ran, which zero would report as a success.
 func (t *runTask) exitCode() *int {
 	return t.LastAttemptResult.ExitCode
 }
 
-// task finds the single task of an execution.
-//
-// One, because every job is submitted with taskCount 1. Vagabond's own
-// parallelism is one task per provider, not one execution split across
-// several.
+// task finds the single task of an execution; every job is submitted with
+// taskCount 1.
 func (p *Provider) task(ctx context.Context, executionName string) (*runTask, error) {
 	var out struct {
 		Tasks []runTask `json:"tasks"`
@@ -163,11 +140,8 @@ func (p *Provider) task(ctx context.Context, executionName string) (*runTask, er
 // TIME
 // -------------------------------------------------------------------------
 
-// parseTime reads one of Google's RFC 3339 timestamps.
-//
-// An unparseable or absent time is the zero value rather than an error. These
-// are absent by design while a run is in progress, and a status that failed to
-// decode because a job had not started yet would be useless.
+// parseTime reads one of Google's RFC 3339 timestamps. An absent or unparseable
+// time is the zero value, since these are absent while a run is in progress.
 func parseTime(value string) time.Time {
 	if value == "" {
 		return time.Time{}

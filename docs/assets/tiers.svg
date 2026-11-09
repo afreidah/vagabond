@@ -26,7 +26,7 @@
 
     <rect x="30" y="40" width="230" height="64" rx="18" class="card"/>
     <text x="50" y="68" class="label">homelab</text>
-    <text x="50" y="90" class="small">tier 0 · 15% quota left</text>
+    <text x="50" y="90" class="small">tier 0 · 16% quota left</text>
 
     <rect x="30" y="118" width="230" height="64" rx="18" class="muted"/>
     <text x="50" y="146" class="label" style="fill:#c9ccd3">aws-lambda</text>
@@ -51,8 +51,8 @@
     <g class="small" text-anchor="middle" style="fill:#f8fafc">
       <text x="440" y="172">policy</text>
       <text x="440" y="198">availability</text>
-      <text x="440" y="224">capability</text>
-      <text x="440" y="250">quota</text>
+      <text x="440" y="224">mismatch</text>
+      <text x="440" y="250">capacity</text>
     </g>
     <text x="440" y="300" text-anchor="middle" class="small">tiers are not read here</text>
     <text x="440" y="360" text-anchor="middle" class="label" style="fill:#ff8a2b">3 admitted</text>
@@ -100,7 +100,7 @@
 
     <rect x="630" y="422" width="540" height="76" rx="18" class="card"/>
     <text x="654" y="454" class="label">homelab</text>
-    <text x="654" y="480" class="small">headroom 0.15 · tier 1.00</text>
+    <text x="654" y="480" class="small">headroom 0.16 · tier 1.00</text>
     <rect x="890" y="442" width="160" height="16" rx="4" class="free"/><rect x="890" y="442" width="93" height="16" rx="4" class="used"/>
     <text x="1150" y="456" text-anchor="end" class="label">58</text>
     <text x="1150" y="482" text-anchor="end" class="small">fallback 1</text>

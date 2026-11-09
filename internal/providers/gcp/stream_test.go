@@ -29,6 +29,7 @@ import (
 // DECODING
 // -------------------------------------------------------------------------
 
+// Each entry's text is written on its own line.
 func TestCopyTailWritesEntries(t *testing.T) {
 	t.Parallel()
 
@@ -80,6 +81,7 @@ func TestCopyTailTreatsTruncationAsTheEnd(t *testing.T) {
 	}
 }
 
+// An empty array writes nothing and is not an error.
 func TestCopyTailOnAnEmptyStream(t *testing.T) {
 	t.Parallel()
 
@@ -149,6 +151,7 @@ func TestCopyTailIsIncremental(t *testing.T) {
 // writerFunc adapts a function to io.Writer.
 type writerFunc func(p []byte) (int, error)
 
+// Write calls the function.
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
 // -------------------------------------------------------------------------
@@ -200,6 +203,7 @@ func TestStreamLogsSendsAnArrayBody(t *testing.T) {
 	}
 }
 
+// A tail Google refuses to open is reported as an error.
 func TestStreamLogsClassifiesAFailedOpen(t *testing.T) {
 	t.Parallel()
 

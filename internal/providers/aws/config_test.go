@@ -2,6 +2,10 @@
 // Lambda Configuration and Credential Tests
 //
 // Author: Alex Freidah
+//
+// The config block and the credential are what an operator writes by hand, so
+// each mistake is checked to be reported as itself rather than surfacing later
+// as a request AWS refused.
 // -------------------------------------------------------------------------------
 
 package aws
@@ -15,6 +19,10 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 )
 
+// -------------------------------------------------------------------------
+// CONFIGURATION
+// -------------------------------------------------------------------------
+
 // body parses an HCL fragment the way the config loader leaves a block.
 func body(t *testing.T, src string) hcl.Body {
 	t.Helper()
@@ -27,6 +35,7 @@ func body(t *testing.T, src string) hcl.Body {
 	return f.Body
 }
 
+// A block naming a region decodes.
 func TestDecodeConfig(t *testing.T) {
 	t.Parallel()
 
@@ -40,6 +49,7 @@ func TestDecodeConfig(t *testing.T) {
 	}
 }
 
+// Each malformed block is refused with its own diagnostic.
 func TestDecodeConfig_Refusals(t *testing.T) {
 	t.Parallel()
 
@@ -95,6 +105,7 @@ func TestStaticCredential_ReadsProcessFormat(t *testing.T) {
 	}
 }
 
+// Anything but Version 1 JSON with both keys is refused.
 func TestStaticCredential_Refusals(t *testing.T) {
 	t.Parallel()
 

@@ -17,6 +17,7 @@ import (
 	"testing"
 )
 
+// Only the exact lowercase spellings validate; toolchain aliases do not.
 func TestArch_Valid(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -40,6 +41,7 @@ func TestArch_Valid(t *testing.T) {
 	}
 }
 
+// Every architecture in the vocabulary parses back to itself.
 func TestParseArch(t *testing.T) {
 	for _, want := range Arches() {
 		t.Run(want.String(), func(t *testing.T) {
@@ -55,6 +57,7 @@ func TestParseArch(t *testing.T) {
 	}
 }
 
+// A spelling outside the vocabulary fails with ErrUnknownArch.
 func TestParseArch_Invalid(t *testing.T) {
 	for _, input := range []string{"", "x86_64", "riscv64", "Arm64"} {
 		t.Run(input, func(t *testing.T) {
@@ -70,6 +73,7 @@ func TestParseArch_Invalid(t *testing.T) {
 	}
 }
 
+// The parse error names every valid architecture.
 func TestArch_ErrorListsVocabulary(t *testing.T) {
 	_, err := ParseArch("x86_64")
 	if err == nil {
@@ -83,6 +87,7 @@ func TestArch_ErrorListsVocabulary(t *testing.T) {
 	}
 }
 
+// The zero value is not an architecture and does not marshal.
 func TestArch_MarshalTextRejectsZeroValue(t *testing.T) {
 	var a Arch
 
@@ -91,6 +96,7 @@ func TestArch_MarshalTextRejectsZeroValue(t *testing.T) {
 	}
 }
 
+// Mutating the returned slice leaves the vocabulary untouched.
 func TestArches_ReturnsCopy(t *testing.T) {
 	first := Arches()
 	first[0] = "mutated"
@@ -100,6 +106,7 @@ func TestArches_ReturnsCopy(t *testing.T) {
 	}
 }
 
+// Every architecture survives a MarshalText and UnmarshalText round trip.
 func TestArch_TextRoundTrip(t *testing.T) {
 	for _, want := range Arches() {
 		t.Run(want.String(), func(t *testing.T) {
@@ -120,6 +127,7 @@ func TestArch_TextRoundTrip(t *testing.T) {
 	}
 }
 
+// Unmarshalling an unknown spelling fails with ErrUnknownArch.
 func TestArch_UnmarshalTextRejectsUnknown(t *testing.T) {
 	var a Arch
 

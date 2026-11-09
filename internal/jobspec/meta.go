@@ -1,19 +1,12 @@
 // -------------------------------------------------------------------------------
 // Job Metadata
-// -------------------------------------------------------------------------------
 //
 // Author: Alex Freidah
 //
-// A job declares the metadata a submission must supply, and references those
-// values through the meta namespace. Vagabond neither knows nor cares what any
-// of them mean: a key is a name and a value is a string, and what a job does
-// with them is the job's business.
-//
-// A referenced value that nobody supplied is an error, matching Nomad, whose
-// Variable.Value reports "Unset variable" for the same situation. The
-// alternative, carrying a placeholder so validation can pass, means a job can
-// validate and then interpolate nothing at submission, which is worse than
-// being told to supply the value.
+// A job declares the metadata a submission must supply and references those
+// values through the meta namespace; a key is a name and a value is a string.
+// A referenced value nobody supplied is an error rather than a placeholder, so
+// a job cannot validate and then interpolate nothing at submission.
 // -------------------------------------------------------------------------------
 
 package jobspec
@@ -32,22 +25,15 @@ import (
 // -------------------------------------------------------------------------
 
 // MetaNamespace is the accessor a job file uses to reach submission metadata,
-// as in meta.version.
-//
-// Nomad namespaces its own accessors the same way, with var and local. The name
-// matches parameterized.meta_required naming the same keys, so a reader does
-// not have to learn that two spellings mean one thing.
+// as in meta.version, named to match parameterized.meta_required.
 const MetaNamespace = "meta"
 
 // -------------------------------------------------------------------------
 // EVALUATION CONTEXT
 // -------------------------------------------------------------------------
 
-// EvalContext builds the context job expressions are evaluated against.
-//
-// Only supplied metadata is registered. A reference to anything else fails
-// during evaluation, with a range pointing at the reference, which is what
-// makes an unsupplied value and a misspelled one both reportable.
+// EvalContext builds the context job expressions are evaluated against. Only
+// supplied metadata is registered, so any other reference fails at its range.
 func EvalContext(meta map[string]string) *hcl.EvalContext {
 	values := make(map[string]cty.Value, len(meta))
 	for key, value := range meta {
@@ -61,11 +47,8 @@ func EvalContext(meta map[string]string) *hcl.EvalContext {
 	}
 }
 
-// metaObject wraps supplied metadata as an object value.
-//
-// An empty map becomes an empty object rather than a null, because a reference
-// into a null fails with a message about nullness rather than about a missing
-// key, and the second is the one an author can act on.
+// metaObject wraps supplied metadata as an object value, empty rather than null
+// so a bad reference fails naming the missing key rather than nullness.
 func metaObject(values map[string]cty.Value) cty.Value {
 	if len(values) == 0 {
 		return cty.EmptyObjectVal
@@ -80,9 +63,6 @@ func metaObject(values map[string]cty.Value) cty.Value {
 
 // requiredMetaSchema matches the blocks that declare required metadata, without
 // decoding anything that could reference a value.
-//
-// Extracting this before evaluation is what lets a missing key be reported as
-// itself rather than as whatever expression happened to reference it first.
 var requiredMetaSchema = &hcl.BodySchema{
 	Blocks: []hcl.BlockHeaderSchema{{Type: "job", LabelNames: []string{"name"}}},
 }
@@ -95,21 +75,16 @@ var metaRequiredSchema = &hcl.BodySchema{
 	Attributes: []hcl.AttributeSchema{{Name: "meta_required"}, {Name: "meta_optional"}},
 }
 
-// Requirement is one job's declared metadata, and where it declared it.
-//
-// The range matters as much as the keys: a message about metadata nobody
-// supplied should point at the line that asked for it, not at whichever
-// expression happened to reference one first.
+// Requirement is one job's declared metadata and where it declared it, so a
+// message about a missing key points at the line that asked for it.
 type Requirement struct {
 	Job   string
 	Keys  []string
 	Range hcl.Range
 }
 
-// RequiredMeta returns what every job in the body declares, in file order.
-//
-// A slice rather than a map keyed by job name, so that the report a caller
-// eventually prints follows the file rather than an arbitrary iteration order.
+// RequiredMeta returns what every job in the body declares, in file order so a
+// caller's report follows the file.
 func RequiredMeta(body hcl.Body) ([]Requirement, hcl.Diagnostics) {
 	content, _, diags := body.PartialContent(requiredMetaSchema)
 	if content == nil {
@@ -166,11 +141,8 @@ func jobRequiredMeta(body hcl.Body) ([]string, hcl.Range, hcl.Diagnostics) {
 	return keys, attr.Range, diags
 }
 
-// stringList evaluates an attribute expected to hold a list of strings.
-//
-// Evaluated against a nil context on purpose: a job declaring which metadata it
-// needs cannot itself depend on metadata, and allowing it to would make the
-// requirement unknowable until the values it names were already supplied.
+// stringList evaluates a list-of-strings attribute against a nil context, since
+// a declaration of the metadata a job needs cannot itself depend on metadata.
 func stringList(attr *hcl.Attribute, diags *hcl.Diagnostics) []string {
 	value, valueDiags := attr.Expr.Value(nil)
 	*diags = append(*diags, valueDiags...)
@@ -264,10 +236,8 @@ func Declared(filename string, source []byte) (Declaration, hcl.Diagnostics) {
 	return d, diags
 }
 
-// References binds every declared key to its own reference, so a job can be
-// parsed and validated at register with ${meta.version} standing as the text
-// "${meta.version}". A reference to an undeclared key still fails, which
-// catches a typo at register.
+// References binds each declared key to its own ${meta.key} text, so a job
+// validates at register while an undeclared reference still fails.
 func (d Declaration) References() map[string]string {
 	refs := make(map[string]string, len(d.Required)+len(d.Optional))
 
@@ -278,9 +248,8 @@ func (d Declaration) References() map[string]string {
 	return refs
 }
 
-// CheckDispatch refuses metadata a dispatch may not supply: any at all for a
-// job that is not parameterized, keys declared in neither list, and required
-// keys left out.
+// CheckDispatch refuses metadata a dispatch may not supply: any for a job not
+// parameterized, keys in neither list, and missing required keys.
 func (d Declaration) CheckDispatch(supplied map[string]string) error {
 	if !d.Parameterized {
 		if len(supplied) > 0 {
@@ -318,11 +287,7 @@ func (d Declaration) CheckDispatch(supplied map[string]string) error {
 // -------------------------------------------------------------------------
 
 // CheckRequiredMeta reports metadata a job declared that the caller did not
-// supply.
-//
-// Matches Nomad, which refuses a job referencing an unset variable rather than
-// substituting a placeholder. Catching it here means a submission fails before
-// any provider is contacted and any free-tier capacity is spent.
+// supply, so a submission fails before any provider is contacted.
 func CheckRequiredMeta(required []Requirement, supplied map[string]string) hcl.Diagnostics {
 	var diags hcl.Diagnostics
 

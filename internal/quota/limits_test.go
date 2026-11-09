@@ -3,9 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// The additive case is the one worth proving: a provider with a daily cap
-// inside a monthly one must be refused by whichever runs out first, and a pool
-// an execution never touches must not be able to refuse it.
+// Pools are additive: a daily cap inside a monthly one refuses an execution
+// when either runs out, and a pool an execution never touches cannot refuse
+// it.
 // -------------------------------------------------------------------------------
 
 package quota
@@ -17,12 +17,21 @@ import (
 	"time"
 )
 
+// -------------------------------------------------------------------------
+// CONSTANTS
+// -------------------------------------------------------------------------
+
 // One GB-second and one vCPU-second in base units, for readable expectations.
 const (
 	gbSeconds  = mebibytesPerGibibyte * millisPerSecond
 	cpuSeconds = millicoresPerVCPU * millisPerSecond
 )
 
+// -------------------------------------------------------------------------
+// CONSTRUCTION
+// -------------------------------------------------------------------------
+
+// NewLimits refuses every spec it cannot enforce, naming the problem.
 func TestNewLimits_Rejects(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -127,6 +136,11 @@ func TestNewLimits_PreservesOrder(t *testing.T) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// UNLIMITED PROVIDERS
+// -------------------------------------------------------------------------
+
+// Limits are unlimited exactly when no pool was declared.
 func TestLimits_Unlimited(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -173,6 +187,11 @@ func TestLimits_ZeroValueEnforcesNothing(t *testing.T) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// CHARGING
+// -------------------------------------------------------------------------
+
+// An execution charges each pool its meter's amount, in base units.
 func TestLimits_Deltas(t *testing.T) {
 	limits := FixtureFunction()
 
@@ -203,6 +222,8 @@ func TestLimits_DeltasOmitsUntouchedPools(t *testing.T) {
 	}
 }
 
+// An execution fits only when every pool it charges has room, landing exactly
+// on a limit included.
 func TestLimits_Within(t *testing.T) {
 	limits := FixtureFunction()
 	small := Execution{Memory: 1024, Duration: 10 * time.Second} // 1 request, 10 GB-seconds
@@ -314,9 +335,8 @@ func TestLimits_FreePercent(t *testing.T) {
 	}
 }
 
-// A pool the task does not charge must not drag the number down, or a job
-// declaring no duration would be steered away by a spent compute budget it
-// cannot touch.
+// A pool the task does not charge does not drag the number down, so a spent
+// compute budget cannot steer away a job declaring no duration.
 func TestLimits_FreePercentIgnoresUntouchedPools(t *testing.T) {
 	limits := FixtureFunction()
 	spent := PoolUsage{"compute": 400_000 * gbSeconds, "requests": 500_000}
@@ -335,6 +355,10 @@ func TestLimits_FreePercentOfUnlimitedProvider(t *testing.T) {
 		t.Errorf("FreePercent() = %d, want 100", got)
 	}
 }
+
+// -------------------------------------------------------------------------
+// UNITS
+// -------------------------------------------------------------------------
 
 // Base units are an implementation detail of the counters; what an operator
 // reads back has to be the unit they wrote.
@@ -360,6 +384,10 @@ func TestMeter_Natural(t *testing.T) {
 		})
 	}
 }
+
+// -------------------------------------------------------------------------
+// ADDITIVE POOLS
+// -------------------------------------------------------------------------
 
 // Pools are additive: two pools may meter the same thing over different
 // periods, and whichever runs out first refuses the execution.
@@ -404,9 +432,8 @@ func TestLimits_WithinIgnoresUntouchedPools(t *testing.T) {
 	}
 }
 
-// The case cpu_seconds exists for. At a container platform's ordinary CPU to
-// memory ratio the vCPU budget runs out first, so a provider metered only on
-// GB-seconds would still be admitting work after the platform began charging.
+// At a container platform's ordinary CPU-to-memory ratio the vCPU budget runs
+// out first, which a GB-seconds pool alone would miss.
 func TestLimits_CPUBudgetBindsBeforeMemory(t *testing.T) {
 	limits := FixtureContainer()
 
@@ -425,8 +452,12 @@ func TestLimits_CPUBudgetBindsBeforeMemory(t *testing.T) {
 	}
 }
 
-// Between them the fixtures have to cover both charge kinds and both periods,
-// or the ledger's tests are exercising half the vocabulary.
+// -------------------------------------------------------------------------
+// FIXTURES
+// -------------------------------------------------------------------------
+
+// Between them the fixtures cover both kinds of charge and both periods, so
+// the ledger's tests exercise the whole vocabulary.
 func TestFixtures_CoverMetersAndPeriods(t *testing.T) {
 	meters := map[Meter]bool{}
 	periods := map[Period]bool{}

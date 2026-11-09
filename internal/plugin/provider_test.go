@@ -21,13 +21,13 @@ import (
 	"github.com/afreidah/vagabond/internal/ptr"
 )
 
-// All three execution families satisfy one interface. This is the assertion
-// that fails first if a future method cannot be honoured by one of them.
+// All three execution families satisfy one interface.
 var (
 	_ Provider = (*FakeContainerProvider)(nil)
 	_ Provider = (*FakeSyncProvider)(nil)
 )
 
+// newID returns a fresh execution id, failing the test if one cannot be made.
 func newID(t *testing.T) execution.ID {
 	t.Helper()
 
@@ -71,6 +71,7 @@ func TestProvider_ContainerSubmitIsAsynchronous(t *testing.T) {
 	}
 }
 
+// Status reports the state a recorded run was advanced to.
 func TestProvider_ContainerStatusTracksTheRun(t *testing.T) {
 	p := NewFakeContainerProvider("fake-container")
 	id := newID(t)
@@ -163,6 +164,7 @@ func TestProvider_WorkerResultHasNoExitCode(t *testing.T) {
 	}
 }
 
+// A non-zero exit reports StateFailed with no Go error.
 func TestProvider_NonZeroExitFailsTheSubmission(t *testing.T) {
 	p := NewFakeFunctionProvider("fake-function")
 	p.ExitCode = new(1)
@@ -176,8 +178,7 @@ func TestProvider_NonZeroExitFailsTheSubmission(t *testing.T) {
 		t.Errorf("State = %q, want %q", sub.State, execution.StateFailed)
 	}
 
-	// A failing build is still a successful submission. The error return stays
-	// nil, because nothing went wrong with Vagabond or the provider.
+	// A failing build is still a successful submission, so err stays nil
 	if err != nil {
 		t.Error("a non-zero exit produced a Go error")
 	}
@@ -282,8 +283,8 @@ func TestProvider_ResultForUnknownExecution(t *testing.T) {
 	}
 }
 
-// Unsupported is Vagabond's own fault for asking, so it is internal and must
-// never be rerouted: another provider will not answer differently.
+// Unsupported is Vagabond's own fault for asking, so it is internal and never
+// rerouted: another provider does not answer differently.
 func TestProvider_UnsupportedIsInternalAndNotReroutable(t *testing.T) {
 	p := NewFakeWorkerProvider("fake-worker")
 
@@ -307,6 +308,7 @@ func TestProvider_UnsupportedIsInternalAndNotReroutable(t *testing.T) {
 // SUBMISSION VALIDATION
 // -------------------------------------------------------------------------
 
+// Validate accepts only coherent state and result pairs a provider may report.
 func TestSubmission_Validate(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -432,8 +434,8 @@ func TestFakes_NameAndCapabilities(t *testing.T) {
 	}
 }
 
-// An operation naming an execution the provider never saw is Vagabond asking
-// about something that does not exist, which is our bug rather than theirs.
+// An operation naming an execution the provider never saw is Vagabond's bug,
+// not the provider's.
 func TestFakeContainerProvider_UnknownExecution(t *testing.T) {
 	p := NewFakeContainerProvider("fake-container")
 	id := newID(t)
@@ -451,6 +453,7 @@ func TestFakeContainerProvider_UnknownExecution(t *testing.T) {
 	}
 }
 
+// Cancel makes a run terminal, and the transition table refuses reviving it.
 func TestFakeContainerProvider_CancelAndIllegalAdvance(t *testing.T) {
 	p := NewFakeContainerProvider("fake-container")
 	id := newID(t)
@@ -472,13 +475,13 @@ func TestFakeContainerProvider_CancelAndIllegalAdvance(t *testing.T) {
 		t.Errorf("State = %q, want %q", status.State, execution.StateCancelled)
 	}
 
-	// A cancelled execution is terminal, so reviving it must be refused by the
-	// same transition table everything else uses.
+	// Cancelled is terminal, so reviving it must be refused
 	if err := p.Advance(id, execution.StateRunning); err == nil {
 		t.Error("advancing a cancelled execution back to running was allowed")
 	}
 }
 
+// A configured SubmitErr comes back from the synchronous fake's Submit.
 func TestFakeSyncProvider_SubmitError(t *testing.T) {
 	p := NewFakeFunctionProvider("fake-function")
 	p.SubmitErr = Infrastructure(errors.New("throttled"))
@@ -488,6 +491,7 @@ func TestFakeSyncProvider_SubmitError(t *testing.T) {
 	}
 }
 
+// A configured SubmitErr comes back from the container fake's Submit.
 func TestProvider_SubmitErrorIsReturnedUnchanged(t *testing.T) {
 	p := NewFakeContainerProvider("fake-container")
 	p.SubmitErr = Infrastructure(errors.New("service unavailable"))

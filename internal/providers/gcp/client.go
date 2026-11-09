@@ -3,10 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// Authentication and JSON plumbing. Google's generated client is deliberately
-// not used: the handful of calls this plugin makes are simple enough that the
-// generated surface would be a large dependency carried for very little, and
-// oauth2 alone handles the part that is genuinely fiddly.
+// Authentication and JSON plumbing. Google's generated client is not used: the
+// few calls this plugin makes do not justify the dependency, and oauth2 alone
+// handles the part that is fiddly.
 // -------------------------------------------------------------------------------
 
 package gcp
@@ -28,11 +27,12 @@ import (
 	"github.com/afreidah/vagabond/internal/plugin"
 )
 
-// The endpoints this plugin talks to, and the OAuth scope both accept.
-//
-// The scope is not a permission: what the credential may actually do is
-// decided by the IAM roles it holds, which are run.developer and
-// logging.viewer and nothing else.
+// -------------------------------------------------------------------------
+// CONSTANTS
+// -------------------------------------------------------------------------
+
+// The endpoints this plugin talks to, and the OAuth scope both accept. The
+// scope is not a permission: the credential's IAM roles decide what it may do.
 const (
 	runEndpoint     = "https://run.googleapis.com"
 	loggingEndpoint = "https://logging.googleapis.com"
@@ -44,21 +44,15 @@ const (
 var ErrNoCredential = errors.New("no credential supplied")
 
 // -------------------------------------------------------------------------
-// CONSTRUCTION
+// AUTHENTICATION
 // -------------------------------------------------------------------------
 
-// newHTTPClient builds a client that signs every request.
+// newHTTPClient builds a client that signs every request, its token source
+// refreshing on its own.
 //
-// JWTConfigFromJSON rather than the general credential loader, which is
-// deprecated for accepting external-account configurations that can name an
-// executable to run for a token. Vagabond's credential comes from wherever an
-// operator's config pointed, so narrowing to service account keys means a
-// malformed or substituted one is refused here rather than obeyed.
-//
-// The token source refreshes on its own, so nothing tracks expiry. A key that
-// cannot be parsed fails now rather than on the first dispatch, which is the
-// difference between an error at startup and a job that mysteriously will not
-// run an hour later.
+// JWTConfigFromJSON accepts only service account keys, unlike the general
+// loader, whose external-account configurations can name an executable to run
+// for a token. A key that cannot be parsed fails at startup, not at dispatch.
 func newHTTPClient(ctx context.Context, credentials []byte) (*http.Client, error) {
 	if len(credentials) == 0 {
 		return nil, ErrNoCredential
@@ -77,11 +71,7 @@ func newHTTPClient(ctx context.Context, credentials []byte) (*http.Client, error
 // -------------------------------------------------------------------------
 
 // call sends one request and decodes the response into out, which may be nil.
-//
-// Every non-2xx is classified, so the dispatcher can tell a quota rejection it
-// should wait on from a malformed request that is Vagabond's own bug. Google's
-// message is lifted out of the body because a bare status code sends someone
-// reading the wrong page.
+// Every non-2xx is classified, carrying Google's own message from the body.
 func (p *Provider) call(ctx context.Context, method, url string, payload, out any) error {
 	var body io.Reader
 
@@ -132,10 +122,8 @@ func (p *Provider) call(ctx context.Context, method, url string, payload, out an
 	return nil
 }
 
-// retryAfter reads how long Google asked us to wait.
-//
-// Only sent with a rate limit, and only sometimes. Zero means the dispatcher
-// picks its own backoff, which is the common case.
+// retryAfter reads how long Google asked the caller to wait. Zero, the common
+// case, leaves the backoff to the dispatcher.
 func retryAfter(resp *http.Response) time.Duration {
 	seconds, err := strconv.Atoi(resp.Header.Get("Retry-After"))
 	if err != nil || seconds < 0 {
@@ -145,10 +133,8 @@ func retryAfter(resp *http.Response) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-// googleError renders whatever Google said went wrong.
-//
-// Their errors nest the useful sentence two levels down under several hundred
-// bytes of help tokens and metadata, which hide it.
+// googleError renders whatever Google said went wrong, lifting the message out
+// from under the help tokens and metadata that bury it.
 func googleError(body []byte) string {
 	var out struct {
 		Error struct {

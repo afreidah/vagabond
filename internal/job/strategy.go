@@ -20,10 +20,8 @@ import (
 // Strategy is how the scheduler orders admitted candidates.
 type Strategy string
 
-// The routing strategies Vagabond implements.
-//
-// StrategyFreeFirst prefers candidates with free-tier capacity remaining, and is
-// the only strategy in phase 1.
+// The routing strategies Vagabond implements. StrategyFreeFirst prefers
+// candidates with free-tier capacity remaining.
 const (
 	StrategyFreeFirst Strategy = "free-first"
 )
@@ -33,10 +31,7 @@ var strategyNames = []Strategy{StrategyFreeFirst}
 // ErrUnknownStrategy is the sentinel behind every unknown-strategy failure.
 var ErrUnknownStrategy = errors.New("unknown routing strategy")
 
-// Strategies returns the valid routing strategies in declaration order.
-//
-// The returned slice is a copy, so a caller rendering it into an error cannot
-// reorder the vocabulary for everyone else.
+// Strategies returns the valid strategies in declaration order, as a copy.
 func Strategies() []Strategy {
 	return slices.Clone(strategyNames)
 }
@@ -82,6 +77,8 @@ func (s *Strategy) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// unknownStrategy builds the ErrUnknownStrategy failure for name, listing the
+// valid set.
 func unknownStrategy(name string) error {
 	valid := make([]string, 0, len(strategyNames))
 	for _, s := range strategyNames {

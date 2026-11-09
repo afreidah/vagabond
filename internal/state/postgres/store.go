@@ -3,9 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// Persistence for the usage ledger. One implementation for Postgres and
-// CockroachDB: Cockroach speaks the same wire protocol, and this schema stays
-// clear of the places the two disagree.
+// The connection pool, migrations and transaction retry every persistence call
+// shares. One implementation for Postgres and CockroachDB: Cockroach speaks the
+// same wire protocol, and this schema stays clear of the places the two
+// disagree.
 // -------------------------------------------------------------------------------
 
 package postgres
@@ -32,6 +33,12 @@ import (
 	db "github.com/afreidah/vagabond/internal/state/postgres/sqlc"
 )
 
+// -------------------------------------------------------------------------
+// CONSTANTS
+// -------------------------------------------------------------------------
+
+// migrationFS holds the schema migrations, compiled into the binary.
+//
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
@@ -42,6 +49,10 @@ const SchemaVersion = 7
 // connectTimeout bounds opening a connection when the DSN sets none, so an
 // unreachable database fails a request quickly rather than holding it.
 const connectTimeout = 5 * time.Second
+
+// -------------------------------------------------------------------------
+// TYPES
+// -------------------------------------------------------------------------
 
 // Store holds the connection pool and the generated queries.
 type Store struct {
@@ -54,10 +65,8 @@ type Store struct {
 // LIFECYCLE
 // -------------------------------------------------------------------------
 
-// Open connects and verifies the connection before returning.
-//
-// Verified here rather than on first use, so a bad DSN is an error at startup
-// instead of a dispatch that fails for reasons nothing in the job explains.
+// Open connects and verifies the connection before returning, so a bad DSN is
+// an error at startup rather than a dispatch failing for no visible reason.
 func Open(ctx context.Context, dsn string) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
@@ -94,9 +103,7 @@ func (s *Store) Ping(ctx context.Context) error {
 }
 
 // Migrate applies the embedded migrations, skipping the ones already recorded.
-//
-// goose wants a database/sql handle, so one is opened for the duration rather
-// than kept alongside the pool for the life of the process.
+// goose wants a database/sql handle, so one is opened for the duration only.
 func (s *Store) Migrate(ctx context.Context) error {
 	handle, err := sql.Open("pgx", s.dsn)
 	if err != nil {
@@ -209,6 +216,8 @@ func (s *Store) transaction(ctx context.Context, fn func(*db.Queries) error) err
 	return nil
 }
 
+// isSerializationFailure reports whether err is SQLSTATE 40001, which a whole
+// transaction retry can resolve.
 func isSerializationFailure(err error) bool {
 	var pgErr *pgconn.PgError
 
@@ -220,10 +229,7 @@ func isSerializationFailure(err error) bool {
 // -------------------------------------------------------------------------
 
 // VerifySchema checks that the database is at exactly the version this binary
-// expects.
-//
-// Older means a migration failed partway. Newer means this binary is outdated
-// and would write rows a newer one no longer understands.
+// expects. Older means a migration failed partway; newer, an outdated binary.
 func (s *Store) VerifySchema(ctx context.Context) error {
 	var version int64
 

@@ -57,8 +57,7 @@ func TestPool_RunsAJobOnANode(t *testing.T) {
 		t.Fatalf("config: %s", diags.Error())
 	}
 
-	// The registry's pool and the server's agent connections share one set of
-	// nodes, as vagabond server wires them.
+	// The pool and the server share one set of nodes, as vagabond server wires it.
 	conns := nodes.New()
 
 	reg, diags := registry.New(ctx, cfg, registry.WithNodes(conns))

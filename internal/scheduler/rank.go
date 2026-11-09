@@ -3,17 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// Admission says which providers can run the task. This says which one should,
-// and why, which is the harder half to explain: a rejection names the rule it
-// broke, while a score is a number that has to be defensible on its own.
-//
-// So a candidate carries the parts it was built from, not only the total. A
-// plan that can say "eighty percent headroom, no affinity satisfied" is
-// answering a question; one that says "score 40" is asking the reader to trust
-// it. Nomad keeps the same breakdown on RankedNode.Scores for the same reason.
-//
-// Nothing here calls a provider. Ranking is a pure function of what admission
-// produced, and every value it reads was fingerprinted before the plan began.
+// Admission says which providers can run the task; this says which one should.
+// A candidate carries the scores it was built from, not only the total, so a
+// plan can explain a ranking rather than print a number. Ranking is a pure
+// function of what admission produced.
 // -------------------------------------------------------------------------------
 
 package scheduler
@@ -31,10 +24,8 @@ import (
 // SCORERS
 // -------------------------------------------------------------------------
 
-// The scorers that can contribute to a candidate's score.
-//
-// Named because they appear in plan output and in whatever a CI system reads,
-// which makes them permanent surface the same way rejection reasons are.
+// The scorers that can contribute to a candidate's score. Their names appear
+// in plan output and are stable surface, as rejection reasons are.
 const (
 	ScorerHeadroom = "headroom"
 	ScorerAffinity = "affinity"
@@ -52,38 +43,25 @@ type Score struct {
 // -------------------------------------------------------------------------
 
 // ScoredCandidate is a candidate and the reasoning behind where it ranked.
-//
-// Score is the mean of Scores rather than their sum. Nomad averages for the
-// same reason: a sum makes a job with four affinities score on a different
-// scale than a job with one, and neither number means anything next to the
-// other.
+// Score is the mean of Scores rather than their sum, so jobs with different
+// numbers of scorers score on one scale.
 type ScoredCandidate struct {
 	Candidate
 	Score  float64
 	Scores []Score
 }
 
-// Percent renders the score the way a plan prints it.
-//
-// Scoring is done in floating point because averaging demands it, and shown as
-// an integer because a table reading "score 91" is worth more to a person than
-// one reading 0.9125.
+// Percent renders the score as the whole percentage a plan prints.
 func (s *ScoredCandidate) Percent() int {
 	return int(math.Round(s.Score * 100))
 }
 
-// Ranking is every candidate, best first.
-//
-// The whole ordering rather than a winner. Rerouting after an infrastructure
-// failure needs the second choice, and a ranking reduced to its head cannot
-// produce one without running the whole plan again against a changed world.
+// Ranking is every candidate, best first: the whole ordering rather than a
+// winner, since rerouting needs the second choice.
 type Ranking []ScoredCandidate
 
-// Selected returns the candidate a job should be dispatched to.
-//
-// Reports false when nothing was admitted, which is a different outcome from a
-// candidate scoring zero: one has nowhere to run and the other has somewhere
-// unappealing.
+// Selected returns the candidate a job should be dispatched to, or false when
+// nothing was admitted.
 func (r Ranking) Selected() (ScoredCandidate, bool) {
 	if len(r) == 0 {
 		return ScoredCandidate{}, false
@@ -106,14 +84,10 @@ func (r Ranking) Providers() []string {
 // RANKING
 // -------------------------------------------------------------------------
 
-// Rank orders admitted candidates by how well each suits the request.
-//
-// Under strict tiers a lower tier always ranks first and scores only order
-// providers within one. Under weighted tiers the tier is one more scorer.
-//
-// Stable, and the candidates admission produced are already ordered by provider
-// name, so equal standings keep that order. Plan output for the same inputs is
-// byte-identical across runs, which is what lets it be diffed in CI.
+// Rank orders admitted candidates by how well each suits the request. Under
+// strict tiers a lower tier always ranks first; under weighted tiers the tier
+// is one more scorer. The sort is stable over admission's name order, so plan
+// output is byte-identical across runs.
 func Rank(req *Request, candidates []Candidate) Ranking {
 	mode := req.Tiers()
 	span := tierSpanOf(candidates)
@@ -143,16 +117,12 @@ func score(req *Request, candidate *Candidate, mode job.TierMode, span tierSpan)
 		Value: baseScorer(req.Strategy())(candidate, req.Execution),
 	}}
 
-	// Only weighted tiers score; under strict ones the tier is the ordering
-	// itself, and a score for it would move nothing.
+	// Under strict tiers the tier is the ordering itself, so only weighted score
 	if mode == job.TiersWeighted {
 		scores = append(scores, Score{Name: ScorerTier, Value: span.score(candidate.Tier)})
 	}
 
-	// Left out entirely when the job stated no preference, rather than averaged
-	// in as a zero. A preference nobody expressed is not one every provider
-	// failed, and scoring it as one would halve every candidate identically to
-	// say nothing. Nomad's affinity iterator skips the same way.
+	// No stated preference leaves the scorer out rather than averaging in a zero
 	if affinities := req.Affinities(); len(affinities) > 0 {
 		scores = append(scores, Score{
 			Name:  ScorerAffinity,
@@ -185,12 +155,8 @@ func mean(scores []Score) float64 {
 // STRATEGIES
 // -------------------------------------------------------------------------
 
-// baseScorer returns the scorer a strategy ranks by.
-//
-// One strategy exists, so this reads as a formality. It is here because the
-// alternative is scoring inlined into Rank, and a second strategy would then
-// arrive as a conditional inside the function that averages, rather than as a
-// line in this switch. Affinities apply on top of whichever base is chosen.
+// baseScorer returns the scorer a strategy ranks by, with affinities applied
+// on top. A second strategy is a case here rather than a branch inside Rank.
 func baseScorer(strategy job.Strategy) func(*Candidate, quota.Execution) float64 {
 	switch strategy {
 	case job.StrategyFreeFirst:
@@ -202,13 +168,8 @@ func baseScorer(strategy job.Strategy) func(*Candidate, quota.Execution) float64
 }
 
 // headroomScore is what free-first prefers: the provider with the most
-// allowance left in the pools this task charges.
-//
-// The point is not that a fuller provider runs the work better, because it does
-// not. It is that spending the scarcest allowance first strands the workloads
-// with the fewest eligible providers, and those are the ones with nowhere else
-// to go. Draining the emptiest last keeps the most options open for whatever
-// arrives next.
+// allowance left in the pools this task charges, so scarce allowance is kept
+// for workloads with nowhere else to go.
 func headroomScore(candidate *Candidate, e quota.Execution) float64 {
 	return clamp(float64(candidate.FreePercent(e)) / 100)
 }
@@ -249,11 +210,8 @@ func (s tierSpan) score(tier int) float64 {
 	return clamp(float64(s.high-tier) / float64(s.high-s.low))
 }
 
-// clamp keeps a scorer inside the range every other scorer is averaged against.
-//
-// A ledger that reported more than a full allowance, or a negative one, would
-// otherwise let a single scorer drag the mean outside the scale the plan prints
-// as a percentage.
+// clamp keeps a scorer between zero and one, so a ledger reporting more than a
+// full allowance, or a negative one, cannot drag the mean off the scale.
 func clamp(value float64) float64 {
 	return math.Max(0, math.Min(1, value))
 }

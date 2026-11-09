@@ -23,10 +23,18 @@ import (
 	"github.com/afreidah/vagabond/internal/plugin"
 )
 
+// -------------------------------------------------------------------------
+// CONSTANTS
+// -------------------------------------------------------------------------
+
 const (
 	defaultFollowPoll   = time.Second     // how often a followed execution's record is re-read
 	defaultFollowLinger = 5 * time.Second // how long a stream outlives its execution
 )
+
+// -------------------------------------------------------------------------
+// STREAMING
+// -------------------------------------------------------------------------
 
 // streamer is the provider streaming rec's output, when the request asked to
 // follow and rec has not ended.
@@ -57,8 +65,7 @@ func (s *Server) follow(
 
 	go s.endFollow(ctx, cancel, id)
 
-	// Headers go out with the first write, so a stream refused before then can
-	// still be answered with a status.
+	// Headers wait for the first write, so an early refusal can still set a status.
 	out := &flushing{w: w, rc: http.NewResponseController(w)}
 
 	err := streamer.StreamLogs(ctx, id, offset, out)
@@ -109,6 +116,10 @@ func (s *Server) endFollow(ctx context.Context, stop context.CancelFunc, id exec
 func (s *Server) endStreams() {
 	s.stopOnce.Do(func() { close(s.stopping) })
 }
+
+// -------------------------------------------------------------------------
+// FLUSHING WRITER
+// -------------------------------------------------------------------------
 
 // flushing sends each write to the client as soon as it is made, and records
 // that the response has begun.

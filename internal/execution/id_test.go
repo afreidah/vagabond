@@ -17,6 +17,7 @@ import (
 	"time"
 )
 
+// A thousand minted IDs contain no duplicate.
 func TestNewID_IsUnique(t *testing.T) {
 	seen := make(map[string]bool, 1000)
 
@@ -71,6 +72,7 @@ func TestID_Created(t *testing.T) {
 	}
 }
 
+// The zero ID reports as zero and a minted one does not.
 func TestID_IsZero(t *testing.T) {
 	var zero ID
 	if !zero.IsZero() {
@@ -87,6 +89,7 @@ func TestID_IsZero(t *testing.T) {
 	}
 }
 
+// A minted ID survives a MarshalText and UnmarshalText round trip.
 func TestID_TextRoundTrip(t *testing.T) {
 	original, err := NewID()
 	if err != nil {
@@ -108,8 +111,7 @@ func TestID_TextRoundTrip(t *testing.T) {
 	}
 }
 
-// The zero ID is not an execution. Writing one to a column or naming one in a
-// token defers the failure to whatever reads it back.
+// The zero ID is not an execution, so it never reaches a column or a token.
 func TestID_MarshalTextRejectsZeroValue(t *testing.T) {
 	var zero ID
 
@@ -118,6 +120,7 @@ func TestID_MarshalTextRejectsZeroValue(t *testing.T) {
 	}
 }
 
+// A string that is not a UUID fails with ErrInvalidID.
 func TestParseID_Invalid(t *testing.T) {
 	for _, input := range []string{"", "not-a-uuid", "12345"} {
 		t.Run(input, func(t *testing.T) {
@@ -133,6 +136,7 @@ func TestParseID_Invalid(t *testing.T) {
 	}
 }
 
+// A refused unmarshal wraps ErrInvalidID and leaves the ID zero.
 func TestID_UnmarshalTextRejectsInvalid(t *testing.T) {
 	var id ID
 

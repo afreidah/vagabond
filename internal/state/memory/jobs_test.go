@@ -2,6 +2,9 @@
 // Memory Job Store Tests
 //
 // Author: Alex Freidah
+//
+// Versioning is the rule worth pinning: a new version only when the formatted
+// source changes, and a stopped job revived by registering it again.
 // -------------------------------------------------------------------------------
 
 package memory

@@ -72,9 +72,7 @@ func (c *JobValidateCommand) Run(args []string) int {
 
 	parsed, diags := c.parseJob(paths[0], meta)
 
-	// Only validate what decoded. Rules run against the decoded specification,
-	// so a file that failed to decode would produce a second wave of complaints
-	// about fields that were never populated.
+	// Rules on a file that failed to decode would only flag unpopulated fields
 	if !diags.HasErrors() {
 		diags = append(diags, jobspec.Validate(parsed.Spec)...)
 	}

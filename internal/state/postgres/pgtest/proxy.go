@@ -25,6 +25,10 @@ import (
 	"github.com/afreidah/vagabond/internal/state/postgres"
 )
 
+// -------------------------------------------------------------------------
+// PROXY
+// -------------------------------------------------------------------------
+
 // Proxy forwards connections on its own address to an engine's database.
 type Proxy struct {
 	dsn    string // the engine's DSN, pointed at the proxy
@@ -79,6 +83,10 @@ func (p *Proxy) Open(t *testing.T, e *Engine) *postgres.Store {
 	return store
 }
 
+// -------------------------------------------------------------------------
+// OUTAGES
+// -------------------------------------------------------------------------
+
 // Cut stops accepting and closes every open connection.
 func (p *Proxy) Cut() {
 	p.mu.Lock()
@@ -101,6 +109,10 @@ func (p *Proxy) Restore(t *testing.T) {
 
 	p.listen(t, p.addr)
 }
+
+// -------------------------------------------------------------------------
+// FORWARDING
+// -------------------------------------------------------------------------
 
 // listen starts accepting on addr.
 func (p *Proxy) listen(t *testing.T, addr string) {

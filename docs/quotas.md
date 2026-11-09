@@ -11,7 +11,10 @@ fit, ranking prefers the provider with the most allowance left, and dispatch
 reserves the charge in the ledger before submitting. The ledger is Vagabond's
 own account; no provider is asked for its remaining allowance.
 
-![An execution in namespace ci on aws-lambda charges the provider's pools and the namespace's share of them. It is admitted only if every pool it touches has room in both layers. Dispatch reserves the charge in one statement and settles it with what the execution used.](assets/quota.svg)
+![An execution in namespace ci on aws-lambda charges the provider's pools and the namespace's share of them. It is admitted only if every pool it touches has room in both layers, unless the job pays (max_cost_usd above 0). Dispatch reserves the charge in one statement and settles it with what the execution used.](assets/quota.svg)
+
+Interactive version, with notes on each step:
+[Quota accounting](https://vagabond.munchbox.cc/diagrams/quotas/).
 
 ## Declaring pools
 
@@ -70,6 +73,7 @@ Configuration errors, reported when the server loads the file:
 | Limit overflows the counter | `quota pool "<name>" limit of <n> <unit> is too large to count` |
 | Namespace share of an unconfigured provider | `Unknown provider in namespace quota` |
 | Two shares of one provider in one namespace | `Duplicate namespace quota` |
+| Namespace declared twice | `Duplicate namespace` |
 
 ## Meters
 
@@ -207,8 +211,10 @@ pools charged 0, so settlement knows each pool's period.
 The headroom test and the insert are one SQL statement: rows are inserted only
 if, for every pool with a non-zero charge,
 `settled + reserved + charge <= limit`. Zero rows inserted means refused. The
-statement runs in a serializable transaction, retried up to 10 times on a
-serialization failure with jittered backoff (5 ms doubling to 500 ms), so two
+statement runs in a serializable transaction. A serialization failure re-runs
+the whole transaction, up to 10 attempts in all, after a random wait whose
+ceiling starts at 10 ms and doubles to 500 ms. The tenth failure fails the
+reservation (`gave up after 10 serialization failures`) and stops the task. Two
 servers reserving against the same pool cannot both see room.
 
 A refused reservation reads usage in the same transaction and reports the pool,
@@ -239,7 +245,8 @@ reservation was made in.
 | A billed amount | Billed memory × billed duration, billed CPU (0 when not reported) × billed duration |
 | No billed amount | Declared CPU and memory × the execution's measured duration |
 
-`executions` pools are charged 1 either way.
+`executions` pools are charged 1 either way, and `seconds` pools the billed or
+measured duration.
 
 - **AWS Lambda** reports a billed amount when the invocation's `REPORT` log
   line carries both `Billed Duration` and `Memory Size`. Memory is the
@@ -282,8 +289,9 @@ For each claimed execution it asks the provider for the execution's status:
 | Terminal, started and ended | Settled at declared resources × (end − start) |
 
 A kept reservation is asked about again on the next pass. The server logs
-`resolved abandoned quota reservations` with a count when any were settled, and
-a warning when a pass fails. The reaper runs only in `vagabond server`. All
+`resolved abandoned quota reservations` with a count when any were settled or
+dropped, and `resolving abandoned quota reservations` at warn when a pass
+fails. The reaper runs only in `vagabond server`. All
 periodic tasks: [Background services](background-services.md#reservation-reaper).
 
 ### Usage snapshot
@@ -299,10 +307,13 @@ for each pool's current period, not the store.
 | `job plan` | Not re-read; the plan uses the current snapshot |
 
 Reserving, settling and reaping do not update the snapshot. A plan can
-therefore be up to 15 seconds behind other servers' charges, or older while the
-store is unreachable. The reservation is what enforces the limit, so a stale
-snapshot can admit a task that dispatch then refuses, never the reverse.
-`GET /v1/health` reports the snapshot's age as `UsageRefreshed`.
+therefore be up to 15 seconds behind every charge, this server's included, or
+older while the store is unreachable. The error runs both ways: a stale
+snapshot can admit a task that dispatch then refuses, or reject with
+`quota-exhausted` a task that would fit, once a reservation it counted has
+settled lower or been reaped. The reservation is what enforces the limit.
+`GET /v1/health` reports when the snapshot was last read as `UsageRefreshed`;
+it stops advancing while the store is unreachable.
 
 ## Worked example
 

@@ -2,6 +2,9 @@
 // Registered Job Tests
 //
 // Author: Alex Freidah
+//
+// Covers the fingerprint that decides whether registering a job again creates
+// a new version. Reformatting must not; a change to any value must.
 // -------------------------------------------------------------------------------
 
 package jobs
@@ -22,6 +25,7 @@ func TestFingerprint_IgnoresFormatting(t *testing.T) {
 	}
 }
 
+// A changed value is a change to the job.
 func TestFingerprint_SeesAChange(t *testing.T) {
 	changed := `job "ci" {
   type = "service"

@@ -1,0 +1,181 @@
+---
+title: "Live Output"
+linkTitle: "Live Output"
+description: "Interactive diagram of a running execution's output from the provider through the server's follow route to the CLI, with resume, the stored copy and 416."
+weight: 6
+---
+
+How a running execution's output reaches the terminal: the CLI follower, the server's follow route, the pool and Cloud Run streams behind it, and the stored copy that finishes what did not stream. **Hover over any component** for implementation details.
+
+{{< diagram >}}
+
+<script>
+window.vagabondDiagram = {
+  source: [
+    'flowchart TD',
+    '    subgraph CLISIDE [CLI]',
+    '        RUN(["job run /<br>execution logs -f"]):::entry --> POLL[Poll the run<br>every 1 s]:::process',
+    '        POLL -->|no result yet| WATCH{Submitted,<br>not ended?}:::decision',
+    '        WATCH -->|yes, once| FOLLOWER["FollowLogs from<br>bytes written"]:::process',
+    '        POLL -->|has a result| REST[Print the rest<br>of the stored copy]:::process',
+    '        FOLLOWER -->|response ends| REOPEN{Reopen<br>the stream?}:::decision',
+    '        REOPEN -->|"still running:<br>after 1 s"| FOLLOWER',
+    '        REOPEN -->|"416 or ended:<br>follow stops"| REST',
+    '        REST --> VERDICT([Verdict line]):::success',
+    '    end',
+    '',
+    '    subgraph SRVSIDE [Server]',
+    '        ROUTE["GET /v1/execution/{id}/logs"]:::process --> STREAMSEL{"follow=true, not ended,<br>LogStreamer?"}:::decision',
+    '        STREAMSEL -->|no| STORED[Stored copy<br>from offset]:::process',
+    '        STORED --> STORE[(Execution record:<br>last 64 KiB)]:::storage',
+    '        STREAMSEL -->|yes| FOLLOW[Stream and<br>flush each write]:::process',
+    '        ENDFOLLOW["End of follow:<br>poll 1 s, linger 5 s"]:::background -->|cancel| FOLLOW',
+    '        ENDFOLLOW -->|re-read| STORE',
+    '        SHUTDOWN[Shutdown:<br>endStreams]:::background -->|stop at once| ENDFOLLOW',
+    '        R416[416 Range Not<br>Satisfiable]:::reject',
+    '    end',
+    '',
+    '    subgraph POOLSIDE [Pool provider and agent]',
+    '        POOLSL[Pool StreamLogs]:::process -->|"StreamLogs<br>with offset"| AGENTSL["Agent: seek offset,<br>poll 250 ms"]:::process',
+    '        AGENTSL --> LOGFILE[(Workload<br>log file)]:::storage',
+    '    end',
+    '',
+    '    subgraph GCPSIDE [Cloud Run provider]',
+    '        CRSL{Offset<br>above 0?}:::decision -->|yes| NORESUME[plugin.ErrNoResume]:::reject',
+    '        CRSL -->|no| TAIL["entries:tail"]:::process',
+    '        TAIL --> CLOUDLOG[(Cloud Logging)]:::storage',
+    '    end',
+    '',
+    '    FOLLOWER -->|"follow=true,<br>offset=N"| ROUTE',
+    '    REST -->|"offset=N"| ROUTE',
+    '    FOLLOW -->|pool| POOLSL',
+    '    FOLLOW -->|Cloud Run| CRSL',
+    '    NORESUME --> R416',
+  ].join('\n'),
+
+  info: {
+    RUN: {
+      title: 'job run / execution logs -f',
+      badge: 'entry', badgeText: 'entry point',
+      body: '<p><code>vagabond job run</code> and <code>job dispatch</code> start a run and follow it (<code>internal/cli/dispatching.go</code>). <code>vagabond execution logs -f &lt;id&gt;</code> follows one execution with the same follower (<code>internal/cli/execution_logs.go</code>).</p><p>Progress lines (<code>==&gt; ...</code>) go to stderr and task output to stdout, so redirecting stdout captures the build alone. With <code>-no-logs</code>, <code>job run</code> and <code>job dispatch</code> fetch and print no output.</p><p>Interrupting <code>job run</code> cancels the unfinished execution on the server (30 s timeout) and exits 2. Interrupting <code>execution logs -f</code> stops following and leaves the execution running.</p><p><a href="../task-path/">Task path diagram &rarr;</a></p>'
+    },
+    POLL: {
+      title: 'Poll the Run',
+      badge: 'process', badgeText: 'every 1 s',
+      body: '<p><code>job run</code> reads <code>GET /v1/dispatch/{id}</code> every second and goes through its executions: one with a result goes to the rest and the verdict; any other goes to <code>watch</code>, and a state change prints <code>==&gt; &lt;task&gt; &lt;state&gt; on &lt;provider&gt;</code>. The command ends when the dispatch leaves <code>running</code>.</p><p><code>execution logs -f</code> reads <code>GET /v1/execution/{id}</code> every second instead, and once the execution has a result or an end time prints the rest and exits 0.</p>'
+    },
+    WATCH: {
+      title: 'Follow This Execution?',
+      badge: 'decision', badgeText: 'watch',
+      body: '<p><code>follower.watch</code> starts one follow per execution, once, when it has left <code>pending</code> and has no end time. A pending execution has not been submitted, so it has nothing to stream. <code>-no-logs</code> never starts one.</p><p>When a followed execution shows an end time, <code>watch</code> tells its follow the execution is over, so no new stream is opened. The open one runs until the server ends it.</p>'
+    },
+    FOLLOWER: {
+      title: 'FollowLogs from Bytes Written',
+      badge: 'process', badgeText: 'CLI follow',
+      body: '<p><code>follower.start</code> runs a goroutine that calls <code>api.Client.FollowLogs</code> with <code>offset</code> set to the bytes this execution has written to stdout so far, and copies the response body to stdout as it arrives.</p><p>Every execution&rsquo;s output shares one stdout lock, so parallel follows never interleave a write. The byte count is where a reopened stream resumes.</p><p>Any error from <code>FollowLogs</code>, whether no connection, an error status or a body that breaks, marks the follow broken; a body that ends cleanly does not.</p>'
+    },
+    REOPEN: {
+      title: 'Reopen the Stream?',
+      badge: 'decision', badgeText: 'reconnect',
+      body: '<p>When a response ends: a <code>416</code> stops following at once, since the provider cannot resume, and the stored copy finishes the output. Otherwise the follow waits 1 s and reopens from the bytes written, unless the execution has ended or the command was interrupted.</p><p>The first request starts at offset 0, which every streaming provider accepts. On Cloud Run the <code>416</code> comes on a reopen after output has streamed; a reopen with nothing written yet is still offset 0 and is accepted.</p>'
+    },
+    REST: {
+      title: 'Print the Rest of the Stored Copy',
+      badge: 'process', badgeText: 'stored copy',
+      body: '<p><code>follower.rest</code> runs once the execution has a result. It waits for the follow to stop, so the stream&rsquo;s last lines come before the verdict, then calls <code>api.Client.Logs</code> with <code>offset</code> set to the bytes streamed and prints what comes back, ending it with a newline if needed.</p><p>A truncated stored copy cannot place an offset. With nothing streamed it prints the tail and warns <code>Output was truncated.</code>; after a broken stream it warns <code>Live output was interrupted. vagabond execution logs &lt;id&gt; has its stored tail.</code></p><p>A failed read warns <code>Could not read the output of &lt;id&gt;</code>.</p>'
+    },
+    VERDICT: {
+      title: 'Verdict Line',
+      badge: 'success', badgeText: 'job run',
+      body: '<p><code>==&gt; &lt;task&gt; &lt;state&gt; on &lt;provider&gt; in &lt;duration&gt;</code> on stderr, once per execution, with <code>failed (exit &lt;n&gt;)</code> for a non-zero exit.</p><p><code>job run</code> exits 0 when every task succeeded, 1 when a task failed, and 2 when the work never ran or was interrupted. <code>execution logs -f</code> prints no verdict and exits 0.</p>'
+    },
+    ROUTE: {
+      title: 'GET /v1/execution/{id}/logs',
+      badge: 'process', badgeText: 'server route',
+      body: '<p><code>Server.executionLogs</code> (<code>internal/server/executions.go</code>) reads <code>offset</code>, the bytes the caller already has: default 0, and anything but a non-negative integer is 400 <code>offset "&lt;value&gt;" is not a byte count</code>. It then reads the execution record: 404 if there is none, 503 if the store is unreachable.</p><p>The body is <code>text/plain</code> with <code>X-Content-Type-Options: nosniff</code>. Errors use the JSON error body.</p><p><a href="../../docs/api/#read-execution-logs">Read execution logs &rarr;</a></p>'
+    },
+    STREAMSEL: {
+      title: 'Stream or Stored?',
+      badge: 'decision', badgeText: 'streamer',
+      body: '<p><code>Server.streamer</code> streams only when the request has <code>follow=true</code>, the record is not terminal, the provider it ran on is still configured, and that provider implements <code>plugin.LogStreamer</code>: pools and Cloud Run.</p><p>Anything else gets the stored copy, so a client can always ask to follow. A <code>lost</code> execution is not terminal, so it is still streamed.</p><p><a href="../../docs/writing-a-provider/#logstreamer">LogStreamer &rarr;</a></p>'
+    },
+    STORED: {
+      title: 'Stored Copy from Offset',
+      badge: 'process', badgeText: 'stored output',
+      body: '<p><code>storedFrom</code> slices the result&rsquo;s stored output, always with status 200:</p><p>No result yet: empty.<br><code>offset</code> 0: all of it.<br>Truncated, <code>offset</code> above 0: empty, since the copy no longer starts at byte 0.<br>At or past the end: empty.<br>Otherwise: from <code>offset</code> on.</p>'
+    },
+    STORE: {
+      title: 'Execution Record',
+      badge: 'storage', badgeText: 'store',
+      body: '<p>The result holds the last 64 KiB (65536 bytes) of output, with <code>LogsTruncated</code> set when earlier output was cut (<code>Result.Bounded</code>). It is written with the result once the execution is terminal; before that there is no stored output.</p><p>Streaming never writes here. The stream is a view; <code>Result</code> stays the record.</p><p><a href="../database-schema/">Database schema diagram &rarr;</a></p>'
+    },
+    FOLLOW: {
+      title: 'Stream and Flush Each Write',
+      badge: 'process', badgeText: 'server stream',
+      body: '<p><code>Server.follow</code> calls the provider&rsquo;s <code>StreamLogs</code> with the request&rsquo;s <code>offset</code> and a writer that flushes every write through <code>http.ResponseController</code>. Headers go out with the first write, so a stream refused before any output can still be answered with a status.</p><p>The response ends when the provider ends its stream, when the end of follow cancels it, when the client disconnects, or at shutdown. A stream that breaks ends the response early, still 200, and logs <code>log stream ended early</code>; the client reopens from the bytes it has.</p><p>The stream never touches the execution: a broken stream is not a failed run.</p>'
+    },
+    ENDFOLLOW: {
+      title: 'End of Follow',
+      badge: 'background', badgeText: 'per stream',
+      body: '<p><code>Server.endFollow</code> runs beside each stream. It re-reads the execution record every second, retrying a read that fails. Once the record is terminal it waits 5 s more and cancels the stream, because some providers&rsquo; logs trail the work: Cloud Logging runs seconds behind the container.</p><p>A Cloud Run tail never ends by itself, so this is what ends it. A pool stream usually ends first, when the agent sees the workload exit.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
+    },
+    SHUTDOWN: {
+      title: 'Shutdown: endStreams',
+      badge: 'background', badgeText: 'shutdown',
+      body: '<p><code>Server.endStreams</code> is registered with <code>http.Server.RegisterOnShutdown</code> and closes the server&rsquo;s <code>stopping</code> channel once. Every end of follow sees it and cancels its stream at once, so a live stream does not hold the 10 s drain open.</p><p>To the CLI the response simply ended; it reopens from the bytes written a second later.</p>'
+    },
+    R416: {
+      title: '416 Range Not Satisfiable',
+      badge: 'reject', badgeText: 'cannot resume',
+      body: '<p><code>this provider&#39;s log stream cannot resume from an offset</code>, as the JSON error body, sent before any output.</p><p>The CLI follow stops streaming that execution and does not reopen it. Once the execution has a result, the rest is read from the stored copy with <code>?offset=</code> set to the bytes streamed. That read is empty when the copy is truncated, and the CLI warns that live output was interrupted.</p>'
+    },
+    POOLSL: {
+      title: 'Pool StreamLogs',
+      badge: 'process', badgeText: 'pool provider',
+      body: '<p><code>pool.Provider.StreamLogs</code> finds the node holding the execution; one that is not connected fails <code>the node holding &lt;id&gt; is not connected</code> within 5 minutes of leaving and <code>node &lt;name&gt; holding &lt;id&gt; is gone</code> after, which ends the response early. Otherwise it opens <code>AgentExecutions.StreamLogs</code> with <code>execution_id</code> and <code>offset</code> down the agent&rsquo;s session and writes each <code>LogChunk</code> to the response until the agent ends the stream.</p><p>The pool honours <code>offset</code>, so a reopened stream resumes exactly where the last one stopped.</p><p><a href="../agents/">Agents and pools diagram &rarr;</a></p>'
+    },
+    AGENTSL: {
+      title: 'Agent: Seek Offset, Poll 250 ms',
+      badge: 'process', badgeText: 'agent',
+      body: '<p><code>Containerd.Logs</code> opens <code>&lt;data-dir&gt;/logs/&lt;execution-id&gt;.log</code>, seeks to <code>offset</code>, and sends what is there. Between copies it reads the workload&rsquo;s state, waiting 250 ms while it runs.</p><p>Once the workload is terminal, or released since the last copy, it sends whatever the file still holds and returns, which ends the stream and the response. No log file is <code>Internal</code>. An agent that predates <code>offset</code> streams from byte 0.</p><p><a href="../../docs/agent/#output">Agent output &rarr;</a></p>'
+    },
+    LOGFILE: {
+      title: 'Workload Log File',
+      badge: 'storage', badgeText: 'node disk',
+      body: '<p>containerd writes the container&rsquo;s stdout and stderr to the file itself, so output keeps landing while the agent or the server is down, and a reopened stream can read it from any offset.</p><p>The same file is the source of the 64 KiB tail the agent&rsquo;s <code>Result</code> returns. <code>Release</code> deletes it.</p>'
+    },
+    CRSL: {
+      title: 'Cloud Run: Offset Above 0?',
+      badge: 'decision', badgeText: 'Cloud Run provider',
+      body: '<p><code>gcp.Provider.StreamLogs</code>. A tail starts at what is being logged now, so it cannot be placed at a byte offset.</p><p>Any <code>offset</code> above 0 returns <code>plugin.ErrNoResume</code> before writing anything, rather than start somewhere else and leave the client&rsquo;s count no longer a position. Offset 0 opens the tail.</p>'
+    },
+    NORESUME: {
+      title: 'plugin.ErrNoResume',
+      badge: 'reject', badgeText: 'sentinel',
+      body: '<p>The <code>plugin</code> package&rsquo;s sentinel for a log stream that cannot start at an offset. <code>Server.follow</code> answers it with <code>416</code>, provided nothing has been written yet.</p>'
+    },
+    TAIL: {
+      title: 'entries:tail',
+      badge: 'process', badgeText: 'Cloud Logging',
+      body: '<p><code>openTail</code> POSTs to <code>/v2/entries:tail</code> a one-element JSON array, since a streaming method&rsquo;s body is a stream of requests, filtering on <code>resource.type="cloud_run_job"</code> and the job name, with a 1 s <code>bufferWindow</code> so stderr does not arrive before the stdout that preceded it.</p><p><code>copyTail</code> decodes the open response array one element at a time and writes each entry&rsquo;s <code>textPayload</code> plus a newline, skipping structural entries. Once open, every way the stream stops ends the copy without an error.</p>'
+    },
+    CLOUDLOG: {
+      title: 'Cloud Logging',
+      badge: 'storage', badgeText: 'Google Cloud',
+      body: '<p>Where the Cloud Run job&rsquo;s container output lands, seconds behind the container. The tail reads it live; <code>Result</code> reads the stored copy from it with <code>entries:list</code> once the job finishes.</p>'
+    }
+  }
+};
+</script>
+
+## Legend
+
+| Node | Meaning |
+|------|---------|
+| <span class="dg-swatch dg-entry"></span> | Entry point |
+| <span class="dg-swatch dg-process"></span> | Processing step |
+| <span class="dg-swatch dg-decision"></span> | Decision / branch |
+| <span class="dg-swatch dg-storage"></span> | Where output is kept |
+| <span class="dg-swatch dg-success"></span> | Verdict |
+| <span class="dg-swatch dg-background"></span> | Stream lifetime |
+| <span class="dg-swatch dg-reject"></span> | Cannot resume |

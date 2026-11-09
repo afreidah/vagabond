@@ -12,9 +12,7 @@
 //	VAGABOND_GCP_RUNTIME_SA=vagabond-runtime@munchbox-66afc.iam.gserviceaccount.com \
 //	go test -run TestLive -v -timeout 10m ./internal/providers/gcp/
 //
-// The fake-Google tests prove the plugin builds requests Google would
-// understand. This proves Google agrees, which is a different claim and the
-// only one that catches a field they renamed.
+// This is the only test that catches a field Google renamed.
 // -------------------------------------------------------------------------------
 
 package gcp
@@ -31,10 +29,12 @@ import (
 	"github.com/afreidah/vagabond/internal/ptr"
 )
 
-// How long to wait for a container that does almost nothing.
-//
-// Generous because most of it is not the work: a cold start and an image pull
-// have taken most of two minutes on a task that ran for four seconds.
+// -------------------------------------------------------------------------
+// SETUP
+// -------------------------------------------------------------------------
+
+// How long to wait for a container that does almost nothing, generous because
+// a cold start and image pull have taken two minutes for a four second task.
 const (
 	livePoll     = 10 * time.Second
 	liveDeadline = 6 * time.Minute
@@ -78,6 +78,10 @@ runtime_service_account = "`+runtimeSA+`"
 	return p
 }
 
+// -------------------------------------------------------------------------
+// ROUND TRIP
+// -------------------------------------------------------------------------
+
 // A failing container, because a successful one proves less: exit code zero is
 // also what a plugin that lost the exit code would report.
 func TestLiveRoundTrip(t *testing.T) {
@@ -108,12 +112,7 @@ args    = ["-c", "echo hello-stdout; echo hello-stderr >&2; exit 3"]
 
 	t.Logf("submitted %s", submission.ProviderID)
 
-	// Always, even on failure: a job left behind is a resource against a
-	// per-region quota that eventually stops dispatch.
-	//
-	// Its own context, because t.Context is cancelled before cleanups run and
-	// a delete on a cancelled context leaks the very job it was registered to
-	// remove.
+	// Its own context: t.Context is cancelled before cleanups run
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -140,8 +139,7 @@ args    = ["-c", "echo hello-stdout; echo hello-stderr >&2; exit 3"]
 		t.Errorf("exit code = %v, want 3", result.ExitCode)
 	}
 
-	// Both streams: a plugin that read only stdout would still look correct on
-	// a passing build and be useless on a failing one.
+	// Both streams, since stdout alone looks correct on a passing build
 	for _, want := range []string{"hello-stdout", "hello-stderr"} {
 		if !strings.Contains(string(result.Logs), want) {
 			t.Errorf("logs do not contain %q: %q", want, result.Logs)
