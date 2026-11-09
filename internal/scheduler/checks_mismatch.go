@@ -3,14 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// The rejections that are permanent for a pairing. A provider filtered here
-// cannot run this task today or next week, and the only thing that changes the
-// answer is changing the job.
-//
-// Ordered cheapest first within the tier: set membership, then booleans, then
-// integer comparisons, then constraint evaluation, which is the only one that
-// builds a map and parses operands. Nomad orders its stack on the same
-// principle and says so where it wires the drivers check ahead of constraints.
+// The rejections that are permanent for a pairing: only changing the job
+// changes the answer. They run cheapest first: set membership, booleans,
+// integer comparisons, then constraint evaluation, the only one that builds a
+// map and parses operands.
 // -------------------------------------------------------------------------------
 
 package scheduler
@@ -56,11 +52,8 @@ type archChecker struct{}
 // Name identifies the checker in traces and test failures.
 func (archChecker) Name() string { return "arch" }
 
-// Check rejects a provider that cannot run the architecture the task named.
-//
-// A task that named none is admitted everywhere. Most work does not care, and
-// forcing an author to state an architecture to get a placement would make the
-// common job longer to say nothing.
+// Check rejects a provider that cannot run the architecture the task named. A
+// task that named none is admitted everywhere.
 func (archChecker) Check(req *Request, in *Input) *Rejection {
 	arch, required := req.Architecture()
 	if !required || slices.Contains(in.Capabilities.Architectures, arch) {
@@ -82,12 +75,8 @@ type imageChecker struct{}
 // Name identifies the checker in traces and test failures.
 func (imageChecker) Name() string { return "image" }
 
-// Check rejects a provider that runs containers but not anyone's container.
-//
-// Distinct from the driver check because the two claims differ. Lambda accepts
-// container images, but only ones implementing its runtime contract, so a
-// provider can offer an execution family and still refuse the image a job
-// brought to it.
+// Check rejects a provider that runs containers but not anyone's container, as
+// Lambda runs only images implementing its runtime contract.
 func (imageChecker) Check(req *Request, in *Input) *Rejection {
 	if req.Image == "" || in.Capabilities.ArbitraryImages {
 		return nil
@@ -147,15 +136,9 @@ type durationChecker struct{}
 // Name identifies the checker in traces and test failures.
 func (durationChecker) Name() string { return "duration" }
 
-// Check rejects a provider whose limit is below the task's declared timeout.
-//
-// A task killed by a provider limit under its own timeout is an admission bug
-// rather than a workload failure, which is the whole reason this comparison
-// happens before dispatch rather than being discovered after it.
-//
-// An unparseable timeout is passed over rather than rejected here. Jobspec
-// validation owns that error and reports it against the line the author wrote,
-// where admission could only say that some provider or other declined.
+// Check rejects a provider whose limit is below the task's declared timeout,
+// so a provider never kills a task early. An unparseable timeout is passed
+// over, since jobspec validation reports it against the line the author wrote.
 func (durationChecker) Check(req *Request, in *Input) *Rejection {
 	max := in.Capabilities.MaxDuration
 	if max == 0 || req.Task.Timeout == nil {
@@ -179,11 +162,8 @@ type networkChecker struct{}
 // Name identifies the checker in traces and test failures.
 func (networkChecker) Name() string { return "network" }
 
-// Check rejects a provider missing connectivity the task asked for.
-//
-// Only an explicit true is a requirement. An absent internet leaves the choice
-// to the provider and an explicit false denies egress, neither of which any
-// provider can fail to satisfy.
+// Check rejects a provider missing connectivity the task asked for. Only an
+// explicit true is a requirement; absent or false any provider satisfies.
 func (networkChecker) Check(req *Request, in *Input) *Rejection {
 	if req.NeedsInternet() && !in.Capabilities.InternetEgress {
 		return reject(ReasonNetworkUnsupported,
@@ -210,14 +190,8 @@ type attributeChecker struct{}
 func (attributeChecker) Name() string { return "attribute" }
 
 // Check rejects when a constraint or affinity names an unpublished attribute.
-//
-// The same verdict lands on every provider, which is the point: a typo is a
-// property of the job file rather than of any backend, and a plan whose every
-// row says so reads as a job file to fix. Reporting it as an unmet constraint
-// instead is how a misspelling comes to look like an outage.
-//
-// Ahead of the constraint check because an attribute that does not exist cannot
-// meaningfully fail to match.
+// Every provider gets the same verdict, so a typo reads as a job file to fix
+// rather than as an unmet constraint.
 func (attributeChecker) Check(req *Request, _ *Input) *Rejection {
 	unknown := UnknownAttribute(req.Constraints(), req.Affinities())
 	if unknown == "" {

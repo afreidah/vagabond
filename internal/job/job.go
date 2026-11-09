@@ -4,12 +4,9 @@
 // Author: Alex Freidah
 //
 // A job is a named collection of tasks plus the routing policy that applies to
-// them. It is the unit a client submits and the unit admission reasons about.
-//
-// The File type above it exists because a .vagabond.hcl file is a container
-// rather than a job: the schema allows more than one, so that the parser can
-// report a second job in a file as a schema error rather than silently
-// discarding it.
+// them, and the unit a client submits and admission reasons about. File holds
+// more than one so the parser can report a second job in a file as a schema
+// error rather than silently discarding it.
 // -------------------------------------------------------------------------------
 
 package job
@@ -20,6 +17,10 @@ import (
 	"slices"
 	"strings"
 )
+
+// -------------------------------------------------------------------------
+// CONSTANTS
+// -------------------------------------------------------------------------
 
 // DefaultNamespace is where a job naming no namespace runs. It exists without
 // being declared.
@@ -40,10 +41,8 @@ type File struct {
 
 // Job is a named collection of tasks and the routing policy applied to them.
 //
-// Routing is optional because a job that states no preference is admissible
-// everywhere, which is the sensible default for work that genuinely does not
-// care where it runs. Its absence is not the same as an empty provider list,
-// which would mean no provider is allowed.
+// A job with no routing block is admissible everywhere, which differs from an
+// empty provider list that allows no provider.
 //
 // Namespace is nil when the job names none; the caller's -namespace or the
 // default namespace applies.
@@ -64,13 +63,9 @@ type Job struct {
 // Type is the scheduling model a job follows.
 type Type string
 
-// The job types Vagabond implements.
-//
-// TypeBatch runs each task to completion and is the only type in phase 1.
-// Vagabond brokers short-lived stateless work, so the long-running types a
-// Nomad user would expect alongside it are deliberately absent rather than
-// unimplemented: a service has no completion to report and no exit status to
-// return.
+// The job types Vagabond implements. TypeBatch runs each task to completion;
+// long-running types are absent by design, since a service has no completion
+// to report and no exit status to return.
 const (
 	TypeBatch Type = "batch"
 )
@@ -80,10 +75,7 @@ var typeNames = []Type{TypeBatch}
 // ErrUnknownType is the sentinel behind every unknown-job-type failure.
 var ErrUnknownType = errors.New("unknown job type")
 
-// Types returns the valid job types in declaration order.
-//
-// The returned slice is a copy, so a caller rendering it into an error cannot
-// reorder the vocabulary for everyone else.
+// Types returns the valid job types in declaration order, as a copy.
 func Types() []Type {
 	return slices.Clone(typeNames)
 }
@@ -129,6 +121,7 @@ func (t *Type) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// unknownType builds the ErrUnknownType failure for name, listing valid ones.
 func unknownType(name string) error {
 	valid := make([]string, 0, len(typeNames))
 	for _, t := range typeNames {
@@ -143,16 +136,11 @@ func unknownType(name string) error {
 // PARAMETERIZED JOBS
 // -------------------------------------------------------------------------
 
-// Parameterized declares the metadata a caller must supply at submission.
+// Parameterized declares the metadata a caller supplies at submission, which
+// turns one job definition into a template run against many inputs.
 //
-// MetaRequired is what turns one job definition into a template usable across
-// every input a caller wants it run against: the definition names a key as
-// required, and the caller supplies the value per submission. A missing
-// required key is a submission error, caught before any provider is contacted
-// and any free-tier capacity is spent.
-//
-// MetaOptional names keys a submission may supply. A dispatch supplying a key
-// in neither list is refused.
+// A missing MetaRequired key is a submission error caught before any provider
+// is contacted. A dispatch supplying a key in neither list is refused.
 type Parameterized struct {
 	MetaRequired []string `hcl:"meta_required,optional"`
 	MetaOptional []string `hcl:"meta_optional,optional"`

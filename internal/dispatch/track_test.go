@@ -21,6 +21,11 @@ import (
 	"github.com/afreidah/vagabond/internal/plugin"
 )
 
+// -------------------------------------------------------------------------
+// EXECUTION RECORDS
+// -------------------------------------------------------------------------
+
+// A polled run's record ends succeeded, with its result, identity and times.
 func TestRecord_PolledRunEndsWithItsResult(t *testing.T) {
 	t.Parallel()
 
@@ -174,6 +179,10 @@ func TestRecord_TasksShareTheDispatch(t *testing.T) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// STORE FAILURES
+// -------------------------------------------------------------------------
+
 // failingStore records nothing.
 type failingStore struct{}
 
@@ -215,6 +224,25 @@ func (failingStore) Unreleased(context.Context, time.Time) ([]*execution.Record,
 // MarkReleased fails, as every write to a store that is down does.
 func (failingStore) MarkReleased(context.Context, execution.ID, time.Time) error {
 	return errors.New("store down")
+}
+
+// The record must exist before Submit, so one that cannot be written stops the
+// dispatch.
+func TestRecord_UnrecordableAttemptIsNotSubmitted(t *testing.T) {
+	t.Parallel()
+
+	p := &scriptedProvider{name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded}
+	reg := newRegistry(p)
+
+	_, err := New(reg, reg.ledger, failingStore{}, WithSleeper(noWait)).
+		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil)
+	if err == nil {
+		t.Fatal("dispatched with no record of the execution")
+	}
+
+	if p.submits != 0 {
+		t.Errorf("submitted %d times with no record", p.submits)
+	}
 }
 
 // -------------------------------------------------------------------------
@@ -313,24 +341,5 @@ func TestRun_NeedsBegin(t *testing.T) {
 
 	if _, err := newDispatcher(t, newRegistry()).Run(t.Context(), origin, j, nil); err == nil {
 		t.Error("Run() started a dispatch that was never begun")
-	}
-}
-
-// The record must exist before Submit, so one that cannot be written stops the
-// dispatch.
-func TestRecord_UnrecordableAttemptIsNotSubmitted(t *testing.T) {
-	t.Parallel()
-
-	p := &scriptedProvider{name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded}
-	reg := newRegistry(p)
-
-	_, err := New(reg, reg.ledger, failingStore{}, WithSleeper(noWait)).
-		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil)
-	if err == nil {
-		t.Fatal("dispatched with no record of the execution")
-	}
-
-	if p.submits != 0 {
-		t.Errorf("submitted %d times with no record", p.submits)
 	}
 }

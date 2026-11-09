@@ -21,8 +21,16 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 )
 
+// -------------------------------------------------------------------------
+// CONSTANTS
+// -------------------------------------------------------------------------
+
 // cancelTimeout bounds asking a provider to stop an execution.
 const cancelTimeout = 30 * time.Second
+
+// -------------------------------------------------------------------------
+// STATUS
+// -------------------------------------------------------------------------
 
 // executionStatus answers with one execution's record, result fields included
 // once it has one.
@@ -39,6 +47,10 @@ func (s *Server) executionStatus(_ http.ResponseWriter, r *http.Request) (any, e
 
 	return executionOf(rec), nil
 }
+
+// -------------------------------------------------------------------------
+// OUTPUT
+// -------------------------------------------------------------------------
 
 // executionLogs writes an execution's output as plain text, from the requested
 // byte offset on: streamed live while it runs when the request follows and its
@@ -100,6 +112,10 @@ func storedFrom(result *execution.Result, offset int64) []byte {
 		return result.Logs[offset:]
 	}
 }
+
+// -------------------------------------------------------------------------
+// CANCELLATION
+// -------------------------------------------------------------------------
 
 // cancelExecution stops an execution and answers with its record. A dispatch
 // running here is cancelled whole, ending the job as an interrupted run does.

@@ -11,6 +11,6 @@
 // that a candidate is IBM, the capability model is missing something and that
 // is where the fix belongs. depguard enforces the boundary.
 //
-// Chunk 1 defines the vocabulary and the shapes. The checkers that produce
-// rejections and the scoring that orders candidates arrive in Chunk 3.
+// Admit runs the checkers in checks_*.go, Rank scores and orders the
+// candidates admitted, and PlanTask runs both for job plan.
 package scheduler

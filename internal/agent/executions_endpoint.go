@@ -75,8 +75,7 @@ type reservation struct {
 func (e *executions) Submit(ctx context.Context, req *agentrpc.SubmitRequest) (*agentrpc.Submission, error) {
 	id, spec := req.GetExecutionId(), specOf(req.GetWorkload())
 
-	// Reserve capacity under the lock so two submissions racing for the
-	// last room cannot both see it free, while image pulls run outside it.
+	// Reserved under the lock, so racing submissions cannot share the last room.
 	release, err := e.reserve(ctx, id, spec)
 	if err != nil {
 		return nil, err
@@ -159,9 +158,7 @@ func (e *executions) fits(ctx context.Context, id string, spec *executor.Spec) e
 			return nil
 		}
 
-		// A finished workload keeps its container until released, but no
-		// longer uses the node. Reserved workloads are counted below, so
-		// don't count them twice.
+		// Only running workloads use room; reserved ones are counted below.
 		if _, reserved := e.reserved[h.ID]; h.Running && !reserved {
 			cpu, memory = cpu+h.CPU, memory+h.Memory
 		}
@@ -171,8 +168,7 @@ func (e *executions) fits(ctx context.Context, id string, spec *executor.Spec) e
 		cpu, memory = cpu+r.spec.CPU, memory+r.spec.Memory
 	}
 
-	// Declared sizes, not live usage: each workload is capped at what it
-	// declared, so their sum is what the node could be asked for at once.
+	// Declared sizes, not live usage, since each workload is capped at its own.
 	if cpu+spec.CPU > e.capacity.GetCpu() || memory+spec.Memory > e.capacity.GetMemory() {
 		return status.Errorf(codes.ResourceExhausted,
 			"the node has %d millicores and %d MiB free; the workload needs %d and %d",
@@ -184,8 +180,7 @@ func (e *executions) fits(ctx context.Context, id string, spec *executor.Spec) e
 
 // notify tells the agent to report its workloads, without waiting.
 func (e *executions) notify() {
-	// One pending signal is enough: the report sends everything, so a second
-	// signal while one waits would add nothing.
+	// One pending signal is enough, since a report sends everything.
 	select {
 	case e.changed <- struct{}{}:
 	default:

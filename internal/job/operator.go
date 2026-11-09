@@ -4,15 +4,10 @@
 // Author: Alex Freidah
 //
 // How a constraint or affinity compares a provider attribute against a value.
-// A closed vocabulary, like every other thing a job file spells out, so that a
-// misspelled operator fails while the file is being read rather than matching
-// nothing and reading as a capacity problem.
-//
-// Deliberately smaller than Nomad's, which also carries regexp, version,
-// semver, set_contains_all, set_contains_any, distinct_hosts, and
-// distinct_property. Those answer questions about node placement and software
-// versions that a provider attribute does not raise. Each one added is surface
-// that has to keep working, so they arrive when a job needs them.
+// The vocabulary is closed, so a misspelled operator fails while the file is
+// read rather than matching nothing and reading as a capacity problem. It is
+// deliberately small: placement and version operators such as regexp, semver
+// and distinct_hosts answer questions a provider attribute does not raise.
 // -------------------------------------------------------------------------------
 
 package job
@@ -33,15 +28,10 @@ type Operator string
 
 // The operators Vagabond implements.
 //
-// OperatorSetContains is the one that needs explaining. Some attributes hold a
-// set rather than a single value, because a provider may offer several
-// architectures or satisfy several drivers, and equality against a set asks
-// whether the whole set is that one value. Membership is almost always what an
-// author means, and it has its own spelling so that the other reading stays
-// available and neither is a guess.
-//
-// OperatorIsSet and OperatorIsNotSet ignore the value entirely, asking only
-// whether the provider published the attribute at all.
+// OperatorSetContains tests membership in a set-valued attribute, such as the
+// architectures a provider offers, where equality would compare the whole set.
+// OperatorIsSet and OperatorIsNotSet ignore the value and ask only whether the
+// provider published the attribute.
 const (
 	OperatorEqual        Operator = "="
 	OperatorNotEqual     Operator = "!="
@@ -86,10 +76,7 @@ var ErrUnknownOperator = errors.New("unknown operator")
 // VOCABULARY
 // -------------------------------------------------------------------------
 
-// Operators returns the valid operators in declaration order.
-//
-// The returned slice is a copy, so a caller rendering it into an error cannot
-// reorder the vocabulary for everyone else.
+// Operators returns the valid operators in declaration order, as a copy.
 func Operators() []Operator {
 	return slices.Clone(operatorNames)
 }
@@ -146,6 +133,8 @@ func (o *Operator) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// unknownOperator builds the ErrUnknownOperator failure for name, listing the
+// valid set.
 func unknownOperator(name string) error {
 	valid := make([]string, 0, len(operatorNames))
 	for _, o := range operatorNames {

@@ -4,8 +4,7 @@
 // Author: Alex Freidah
 //
 // What every command needs regardless of what it does. Embedded rather than
-// passed, following Nomad's command.Meta, so that adding a shared concern later
-// does not mean touching every constructor.
+// passed, so that adding a shared concern does not touch every constructor.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -24,20 +23,14 @@ import (
 	"github.com/afreidah/vagabond/internal/api"
 )
 
-// Meta carries the state shared by every command.
-//
-// Ui exists so that commands never print directly: a test injects a buffer and
-// reads what the command said, rather than capturing process streams and hoping
-// nothing else wrote to them.
-//
-// Stdin is held separately because a command reading a specification from a
-// pipe needs the reader itself, not the line-oriented prompting a cli.Ui
-// offers. Stdout is held for output streamed as it arrives, which a cli.Ui
-// would break into lines. ErrStream is held only to ask whether it is a
-// terminal, which decides colour, and for the server's log.
-//
-// address and namespace are set by clientFlags for commands that talk to a
-// server.
+// -------------------------------------------------------------------------
+// TYPES
+// -------------------------------------------------------------------------
+
+// Meta carries the state shared by every command. Commands print through Ui, so
+// a test injects a buffer rather than capturing process streams. Stdin and
+// Stdout are held raw for a specification piped in and for output streamed as
+// it arrives; ErrStream decides colour and carries the server's log.
 type Meta struct {
 	Ui        cli.Ui
 	Stdin     io.Reader
@@ -48,13 +41,6 @@ type Meta struct {
 	namespace string
 }
 
-// Environment variables supplying -address and -namespace when the flags are
-// not given.
-const (
-	addressEnv   = "VAGABOND_ADDR"
-	namespaceEnv = "VAGABOND_NAMESPACE"
-)
-
 // color reports whether diagnostics should carry escape sequences.
 func (m *Meta) color() bool {
 	return useColor(m.ErrStream)
@@ -64,6 +50,13 @@ func (m *Meta) color() bool {
 // SERVER CLIENT
 // -------------------------------------------------------------------------
 
+// Environment variables supplying -address and -namespace when the flags are
+// not given.
+const (
+	addressEnv   = "VAGABOND_ADDR"
+	namespaceEnv = "VAGABOND_NAMESPACE"
+)
+
 // clientFlags registers -address and -namespace, which every command that
 // talks to a server takes.
 func (m *Meta) clientFlags(fs *flag.FlagSet) {
@@ -71,9 +64,8 @@ func (m *Meta) clientFlags(fs *flag.FlagSet) {
 	fs.StringVar(&m.namespace, "namespace", os.Getenv(namespaceEnv), "namespace")
 }
 
-// connect parses a client command's flags and arguments and returns a client
-// for the server -address names. A command adds its own flags to fs first. A
-// nil client means the problem has been reported.
+// connect adds the client flags to fs, parses args, and returns a client for
+// -address with the arguments left, or nil once a problem is reported.
 func (m *Meta) connect(fs *flag.FlagSet, args []string, want operands, help string) (*api.Client, []string) {
 	m.clientFlags(fs)
 
@@ -132,6 +124,20 @@ func (m *Meta) parse(fs *flag.FlagSet, args []string, want operands, help string
 	return got, true
 }
 
+// FlagSet returns a ContinueOnError flag set that reports through the UI, so a
+// bad flag returns an exit code rather than calling os.Exit.
+func (m *Meta) FlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.Usage = func() {}
+	fs.SetOutput(uiWriter{ui: m.Ui})
+
+	return fs
+}
+
+// -------------------------------------------------------------------------
+// OUTPUT
+// -------------------------------------------------------------------------
+
 // apiFailure reports an error from the server and returns the failure exit
 // code. A job the server found invalid is reported one diagnostic at a time.
 func (m *Meta) apiFailure(err error) int {
@@ -154,20 +160,6 @@ func (m *Meta) apiFailure(err error) int {
 	}
 
 	return ExitFailure
-}
-
-// FlagSet returns a flag set that reports errors through the UI rather than
-// writing to os.Stderr behind the command's back.
-//
-// ContinueOnError rather than ExitOnError, because a flag package that calls
-// os.Exit makes the command untestable and takes the exit code decision away
-// from the caller.
-func (m *Meta) FlagSet(name string) *flag.FlagSet {
-	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.Usage = func() {}
-	fs.SetOutput(uiWriter{ui: m.Ui})
-
-	return fs
 }
 
 // Errorf reports a failure through the UI and returns the failure exit code,

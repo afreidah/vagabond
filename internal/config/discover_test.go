@@ -4,9 +4,8 @@
 // Author: Alex Freidah
 //
 // The property that matters is that a path someone named explicitly is never
-// quietly replaced by one they did not. Planning against a different set of
-// providers than the operator asked for is the worst thing this package can do,
-// and it would look like a correct plan.
+// quietly replaced by one they did not, since a plan against the wrong set of
+// providers would still look correct.
 // -------------------------------------------------------------------------------
 
 package config
@@ -23,6 +22,7 @@ import (
 // PRECEDENCE
 // -------------------------------------------------------------------------
 
+// The flag wins over the environment.
 func TestDiscoverPrefersTheFlag(t *testing.T) {
 	flagged := writeConfig(t, "flagged.hcl")
 	t.Setenv(EnvConfig, writeConfig(t, "environment.hcl"))
@@ -37,6 +37,7 @@ func TestDiscoverPrefersTheFlag(t *testing.T) {
 	}
 }
 
+// With no flag, the environment variable names the path.
 func TestDiscoverFallsBackToTheEnvironment(t *testing.T) {
 	fromEnv := writeConfig(t, "environment.hcl")
 	t.Setenv(EnvConfig, fromEnv)
@@ -51,11 +52,10 @@ func TestDiscoverFallsBackToTheEnvironment(t *testing.T) {
 	}
 }
 
+// With neither, a config in the working directory wins without being named.
 func TestDiscoverUsesTheSearchPath(t *testing.T) {
 	t.Setenv(EnvConfig, "")
 
-	// The working directory is first on the search path, so a config beside
-	// the job being planned wins without anyone saying so.
 	t.Chdir(t.TempDir())
 
 	if err := os.WriteFile(workingDirConfig, []byte(sampleConfig), 0o600); err != nil {
@@ -102,8 +102,7 @@ func TestDiscoverRefusesAMissingNamedPath(t *testing.T) {
 				t.Fatalf("err = %v, want ErrNotFound", err)
 			}
 
-			// Naming who asked for it is the difference between a useful error
-			// and one that sends someone looking in the wrong place.
+			// Naming who asked for the path says where to look
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error does not name %s: %s", tc.want, err)
 			}
@@ -111,6 +110,7 @@ func TestDiscoverRefusesAMissingNamedPath(t *testing.T) {
 	}
 }
 
+// Finding nothing lists every path tried and the environment variable.
 func TestDiscoverReportsWhereItLooked(t *testing.T) {
 	t.Setenv(EnvConfig, "")
 	t.Chdir(t.TempDir())
@@ -120,8 +120,6 @@ func TestDiscoverReportsWhereItLooked(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNoConfig", err)
 	}
 
-	// Every path tried, so the error teaches the search path rather than
-	// leaving someone to guess at it.
 	for _, path := range SearchPath() {
 		if !strings.Contains(err.Error(), path) {
 			t.Errorf("error omits %q: %s", path, err)
@@ -133,6 +131,7 @@ func TestDiscoverReportsWhereItLooked(t *testing.T) {
 	}
 }
 
+// The working directory is searched first and the system directory last.
 func TestSearchPathOrder(t *testing.T) {
 	t.Parallel()
 

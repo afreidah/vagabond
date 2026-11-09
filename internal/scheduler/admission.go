@@ -6,11 +6,8 @@
 // Admission answers one question: which providers can currently run this task,
 // and for each that cannot, why not. Its inputs are values gathered beforehand
 // and its output is normalized, so the scheduler never sees a provider type and
-// admission never reaches a network.
-//
-// Checkers follow the shape Nomad uses for feasibility: many small ones, each
-// owning a single concern and each naming the reason it filtered. One large
-// function would test as one unit and read as none.
+// admission never reaches a network. Each checker owns a single concern and
+// names the reason it filtered.
 // -------------------------------------------------------------------------------
 
 package scheduler
@@ -29,20 +26,11 @@ import (
 // INPUTS
 // -------------------------------------------------------------------------
 
-// Input is everything admission knows about one provider.
-//
-// Capabilities is a snapshot taken before admission runs. Enabled and Healthy
-// are the control plane's own view, held separately because a provider an
-// operator turned off and one failing its health checks are different
-// rejections with different fixes.
-// Tags are the operator's own labels, reaching a job as provider.meta.*
-// attributes. Vagabond never interprets them.
-//
-// Limits are the budgets an operator declared and Usage is what the ledger has
-// charged against them. Both are needed because neither means anything alone.
-//
-// Share and ShareUsage are the job's namespace's own slice of this provider,
-// zero when the namespace declared none. Both layers must have room.
+// Input is everything admission knows about one provider. Enabled and Healthy
+// are kept apart because a provider an operator turned off and one failing its
+// health checks are different rejections with different fixes. Share and
+// ShareUsage are the namespace's own slice, zero when it declared none; both
+// layers must have room.
 type Input struct {
 	Provider     string
 	Capabilities plugin.Capabilities
@@ -51,7 +39,7 @@ type Input struct {
 	Namespace    string
 	Share        quota.Limits
 	ShareUsage   quota.PoolUsage
-	Tags         map[string]string
+	Tags         map[string]string // the operator's labels, matched as provider.meta.*
 	Labels       map[string]string // a pool node's labels, set while that node is judged
 	Tier         int               // the operator's preference, lower first
 	Enabled      bool
@@ -65,22 +53,15 @@ func (in *Input) FreePercent(e quota.Execution) int {
 }
 
 // Attributes returns everything a constraint or affinity can match on for this
-// provider.
-//
-// Capability attributes come from the snapshot; the quota-derived ones are
-// merged here, because this is the only place holding both.
-//
-// provider.free_quota_percent depends on the task. A pool the task does not
-// charge cannot constrain it, so the same provider reports a different number
-// for two jobs that meter differently.
+// provider, merging the quota-derived ones into the capability snapshot.
+// provider.free_quota_percent depends on the task, since a pool the task does
+// not charge cannot constrain it.
 func (in *Input) Attributes(e quota.Execution) map[string]string {
 	attrs := in.Capabilities.Attributes()
 	attrs[plugin.AttrFreeQuotaPercent] = strconv.Itoa(in.FreePercent(e))
 	attrs[plugin.AttrTier] = strconv.Itoa(in.Tier)
 
-	// An operator's tags cannot shadow a capability, because they land under a
-	// prefix nothing else writes to. That is what makes the closed half of the
-	// namespace checkable while this half stays open.
+	// Tags sit under their own prefix, so they cannot shadow a capability
 	for name, value := range in.Tags {
 		attrs[plugin.MetaPrefix+name] = value
 	}
@@ -96,35 +77,20 @@ func (in *Input) Attributes(e quota.Execution) map[string]string {
 // OUTPUTS
 // -------------------------------------------------------------------------
 
-// Candidate is a provider that can run the task.
-//
-// It embeds the input it was admitted from rather than copying fields out of
-// it, because scoring needs the quota snapshot and the operator's tags that
-// admission was already holding. Matching a candidate back to its input by name
-// afterwards would be the same data with a lookup in front of it.
-//
-// EstimatedCost is always zero while max_cost_usd = 0 is the only policy
-// Vagabond implements. It is stated anyway, because a candidate that cannot say
-// its price is not one a paid path could ever use.
+// Candidate is a provider that can run the task. It embeds the input it was
+// admitted from because scoring needs the quota snapshot and tags admission
+// already holds. EstimatedCost is the provider's advertised price for one
+// execution, zero for every current provider.
 type Candidate struct {
 	Input
 	EstimatedCost job.Cost
 	Members       []string // for a pool, the nodes that passed; placement picks among them
 }
 
-// Rejection is a provider that cannot run the task, and why.
-//
-// Reason is what a machine reads and Detail is what a person reads. Both are
-// needed: the code lets a CI system branch without parsing prose, and the
-// detail carries the numbers that make the code actionable, as in a duration
-// limit the job exceeded by four minutes.
-//
-// Also holds every other reason the provider failed, in the order the checkers
-// ran. The plan table shows one line per provider so only Reason is rendered,
-// but a task that fails five checks against a provider takes five edit-and-rerun
-// cycles to discover that if the other four are thrown away. Nomad reports
-// aggregate counts instead and has no equivalent, which is the right call at
-// five thousand anonymous nodes and the wrong one at five named providers.
+// Rejection is a provider that cannot run the task, and why: Reason for a
+// machine to branch on, Detail with the numbers for a person. Also holds every
+// other reason the provider failed, in checker order, so one plan shows every
+// fix rather than one per rerun.
 type Rejection struct {
 	Provider string
 	Reason   Reason
@@ -133,11 +99,8 @@ type Rejection struct {
 }
 
 // Result is the outcome of admitting one task against every configured
-// provider.
-//
-// Both slices are ordered by provider name, so plan output is stable for the
-// same inputs and can be diffed in CI. That is a property of how this value is
-// built rather than of whatever renders it.
+// provider. Both slices are ordered by provider name, so plan output is stable
+// and can be diffed in CI.
 type Result struct {
 	Candidates []Candidate
 	Rejections []Rejection
@@ -148,13 +111,9 @@ func (r *Result) Admitted() bool {
 	return len(r.Candidates) > 0
 }
 
-// Retryable reports whether a job that was admitted nowhere might be admitted
-// later without changing.
-//
-// True when at least one rejection was transient. A caller holding a job that
-// every provider refused on quota should wait for a period reset; one refused
-// everywhere on driver support should not, and telling them apart is the
-// difference between patience and a loop.
+// Retryable reports whether a job admitted nowhere might be admitted later
+// unchanged: true when at least one rejection was transient, as spent quota
+// is and a missing driver is not.
 func (r *Result) Retryable() bool {
 	if r.Admitted() {
 		return false
@@ -169,10 +128,8 @@ func (r *Result) Retryable() bool {
 	return false
 }
 
-// Sort orders candidates and rejections by provider name.
-//
-// Called once after admission has collected every verdict, so that output is
-// deterministic regardless of the order providers were evaluated in.
+// Sort orders candidates and rejections by provider name, so output does not
+// depend on the order providers were evaluated in.
 func (r *Result) Sort() {
 	slices.SortFunc(r.Candidates, func(a, b Candidate) int {
 		return strings.Compare(a.Provider, b.Provider)
@@ -187,22 +144,9 @@ func (r *Result) Sort() {
 // CHECKERS
 // -------------------------------------------------------------------------
 
-// Checker decides whether one provider can run one request.
-//
-// Returning nil admits. Returning a rejection removes the provider and says
-// why. A checker owns exactly one concern, which is what lets each be table
-// tested on its own and what keeps a new rule from being buried inside an
-// existing one.
-//
-// Provider is left empty on the returned rejection and filled in by Admit,
-// because a checker is handed the input it is judging and should not have to
-// copy a field out of it correctly twelve times.
-//
-// Implementations are pure functions of their two arguments. Nomad's equivalent
-// returns a bare bool and reports its reason by writing to a shared metrics
-// sink; returning the rejection as a value instead means a checker can be
-// tested without constructing a context, and means nothing in admission holds
-// state that the order of evaluation could disturb.
+// Checker decides whether one provider can run one request: nil admits, and a
+// rejection removes the provider and says why. Each owns one concern and is a
+// pure function of its arguments; Admit fills in the rejection's Provider.
 type Checker interface {
 	Name() string
 	Check(req *Request, in *Input) *Rejection

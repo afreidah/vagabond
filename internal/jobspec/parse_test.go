@@ -3,10 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// The acceptance test is at the bottom: the documented example has to decode
-// into the same value the specification package builds by hand. Those literals
-// were written in Chunk 1 to be compared against exactly this, which is what
-// makes them worth the space they take.
+// The acceptance test is at the bottom: the fixture has to decode into the
+// value expectedFixtureJob builds by hand. Every file under examples/ is parsed
+// too, so a documented job cannot quietly stop working.
 // -------------------------------------------------------------------------------
 
 package jobspec
@@ -28,13 +27,16 @@ import (
 	"github.com/afreidah/vagabond/internal/ptr"
 )
 
-// fixturePath is the job that uses every block the specification defines. It is
-// a fixture rather than an example, so that a field can be added to cover it
-// without changing what a reader is shown.
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
+
+// fixturePath is the job using every block the specification defines, kept out
+// of examples/ so coverage can grow without changing what a reader is shown.
 var fixturePath = filepath.Join("testdata", "complete.vagabond.hcl")
 
-// examplesDir holds the files a reader is pointed at. Every one of them has to
-// parse: an example that does not is worse than no example.
+// examplesDir holds the files a reader is pointed at, every one of which must
+// parse.
 var examplesDir = filepath.Join("..", "..", "examples")
 
 // parse is the common shape: parse a snippet and fail on any diagnostic.
@@ -85,6 +87,7 @@ job "example" {
 // SHAPE
 // -------------------------------------------------------------------------
 
+// A job with one container task decodes its name, type, and driver.
 func TestParse_MinimalJob(t *testing.T) {
 	file := parse(t, minimalJob, nil)
 
@@ -147,17 +150,8 @@ job "second" {
 // CLOSED VOCABULARIES
 // -------------------------------------------------------------------------
 
-// Decoding does not enforce the closed vocabularies, and this pins that so the
-// gap is deliberate rather than discovered.
-//
-// gohcl decodes through gocty, which converts by reflected kind and consults
-// neither encoding.TextUnmarshaler nor any custom decoder. A string-kinded type
-// such as DriverName therefore accepts any string, and the UnmarshalText
-// written in Chunk 1 is used by JSON and database columns but never by HCL.
-//
-// Enforcing the vocabulary is validation's job, where the diagnostic can name
-// the valid set. Losing that test here would mean nobody notices when it is
-// also missing there.
+// Decoding does not enforce the closed vocabularies, since gohcl never calls
+// UnmarshalText. This pins the gap so validation stays the place that does.
 func TestParse_DoesNotEnforceVocabularies(t *testing.T) {
 	tests := []struct {
 		name string
@@ -202,8 +196,7 @@ func TestParse_DoesNotEnforceVocabularies(t *testing.T) {
 // DIAGNOSTICS
 // -------------------------------------------------------------------------
 
-// Every diagnostic has to carry a position, or the renderer has nothing to
-// point at and the validator is no better than "invalid job".
+// Every diagnostic carries a position, so the renderer has a line to point at.
 func TestParse_DiagnosticsCarrySourcePositions(t *testing.T) {
 	diags := parseErr(t, `
 job "example" {
@@ -312,6 +305,7 @@ func TestParse_ConfigBodyIsUsable(t *testing.T) {
 // METADATA
 // -------------------------------------------------------------------------
 
+// A supplied value replaces its ${meta.key} reference.
 func TestParse_SubstitutesMeta(t *testing.T) {
 	src := `
 job "example" {
@@ -340,6 +334,7 @@ job "example" {
 	}
 }
 
+// The meta and env blocks decode into string maps.
 func TestParse_EnvAndMetaDecodeToStrings(t *testing.T) {
 	src := `
 job "example" {
@@ -437,12 +432,8 @@ func TestParseFile_MissingFile(t *testing.T) {
 // ACCEPTANCE
 // -------------------------------------------------------------------------
 
-// A job using every block the specification defines decodes into the value
-// built by hand below.
-//
-// Bodies are compared by the values they hold rather than by identity: a parsed
-// body and a constructed one hold different concrete types and different source
-// ranges, and neither difference means the jobs differ.
+// The fixture decodes into the hand-built job, with bodies compared by value
+// since parsed and constructed bodies differ in type and source range.
 func TestParseFile_MatchesTheHandBuiltJob(t *testing.T) {
 	file, diags := ParseFile(fixturePath, map[string]string{"version": "abc123"})
 	if diags.HasErrors() {
@@ -456,8 +447,7 @@ func TestParseFile_MatchesTheHandBuiltJob(t *testing.T) {
 	got := file.Spec.Jobs[0]
 	want := expectedFixtureJob()
 
-	// What the parser binds to each task is covered by its own tests; the
-	// hand-built job describes the file.
+	// Binding has its own tests; the hand-built job describes the file
 	ignoreBinding := cmpopts.IgnoreFields(job.Task{}, "Vars", "Meta")
 
 	if diff := cmp.Diff(want, got, cmp.Comparer(sameAttributes), ignoreBinding); diff != "" {
@@ -465,9 +455,7 @@ func TestParseFile_MatchesTheHandBuiltJob(t *testing.T) {
 	}
 }
 
-// Every file under examples/ parses. An example that does not is worse than no
-// example, and nothing else checks them now that the acceptance fixture lives
-// in testdata.
+// Every file under examples/ parses, given placeholders for what it declares.
 func TestExamples_AllParse(t *testing.T) {
 	entries, err := os.ReadDir(examplesDir)
 	if err != nil {
@@ -486,8 +474,7 @@ func TestExamples_AllParse(t *testing.T) {
 		t.Run(entry.Name(), func(t *testing.T) {
 			path := filepath.Join(examplesDir, entry.Name())
 
-			// Examples are parameterized, so they need values to parse.
-			// Anything they declare is supplied here.
+			// Examples are parameterized, so supply whatever they declare
 			body, diags := ParseFile(path, exampleMeta(t, path))
 			if diags.HasErrors() {
 				t.Errorf("example does not parse: %s", diags.Error())
@@ -535,11 +522,8 @@ func exampleMeta(t *testing.T, path string) map[string]string {
 	return meta
 }
 
-// sameAttributes compares two undecoded blocks by the values they hold.
-//
-// Values are compared as cty rather than as strings, because a config block
-// holds whatever its driver accepts: the example's args is a list, and forcing
-// it through a string conversion would report every config as different.
+// sameAttributes compares two undecoded blocks by their cty values, since a
+// config block may hold a list that no string conversion survives.
 func sameAttributes(a, b *job.RawBlock) bool {
 	left, leftOK := blockValues(a)
 	right, rightOK := blockValues(b)
@@ -574,8 +558,7 @@ func blockValues(b *job.RawBlock) (map[string]cty.Value, bool) {
 		return nil, false
 	}
 
-	// The expected value substitutes metadata itself, so both sides evaluate
-	// against the same context the parser used.
+	// Both sides evaluate against the context the parser used
 	ctx := EvalContext(map[string]string{"version": "abc123"})
 	values := make(map[string]cty.Value, len(attrs))
 

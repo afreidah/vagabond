@@ -4,13 +4,9 @@
 // Author: Alex Freidah
 //
 // Admission decides whether a provider could run a task without calling that
-// provider, so everything admission needs has to be expressible here as data.
-// That constraint drives the design: these are values, observed earlier and
-// cached, never handles that reach the network when read.
-//
-// A field earns its place here only if admission branches on it. A platform
-// limit nothing in a job maps to belongs to the plugin that knows it, and an
-// operator's preference belongs in configuration.
+// provider, so everything admission needs is expressed here as data: values
+// observed earlier and cached, never handles that reach the network when read.
+// A field earns its place only if admission branches on it.
 // -------------------------------------------------------------------------------
 
 package plugin
@@ -34,13 +30,8 @@ type Resources struct {
 	Memory int // MiB
 }
 
-// Limits is the largest task a provider will accept. A nil field advertises no
-// limit; zero is a real limit that admits nothing, which a full pool node
-// needs to say.
-//
-// A provider that does not let a caller choose CPU, as Lambda does not,
-// advertises the ceiling its largest memory tier implies rather than leaving
-// it nil.
+// Limits is the largest task a provider accepts. A nil field advertises no
+// limit; zero is a real limit that admits nothing, as a full pool node says.
 type Limits struct {
 	CPU    *int // millicores
 	Memory *int // MiB
@@ -49,24 +40,13 @@ type Limits struct {
 // Capabilities is what a provider advertises so that admission can decide
 // without contacting it.
 //
-// ObservedAt is what makes staleness visible. Without it a provider that has
-// been unreachable for an hour is indistinguishable from one answering
-// normally, and admission has no way to decline to decide on old data.
+// ObservedAt makes staleness visible, so admission can decline to decide on old
+// data. The zero value advertises nothing, because admission rejects what it
+// cannot confirm. EstimatedCost is zero for every current provider and exists
+// so that max_cost_usd = 0 is checked against a published number.
 //
-// The zero value advertises nothing: no drivers, no architectures, no limits.
-// That is the correct reading of a provider nothing is known about, because
-// admission rejects what it cannot confirm rather than assuming capacity that
-// may not exist.
-//
-// EstimatedCost is zero for every provider Vagabond currently speaks to, and
-// the field exists anyway. A job declaring max_cost_usd = 0 is making the
-// promise this project exists to keep, and a promise checked against a number
-// nobody publishes is not checked at all.
-//
-// Methods take a pointer receiver. A value receiver would copy the struct on
-// every call without buying immutability in exchange, since copying it copies
-// the slice headers while sharing their backing arrays. Callers that need an
-// independent copy take one with Clone.
+// Methods take a pointer receiver: a value copy still shares the slices'
+// backing arrays, so it buys no immutability. Clone takes a real copy.
 type Capabilities struct {
 	Drivers       []job.DriverName
 	Architectures []job.Arch
@@ -74,10 +54,7 @@ type Capabilities struct {
 	MaxResources Limits
 	MaxDuration  time.Duration // zero means the provider advertised no limit
 
-	// DefaultResources is what the provider sizes a task that declares no CPU or
-	// memory at, so admission checks the size it will run at. Zero where the
-	// provider sets no size of its own.
-	DefaultResources Resources
+	DefaultResources Resources // the size of a task declaring none; zero if unset
 
 	InternetEgress  bool
 	PrivateNetwork  bool
@@ -98,14 +75,8 @@ type Member struct {
 	Labels       map[string]string
 }
 
-// Clone returns a copy that shares nothing with the original.
-//
-// The slice fields are what make this necessary. Assigning a Capabilities
-// copies their headers and leaves both values pointing at one backing array, so
-// a caller that sorted or appended to Drivers would change what every other
-// holder of that snapshot sees. Admission runs against a shared cached value
-// across every candidate, which is exactly where that would be found late and
-// be hard to attribute.
+// Clone returns a copy that shares nothing with the original. Assignment shares
+// the slices' backing arrays, and one cached snapshot serves every candidate.
 func (c *Capabilities) Clone() Capabilities {
 	out := *c
 	out.Drivers = slices.Clone(c.Drivers)
@@ -150,17 +121,14 @@ func (c *Capabilities) SupportsArch(a job.Arch) bool {
 	return slices.Contains(c.Architectures, a)
 }
 
-// WithinDuration reports whether the provider will run a task for d.
-//
-// A zero MaxDuration means no limit was advertised, not a limit of zero.
-// Container providers genuinely have no meaningful bound, so the permissive
-// reading is the useful one.
+// WithinDuration reports whether the provider runs a task for d. A zero
+// MaxDuration means no limit was advertised, not a limit of zero.
 func (c *Capabilities) WithinDuration(d time.Duration) bool {
 	return c.MaxDuration == 0 || d <= c.MaxDuration
 }
 
 // Sized returns r with the provider's defaults in place of anything r leaves
-// zero: the size a task will actually run at here.
+// zero: the size a task actually runs at here.
 func (c *Capabilities) Sized(r Resources) Resources {
 	if r.CPU == 0 {
 		r.CPU = c.DefaultResources.CPU
@@ -187,11 +155,8 @@ func (c *Capabilities) WithinResources(r Resources) bool {
 	return limit == nil || r.Memory <= *limit
 }
 
-// StaleAt reports whether the observation is older than maxAge as of now.
-//
-// An unset ObservedAt counts as stale. A snapshot that never recorded when it
-// was gathered is one nothing is known about, and treating it as current would
-// admit against data of unknown age.
+// StaleAt reports whether the observation is older than maxAge as of now. An
+// unset ObservedAt counts as stale, since its age is unknown.
 func (c *Capabilities) StaleAt(now time.Time, maxAge time.Duration) bool {
 	if c.ObservedAt.IsZero() {
 		return true

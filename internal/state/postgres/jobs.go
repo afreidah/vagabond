@@ -22,6 +22,10 @@ import (
 	db "github.com/afreidah/vagabond/internal/state/postgres/sqlc"
 )
 
+// -------------------------------------------------------------------------
+// REGISTRY
+// -------------------------------------------------------------------------
+
 // Register stores source as the job's next version when it differs from the
 // current one, and reports the job's version afterwards and whether it changed.
 // Registering a stopped job always makes a new version.
@@ -166,6 +170,10 @@ func (s *Store) Stop(ctx context.Context, namespace, name string, now time.Time)
 		return nil
 	})
 }
+
+// -------------------------------------------------------------------------
+// MAPPING
+// -------------------------------------------------------------------------
 
 // jobOf maps a jobs row.
 func jobOf(row *db.Job) *jobs.Job {

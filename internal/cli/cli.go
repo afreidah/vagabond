@@ -6,12 +6,6 @@
 // Builds the command tree and runs it. The binary's main is a wrapper around
 // Run so that the exit code is a return value rather than an os.Exit buried in
 // a package nothing can test.
-//
-// hashicorp/cli registers commands in a flat map whose keys carry spaces, so
-// "job validate" is one key rather than a child of "job". The library derives
-// the namespace from that spelling on its own, which is why no custom help
-// function is needed here: "vagabond job" lists its subcommands without being
-// registered.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -29,16 +23,14 @@ import (
 // CONSTANTS
 // -------------------------------------------------------------------------
 
-// Exit codes. These are an interface the moment a CI system runs job validate,
-// so they are fixed here and used everywhere rather than invented per command.
-//
-// Failure covers usage errors too, because a caller cannot act differently on
-// those. NoCapacity is separate because a caller can: a failing build is the
-// author's problem, and nowhere to run it is an infrastructure one.
+// Exit codes are an interface once CI branches on them, so they are fixed here
+// rather than invented per command. Failure covers usage errors too.
+// NoCapacity is separate because a caller can act on it: a failing build is
+// the author's problem, and nowhere to run it is an infrastructure one.
 const (
 	ExitSuccess    = 0 // the command did what was asked
 	ExitFailure    = 1 // it ran and the answer was no
-	ExitNoCapacity = 2 // the work never ran
+	ExitNoCapacity = 2 // the work never ran, or was interrupted
 )
 
 const binaryName = "vagabond"
@@ -47,10 +39,8 @@ const binaryName = "vagabond"
 // ENTRY POINT
 // -------------------------------------------------------------------------
 
-// Run executes the command named in args and returns the process exit code.
-//
-// Takes its streams rather than reaching for os.Stdout so that the whole CLI
-// can be exercised from a test.
+// Run executes the command named in args and returns the process exit code. It
+// takes its streams rather than os.Stdout so the whole CLI runs from a test.
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	ui := &cli.BasicUi{
 		Reader:      stdin,
@@ -82,13 +72,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return normalizeExit(code)
 }
 
-// normalizeExit passes the codes this CLI documents and collapses anything else
-// to failure.
-//
-// hashicorp/cli returns 127 when no command matched, which conventionally means
-// "command not found" at a shell and would be read as the binary being missing
-// rather than the argument being wrong. A caller branching on our exit code
-// should only ever see the three documented ones.
+// normalizeExit collapses undocumented codes to failure, such as the 127 that
+// hashicorp/cli returns for an unknown command and a shell reads as missing.
 func normalizeExit(code int) int {
 	switch code {
 	case ExitSuccess, ExitFailure, ExitNoCapacity:

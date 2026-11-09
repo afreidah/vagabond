@@ -3,13 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// In-memory providers covering the three execution families. They exist first
-// to prove the interface can be satisfied without contorting an implementation,
-// and second so that admission, scheduling, and dispatch can be developed and
-// tested end to end before any cloud account exists.
-//
-// That second point is the one that matters. If the test suite needed an IBM
-// account, the abstraction would already have failed.
+// In-memory providers covering the three execution families. They prove the
+// interface can be satisfied without contorting an implementation, and let
+// admission, scheduling, and dispatch be tested end to end with no cloud
+// account.
 // -------------------------------------------------------------------------------
 
 package plugin
@@ -25,6 +22,10 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 )
 
+// -------------------------------------------------------------------------
+// CONSTANTS
+// -------------------------------------------------------------------------
+
 // fakeOutput is what every fake container run prints.
 const fakeOutput = "fake execution output\n"
 
@@ -35,9 +36,9 @@ const fakeOutput = "fake execution output\n"
 // FakeContainerProvider is a container provider whose work outlives Submit,
 // like IBM Code Engine or Google Cloud Run Jobs.
 //
-// SubmitErr and Capabilities are exported so a test can make the provider fail
-// or advertise something unusual without a constructor per scenario. NoResume
-// makes its log stream refuse an offset, as a live tail does.
+// The exported fields let a test make the provider fail or advertise something
+// unusual without a constructor per scenario. NoResume makes its log stream
+// refuse an offset, as a live tail does.
 type FakeContainerProvider struct {
 	ProviderName string
 	Caps         Capabilities
@@ -135,12 +136,8 @@ func (p *FakeContainerProvider) Cancel(_ context.Context, id execution.ID) error
 	return nil
 }
 
-// Result reports what a recorded run produced.
-//
-// Derived rather than stored: this fake exists to satisfy the interface and to
-// let the registry and job plan run with no cloud account, so ExitCode is the
-// one knob a test needs and anything more would be modelling a platform rather
-// than the contract.
+// Result reports what a recorded run produced, derived rather than stored:
+// ExitCode is the one knob a test needs.
 func (p *FakeContainerProvider) Result(
 	_ context.Context, id execution.ID,
 ) (*execution.Result, error) {
@@ -213,11 +210,8 @@ func (p *FakeContainerProvider) Advance(id execution.ID, next execution.State) e
 // -------------------------------------------------------------------------
 
 // FakeSyncProvider finishes its work inside Submit, like AWS Lambda or a
-// Cloudflare worker.
-//
-// It embeds the not-supported helpers, which is the whole demonstration: a
-// provider with no work outliving Submit declares that in two lines rather than
-// writing two method bodies.
+// Cloudflare worker, and embeds the not-supported helpers instead of writing
+// those method bodies.
 type FakeSyncProvider struct {
 	StatusNotSupported
 	ResultNotSupported

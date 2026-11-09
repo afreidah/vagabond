@@ -4,8 +4,7 @@
 // Author: Alex Freidah
 //
 // Each rule gets a job that breaks it and an assertion on what the diagnostic
-// says. The messages are the product here: a rule that fires with a message an
-// author cannot act on has not helped them.
+// says, since the message is what an author acts on.
 // -------------------------------------------------------------------------------
 
 package jobspec
@@ -15,9 +14,12 @@ import (
 	"testing"
 )
 
-// validate parses a snippet and runs the rules over it, returning what they
-// found. Parsing itself must succeed: a rule cannot run against a file that
-// never decoded.
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
+
+// validate parses a snippet, which must succeed, and returns what the rules
+// found as summary and detail strings.
 func validate(t *testing.T, src string, meta map[string]string) []string {
 	t.Helper()
 
@@ -63,6 +65,13 @@ func mentions(messages []string, fragments ...string) bool {
 	return false
 }
 
+// routed wraps a routing block around the minimal job, for the rules that only
+// apply to constraints and affinities.
+func routed(body string) string {
+	return strings.Replace(minimalJob, `type = "batch"`,
+		"type = \"batch\"\n\n  routing {\n"+body+"\n  }", 1)
+}
+
 // -------------------------------------------------------------------------
 // THE VALID CASE
 // -------------------------------------------------------------------------
@@ -80,6 +89,7 @@ func TestValidate_FixtureIsClean(t *testing.T) {
 	}
 }
 
+// The smallest valid job produces no diagnostics.
 func TestValidate_MinimalJobIsClean(t *testing.T) {
 	if messages := validate(t, minimalJob, nil); len(messages) != 0 {
 		t.Errorf("a minimal job produced diagnostics: %v", messages)
@@ -90,9 +100,8 @@ func TestValidate_MinimalJobIsClean(t *testing.T) {
 // CLOSED VOCABULARIES
 // -------------------------------------------------------------------------
 
-// This is the gap TestParse_DoesNotEnforceVocabularies pins open at the parser.
-// Closing it here is the whole reason the Drivers, Types, Arches, and
-// Strategies accessors exist.
+// Validation closes the gap TestParse_DoesNotEnforceVocabularies pins open,
+// naming both the rejected value and the valid set.
 func TestValidate_ClosedVocabularies(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -136,6 +145,7 @@ func TestValidate_ClosedVocabularies(t *testing.T) {
 // STRUCTURE
 // -------------------------------------------------------------------------
 
+// A job declaring no task is reported by name.
 func TestValidate_JobWithNoTasks(t *testing.T) {
 	messages := validate(t, `
 job "empty" {
@@ -251,6 +261,7 @@ job "build" {
 	}
 }
 
+// A container task with no config block is missing its image.
 func TestValidate_ContainerWithNoConfigAtAll(t *testing.T) {
 	messages := validate(t, `
 job "build" {
@@ -303,6 +314,7 @@ func TestValidate_ZeroTimeout(t *testing.T) {
 // RESOURCES
 // -------------------------------------------------------------------------
 
+// A zero or negative CPU or memory request is refused.
 func TestValidate_NonPositiveResources(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -359,6 +371,7 @@ func TestValidate_BackoffMaxBelowInitial(t *testing.T) {
 	}
 }
 
+// A negative attempts count is refused.
 func TestValidate_NegativeRetryAttempts(t *testing.T) {
 	src := strings.Replace(minimalJob, `driver = "container"`,
 		`driver = "container"
@@ -392,8 +405,8 @@ func TestValidate_ZeroRetryAttemptsIsAllowed(t *testing.T) {
 // ROUTING
 // -------------------------------------------------------------------------
 
-// An attribute outside the reserved prefix matches nothing, so a job
-// constraining on it would silently exclude every provider.
+// An attribute neither published nor under an unchecked prefix matches nothing,
+// so a job constraining on it would silently exclude every provider.
 func TestValidate_UnknownConstraintAttribute(t *testing.T) {
 	src := strings.Replace(minimalJob, `type = "batch"`,
 		`type = "batch"
@@ -413,6 +426,7 @@ func TestValidate_UnknownConstraintAttribute(t *testing.T) {
 	}
 }
 
+// An unknown routing strategy is named alongside the valid set.
 func TestValidate_UnknownStrategy(t *testing.T) {
 	src := strings.Replace(minimalJob, `type = "batch"`,
 		`type = "batch"
@@ -428,6 +442,7 @@ func TestValidate_UnknownStrategy(t *testing.T) {
 	}
 }
 
+// An unknown tier mode is named alongside the valid modes.
 func TestValidate_UnknownTierMode(t *testing.T) {
 	src := strings.Replace(minimalJob, `type = "batch"`,
 		`type = "batch"
@@ -516,13 +531,7 @@ func TestValidate_EmptyFile(t *testing.T) {
 // CONSTRAINT OPERATORS AND ATTRIBUTES
 // -------------------------------------------------------------------------
 
-// routed wraps a routing block around the minimal job, for the rules that only
-// apply to constraints and affinities.
-func routed(body string) string {
-	return strings.Replace(minimalJob, `type = "batch"`,
-		"type = \"batch\"\n\n  routing {\n"+body+"\n  }", 1)
-}
-
+// An unknown operator is named alongside the valid set.
 func TestValidate_UnknownOperator(t *testing.T) {
 	messages := validate(t, routed(`
     constraint {
@@ -536,8 +545,8 @@ func TestValidate_UnknownOperator(t *testing.T) {
 	}
 }
 
-// A typo in an attribute name would otherwise exclude every provider and report
-// as having no capacity, which is the most misleading failure available.
+// A typo in an attribute name is reported rather than excluding every provider
+// and reading as a capacity problem.
 func TestValidate_MisspelledAttribute(t *testing.T) {
 	messages := validate(t, routed(`
     constraint {
@@ -581,6 +590,7 @@ func TestValidate_PresenceOperatorWithValue(t *testing.T) {
 	}
 }
 
+// A presence operator with no value is valid.
 func TestValidate_PresenceOperatorWithoutValue(t *testing.T) {
 	messages := validate(t, routed(`
     constraint {
@@ -593,6 +603,7 @@ func TestValidate_PresenceOperatorWithoutValue(t *testing.T) {
 	}
 }
 
+// A comparison operator with no value is refused.
 func TestValidate_ComparisonWithoutValue(t *testing.T) {
 	messages := validate(t, routed(`
     constraint {
@@ -605,6 +616,7 @@ func TestValidate_ComparisonWithoutValue(t *testing.T) {
 	}
 }
 
+// Affinity operators are checked the same way as constraint operators.
 func TestValidate_AffinityOperatorIsChecked(t *testing.T) {
 	messages := validate(t, routed(`
     affinity {

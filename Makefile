@@ -5,8 +5,7 @@
 #
 # Common development tasks for the Vagabond control plane and CLI. `make check`
 # is the gate a change must pass before it is pushed, and it is what CI runs.
-# Every target is safe to run against a tree with no Go files, which matters
-# while the contract packages are still being written.
+# Every target is safe to run against a tree with no Go packages.
 # -------------------------------------------------------------------------------
 
 GO             ?= go

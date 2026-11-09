@@ -22,9 +22,8 @@ import (
 // CLONE
 // -------------------------------------------------------------------------
 
-// A struct assignment copies slice headers and leaves both values pointing at
-// one backing array. Clone exists to break that sharing, and this is the test
-// that fails if the slices.Clone calls are ever dropped.
+// Assignment leaves both values on one backing array; this fails if Clone
+// stops copying the slices.
 func TestCapabilities_CloneDoesNotShareSlices(t *testing.T) {
 	original := Capabilities{
 		Drivers:       []job.DriverName{job.DriverContainer, job.DriverFunction},
@@ -57,6 +56,7 @@ func TestCapabilities_CloneAppendIsIsolated(t *testing.T) {
 	}
 }
 
+// Scalars carry over, and the pointer limits are copied rather than shared.
 func TestCapabilities_CloneCopiesScalars(t *testing.T) {
 	observed := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
 	original := Capabilities{
@@ -90,6 +90,7 @@ func TestCapabilities_CloneCopiesScalars(t *testing.T) {
 // QUERIES
 // -------------------------------------------------------------------------
 
+// SupportsDriver answers from the advertised driver list.
 func TestCapabilities_SupportsDriver(t *testing.T) {
 	c := Capabilities{Drivers: []job.DriverName{job.DriverContainer}}
 
@@ -116,6 +117,7 @@ func TestCapabilities_ZeroValueAdvertisesNothing(t *testing.T) {
 	}
 }
 
+// The limit is inclusive, and zero means no limit.
 func TestCapabilities_WithinDuration(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -139,6 +141,7 @@ func TestCapabilities_WithinDuration(t *testing.T) {
 	}
 }
 
+// Each limit is checked against the size after defaults; nil admits anything.
 func TestCapabilities_WithinResources(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -173,6 +176,7 @@ func TestCapabilities_WithinResources(t *testing.T) {
 // STALENESS
 // -------------------------------------------------------------------------
 
+// The bound is inclusive, and a snapshot never observed is always stale.
 func TestCapabilities_StaleAt(t *testing.T) {
 	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 

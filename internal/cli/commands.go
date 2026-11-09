@@ -5,8 +5,7 @@
 //
 // Every command the binary answers to, in one map. Keys carry spaces because
 // hashicorp/cli has no command tree: "job validate" is a key, not a child of
-// "job", and the grouped help function in cli.go is what makes that read like a
-// hierarchy.
+// "job", and the library derives the namespace from that spelling.
 // -------------------------------------------------------------------------------
 
 package cli

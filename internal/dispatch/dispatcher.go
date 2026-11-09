@@ -31,11 +31,8 @@ import (
 // TYPES
 // -------------------------------------------------------------------------
 
-// Registry is the part of the provider registry dispatch needs.
-//
-// Declared here rather than imported, so a test supplies two methods instead
-// of a configured registry, and so dispatch does not depend on how providers
-// happen to be constructed.
+// Registry is the part of the provider registry dispatch needs, declared here
+// so a test supplies it without constructing providers.
 type Registry interface {
 	Inputs(namespace string, usage func(namespace, provider string) (total, share quota.PoolUsage)) []scheduler.Input
 	Provider(name string) (plugin.Provider, bool)
@@ -43,11 +40,9 @@ type Registry interface {
 }
 
 // Ledger is the account every dispatch charges, declared here for the same
-// reason as Registry.
-//
-// Reserve refuses with a *ledger.Refusal when the charge would pass a limit,
-// unless pays says the job pays past it. Any other error means the charge
-// could not be made at all, and nothing is dispatched on it.
+// reason as Registry. Reserve refuses with a *ledger.Refusal when the charge
+// would pass a limit and pays is false; any other error means the charge was
+// not made, and nothing is dispatched on it.
 type Ledger interface {
 	Reserve(ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution, pays bool) error
 	Settle(ctx context.Context, id execution.ID, namespace, provider string, actual quota.Execution) error
@@ -58,13 +53,10 @@ type Ledger interface {
 }
 
 // Executions is where every run and attempt is recorded, declared here for the
-// same reason as Registry.
-//
-// Update writes the record only if the stored one is still in from, and fails
-// with execution.ErrStale otherwise. FinishDispatch and RenewDispatch change
-// only a dispatch still running under the named owner. Unreleased lists the
-// records whose leftovers are not yet released and that have not changed since
-// before; MarkReleased records that they were.
+// same reason as Registry. Update writes only if the stored record is still in
+// from, failing with execution.ErrStale otherwise; FinishDispatch and
+// RenewDispatch change only a dispatch still running under the named owner.
+// Unreleased lists records not yet released and unchanged since before.
 type Executions interface {
 	CreateDispatch(ctx context.Context, d *execution.Dispatch) error
 	FinishDispatch(ctx context.Context, d *execution.Dispatch) error
@@ -88,11 +80,8 @@ type Origin struct {
 	lease *lease
 }
 
-// Dispatcher runs jobs against the providers a registry holds.
-//
-// sleep is injected because the alternative is a test suite that waits out real
-// backoff. One that returns immediately turns a two minute run into
-// microseconds without the polling logic knowing it was not real.
+// Dispatcher runs jobs against the providers a registry holds. sleep is
+// injected so tests do not wait out real backoff.
 type Dispatcher struct {
 	registry   Registry
 	ledger     Ledger
@@ -105,6 +94,10 @@ type Dispatcher struct {
 	sleep      func(ctx context.Context, d time.Duration) error
 	tiers      job.TierMode // the deployment's tier mode; empty is the default
 }
+
+// -------------------------------------------------------------------------
+// CONSTRUCTOR
+// -------------------------------------------------------------------------
 
 // Option configures a Dispatcher.
 type Option func(*Dispatcher)
@@ -139,10 +132,9 @@ func WithTierMode(mode job.TierMode) Option {
 }
 
 // New builds a dispatcher over a registry, charging ledger for what it runs and
-// recording every attempt in executions.
-//
-// Both are arguments rather than options: a dispatcher that charges nothing or
-// records nothing is the failure each exists to prevent.
+// recording every attempt in executions. Both are arguments rather than
+// options, since a dispatcher that charges or records nothing is the failure
+// each exists to prevent.
 func New(registry Registry, ledger Ledger, executions Executions, opts ...Option) *Dispatcher {
 	d := &Dispatcher{
 		registry:   registry,
@@ -245,16 +237,8 @@ func (d *Dispatcher) end(ctx context.Context, origin Origin, state execution.Dis
 }
 
 // Run executes every task in a job, in declaration order, under the dispatch
-// Begin recorded.
-//
-// Sequential and fail-fast. The specification has no dependency graph, so a
-// job's tasks read as steps, and running step two after step one failed is
-// work nobody asked for. A task that produced a non-zero exit code stops the
-// job exactly as a task that could not be dispatched does: both mean the thing
-// the job describes did not happen.
-//
-// The outcome is populated even when the error is non-nil, so a caller can
-// report what did run before the failure.
+// Begin recorded. Tasks read as steps, so the first that fails or cannot be
+// dispatched stops the job; the outcome holds what ran even alongside an error.
 func (d *Dispatcher) Run(
 	ctx context.Context, origin Origin, j *job.Job, eval *hcl.EvalContext,
 ) (*JobOutcome, error) {
@@ -293,13 +277,10 @@ func (d *Dispatcher) Run(
 // RUNNING A TASK
 // -------------------------------------------------------------------------
 
-// RunTask admits, ranks, and executes one task.
-//
-// Candidates are tried in ranked order. A provider that fails to give an
-// answer is abandoned and the next is tried, subject to the task's retry
-// policy; a provider that gives one, of any kind, ends the task. Usage is
-// re-read first, so admission sees what earlier tasks charged; a failed read
-// keeps the last snapshot, since reserving is what enforces the limit.
+// RunTask admits, ranks, and executes one task, trying candidates in ranked
+// order until one gives an answer of any kind. Usage is re-read first so
+// admission sees earlier tasks' charges; a failed read keeps the last
+// snapshot, since reserving is what enforces the limit.
 func (d *Dispatcher) RunTask(
 	ctx context.Context, origin Origin, task *job.Task, routing *job.Routing, eval *hcl.EvalContext,
 ) (*TaskOutcome, error) {
@@ -325,13 +306,9 @@ func (d *Dispatcher) RunTask(
 }
 
 // attempt works down the ranking until something answers or the budget runs
-// out.
-//
-// The budget counts submissions. A provider whose ledger refuses the
-// reservation is passed over without spending one, because nothing was sent
-// and there is no outage to back off from. Trying the same provider again for
-// an outage it is still having is a slower way to reach the same place, so
-// each candidate is tried at most once.
+// out. The budget counts submissions, so a refused reservation spends none,
+// and each candidate is tried at most once: retrying one mid-outage only
+// delays the same failure.
 func (d *Dispatcher) attempt(
 	ctx context.Context, origin Origin, req *scheduler.Request, ranking scheduler.Ranking, outcome *TaskOutcome,
 ) (*TaskOutcome, error) {
@@ -394,8 +371,7 @@ func (d *Dispatcher) attempt(
 			return outcome, nil
 		}
 
-		// Our own bug reproduces on every provider, so sending it onward
-		// spends capacity to fail identically.
+		// An internal fault fails identically on every provider
 		if !plugin.Reroutable(err) {
 			return outcome, err
 		}
@@ -403,8 +379,7 @@ func (d *Dispatcher) attempt(
 		lastErr = err
 	}
 
-	// Every admitted provider refused the reservation, so nothing was
-	// attempted: the quota admission saw was spent before dispatch got there.
+	// Every candidate refused its reservation, so nothing was attempted
 	if tried == 0 {
 		return outcome, fmt.Errorf("%w: %w", ErrNoCandidates, lastErr)
 	}
@@ -412,13 +387,10 @@ func (d *Dispatcher) attempt(
 	return outcome, fmt.Errorf("%w: %w", ErrExhausted, lastErr)
 }
 
-// prepare mints an execution ID, charges it against name's quota, and records
-// it as pending. A refusal comes back as the *ledger.Refusal with the run
-// carrying its ID; any other failure means nothing may be dispatched.
-//
-// The ID is minted per attempt because it is the submission idempotency key:
-// reusing it would ask the provider to resume the one that just failed. It is
-// recorded before Submit for the same reason, so it exists durably first.
+// prepare mints an execution ID, reserves name's quota for it, and records it
+// as pending; a refusal returns the *ledger.Refusal alongside the run. The ID
+// is per attempt because it is the submission idempotency key, and reusing it
+// would resume the attempt that just failed.
 func (d *Dispatcher) prepare(
 	ctx context.Context, origin Origin, req *scheduler.Request, name string, attempt int, previous execution.ID,
 ) (*tracked, error) {
@@ -447,8 +419,7 @@ func (d *Dispatcher) prepare(
 		},
 	}
 
-	// A job that pays passes the quota check at admission, so its reservation is
-	// uncapped too; otherwise plan and dispatch would disagree at the limit.
+	// A paying job passed admission's quota check, so its reservation is uncapped
 	if err := d.ledger.Reserve(ctx, id, origin.Namespace, name, req.Execution, req.WillPay()); err != nil {
 		if refused(err) {
 			return run, err
@@ -480,12 +451,10 @@ func (d *Dispatcher) pause(ctx context.Context, p policy, tried int) error {
 	return d.sleep(ctx, p.backoff(tried))
 }
 
-// charge settles what an execution cost, from its result.
-//
-// Only a result says what the run cost. Without one the reservation stands:
-// the run may be out there still, and charging its declared worst case is the
-// over-count this errs toward. A result carrying what the platform billed is
-// charged at that; otherwise at the declared shape over how long it ran.
+// charge settles what an execution cost: what the platform billed when the
+// result carries it, otherwise the declared shape over how long it ran.
+// Without a result the worst-case reservation stands, since the run may still
+// be out there.
 func (d *Dispatcher) charge(ctx context.Context, rec *execution.Record, result *execution.Result) {
 	if result == nil {
 		return

@@ -46,9 +46,7 @@ func (p *releasingProvider) Release(context.Context, execution.ID) error {
 // releasing registers a releasing provider named "a" that ends in state after
 // polls Status calls.
 func releasing(state execution.State, polls int) (*releasingProvider, *fakeRegistry) {
-	p := &releasingProvider{scriptedProvider: scriptedProvider{
-		name: "a", pollsToFinish: polls, finalState: state,
-	}}
+	p := &releasingProvider{name: "a", pollsToFinish: polls, finalState: state}
 
 	reg := newRegistry(&p.scriptedProvider)
 	reg.providers["a"] = p
@@ -100,7 +98,7 @@ func releaseLoop(t *testing.T, reg *fakeRegistry) (int, error) {
 }
 
 // -------------------------------------------------------------------------
-// TESTS
+// RELEASE LOOP
 // -------------------------------------------------------------------------
 
 // A run dispatch stopped following, once the provider says it is over, is
@@ -276,8 +274,8 @@ func TestReleaseLoop_ReconcilesALostExecution(t *testing.T) {
 	}
 }
 
-// A lost execution the provider has no record of will never be learned about,
-// so it fails at once.
+// A lost execution the provider has no record of cannot be learned about, so
+// it fails at once.
 func TestReleaseLoop_FailsALostExecutionTheProviderForgot(t *testing.T) {
 	t.Parallel()
 

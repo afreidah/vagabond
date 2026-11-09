@@ -24,6 +24,10 @@ import (
 	"github.com/afreidah/vagabond/internal/plugin"
 )
 
+// -------------------------------------------------------------------------
+// HARNESS
+// -------------------------------------------------------------------------
+
 // functionConfig is one synchronous provider.
 const functionConfig = `provider "fn" { type = "fake-function" }`
 

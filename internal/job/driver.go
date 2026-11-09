@@ -24,41 +24,28 @@ import (
 // DRIVER NAMES
 // -------------------------------------------------------------------------
 
-// DriverName is the execution contract a task requests.
-//
-// It is a distinct type rather than a bare string so that a driver cannot be
-// passed where a provider name is expected. The two are routinely adjacent in
-// admission and scheduling code and read identically at a call site, which is
-// the confusion this type exists to prevent.
+// DriverName is the execution contract a task requests. It is a distinct type
+// so a driver cannot be passed where an adjacent provider name is expected.
 type DriverName string
 
-// The drivers Vagabond implements, and the execution contract each one names.
+// The drivers Vagabond implements. A provider advertises which of these it
+// satisfies and cannot introduce its own.
 //
-// DriverContainer runs an arbitrary container image to completion and takes its
-// exit status as the result, imposing no runtime contract on the image beyond
-// exiting. DriverFunction invokes a handler that satisfies the target
-// platform's runtime contract, which a function-packaged container image must
-// still implement even though it is a container. DriverWorker invokes a
-// predeployed constrained executor, typically an edge or Wasm runtime, and can
-// request only the operations that executor already implements.
-//
-// The vocabulary is closed: a provider advertises which of these it satisfies
-// and cannot introduce its own.
+// DriverContainer runs an image to completion and takes its exit status as the
+// result. DriverFunction invokes a handler satisfying the platform's runtime
+// contract, even when it is packaged as a container image. DriverWorker invokes
+// a predeployed constrained executor, such as an edge or Wasm runtime.
 const (
 	DriverContainer DriverName = "container"
 	DriverFunction  DriverName = "function"
 	DriverWorker    DriverName = "worker"
 )
 
-// driverNames is the canonical vocabulary, and the single source of truth for
-// both validation and the list an error message prints. Declaration order is
+// driverNames is the vocabulary validation checks and error messages print, in
 // the order users see.
 var driverNames = []DriverName{DriverContainer, DriverFunction, DriverWorker}
 
-// Drivers returns the valid driver names in declaration order.
-//
-// The returned slice is a copy, so a caller rendering it into help text or an
-// error cannot reorder or truncate the vocabulary for everyone else.
+// Drivers returns the valid driver names in declaration order, as a copy.
 func Drivers() []DriverName {
 	return slices.Clone(driverNames)
 }
@@ -67,12 +54,8 @@ func Drivers() []DriverName {
 // VALIDATION
 // -------------------------------------------------------------------------
 
-// Valid reports whether d is a driver Vagabond implements.
-//
-// Comparison is exact. Driver names are lowercase and case-sensitive, so
-// "Container" is not accepted. A closed vocabulary that quietly normalizes
-// spelling ends up with two renderings of the same driver across job files and
-// persisted rows, and the second one surfaces long after the error would have.
+// Valid reports whether d is a driver Vagabond implements. Comparison is exact,
+// so one spelling of each driver reaches job files and persisted rows.
 func (d DriverName) Valid() bool {
 	return slices.Contains(driverNames, d)
 }
@@ -97,18 +80,13 @@ func ParseDriverName(s string) (DriverName, error) {
 // need the rejected spelling extract an *UnknownDriverError with errors.As.
 var ErrUnknownDriver = errors.New("unknown driver")
 
-// UnknownDriverError reports a driver name Vagabond does not implement.
-//
-// Name is preserved exactly as it was written rather than normalized, because
-// the whole value of this error is showing an author the string they typed next
-// to the strings they could have typed.
+// UnknownDriverError reports a driver name Vagabond does not implement. Name is
+// kept exactly as written, so the error shows it next to the valid spellings.
 type UnknownDriverError struct {
 	Name string
 }
 
-// Error renders the rejected name alongside the full valid vocabulary. The
-// vocabulary is short and the correction is almost always a spelling the reader
-// can take directly off the list.
+// Error renders the rejected name alongside the full valid vocabulary.
 func (e *UnknownDriverError) Error() string {
 	valid := make([]string, 0, len(driverNames))
 	for _, d := range driverNames {
@@ -134,16 +112,8 @@ func (d DriverName) String() string {
 	return string(d)
 }
 
-// MarshalText implements encoding.TextMarshaler.
-//
-// Marshalling validates, which is deliberate. The zero DriverName is not a
-// driver, and a closed vocabulary that allows an unset value into an API
-// response or a database column has only deferred the failure to whatever reads
-// it back, where the context that would explain it is gone.
-//
-// Note that this type deliberately implements no database interfaces. Those
-// would require importing a driver, which belongs only in internal/state; a
-// text encoding is enough for persistence to build on.
+// MarshalText implements encoding.TextMarshaler and validates, so an unset
+// driver fails here rather than in whatever reads the stored text back.
 func (d DriverName) MarshalText() ([]byte, error) {
 	if !d.Valid() {
 		return nil, &UnknownDriverError{Name: string(d)}
@@ -152,9 +122,8 @@ func (d DriverName) MarshalText() ([]byte, error) {
 	return []byte(d), nil
 }
 
-// UnmarshalText implements encoding.TextUnmarshaler, rejecting any name outside
-// the vocabulary so that an invalid driver cannot enter the model by way of
-// JSON or an HCL string value.
+// UnmarshalText implements encoding.TextUnmarshaler, so an invalid driver
+// cannot enter the model through JSON or an HCL string value.
 func (d *DriverName) UnmarshalText(text []byte) error {
 	parsed, err := ParseDriverName(string(text))
 	if err != nil {

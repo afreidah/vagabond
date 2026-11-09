@@ -25,10 +25,9 @@ import (
 // -------------------------------------------------------------------------
 
 // Resume takes a claimed dispatch to its end: follows its unfinished
-// executions, then records how it ended and returns that state and why.
-//
-// A failure to read its executions returns an error and leaves the dispatch
-// running, so its lease lapses and the next claim tries again.
+// executions, then records how it ended and returns that state and why. A
+// failure to read its executions leaves the dispatch running, so its lease
+// lapses and the next claim tries again.
 func (d *Dispatcher) Resume(
 	ctx context.Context, claimed *execution.Dispatch,
 ) (execution.DispatchState, string, error) {
@@ -59,12 +58,10 @@ func (d *Dispatcher) Resume(
 	return state, reason, nil
 }
 
-// resume follows one execution to its result and charges it. rec is updated
-// in place, so the dispatch's verdict reads where it ended.
-//
-// An execution the provider cannot account for is recorded as failed before
-// submission and lost after, and its reservation is left to the reaper, which
-// asks the provider again later.
+// resume follows one execution to its result and charges it, updating rec in
+// place for the dispatch's verdict. One the provider cannot account for is
+// recorded failed before submission and lost after, its reservation left for
+// the reaper.
 func (d *Dispatcher) resume(ctx context.Context, rec *execution.Record) {
 	run := &tracked{rec: *rec, store: d.executions, now: d.now}
 	defer func() { *rec = run.rec }()

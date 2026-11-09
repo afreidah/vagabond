@@ -61,6 +61,7 @@ func TestReasons_ReadmeExamplesExist(t *testing.T) {
 	}
 }
 
+// Only exact spellings from the vocabulary are valid.
 func TestReason_Valid(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -88,8 +89,8 @@ func TestReason_Valid(t *testing.T) {
 // TRANSIENCE
 // -------------------------------------------------------------------------
 
-// Transience is the difference between waiting for a quota period to reset and
-// waiting forever for a Wasm runtime to grow a container engine.
+// Exactly the provider conditions are transient, and the table covers every
+// reason.
 func TestReason_Transient(t *testing.T) {
 	transient := map[Reason]bool{
 		ReasonQuotaExhausted:   true,
@@ -143,6 +144,7 @@ func TestReason_TaskMismatchesAreNeverTransient(t *testing.T) {
 // ENCODING
 // -------------------------------------------------------------------------
 
+// Every reason survives a MarshalText and UnmarshalText round trip.
 func TestReason_TextRoundTrip(t *testing.T) {
 	for _, want := range Reasons() {
 		t.Run(want.String(), func(t *testing.T) {
@@ -163,6 +165,7 @@ func TestReason_TextRoundTrip(t *testing.T) {
 	}
 }
 
+// The zero-value Reason does not encode.
 func TestReason_MarshalTextRejectsZeroValue(t *testing.T) {
 	var r Reason
 
@@ -171,6 +174,7 @@ func TestReason_MarshalTextRejectsZeroValue(t *testing.T) {
 	}
 }
 
+// An unknown code fails to parse with an error wrapping ErrUnknownReason.
 func TestParseReason_Invalid(t *testing.T) {
 	for _, input := range []string{"", "unsupported", "no-capacity", "Quota-Exhausted"} {
 		t.Run(input, func(t *testing.T) {
@@ -186,6 +190,7 @@ func TestParseReason_Invalid(t *testing.T) {
 	}
 }
 
+// UnmarshalText refuses a code outside the vocabulary.
 func TestReason_UnmarshalTextRejectsUnknown(t *testing.T) {
 	var r Reason
 
@@ -194,6 +199,7 @@ func TestReason_UnmarshalTextRejectsUnknown(t *testing.T) {
 	}
 }
 
+// The parse error lists the valid reasons.
 func TestReason_ErrorListsVocabulary(t *testing.T) {
 	_, err := ParseReason("nonsense")
 	if err == nil {
@@ -205,6 +211,7 @@ func TestReason_ErrorListsVocabulary(t *testing.T) {
 	}
 }
 
+// Mutating what Reasons returns leaves the vocabulary unchanged.
 func TestReasons_ReturnsCopy(t *testing.T) {
 	first := Reasons()
 	first[0] = "mutated"

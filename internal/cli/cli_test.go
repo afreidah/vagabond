@@ -16,6 +16,10 @@ import (
 	"testing"
 )
 
+// -------------------------------------------------------------------------
+// HARNESS
+// -------------------------------------------------------------------------
+
 // run executes the CLI against buffers and returns the exit code and what was
 // written to each stream.
 func run(args ...string) (code int, stdout, stderr string) {
@@ -30,9 +34,8 @@ func run(args ...string) (code int, stdout, stderr string) {
 // EXIT CODES
 // -------------------------------------------------------------------------
 
-// The CLI documents two exit codes, and a caller branching on them must never
-// see a third. The library returns 127 for an unmatched command, which at a
-// shell means the binary itself is missing.
+// A usage error exits zero or one, never the 127 the library returns for an
+// unmatched command, which a shell reads as a missing binary.
 func TestRun_ExitCodesAreOnlyZeroOrOne(t *testing.T) {
 	tests := []struct {
 		name string
@@ -57,6 +60,7 @@ func TestRun_ExitCodesAreOnlyZeroOrOne(t *testing.T) {
 	}
 }
 
+// -version prints something and succeeds.
 func TestRun_VersionSucceeds(t *testing.T) {
 	code, stdout, _ := run("-version")
 
@@ -73,8 +77,7 @@ func TestRun_VersionSucceeds(t *testing.T) {
 // HELP
 // -------------------------------------------------------------------------
 
-// The usage line uses single dashes, which is the convention this CLI was built
-// on hashicorp/cli to preserve. The library's own help function hardcodes
+// The usage line uses single dashes. The library's own help function hardcodes
 // double dashes, so this asserts ours is in use.
 func TestRun_HelpUsesSingleDashFlags(t *testing.T) {
 	_, stdout, stderr := run()
@@ -104,6 +107,7 @@ func TestRun_HelpListsNamespaceWithSynopsis(t *testing.T) {
 	}
 }
 
+// The job namespace's help lists its subcommands.
 func TestRun_JobNamespaceListsSubcommands(t *testing.T) {
 	_, stdout, stderr := run("job", "-help")
 	output := stdout + stderr
@@ -131,6 +135,7 @@ func TestJobValidate_MissingPathExplainsItself(t *testing.T) {
 	}
 }
 
+// More than one path is a usage error.
 func TestJobValidate_TooManyPaths(t *testing.T) {
 	code, _, _ := run("job", "validate", "one.hcl", "two.hcl")
 
@@ -186,6 +191,7 @@ func TestClientCommands_BadAddressIsReported(t *testing.T) {
 	}
 }
 
+// An unknown flag fails rather than being ignored.
 func TestClientCommands_UnknownFlagFails(t *testing.T) {
 	code, _, _ := run("job", "status", "-nope")
 
@@ -222,6 +228,7 @@ func TestRun_GroupsExplainThemselves(t *testing.T) {
 // THE -meta FLAG
 // -------------------------------------------------------------------------
 
+// A key=value pair is recorded under its key.
 func TestMetaFlags_Set(t *testing.T) {
 	var m metaFlags
 
@@ -248,6 +255,7 @@ func TestMetaFlags_EmptyValueIsAllowed(t *testing.T) {
 	}
 }
 
+// A pair with no separator or no key is refused.
 func TestMetaFlags_Invalid(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -269,8 +277,8 @@ func TestMetaFlags_Invalid(t *testing.T) {
 	}
 }
 
-// A repeated key is a mistake upstream. Taking the last one quietly hides which
-// value the submission actually ran with.
+// A repeated key is refused, since quietly taking the last one hides which
+// value the submission ran with.
 func TestMetaFlags_RepeatedKeyIsRejected(t *testing.T) {
 	var m metaFlags
 
@@ -292,6 +300,7 @@ func TestMetaFlags_RepeatedKeyIsRejected(t *testing.T) {
 	}
 }
 
+// String renders nothing when empty and every pair otherwise.
 func TestMetaFlags_String(t *testing.T) {
 	var empty metaFlags
 	if empty.String() != "" {

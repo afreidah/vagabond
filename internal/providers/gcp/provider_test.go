@@ -4,13 +4,9 @@
 // Author: Alex Freidah
 //
 // Run against an httptest server standing in for Google, so request building,
-// headers, encoding and status classification are all exercised for real. A
-// mocked HTTP client would assert that Do was called with the right arguments,
-// which is a weaker claim than that Google would have understood us.
-//
-// The canned responses are shaped after what a spike actually received,
-// including the exit code living on lastAttemptResult and the execution
-// carrying a suffix Google chose.
+// headers, encoding and status classification are all exercised for real. The
+// canned responses are shaped after real ones, including the exit code on
+// lastAttemptResult and the suffix Google adds to an execution's name.
 // -------------------------------------------------------------------------------
 
 package gcp
@@ -34,6 +30,10 @@ import (
 	"github.com/afreidah/vagabond/internal/ptr"
 )
 
+// -------------------------------------------------------------------------
+// FAKE GOOGLE
+// -------------------------------------------------------------------------
+
 // recorded is one request the fake Google saw.
 type recorded struct {
 	method string
@@ -42,11 +42,8 @@ type recorded struct {
 	body   map[string]any
 }
 
-// fakeGoogle stands in for Cloud Run and Cloud Logging.
-//
-// Handlers are keyed by "METHOD /path" with a trailing star meaning prefix, so
-// a test states only the responses it cares about and anything unexpected
-// fails loudly rather than returning an empty body that decodes to zeroes.
+// fakeGoogle stands in for Cloud Run and Cloud Logging. Handlers are keyed by
+// "METHOD /path", a trailing star meaning prefix; anything unmatched 404s.
 type fakeGoogle struct {
 	t         *testing.T
 	handlers  map[string]any
@@ -54,6 +51,7 @@ type fakeGoogle struct {
 	requests  []recorded
 }
 
+// newFakeGoogle starts a fake Google and a provider pointed at it.
 func newFakeGoogle(t *testing.T) (*fakeGoogle, *Provider) {
 	t.Helper()
 
@@ -77,8 +75,7 @@ func newFakeGoogle(t *testing.T) (*fakeGoogle, *Provider) {
 		logsURL: server.URL,
 	}
 
-	// The real client signs requests; a test server needs no auth, and
-	// swapping it here is the point of the endpoints being fields.
+	// The real client signs requests; a test server needs no auth
 	p.http.Store(server.Client())
 
 	return g, p
@@ -95,6 +92,8 @@ func (g *fakeGoogle) respondInTurn(route string, bodies ...any) {
 	g.sequences[route] = bodies
 }
 
+// ServeHTTP records the request and answers from the queued, exact, then
+// prefix routes, in that order.
 func (g *fakeGoogle) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&body)
@@ -136,6 +135,7 @@ func (g *fakeGoogle) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// writeJSON writes body as a JSON response with the given status.
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -170,6 +170,7 @@ func rawBlock(t *testing.T, src string) *job.RawBlock {
 	return &job.RawBlock{Body: f.Body}
 }
 
+// newID returns a fresh execution id, failing the test if one cannot be made.
 func newID(t *testing.T) execution.ID {
 	t.Helper()
 
@@ -200,7 +201,7 @@ func containerTask(t *testing.T) *job.Task {
 // -------------------------------------------------------------------------
 
 // Cloud Run has no ad-hoc run, so a submission is a create followed by a run,
-// and the job carries our execution id so every later call can find it.
+// and the job carries the execution id so every later call can find it.
 func TestSubmitCreatesThenRuns(t *testing.T) {
 	t.Parallel()
 
@@ -219,8 +220,7 @@ func TestSubmitCreatesThenRuns(t *testing.T) {
 		t.Errorf("state = %s, want accepted", submission.State)
 	}
 
-	// Named from the execution id, which is what makes the plugin stateless: a
-	// later process derives this without remembering anything.
+	// Named from the execution id, so a later process derives it
 	if want := "vagabond-" + id.String(); submission.ProviderID != want {
 		t.Errorf("provider id = %q, want %q", submission.ProviderID, want)
 	}
@@ -255,8 +255,7 @@ func TestSubmitDisablesGoogleRetries(t *testing.T) {
 		t.Errorf("maxRetries = %v, want an explicit 0", inner["maxRetries"])
 	}
 
-	// And the container runs as an identity holding nothing, not as the one
-	// Vagabond authenticates with.
+	// The container runs as the runtime identity, not the dispatcher's
 	if got := inner["serviceAccount"]; got != "runtime@test-project.iam.gserviceaccount.com" {
 		t.Errorf("serviceAccount = %v, want the runtime identity", got)
 	}
@@ -300,8 +299,7 @@ func TestSubmitTranslatesTheTask(t *testing.T) {
 		t.Errorf("limits = %v, want 1 vCPU and 2048Mi", limits)
 	}
 
-	// Sorted, so two submissions of one task are byte-identical rather than
-	// differing by map iteration order.
+	// Sorted, so two submissions of one task are byte-identical
 	env := container["env"].([]any)
 	if env[0].(map[string]any)["name"] != "CGO_ENABLED" {
 		t.Errorf("env is not sorted: %v", env)
@@ -350,8 +348,7 @@ func TestStatusListsTheExecution(t *testing.T) {
 			},
 			want: execution.StateRunning,
 		},
-		// The container has exited but Cloud Run has not written a completion
-		// time yet. On the counter alone this reads as never having started.
+		// Exited with no completion time yet; the counter alone reads unstarted
 		"draining": {
 			execution: map[string]any{
 				"name":         "jobs/x/executions/x-nhrzk",
@@ -489,8 +486,7 @@ func TestResultReadsTheExitCode(t *testing.T) {
 		t.Errorf("duration = %s, want 3s", got)
 	}
 
-	// Both streams, interleaved in timestamp order, which is what someone
-	// reading a failed build wants.
+	// Both streams, interleaved in timestamp order
 	if got := string(result.Logs); !strings.Contains(got, "hello-stdout") ||
 		!strings.Contains(got, "hello-stderr") {
 		t.Errorf("logs = %q, want both streams", got)
@@ -533,6 +529,7 @@ func TestResultSurvivesUnreadableLogs(t *testing.T) {
 // CANCEL
 // -------------------------------------------------------------------------
 
+// Cancel deletes the job named for the execution.
 func TestCancelDeletesTheJob(t *testing.T) {
 	t.Parallel()
 
@@ -552,7 +549,7 @@ func TestCancelDeletesTheJob(t *testing.T) {
 	}
 }
 
-// The caller wanted it not running, and it is not.
+// Cancelling a job that is already gone is not an error.
 func TestCancelIsIdempotent(t *testing.T) {
 	t.Parallel()
 

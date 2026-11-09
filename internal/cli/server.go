@@ -32,6 +32,10 @@ import (
 	"github.com/afreidah/vagabond/internal/state/postgres"
 )
 
+// -------------------------------------------------------------------------
+// COMMAND
+// -------------------------------------------------------------------------
+
 // ServerCommand implements `vagabond server`.
 type ServerCommand struct {
 	*Meta
@@ -104,8 +108,7 @@ func (c *ServerCommand) Run(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// One set of connected agent nodes: the server fills it as agents connect,
-	// and pool providers read it.
+	// The server fills this as agents connect, and pool providers read it
 	conns := nodes.New()
 
 	reg, cfg, code := c.loadRegistry(ctx, configPath, conns)
@@ -173,13 +176,8 @@ func (c *ServerCommand) Run(args []string) int {
 // PROVIDERS AND STORES
 // -------------------------------------------------------------------------
 
-// loadRegistry finds configuration, builds the providers, and refreshes them.
-// The configuration comes back beside the registry for its store and server
-// blocks.
-//
-// A refresh failure is reported but does not stop the server. A provider that
-// did not answer is marked unhealthy and rejected by name until it does. Pools
-// are built over conns.
+// loadRegistry loads configuration and builds and refreshes its providers, with
+// pools over conns. A provider that does not answer is a warning, not fatal.
 func (m *Meta) loadRegistry(
 	ctx context.Context, configPath string, conns *nodes.Conns,
 ) (*registry.Registry, *config.File, int) {
@@ -255,9 +253,12 @@ func storeServer(
 	return server.New(reg, led, db, db, logger, opts...), db.Close, nil
 }
 
-// agentListener listens where agents connect: over mutual TLS when the server
-// block has agent_tls, and in plain TCP only on a loopback address, since an
-// unauthenticated agent could register as, and replace, any node.
+// -------------------------------------------------------------------------
+// LISTENERS
+// -------------------------------------------------------------------------
+
+// agentListener listens for agents over mutual TLS with agent_tls, or in plain
+// TCP only on loopback, since an unauthenticated agent could replace any node.
 func agentListener(ctx context.Context, block *config.ServerBlock) (net.Listener, error) {
 	addr := block.AgentAddress()
 

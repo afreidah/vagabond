@@ -23,6 +23,7 @@ import (
 // gb_seconds is charged memory times duration and cannot be charged otherwise.
 type Meter string
 
+// The meters a pool can count.
 const (
 	MeterExecutions Meter = "executions"  // one per execution
 	MeterGBSeconds  Meter = "gb_seconds"  // declared memory times declared duration
@@ -108,11 +109,13 @@ func (m Meter) scale() int64 {
 // operator is.
 type Period string
 
+// The periods a pool's allowance can reset on.
 const (
 	PeriodDaily   Period = "daily"
 	PeriodMonthly Period = "monthly"
 )
 
+// Calendar key layouts, one per period.
 const (
 	dailyKeyLayout   = "2006-01-02"
 	monthlyKeyLayout = "2006-01"

@@ -95,9 +95,8 @@ func Current(ctx context.Context, r Reader, namespace, name string) (*Version, e
 // NAMESPACES
 // -------------------------------------------------------------------------
 
-// Namespace returns the namespace a job runs in: its own, else requested, else
-// the default. A conflict between the two, or an undeclared namespace, is an
-// error.
+// Namespace returns the job's own namespace, else requested, else the default.
+// A conflict between the two, or an undeclared namespace, is an error.
 func Namespace(requested string, j *job.Job, declared func(string) bool) (string, error) {
 	namespace := requested
 

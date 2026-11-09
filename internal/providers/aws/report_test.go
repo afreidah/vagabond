@@ -2,6 +2,9 @@
 // REPORT Line Tests
 //
 // Author: Alex Freidah
+//
+// The REPORT line is where the bill comes from, so each field is checked to be
+// read from its own label and a missing line to leave no bill.
 // -------------------------------------------------------------------------------
 
 package aws
@@ -11,9 +14,11 @@ import (
 	"time"
 )
 
+// reportLine is a complete REPORT line as Lambda writes it.
 const reportLine = "REPORT RequestId: 3f1c\tDuration: 12.34 ms\tBilled Duration: 13 ms\t" +
 	"Memory Size: 512 MB\tMax Memory Used: 70 MB\tInit Duration: 150.00 ms\t\n"
 
+// A complete line yields the duration, the billed duration and the memory.
 func TestParseReport(t *testing.T) {
 	t.Parallel()
 

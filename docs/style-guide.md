@@ -37,8 +37,8 @@ where Vagabond's architecture differs, the rule differs with it.
 - **ASCII-only characters** - never Unicode em-dashes, en-dashes, or
   box-drawing characters
 - **Dashes, not equals** - always `-` for dividers, never `=`
-- **Box comment spacing** - all box comments, both the 79-character file header
-  and the 73-character section box, are always followed by a blank line
+- **Box comment spacing** - all box comments, both the file header and the
+  section box, are always followed by a blank line
 - **Professional tone** - no personal references, no numbered lists in
   comments, no casual language
 - **Self-documenting** - code explains *why*, not just *what*
@@ -51,7 +51,9 @@ where Vagabond's architecture differs, the rule differs with it.
 
 ## Comment Types and Spacing
 
-### File Header (79 characters)
+### File Header
+
+`// ` followed by 79 dashes, 82 characters in all.
 
 ```go
 // -------------------------------------------------------------------------------
@@ -71,10 +73,12 @@ Spacing rules:
 
 - Blank line after the title
 - Blank line after the metadata
-- Blank line before the closing divider
+- No blank line before the closing divider
 - Blank line after the closing divider, always separating the box from code
 
-### Major Section Box (73 characters)
+### Major Section Box
+
+`// ` followed by 73 dashes, 76 characters in all.
 
 ```go
 // -------------------------------------------------------------------------
@@ -95,8 +99,11 @@ Spacing rules:
 
 **When to use them.** Every file with more than one logical group of
 declarations carries section boxes, so a reader lands in a familiar shape
-whichever file they open. A file under roughly 100 lines with a single concern
-does not; a box per file is noise, not structure.
+whichever file they open, and every declaration in it sits under one. A file
+with a single concern does not: one under roughly 100 lines, or one that
+defines or tests a single type at any length. A box per file is noise, not
+structure. In a test file, the fixtures and helpers count as a group of their
+own.
 
 **Section vocabulary.** Prefer these names, in this order, so the same concept
 is not called three things across the tree:
@@ -107,9 +114,11 @@ is not called three things across the tree:
 | `TYPES` | the types a file declares |
 | `INTERFACE` | a consumer-declared or role interface |
 | `CONSTRUCTOR` | `New*` and the wiring it needs |
+| `COMMAND` | a CLI command's `Help`, `Synopsis`, and `Run` |
 | *domain sections* | the file's actual work, named for it: `ADMISSION`, `SCORING`, `DISPATCH`, `QUOTA LEDGER`, `INGEST` |
 | `LIFECYCLE` | `Close`, `Shutdown`, and other teardown |
 | `INTERNALS` / `HELPERS` | unexported helpers the sections above call |
+| `FIXTURES` / `HARNESS` | in tests, the doubles and fixtures the tests share, and the setup that wires them |
 
 Domain sections carry the weight. A file split into `ADMISSION` /
 `REJECTION REASONS` / `INTERNALS` tells a reader more than one split into
@@ -125,9 +134,8 @@ End-of-line, when the note is short:
 
 ```go
 const (
-	ClassInfrastructure Class = iota // provider broke  -  reroute is allowed
-	ClassWorkload                    // the job failed  -  return it unchanged
-	ClassInternal                    // Vagabond's own bug  -  never reroute
+	ClassInfrastructure Class = "infrastructure" // provider broke  -  reroute is allowed
+	ClassInternal       Class = "internal"       // Vagabond's own bug  -  never reroute
 )
 ```
 
@@ -160,7 +168,8 @@ if snap.Age() > maxSnapshotAge {
 }
 ```
 
-No blank line before the code. Lowercase or sentence case.
+One line, at a step that is not obvious. No blank line before the code.
+Lowercase or sentence case.
 
 ### Inline Comments
 
@@ -168,15 +177,15 @@ No blank line before the code. Lowercase or sentence case.
 charge := task.Timeout // lost executions are charged their full declared bound
 ```
 
-Used sparingly, explaining *why* rather than *what*, kept under roughly 50
-characters.
+Used sparingly, explaining *why* rather than *what*, kept to one short clause.
 
 ---
 
 ## File Headers
 
-Every `.go` file starts with a 79-character header block. The same box, with
-`#` in place of `//`, heads every YAML and Makefile in the repository.
+Every `.go` file except `doc.go` and generated code starts with the file
+header above. The same box, with `#` in place of `//` (81 characters), heads
+every YAML file, Makefile, and HCL example in the repository.
 
 ---
 
@@ -189,19 +198,17 @@ A doc comment that restates the package name is worse than none, because it
 occupies the place where the reasoning should have been.
 
 ```go
-// Package quota models each provider's free-tier allowance as an append-only
-// ledger rather than as a counter read from the provider.
+// Package ledger keeps Vagabond's own account of what each provider's quota
+// pools have been charged, since no provider reports remaining allowance in a
+// form that can be scheduled against.
 //
-// No provider exposes remaining free-tier capacity in a form that can be
-// scheduled against. Billing data lags by hours where it exists at all, so
-// Vagabond maintains its own account of what it has spent and treats provider
-// APIs as a reconciliation signal rather than as truth.
-//
-// Where the ledger is uncertain it over-counts. An execution that vanished is
-// charged its full declared timeout until reconciliation proves otherwise.
-// Over-counting wastes free capacity; under-counting drifts toward spending
-// money, which is the single failure this project exists to prevent.
-package quota
+// An execution reserves its declared worst case before it is submitted and
+// settles to what it cost once it ends. The store decides each reservation in
+// one statement, so two processes charging the same pool cannot both see
+// room. A reservation nobody settled stays charged until the reaper learns
+// what became of the run: over-counting wastes allowance, under-counting
+// spends money.
+package ledger
 ```
 
 ---
@@ -215,7 +222,9 @@ One tab, `gofmt` enforced. Formatting is a lint failure, not a convention:
 
 ### Imports
 
-Three blocks separated by blank lines, ordered stdlib, internal, external:
+Three blocks separated by blank lines, ordered stdlib, external, internal.
+`goimports` with `local-prefixes: github.com/afreidah/vagabond` enforces the
+last block:
 
 ```go
 import (
@@ -223,16 +232,19 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hashicorp/hcl/v2"
+
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/quota"
-
-	"github.com/hashicorp/hcl/v2"
 )
 ```
 
 ### Naming
 
 - Exported types get standard Go doc comments directly above the declaration
+- Every function and method, exported or not, gets a doc comment of a line or
+  two; a consumer interface or an ordering decision may take up to five to
+  state its contract
 - Constants grouped by concern in `const` blocks, named in `CamelCase`
 - Sentinel errors use the `Err` prefix: `ErrQuotaExhausted`, `ErrUnknownDriver`
 - Reason codes and other strings that cross the API boundary are declared once
@@ -316,23 +328,25 @@ interface that is likewise pure.
 
 ### The failure taxonomy
 
-Every error that crosses a provider boundary carries one of three
+Every error that crosses a provider boundary carries one of two
 classifications, and plugin authors are responsible for assigning it:
 
 | Class | Meaning | Reroute? |
 |---|---|---|
 | `ClassInfrastructure` | the provider failed, the job never got a verdict | yes |
-| `ClassWorkload` | the job ran and produced a real answer | no, return it unchanged |
 | `ClassInternal` | Vagabond's own fault | no, and make it loud |
 
-The third class exists because misattributing our own bug to the user's
+A task that ran and exited non-zero carries no class: it is the task's result,
+returned unchanged and never rerouted.
+
+`ClassInternal` exists because misattributing Vagabond's own bug to the user's
 workload is the worst available outcome: it reports a broken build to someone
 whose build is fine, and because it is not rerouted, it never self-corrects.
 
 **Retryability is an independent flag, not derived from the class.** A provider
 429 and a provider 503 are both infrastructure failures wanting different
-backoff, and a provider 400 is an infrastructure-class error that must never be
-retried at all.
+backoff, and a provider 400 is `internal`: Vagabond sent something wrong, and
+it is never rerouted.
 
 ### Sentinel errors and wrapping
 
@@ -354,8 +368,10 @@ failures are logged at warn level and skipped; the batch proceeds.
 - `go.uber.org/mock/mockgen` for mocks, driven by `//go:generate` directives,
   with generated mocks committed alongside the interface they mock
 - Test names follow `TestFunctionName_Scenario`
+- A test's doc comment states the behaviour it proves in a sentence; it need
+  not start with the test's name
 
-### What Chunk 1 in particular must prove
+### What the contract packages must prove
 
 The contract packages have no I/O, so their tests need no fixtures beyond
 literals. Where a type encodes a rule, the rule gets a test:
@@ -414,7 +430,7 @@ topic.
 
 | Comment Type | Length | Spacing After | Use Case |
 |-------------|--------|---------------|----------|
-| File header | 79 chars | 1 blank line | Top of every `.go`, `.yml`, and Makefile |
-| Major section | 73 chars | 1 blank line | Major divisions within a file |
-| Single-line | Variable | None | Minor divisions within functions |
-| Inline | Brief | N/A | Specific line explanation |
+| File header | 82 chars | 1 blank line | Top of every `.go`, `.yml`, `.hcl` example, and Makefile |
+| Major section | 76 chars | 1 blank line | Major divisions within a file |
+| Single-line | One line | None | A non-obvious step within a function |
+| Inline | One clause | N/A | Specific line explanation |

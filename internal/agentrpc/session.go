@@ -23,6 +23,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// -------------------------------------------------------------------------
+// TYPES
+// -------------------------------------------------------------------------
+
 // Session is one agent connection: the multiplexer both sides run gRPC over,
 // a client for calling the peer, and on the server, who the peer proved to be.
 type Session struct {
@@ -47,8 +51,7 @@ func Dial(ctx context.Context, addr string, tlsConfig *tls.Config) (*Session, er
 	if tlsConfig != nil {
 		tlsConn := tls.Client(conn, tlsConfig)
 
-		// Handshaking now reports a certificate problem as a failed dial,
-		// rather than as a broken session on the first call.
+		// Handshaking now fails the dial, not the first call, on a bad certificate.
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			_ = conn.Close()
 

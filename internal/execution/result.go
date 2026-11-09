@@ -19,18 +19,11 @@ import (
 
 // Result is the output of a finished execution.
 //
-// ExitCode is a pointer because a worker execution has none: a Wasm sandbox has
-// no process to exit. Nil means the family has no exit status, not that the
-// task exited zero.
-//
-// Logs are bounded and may be truncated. Truncation is deliberate rather than a
-// limitation, so that CockroachDB stays the only datastore: a caller needing
-// complete output should be writing it somewhere itself.
-//
-// Billed is what the platform reported it charged, for providers whose platform
-// says. Nil is the common case, and the ledger then prices the declared shape
-// over Duration. When set it supersedes that estimate, above the reservation
-// included: the platform's figure is a fact and ours is a formula.
+// A nil ExitCode means the family has no exit status, as in a Wasm worker, not
+// that the task exited zero. Logs are bounded so CockroachDB stays the only
+// datastore. Billed is what the platform reported it charged, when it says;
+// when nil the ledger prices the declared shape over Duration, and when set it
+// supersedes that estimate even above the reservation.
 type Result struct {
 	ID       ID
 	ExitCode *int

@@ -4,10 +4,9 @@
 // Author: Alex Freidah
 //
 // The pool as the generated queries see it, with every error a query returns
-// passed through unavailable. Writes are classified again by serializable;
-// this is what classifies reads, so a read against a database that is down
-// reports state.ErrUnavailable as a write does, and a query added later cannot
-// forget to.
+// passed through unavailable. Writes are classified again by serializable; this
+// classifies reads, so a read against a database that is down reports
+// state.ErrUnavailable and a query added later cannot forget to.
 // -------------------------------------------------------------------------------
 
 package postgres

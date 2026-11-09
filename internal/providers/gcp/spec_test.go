@@ -18,6 +18,10 @@ import (
 	"github.com/afreidah/vagabond/internal/plugin"
 )
 
+// -------------------------------------------------------------------------
+// RESOURCES
+// -------------------------------------------------------------------------
+
 // Rounding up, because giving a task less CPU than it asked for produces a
 // mysterious timeout rather than a bill.
 func TestVCPURoundsUp(t *testing.T) {
@@ -72,6 +76,10 @@ func TestResourceLimitsIgnoresZeroes(t *testing.T) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// TIMEOUT
+// -------------------------------------------------------------------------
+
 // Absent means Cloud Run's own maximum, not zero, which would be a job killed
 // the moment it started.
 func TestTaskTimeoutDefaultsToTheMaximum(t *testing.T) {
@@ -87,6 +95,7 @@ func TestTaskTimeoutDefaultsToTheMaximum(t *testing.T) {
 	}
 }
 
+// A declared timeout is used as written.
 func TestTaskTimeoutReadsTheTask(t *testing.T) {
 	t.Parallel()
 
@@ -102,6 +111,10 @@ func TestTaskTimeoutReadsTheTask(t *testing.T) {
 		t.Errorf("timeout = %s, want %s", got, want)
 	}
 }
+
+// -------------------------------------------------------------------------
+// THE SPEC
+// -------------------------------------------------------------------------
 
 // Submission metadata reaches Cloud Run: substituted into the config and set
 // as VAGABOND_META_* in the container's environment.
@@ -152,9 +165,8 @@ job "ci" {
 	}
 }
 
-// A task with no image cannot be translated, and saying so as an internal
-// failure keeps it from being rerouted to a provider that would fail the same
-// way.
+// A task with no image cannot be translated, and fails as internal so it is not
+// rerouted to a provider that fails the same way.
 func TestJobSpecNeedsAnImage(t *testing.T) {
 	t.Parallel()
 

@@ -18,6 +18,10 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 )
 
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
+
 // body parses a provider config block the way the config loader leaves it.
 func body(t *testing.T, src string) hcl.Body {
 	t.Helper()
@@ -30,6 +34,11 @@ func body(t *testing.T, src string) hcl.Body {
 	return f.Body
 }
 
+// -------------------------------------------------------------------------
+// DECODING
+// -------------------------------------------------------------------------
+
+// A complete block decodes into its fields.
 func TestDecodeConfig(t *testing.T) {
 	t.Parallel()
 
@@ -106,6 +115,11 @@ regoin                  = "typo"
 	}
 }
 
+// -------------------------------------------------------------------------
+// ENDPOINTS
+// -------------------------------------------------------------------------
+
+// jobURL joins the base, project, region and job name.
 func TestJobURL(t *testing.T) {
 	t.Parallel()
 

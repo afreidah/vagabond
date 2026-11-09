@@ -3,16 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// How a provider's secret is obtained, rather than the secret itself. Three
-// sources cover every arrangement worth supporting, and the third covers the
-// ones we have never heard of.
-//
-// Vagabond integrates with no secret store. Naming one in the schema would
-// make the tool wrong for everyone who runs a different one and would drag its
-// client library into the binary; exec delegates the whole question to a
-// command the operator already trusts. kubectl does this for auth plugins and
-// git for credential helpers, so it is a familiar shape rather than an
-// invented one.
+// How a provider's secret is obtained, rather than the secret itself: from a
+// file, an environment variable, or a command. Vagabond integrates with no
+// secret store, so no client library enters the binary; exec delegates the
+// question to a command the operator already trusts.
 // -------------------------------------------------------------------------------
 
 package config
@@ -34,23 +28,16 @@ import (
 // TYPES
 // -------------------------------------------------------------------------
 
-// execTimeout bounds a credential command.
-//
-// A helper that prompts for a password, or hangs against an unreachable secret
-// store, would otherwise stall startup with no indication of why. Thirty
-// seconds is long enough for a network round trip and short enough that the
-// failure arrives while someone is still watching.
+// execTimeout bounds a credential command, so a helper that prompts or hangs
+// fails while someone is still watching rather than stalling startup.
 const execTimeout = 30 * time.Second
 
 // ErrNoCredentialSource reports a credentials block naming none of the three
 // sources.
 var ErrNoCredentialSource = errors.New("no credential source")
 
-// CredentialsBlock says where a provider's secret comes from.
-//
-// Exactly one source is set. There is deliberately no inline literal: someone
-// would paste a key into the configuration and commit it, and File is one line
-// more for a secret that stays out of the reviewed file.
+// CredentialsBlock says where a provider's secret comes from. Exactly one
+// source is set, and there is no inline literal to paste a key into.
 type CredentialsBlock struct {
 	File *string  `hcl:"file,optional"`
 	Env  *string  `hcl:"env,optional"`
@@ -61,13 +48,8 @@ type CredentialsBlock struct {
 // VALIDATION
 // -------------------------------------------------------------------------
 
-// validate reports a credentials block that names no source or several.
-//
-// Several is the dangerous one. A block naming both a file and an environment
-// variable has an order of precedence the author is guessing at, and the
-// provider it authenticates would be reached with whichever secret won.
-// A nil block is valid: most providers need no credential and should not have
-// to say so.
+// validate reports a credentials block naming no source, or several and so a
+// guessed precedence. A nil block is valid: most providers need no credential.
 func (c *CredentialsBlock) validate(provider string) hcl.Diagnostics {
 	if c == nil {
 		return nil
@@ -121,15 +103,8 @@ func (c *CredentialsBlock) sources() []string {
 // RESOLUTION
 // -------------------------------------------------------------------------
 
-// Resolve returns the secret this block points at.
-//
-// Called once when the registry is built rather than per request, so a plugin
-// holds bytes rather than a resolver and nothing reaches a secret store on the
-// path a plan takes. A rotating secret therefore needs a refresh, which a
-// long-running deployment can schedule and a single command never needs.
-//
-// A nil block resolves to nothing without error: a provider needing no
-// credential, which every fake is, should not have to declare an empty one.
+// Resolve returns the secret this block points at, called once when the
+// registry is built so a plan never reaches a secret store. Nil yields nothing.
 func (c *CredentialsBlock) Resolve(ctx context.Context) ([]byte, error) {
 	if c == nil {
 		return nil, nil
@@ -151,9 +126,7 @@ func (c *CredentialsBlock) Resolve(ctx context.Context) ([]byte, error) {
 
 // readFile reads a secret from disk.
 func readFile(path string) ([]byte, error) {
-	// Cleaned so that the path reported back is the one that was read. This is
-	// not a sandbox boundary: an operator who runs Vagabond can already read
-	// their own files, and naming the file is the point of the setting.
+	// Cleaned so the reported path is the one read; not a sandbox boundary
 	secret, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, fmt.Errorf("reading credential from %s: %w", path, err)
@@ -162,11 +135,8 @@ func readFile(path string) ([]byte, error) {
 	return secret, nil
 }
 
-// readEnv reads a secret from the environment.
-//
-// An unset variable is an error rather than an empty secret, because the
-// failure it would otherwise produce is an authentication rejection from the
-// provider several steps later.
+// readEnv reads a secret from the environment. An unset variable is an error
+// rather than an empty secret that the provider would reject much later.
 func readEnv(name string) ([]byte, error) {
 	value, ok := os.LookupEnv(name)
 	if !ok {
@@ -176,28 +146,13 @@ func readEnv(name string) ([]byte, error) {
 	return []byte(value), nil
 }
 
-// runExec obtains a secret from a command's standard output.
-//
-// The escape hatch, and the reason Vagabond needs no secret store client of
-// its own: this covers Vault, 1Password, a cloud secret manager, pass, or a
-// shell script nobody else has heard of.
-//
-// It is arbitrary code execution driven by a configuration file, which is
-// acceptable only because the operator wrote that file. Anyone who can edit
-// the provider config can already point Vagabond at a cloud account of their
-// choosing, so the command is not the weakest link.
-//
-// Standard error is captured but never mixed into the secret. A helper that
-// prints a warning would otherwise corrupt the credential in a way that
-// surfaces as an unexplained authentication failure.
+// runExec obtains a secret from a command's standard output, keeping standard
+// error out of it so a printed warning cannot corrupt the credential.
 func runExec(ctx context.Context, argv []string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, execTimeout)
 	defer cancel()
 
-	// Running a command from configuration is what this source is, so gosec's
-	// warning is describing the feature. The command comes from a file the
-	// operator wrote, and anyone able to edit it can already point Vagabond at
-	// a cloud account of their choosing.
+	// Anyone able to edit this file can already choose the cloud account
 	//nolint:gosec // the configured command is the credential source
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 
@@ -211,9 +166,7 @@ func runExec(ctx context.Context, argv []string) ([]byte, error) {
 			strings.Join(argv, " "), err, describeStderr(stderr.String()))
 	}
 
-	// Trimmed because a helper that prints its answer adds a newline, and a
-	// trailing newline in an API key is an authentication failure nobody
-	// diagnoses quickly.
+	// A helper's trailing newline would otherwise end up inside the key
 	return []byte(strings.TrimRight(string(secret), "\r\n")), nil
 }
 

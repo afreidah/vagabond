@@ -5,12 +5,9 @@
 //
 // Holds every configured provider alongside what was last observed about it,
 // and produces the inputs admission reads. Admission is a pure function over
-// snapshots, so the network calls that gather them happen here, once, rather
-// than on the path a plan takes.
-//
-// A disabled provider is kept rather than dropped. A plan that silently omits a
-// provider cannot explain why it was not considered, and "why did this not go to
-// IBM" is the question the plan exists to answer.
+// snapshots, so the network calls that gather them happen here rather than on
+// the path a plan takes. A disabled provider is kept rather than dropped, so a
+// plan can say why it was not considered.
 // -------------------------------------------------------------------------------
 
 package registry
@@ -49,16 +46,14 @@ type Registry struct {
 	namespaces map[string]map[string]quota.Limits
 }
 
-// refreshTimeout bounds one provider's answer during Refresh, so one that
-// hangs does not hold the others' snapshots back.
-const refreshTimeout = 30 * time.Second
-
 // entry is one provider and everything last known about it.
 //
-// Capabilities are held beside the plugin rather than fetched on demand,
-// because admission must not call anything. Healthy is separate from enabled
-// because a provider an operator turned off and one failing its checks are
-// different rejections with different fixes.
+// Capabilities are held rather than fetched on demand, because admission
+// calls nothing. healthy is separate from enabled because an operator's off
+// switch and a failed check are different rejections with different fixes.
+// credentials is where the credential comes from, resolved again when the
+// platform rejects it; recredentialed is when that last happened, under
+// recredential.
 type entry struct {
 	name     string
 	provider plugin.Provider
@@ -70,9 +65,6 @@ type entry struct {
 
 	capabilities plugin.Capabilities
 
-	// credentials is where the provider's credential comes from, resolved
-	// again when the platform rejects it; recredentialed is when that last
-	// happened, under recredential.
 	credentials    *config.CredentialsBlock
 	recredential   sync.Mutex
 	recredentialed time.Time
@@ -96,20 +88,9 @@ func WithNodes(conns *nodes.Conns) Option {
 	return func(o *options) { o.nodes = conns }
 }
 
-// New builds a registry from configuration.
-//
-// The context is for resolving credentials, which may run a command an
-// operator nominated. Nothing else here reaches outward: providers are
-// constructed but not contacted, and Refresh is what gathers capabilities, so
-// a caller decides when to pay for that and a test can build a registry
-// against nothing.
-//
-// Diagnostics rather than an error, because a plugin decoding its own config
-// block reports against source ranges, and flattening that to a string would
-// turn "line 12, column 5" into prose.
-//
-// Every provider is attempted even after one fails, so an operator fixing a
-// configuration sees everything wrong with it in one run.
+// New builds a registry from configuration. ctx only resolves credentials;
+// providers are constructed but not contacted until Refresh. Every provider
+// is attempted even after one fails, so one run reports every config error.
 func New(ctx context.Context, cfg *config.File, opts ...Option) (*Registry, hcl.Diagnostics) {
 	if cfg == nil {
 		return &Registry{}, nil
@@ -137,8 +118,7 @@ func New(ctx context.Context, cfg *config.File, opts ...Option) (*Registry, hcl.
 		}
 	}
 
-	// Sorted once here rather than at every read, so that a plan lists
-	// providers the same way whatever order they were configured in.
+	// Sorted once, so plans list providers by name whatever the config order.
 	slices.SortFunc(r.entries, func(a, b *entry) int {
 		return strings.Compare(a.name, b.name)
 	})
@@ -187,9 +167,7 @@ func newEntry(ctx context.Context, cfg *config.Provider, conns *nodes.Conns) (*e
 		return nil, diags
 	}
 
-	// Resolved here rather than held as a resolver, so that a plugin is given
-	// bytes and never learns whether they came from a file, the environment or
-	// a command.
+	// Resolved to bytes, so a plugin never learns where its credential came from.
 	credentials, err := cfg.Credentials.Resolve(ctx)
 	if err != nil {
 		return nil, append(diags, &hcl.Diagnostic{
@@ -199,8 +177,7 @@ func newEntry(ctx context.Context, cfg *config.Provider, conns *nodes.Conns) (*e
 		})
 	}
 
-	// Config validation already reported a bad pool against its line; this is
-	// the backstop for a config that skipped it.
+	// Backstop: config validation already reported a bad pool against its line.
 	limits, err := quota.NewLimits(cfg.PoolSpecs())
 	if err != nil {
 		return nil, append(diags, &hcl.Diagnostic{
@@ -232,8 +209,7 @@ func newEntry(ctx context.Context, cfg *config.Provider, conns *nodes.Conns) (*e
 		enabled:     cfg.IsEnabled(),
 		credentials: cfg.Credentials,
 
-		// Healthy until a refresh says otherwise; assuming the worst before
-		// the first would make every provider unusable.
+		// Healthy until a refresh says otherwise, so all are usable before one.
 		healthy: true,
 	}, diags
 }
@@ -241,6 +217,10 @@ func newEntry(ctx context.Context, cfg *config.Provider, conns *nodes.Conns) (*e
 // -------------------------------------------------------------------------
 // REFRESH
 // -------------------------------------------------------------------------
+
+// refreshTimeout bounds one provider's answer during Refresh, so one that
+// hangs does not hold the others' snapshots back.
+const refreshTimeout = 30 * time.Second
 
 // isLive reports whether a provider's capabilities are read on every plan
 // rather than refreshed, so Refresh leaves it alone.
@@ -250,19 +230,10 @@ func isLive(e *entry) bool {
 	return ok
 }
 
-// Refresh asks every enabled provider what it can currently do, except live
-// ones, which Inputs reads on every plan.
-//
-// A provider that fails to answer is marked unhealthy and keeps whatever was
-// last known about it, rather than being dropped. Losing a provider because one
-// call failed would turn a transient outage into a job that cannot be placed,
-// and the stale snapshot carries ObservedAt so admission can decide for itself
-// how old is too old.
-//
-// Providers are asked in parallel, each under refreshTimeout, and every answer
-// is applied at once. Errors are collected rather than returned on the first
-// one: a refresh that stops at the first unreachable provider leaves the rest
-// stale for no reason.
+// Refresh asks every enabled provider, except live ones, what it can do now.
+// Providers are asked in parallel and every failure is returned. One that
+// fails is marked unhealthy but keeps its last snapshot, whose ObservedAt lets
+// admission judge how stale it is.
 func (r *Registry) Refresh(ctx context.Context) error {
 	type answer struct {
 		caps plugin.Capabilities
@@ -317,14 +288,8 @@ func (r *Registry) Refresh(ctx context.Context) error {
 // -------------------------------------------------------------------------
 
 // Inputs returns what admission reads for a job in namespace, one per
-// configured provider.
-//
-// Usage is read through the function rather than held here, so plan and run
-// price providers from the same ledger: a provider's total and the namespace's
-// share of it. Nil reads as nothing charged.
-//
-// Ordered by provider name, so a plan built from them is deterministic without
-// the caller having to sort.
+// provider in name order. usage reads each provider's total and namespace
+// share, so plan and run price from one ledger; nil reads as nothing charged.
 func (r *Registry) Inputs(
 	namespace string, usage func(namespace, provider string) (total, share quota.PoolUsage),
 ) []scheduler.Input {
@@ -336,8 +301,7 @@ func (r *Registry) Inputs(
 	for _, e := range r.entries {
 		caps, healthy := e.capabilities.Clone(), e.healthy
 
-		// A live provider is read now rather than from the last refresh, so a
-		// node that just joined or filled up is seen by this plan.
+		// Read a live provider now, so this plan sees a node that joined or filled.
 		if live, ok := e.provider.(plugin.Live); ok && e.enabled {
 			var err error
 
@@ -389,10 +353,8 @@ func (r *Registry) Budgets() quota.Budgets {
 	return quota.Budgets{Totals: totals, Namespaces: r.namespaces}
 }
 
-// Provider returns the plugin registered under a name.
-//
-// The dispatcher needs this to submit; admission never does, and reads Inputs
-// instead.
+// Provider returns the plugin registered under a name, for the dispatcher to
+// submit to; admission reads Inputs instead.
 func (r *Registry) Provider(name string) (plugin.Provider, bool) {
 	for _, e := range r.entries {
 		if e.name == name {
@@ -404,15 +366,13 @@ func (r *Registry) Provider(name string) (plugin.Provider, bool) {
 }
 
 // recredentialEvery is the least time between two resolutions of one
-// provider's credential, so a credential that is simply wrong does not rerun
-// its command on every call.
+// provider's credential, so a wrong one does not rerun its command every call.
 const recredentialEvery = time.Minute
 
-// Recredential resolves the named provider's credential again from its source
-// and hands it to the provider, after the platform rejected the one it held.
-// It reports whether a retry can succeed: a credential is fresh now, or was
-// refreshed within recredentialEvery by a concurrent caller. False for a
-// provider with no credential or that cannot take a new one.
+// Recredential resolves the named provider's credential again and hands it
+// over, after the platform rejected the one it held. It reports whether a
+// retry can succeed: true when a credential is fresh, including one another
+// caller resolved within recredentialEvery.
 func (r *Registry) Recredential(ctx context.Context, name string) (bool, error) {
 	var e *entry
 

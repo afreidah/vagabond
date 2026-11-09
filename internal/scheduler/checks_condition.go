@@ -3,22 +3,11 @@
 //
 // Author: Alex Freidah
 //
-// The rejections that may not hold tomorrow. A provider filtered here could run
-// this exact job later, once an operator turns it back on, once it answers a
-// refresh, or once its free tier resets, which is what Reason.Transient reports
-// and what tells a caller to wait rather than to edit.
-//
-// They do not all run at the same point, and the split is deliberate. Enabled
-// and healthy run before every capability comparison, because a provider nobody
-// refreshed has an empty fingerprint and the comparisons would be made against
-// it: a disabled provider rejected for offering no drivers is describing its
-// blank snapshot, not itself. Quota runs last, so that a provider which will
-// never run this driver says so rather than reporting its allowance.
-//
-// Nomad drops ineligible nodes at the source and never filters on them at all,
-// because at five thousand nodes a per-node reason is noise it reports as a
-// count instead. At five named providers, "why did nothing go to IBM" is the
-// question a plan exists to answer, so ours stay in and are rejected by name.
+// The rejections that may not hold tomorrow: a provider filtered here could run
+// this job once it is turned back on, answers a refresh, or has its quota
+// reset, which Reason.Transient reports. Enabled and healthy run before every
+// capability comparison, since an unrefreshed provider has an empty snapshot;
+// quota runs last.
 // -------------------------------------------------------------------------------
 
 package scheduler
@@ -55,12 +44,8 @@ type healthyChecker struct{}
 // Name identifies the checker in traces and test failures.
 func (healthyChecker) Name() string { return "healthy" }
 
-// Check rejects a provider that failed its last refresh.
-//
-// Separate from enabled because the two are different rejections with different
-// fixes: one is an operator's decision and the other is an outage, and a plan
-// that conflated them would send someone to edit a config file over a network
-// partition.
+// Check rejects a provider that failed its last refresh. Separate from enabled
+// because an outage and an operator's decision have different fixes.
 func (healthyChecker) Check(_ *Request, in *Input) *Rejection {
 	if in.Healthy {
 		return nil
@@ -81,21 +66,9 @@ type quotaChecker struct{}
 // Name identifies the checker in traces and test failures.
 func (quotaChecker) Name() string { return "quota" }
 
-// Check rejects a provider with no room unless the job budgeted for paid
-// capacity.
-//
-// The willingness to pay is what makes this a policy question rather than a
-// fact. An exhausted budget is not a provider being unable to run the work; it
-// is the work costing money from here on, and only a job that said it would not
-// pay is refused for that. Without the distinction a job that explicitly
-// budgeted would still be turned away the moment an allowance ran out.
-//
-// Asks whether this task fits rather than whether the provider is generally
-// spent. A pool with room for a small task and not a large one gives different
-// answers to each, and a percentage could not express either.
-//
-// Last in the set, mirroring Nomad's note that its quota iterator must be the
-// final feasibility step so that usage never counts nodes already ineligible.
+// Check rejects a provider with no room for this task unless the job budgeted
+// for paid capacity, since a spent budget means the work costs money from
+// here on rather than that the provider cannot run it.
 func (quotaChecker) Check(req *Request, in *Input) *Rejection {
 	if req.WillPay() {
 		return nil

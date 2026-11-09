@@ -3,9 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// The vocabulary is smaller than Nomad's on purpose, so the tests pin what is
-// absent as well as what is present: an operator arriving later should be a
-// decision rather than something that slipped in.
+// The vocabulary is deliberately small, so the tests pin what is absent as well
+// as what is present: a new operator is a decision rather than something that
+// slipped in.
 // -------------------------------------------------------------------------------
 
 package job
@@ -16,8 +16,7 @@ import (
 	"testing"
 )
 
-// The exact set. This failing means the published vocabulary changed, which
-// should be deliberate.
+// The exact set, in order. A failure means the published vocabulary changed.
 func TestOperators_ExactVocabulary(t *testing.T) {
 	want := []Operator{
 		"=", "!=", "<", "<=", ">", ">=",
@@ -36,8 +35,8 @@ func TestOperators_ExactVocabulary(t *testing.T) {
 	}
 }
 
-// Nomad's extra operators are deliberately absent. Each answers a question a
-// provider attribute does not raise, and each would be surface to maintain.
+// Placement and version operators are absent: each answers a question a
+// provider attribute does not raise.
 func TestOperator_NomadExtrasAreAbsent(t *testing.T) {
 	for _, absent := range []Operator{
 		"regexp", "version", "semver",
@@ -51,6 +50,7 @@ func TestOperator_NomadExtrasAreAbsent(t *testing.T) {
 	}
 }
 
+// Only the exact operator spellings validate.
 func TestOperator_Valid(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -118,6 +118,7 @@ func TestOperator_Presence(t *testing.T) {
 	}
 }
 
+// The set_contains spelling parses to OperatorSetContains.
 func TestParseOperator(t *testing.T) {
 	got, err := ParseOperator("set_contains")
 	if err != nil {
@@ -129,6 +130,7 @@ func TestParseOperator(t *testing.T) {
 	}
 }
 
+// An operator outside the vocabulary fails with ErrUnknownOperator.
 func TestParseOperator_Invalid(t *testing.T) {
 	for _, input := range []string{"", "equals", "=~", "contains"} {
 		t.Run(input, func(t *testing.T) {
@@ -159,6 +161,7 @@ func TestOperator_ErrorListsVocabulary(t *testing.T) {
 	}
 }
 
+// Every operator survives a MarshalText and UnmarshalText round trip.
 func TestOperator_TextRoundTrip(t *testing.T) {
 	for _, want := range Operators() {
 		t.Run(want.String(), func(t *testing.T) {
@@ -179,6 +182,7 @@ func TestOperator_TextRoundTrip(t *testing.T) {
 	}
 }
 
+// The zero value is not an operator and does not marshal.
 func TestOperator_MarshalTextRejectsZeroValue(t *testing.T) {
 	var o Operator
 
@@ -187,6 +191,7 @@ func TestOperator_MarshalTextRejectsZeroValue(t *testing.T) {
 	}
 }
 
+// Unmarshalling an unknown operator fails with ErrUnknownOperator.
 func TestOperator_UnmarshalTextRejectsUnknown(t *testing.T) {
 	var o Operator
 
@@ -195,6 +200,7 @@ func TestOperator_UnmarshalTextRejectsUnknown(t *testing.T) {
 	}
 }
 
+// Mutating the returned slice leaves the vocabulary untouched.
 func TestOperators_ReturnsCopy(t *testing.T) {
 	first := Operators()
 	first[0] = "mutated"

@@ -2,6 +2,10 @@
 // Task Environment Tests
 //
 // Author: Alex Freidah
+//
+// Covers how a task's env block and job metadata merge into the variables a
+// provider sets. Metadata keys are normalized into valid variable names, and
+// an entry the author wrote is never overwritten by one derived from metadata.
 // -------------------------------------------------------------------------------
 
 package job
@@ -13,6 +17,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 )
 
+// envBlock parses src into the RawBlock a task's env block decodes to.
 func envBlock(t *testing.T, src string) *RawBlock {
 	t.Helper()
 
@@ -49,6 +54,7 @@ func TestEnvironment(t *testing.T) {
 	}
 }
 
+// A task with no env block still receives its metadata variables.
 func TestEnvironment_NoEnvBlock(t *testing.T) {
 	env, diags := (&Task{Meta: map[string]string{"v": "1"}}).Environment()
 	if diags.HasErrors() || env["VAGABOND_META_V"] != "1" {

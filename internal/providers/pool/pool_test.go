@@ -45,10 +45,12 @@ type fakeExecutor struct {
 	workloads map[string]*executor.Spec
 }
 
+// newFakeExecutor returns an executor holding nothing.
 func newFakeExecutor() *fakeExecutor {
 	return &fakeExecutor{workloads: map[string]*executor.Spec{}}
 }
 
+// Submit holds the workload until it is released.
 func (f *fakeExecutor) Submit(_ context.Context, id string, spec *executor.Spec) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -58,6 +60,7 @@ func (f *fakeExecutor) Submit(_ context.Context, id string, spec *executor.Spec)
 	return nil
 }
 
+// Status reports a held workload as running and any other as unknown.
 func (f *fakeExecutor) Status(_ context.Context, id string) (execution.Status, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -69,12 +72,15 @@ func (f *fakeExecutor) Status(_ context.Context, id string) (execution.Status, e
 	return execution.Status{State: execution.StateRunning, ProviderID: id}, nil
 }
 
+// Result fails, since no workload here ever finishes.
 func (f *fakeExecutor) Result(context.Context, string) (*execution.Result, error) {
 	return nil, errors.New("still running")
 }
 
+// Cancel accepts and does nothing.
 func (f *fakeExecutor) Cancel(context.Context, string) error { return nil }
 
+// Release forgets the workload.
 func (f *fakeExecutor) Release(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -110,6 +116,7 @@ func (f *fakeExecutor) Held(context.Context) ([]executor.Held, error) {
 	return held, nil
 }
 
+// Runtimes offers only the default runtime.
 func (f *fakeExecutor) Runtimes() []string { return []string{executor.DefaultRuntime} }
 
 // -------------------------------------------------------------------------
@@ -132,6 +139,7 @@ type registrar struct {
 	session *agentrpc.Session
 }
 
+// Register records the node's report against its session.
 func (r *registrar) Register(_ context.Context, req *agentrpc.NodeRegisterRequest) (*agentrpc.NodeRegisterResponse, error) {
 	r.conns.Report(req, r.session)
 
@@ -315,7 +323,7 @@ func TestPool_CapabilitiesFollowNodes(t *testing.T) {
 		t.Errorf("member = %+v", member)
 	}
 
-	// Admission sizes an undeclared task as placement will.
+	// Admission sizes an undeclared task as placement does.
 	if member.DefaultResources != defaultResources || caps.DefaultResources != defaultResources {
 		t.Errorf("default resources = %+v and %+v, want %+v", member.DefaultResources, caps.DefaultResources, defaultResources)
 	}
@@ -456,8 +464,7 @@ func TestPool_StreamLogs(t *testing.T) {
 		t.Errorf("StreamLogs() of a released workload = %v, want ErrUnknownExecution", err)
 	}
 
-	// One no node has reported yet may still be about to, so it is not there
-	// to stream from rather than unknown.
+	// One no node has reported yet may still be about to, so it is not unknown
 	if err := h.pool.StreamLogs(t.Context(), newExecutionID(t), 0, io.Discard); !plugin.Reroutable(err) {
 		t.Errorf("StreamLogs() of one no node holds = %v, want an infrastructure failure", err)
 	}

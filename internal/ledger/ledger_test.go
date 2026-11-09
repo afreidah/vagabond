@@ -3,10 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// Run against the memory store, which applies the same rules as Postgres. Two
-// cases carry the design. A refused reservation must charge nothing at all, or a
-// provider drifts upward every time a task is turned away. And a run that never
-// settles must stay charged until the reaper learns what it did.
+// Run against the memory store, which applies the same rules as Postgres. A
+// refused reservation charges nothing, and a run that never settles stays
+// charged until the reaper learns what it did.
 // -------------------------------------------------------------------------------
 
 package ledger
@@ -22,6 +21,10 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/quota"
 )
+
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
 
 // One GB-second and one vCPU-second in base units, for readable expectations.
 const (
@@ -112,6 +115,7 @@ func onStore(t *testing.T, at time.Time, store Store) *Ledger {
 	return l
 }
 
+// newID mints an execution ID, failing the test if it cannot.
 func newID(t *testing.T) execution.ID {
 	t.Helper()
 
@@ -123,6 +127,7 @@ func newID(t *testing.T) execution.ID {
 	return id
 }
 
+// reserve charges e to provider in ns, failing the test on any error.
 func reserve(t *testing.T, l *Ledger, id execution.ID, provider string, e quota.Execution) {
 	t.Helper()
 
@@ -131,6 +136,7 @@ func reserve(t *testing.T, l *Ledger, id execution.ID, provider string, e quota.
 	}
 }
 
+// settle settles id at actual on provider in ns, failing the test on any error.
 func settle(t *testing.T, l *Ledger, id execution.ID, provider string, actual quota.Execution) {
 	t.Helper()
 
@@ -139,17 +145,20 @@ func settle(t *testing.T, l *Ledger, id execution.ID, provider string, actual qu
 	}
 }
 
+// fnCompute is fn's total compute counter for September.
 var fnCompute = Key{Provider: "fn", Pool: "compute", Period: "2026-09"}
 
 // -------------------------------------------------------------------------
 // CONSTRUCTION
 // -------------------------------------------------------------------------
 
+// errStoreDown is what an unreadable store fails with.
 var errStoreDown = errors.New("store down")
 
 // unreadable is a store whose reads fail.
 type unreadable struct{ *Memory }
 
+// ReadUsage fails with errStoreDown.
 func (unreadable) ReadUsage(context.Context, []string) (Usage, error) {
 	return nil, errStoreDown
 }
@@ -167,6 +176,7 @@ func TestNew_FailsWhenTheStoreCannotBeRead(t *testing.T) {
 // RESERVE
 // -------------------------------------------------------------------------
 
+// A reservation charges every pool the execution meters against.
 func TestReserve_ChargesEveryPoolTheExecutionTouches(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, nil)
 
@@ -226,6 +236,7 @@ func TestReserve_IgnoresPoolsTheExecutionMisses(t *testing.T) {
 	reserve(t, l, newID(t), "fn", quota.Execution{Memory: 1024})
 }
 
+// A provider with no budgets, or none configured at all, reserves without error.
 func TestReserve_ProvidersWithNothingToEnforce(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, nil)
 	task := quota.Execution{Memory: 8192, Duration: time.Hour}
@@ -332,6 +343,7 @@ func TestSettle_IsIdempotent(t *testing.T) {
 	}
 }
 
+// Settling an execution with no reservation writes nothing.
 func TestSettle_UnknownExecutionIsNoOp(t *testing.T) {
 	l, store := newLedger(t, midSeptember, nil)
 
@@ -360,6 +372,7 @@ func TestUnsettledExecutionStaysCharged(t *testing.T) {
 // NAMESPACES
 // -------------------------------------------------------------------------
 
+// tenGBSeconds is an execution charging ten GB-seconds of compute.
 var tenGBSeconds = quota.Execution{Memory: 1024, Duration: 10 * time.Second}
 
 // A namespace's share is charged alongside the provider's total.
@@ -485,6 +498,7 @@ func reaped(t *testing.T, verdict Verdict, ran time.Duration) (*Ledger, *Memory,
 	return l, store, n
 }
 
+// Keep leaves the reservation held and charged at its estimate.
 func TestReap_KeepLeavesTheReservation(t *testing.T) {
 	l, store, n := reaped(t, Keep, 0)
 
