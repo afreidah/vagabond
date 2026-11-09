@@ -5,7 +5,8 @@
 //
 // Every pool a deployment enforces, in two layers: each provider's total, and
 // each namespace's optional share of a provider. An execution charges both and
-// needs room in both, so the shares can never add up past the total.
+// needs room in both, so the shares' limits may add up past the total but the
+// shares can never spend past it together.
 // -------------------------------------------------------------------------------
 
 package quota

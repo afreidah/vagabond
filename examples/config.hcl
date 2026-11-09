@@ -1,20 +1,22 @@
-# Vagabond daemon configuration.
+# -------------------------------------------------------------------------------
+# Daemon Configuration - the operator's file
 #
-# This is the operator's file: which backends exist, what to call them, and how
-# much of each one's quota Vagabond may spend. Job files say what to run; this
-# says what is available to run it on.
+# Author: Alex Freidah
 #
-# Every provider here is a fake, which is what makes this runnable with nothing
-# installed and no cloud account anywhere. The names are the real ones because
-# the name is the routing identifier a job refers to, and the example job routes
-# to two of them; the type is what says nothing here will actually run.
+# Which backends exist, what to call them, and how much of each one's quota
+# Vagabond may spend. Job files say what to run; this says what is available to
+# run it on.
 #
-# Nothing here carries a credential. A provider that needs one names the secret
-# and something else fetches it, because an API key in a file on disk is the
-# line item in every postmortem.
+# Every provider here is a fake, so this runs with nothing installed and no
+# cloud account. The names are real because a job routes by name, and the
+# example job routes to two of them; the type keeps anything from running.
+#
+# Nothing here carries a credential. A provider that needs one has a
+# credentials block naming where its secret comes from, never the secret.
 #
 #   vagabond server -dev -config examples/config.hcl &
 #   vagabond job plan -meta version=1.2.3 examples/go-test.vagabond.hcl
+# -------------------------------------------------------------------------------
 
 # Where jobs, executions and the usage ledger persist. The server requires a
 # store unless it runs with -dev, which keeps everything in memory, empty at
@@ -24,10 +26,9 @@
 #   dsn = "postgres://vagabond@localhost:5432/vagabond"
 # }
 
-# The name is what a job's provider list refers to. The type is which plugin
-# implements it, and the two are separate so that one deployment can register
-# the same plugin twice, against two accounts or two regions, and a job can tell
-# them apart.
+# The name is what a job's provider list refers to and the type is the plugin
+# that implements it, so one plugin can be registered twice against two
+# accounts or regions.
 provider "ibm-code-engine" {
   type = "fake-container"
 
@@ -97,11 +98,8 @@ provider "aws-lambda" {
   }
 }
 
-# A provider you are not using right now.
-#
-# Disabled is not the same as deleted: it stays in the registry and a plan will
-# tell you it was skipped because you turned it off, rather than leaving you to
-# wonder why it was never considered.
+# A provider you are not using right now. Disabled is not deleted: it stays in
+# the registry, and a plan reports it as skipped because it is turned off.
 provider "cloudflare-workers" {
   type    = "fake-worker"
   enabled = false

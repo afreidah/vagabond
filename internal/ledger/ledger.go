@@ -28,6 +28,10 @@ import (
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
+// -------------------------------------------------------------------------
+// CONSTANTS
+// -------------------------------------------------------------------------
+
 // StaleAfter is how old a reservation must be before the reaper asks about it.
 // It covers the gap between reserving and submitting, retry backoff included,
 // so the reaper never asks a provider about a run that is about to exist.
@@ -101,35 +105,27 @@ func (h *Held) namespace() string {
 	return Total
 }
 
-// Verdict is what became of a held execution.
+// Verdict is what became of a held execution, and so what the reaper does with
+// its reservation.
 type Verdict int
 
+// The verdicts a Resolver returns.
 const (
-	// Keep leaves the reservation: the run is still going, or nothing could
-	// be learned about it.
-	Keep Verdict = iota
-
-	// Drop removes the reservation: the provider never ran it.
-	Drop
-
-	// Finished settles at what the run cost, from how long it ran.
-	Finished
-
-	// Stand settles at the reserved amounts: it ran, for an unknown time.
-	Stand
+	Keep     Verdict = iota // leave it: still running, or nothing learned
+	Drop                    // remove it: the provider never ran it
+	Finished                // settle at what the run cost, from how long it ran
+	Stand                   // settle as reserved: it ran, for an unknown time
 )
 
 // Resolver asks a provider what became of a held execution. The duration is
 // read only for Finished.
 type Resolver func(ctx context.Context, h Held) (Verdict, time.Duration)
 
-// Store is where reservations and settled usage live.
-//
-// Reserve records a reservation only if every charge fits, and otherwise
-// returns the usage it was refused against. Settle replaces a reservation with
-// what the run cost; one with none settles to nothing. Reap hands each
-// reservation created before the cutoff to settle and settles those it accepts.
-// Reserved reports whether an execution still holds a reservation.
+// Store is where reservations and settled usage live. Reserve records a
+// reservation only if every charge fits, otherwise returning the usage it was
+// refused against. Settle replaces a reservation with what the run cost, and
+// is a no-op without one. Reap hands each reservation created before the
+// cutoff to settle and settles those it accepts.
 type Store interface {
 	Reserve(ctx context.Context, r *Reservation) (bool, Usage, error)
 	Settle(ctx context.Context, id execution.ID, actual map[PoolRef]int64) error
@@ -178,7 +174,7 @@ func (r *Refusal) Error() string {
 }
 
 // -------------------------------------------------------------------------
-// CONSTRUCTION
+// CONSTRUCTOR
 // -------------------------------------------------------------------------
 
 // New builds a ledger over every compiled pool and loads its first snapshot.
@@ -203,15 +199,10 @@ func New(ctx context.Context, budgets quota.Budgets, store Store) (*Ledger, erro
 // RESERVE AND SETTLE
 // -------------------------------------------------------------------------
 
-// Reserve charges e against the provider's pools and namespace's share of
-// them, or against none.
-//
-// Refuses rather than reports. Admission checks quota earlier so that a plan
-// can explain itself, but time passes between deciding and dispatching, and
-// another process may have charged the pool in between.
-//
-// A job that pays for capacity past the allowance is charged the same way but
-// never refused: its usage still counts, so later jobs see the pools spent.
+// Reserve charges e against the provider's pools and the namespace's share of
+// them, refusing when another process spent the room admission saw. A job that
+// pays is charged the same way but never refused, so later jobs see the pools
+// spent.
 func (l *Ledger) Reserve(
 	ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution, pays bool,
 ) error {
@@ -243,10 +234,8 @@ func (l *Ledger) Reserve(
 	return nil
 }
 
-// Settle replaces a reservation with what the execution actually cost.
-//
-// A settle that could not be written leaves the reservation standing, which is
-// the over-count, and the reaper settles it later.
+// Settle replaces a reservation with what the execution actually cost. One
+// that could not be written leaves the reservation standing for the reaper.
 func (l *Ledger) Settle(
 	ctx context.Context, id execution.ID, namespace, provider string, actual quota.Execution,
 ) error {
@@ -262,8 +251,8 @@ func (l *Ledger) Settle(
 	return nil
 }
 
-// Reserved reports whether id still holds a reservation, which the reaper will
-// settle by asking its provider what it did.
+// Reserved reports whether id still holds a reservation, which the reaper
+// settles by asking its provider what it did.
 func (l *Ledger) Reserved(ctx context.Context, id execution.ID) (bool, error) {
 	return l.store.Reserved(ctx, id)
 }

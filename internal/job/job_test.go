@@ -3,10 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// The job type vocabulary rejects Nomad's other types by name. They are the
-// spellings a Nomad user would reach for first, and Vagabond brokers only
-// short-lived work, so refusing them with a message naming the valid set is
-// better than accepting a job with no completion to report.
+// The job type vocabulary rejects service, system and sysbatch by name. They
+// are the likeliest wrong spellings, and Vagabond brokers only short-lived
+// work, so refusing them with the valid set beats accepting a job with no
+// completion to report.
 // -------------------------------------------------------------------------------
 
 package job
@@ -17,6 +17,11 @@ import (
 	"testing"
 )
 
+// -------------------------------------------------------------------------
+// JOB TYPE
+// -------------------------------------------------------------------------
+
+// Only batch validates; long-running types and case variants do not.
 func TestJobType_Valid(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -39,6 +44,7 @@ func TestJobType_Valid(t *testing.T) {
 	}
 }
 
+// The batch spelling parses to TypeBatch.
 func TestParseJobType(t *testing.T) {
 	got, err := ParseType("batch")
 	if err != nil {
@@ -50,6 +56,7 @@ func TestParseJobType(t *testing.T) {
 	}
 }
 
+// A type outside the vocabulary fails with ErrUnknownType.
 func TestParseJobType_Invalid(t *testing.T) {
 	for _, input := range []string{"", "service", "system", "sysbatch"} {
 		t.Run(input, func(t *testing.T) {
@@ -65,6 +72,7 @@ func TestParseJobType_Invalid(t *testing.T) {
 	}
 }
 
+// The parse error names every valid job type.
 func TestJobType_ErrorListsVocabulary(t *testing.T) {
 	_, err := ParseType("service")
 	if err == nil {
@@ -78,6 +86,7 @@ func TestJobType_ErrorListsVocabulary(t *testing.T) {
 	}
 }
 
+// Mutating the returned slice leaves the vocabulary untouched.
 func TestJobTypes_ReturnsCopy(t *testing.T) {
 	first := Types()
 	first[0] = "mutated"
@@ -87,26 +96,7 @@ func TestJobTypes_ReturnsCopy(t *testing.T) {
 	}
 }
 
-// Absent routing is not the same as routing that allows nothing. A job with no
-// preference is admissible everywhere; an empty provider list would mean no
-// provider is permitted, and conflating the two would silently un-route every
-// job that simply did not care.
-func TestJob_AbsentRoutingIsDistinctFromEmpty(t *testing.T) {
-	noPreference := Job{Name: "a"}
-	if noPreference.Routing != nil {
-		t.Error("a job without a routing block has non-nil Routing")
-	}
-
-	explicitlyEmpty := Job{Name: "b", Routing: &Routing{Providers: []string{}}}
-	if explicitlyEmpty.Routing == nil {
-		t.Fatal("a job with an empty provider list has nil Routing")
-	}
-
-	if explicitlyEmpty.Routing.Providers == nil {
-		t.Error("an explicitly empty provider list decoded as absent")
-	}
-}
-
+// Every job type survives a MarshalText and UnmarshalText round trip.
 func TestJobType_TextRoundTrip(t *testing.T) {
 	for _, want := range Types() {
 		t.Run(want.String(), func(t *testing.T) {
@@ -127,6 +117,7 @@ func TestJobType_TextRoundTrip(t *testing.T) {
 	}
 }
 
+// The zero value is not a job type and does not marshal.
 func TestJobType_MarshalTextRejectsZeroValue(t *testing.T) {
 	var jt Type
 
@@ -135,6 +126,7 @@ func TestJobType_MarshalTextRejectsZeroValue(t *testing.T) {
 	}
 }
 
+// Unmarshalling an unknown type fails with ErrUnknownType.
 func TestJobType_UnmarshalTextRejectsUnknown(t *testing.T) {
 	var jt Type
 
@@ -145,5 +137,27 @@ func TestJobType_UnmarshalTextRejectsUnknown(t *testing.T) {
 
 	if !errors.Is(err, ErrUnknownType) {
 		t.Errorf("error does not wrap ErrUnknownType: %v", err)
+	}
+}
+
+// -------------------------------------------------------------------------
+// ROUTING
+// -------------------------------------------------------------------------
+
+// Absent routing admits every provider; an empty provider list admits none, and
+// conflating the two would un-route every job that did not care.
+func TestJob_AbsentRoutingIsDistinctFromEmpty(t *testing.T) {
+	noPreference := Job{Name: "a"}
+	if noPreference.Routing != nil {
+		t.Error("a job without a routing block has non-nil Routing")
+	}
+
+	explicitlyEmpty := Job{Name: "b", Routing: &Routing{Providers: []string{}}}
+	if explicitlyEmpty.Routing == nil {
+		t.Fatal("a job with an empty provider list has nil Routing")
+	}
+
+	if explicitlyEmpty.Routing.Providers == nil {
+		t.Error("an explicitly empty provider list decoded as absent")
 	}
 }

@@ -4,15 +4,10 @@
 // Author: Alex Freidah
 //
 // A task states what it needs rather than who should run it: an execution
-// contract, resource requirements, a source to fetch, and the limits it expects
-// to run within. Nothing here names a provider, and a field that did would
-// defeat the separation the whole architecture rests on.
-//
-// Optional scalars are pointers, following Nomad's api package. A value type
-// cannot distinguish a field the author set to its zero value from one they
-// omitted, and the two mean opposite things here: attempts = 0 forbids retrying
-// while an absent attempts takes the default, and internet = false denies
-// egress while an absent internet leaves the decision to the provider.
+// contract, resources, a source to fetch, and the limits it runs within, with
+// no provider named. Optional scalars are pointers because a zero the author
+// set and an omitted field mean opposite things: attempts = 0 forbids retrying,
+// while an absent attempts takes the default.
 // -------------------------------------------------------------------------------
 
 package job
@@ -32,12 +27,9 @@ import (
 
 // Task is one unit of work within a job.
 //
-// Timeout is the task's own bound, not a provider's. Admission compares it
-// against each candidate's limit, and a task killed by a provider limit below
-// its declared timeout is an admission bug rather than a workload failure.
-//
-// Vars and Meta are set by the parser, not decoded. A provider reads config
-// with Vars and env through Environment.
+// Timeout is the task's own bound. Admission compares it against each
+// candidate's limit, so a provider killing a task below it is an admission bug.
+// Vars and Meta are set by the parser, not decoded.
 type Task struct {
 	Name             string                 `hcl:"name,label"`
 	Driver           DriverName             `hcl:"driver"`
@@ -59,9 +51,8 @@ type Task struct {
 // metadata.
 const MetaEnvPrefix = "VAGABOND_META_"
 
-// Environment returns the task's env block evaluated against its Vars, plus
-// VAGABOND_META_<KEY> for each metadata key. An env entry the author wrote
-// wins over a metadata variable of the same name.
+// Environment evaluates the env block against Vars and adds VAGABOND_META_<KEY>
+// for each metadata key the author's own entries do not already set.
 func (t *Task) Environment() (map[string]string, hcl.Diagnostics) {
 	env, diags := t.Env.Attributes(t.Vars)
 	if env == nil {
@@ -94,26 +85,13 @@ func envName(key string) string {
 	}, key)
 }
 
-// ConfigImage is the driver config key naming a container image.
-//
-// The config block's shape belongs to the driver, with one exception: whether a
-// task names an image is something admission has to know, because a provider
-// can run containers without running anyone's container. Lambda is the case
-// that makes this real, and no capability comparison reaches it without reading
-// this key.
+// ConfigImage is the driver config key naming a container image. It is the one
+// config key admission reads, because a provider can run containers without
+// running anyone's container.
 const ConfigImage = "image"
 
-// Image returns the container image this task names, if it names one.
-//
-// Reads that one attribute rather than decoding the block, because the rest of
-// a driver config is not Vagabond's to understand: a command's args are a list
-// and a driver may accept nested blocks, neither of which survives being
-// flattened into a string map. Asking for one attribute leaves the rest for the
-// driver.
-//
-// Evaluated against ctx because the config block is left undecoded at parse
-// time and its values may still reference job metadata, as in an image tagged
-// with the commit a CI system supplied.
+// Image returns the container image the config names, evaluated against ctx
+// since it may reference job metadata. The rest of the block is the driver's.
 func (t *Task) Image(ctx *hcl.EvalContext) (string, hcl.Diagnostics) {
 	if t.Config == nil || t.Config.Body == nil {
 		return "", nil
@@ -159,10 +137,8 @@ func (t *Task) ConfigString(name string) (string, bool) {
 	return value.AsString(), true
 }
 
-// ConfigStrings reads one list-of-strings attribute of the driver config, such
-// as args, reporting false when it is absent, empty, or not a list of strings.
-// A list rather than a string to split, so an argument with a space in it
-// stays one argument.
+// ConfigStrings reads a list-of-strings config attribute such as args, keeping
+// an argument with a space whole; false when absent, empty, or mistyped.
 func (t *Task) ConfigStrings(name string) ([]string, bool) {
 	value, ok := t.configValue(name, cty.List(cty.String))
 	if !ok {
@@ -179,9 +155,8 @@ func (t *Task) ConfigStrings(name string) ([]string, bool) {
 	return out, len(out) > 0
 }
 
-// configValue evaluates one driver config attribute and converts it to want.
-// PartialContent rather than JustAttributes, so a config holding a nested
-// block or a field meant for another driver is read without complaint.
+// configValue evaluates one driver config attribute and converts it to want,
+// ignoring nested blocks and fields meant for another driver.
 func (t *Task) configValue(name string, want cty.Type) (cty.Value, bool) {
 	if t.Config == nil || t.Config.Body == nil {
 		return cty.NilVal, false
@@ -213,36 +188,18 @@ func (t *Task) configValue(name string, want cty.Type) (cty.Value, bool) {
 // UNDECODED CONFIG
 // -------------------------------------------------------------------------
 
-// RawBlock is a block whose attribute names are not part of Vagabond's schema.
+// RawBlock is a block whose attribute names are not part of Vagabond's schema:
+// the driver-shaped config block and the author-keyed meta and env blocks.
 //
-// Three blocks qualify, for two different reasons. The task config block is
-// genuinely dynamic: its shape depends on the driver, so only that driver can
-// decode it, and nested blocks inside it are permitted and arbitrary. The meta
-// and env blocks have a known value type, but their keys are chosen by the job
-// author, so no schema can list them either.
-//
-// All three are bodies rather than maps because gohcl decodes a block into a
-// struct and panics on a map field. Nomad's api package does tag these as
-// map[string]string, but Nomad decodes them with its own decoder rather than
-// gohcl, so the tag reads as advice that does not transfer.
-//
-// The body is the better representation regardless. Keeping it undecoded
-// preserves HCL source ranges, which is what lets an error about an env value
-// point at the line the author wrote rather than at a string that has already
-// lost its origin.
+// They are bodies rather than maps because gohcl panics on a map field, and an
+// undecoded body keeps the source ranges that let an error point at the line
+// the author wrote.
 type RawBlock struct {
 	Body hcl.Body `hcl:",remain"`
 }
 
-// Attributes decodes the block into a string map, evaluating each value against
-// ctx.
-//
-// Returns diagnostics rather than an error so that a bad value is reported
-// against its own source range, and so that several bad values are reported
-// together rather than one per run.
-//
-// A nil receiver yields nothing, because an absent block and an empty one carry
-// the same meaning for metadata and environment.
+// Attributes decodes the block into a string map evaluated against ctx,
+// reporting each bad value against its own range. A nil block yields nothing.
 func (b *RawBlock) Attributes(ctx *hcl.EvalContext) (map[string]string, hcl.Diagnostics) {
 	if b == nil || b.Body == nil {
 		return nil, nil
@@ -288,9 +245,8 @@ func (b *RawBlock) Attributes(ctx *hcl.EvalContext) (map[string]string, hcl.Diag
 
 // Source is the material a task operates on, fetched before execution begins.
 //
-// Ref is frequently a reference to job metadata supplied at submission rather
-// than a literal, which is what makes one job definition usable across every
-// commit a CI system wants verified.
+// Ref is often a reference to job metadata supplied at submission, so one job
+// definition serves every commit a CI system wants verified.
 type Source struct {
 	Type        string  `hcl:"type"`
 	Repository  string  `hcl:"repository"`
@@ -301,30 +257,16 @@ type Source struct {
 // Resources is what a task requires, expressed as a workload requirement rather
 // than any provider's sizing model.
 //
-// CPU is in millicores and Memory in MiB. A thousand millicores is one vCPU,
-// which is the Kubernetes convention and, more to the point, the only unit
-// every target platform actually sells in: Code Engine offers quarter and half
-// vCPU tiers, Cloud Run the same, and none of them price in clock speed.
-//
-// Nomad uses MHz here and we deliberately do not, which is the one place this
-// specification departs from the vocabulary a Nomad user arrives with. Nomad
-// fingerprints the real clock speed of a machine it can see; a cloud sells a
-// share of a core it will not describe, and converting between the two would be
-// inventing a number.
-//
-// Each provider plugin translates these into the closest configuration its
-// platform offers. That is rarely an exact match, is almost always a round up,
-// and is the plugin's problem rather than the job author's.
+// CPU is in millicores rather than MHz because a cloud sells shares of a core,
+// not clock speed. Each provider plugin rounds these up to the closest
+// configuration its platform offers.
 type Resources struct {
 	CPU    *int `hcl:"cpu,optional"`    // millicores; 1000 is one vCPU
 	Memory *int `hcl:"memory,optional"` // MiB
 }
 
-// Network is the connectivity a task expects.
-//
-// Private is declared even though no provider satisfies it in phase 1. A job
-// that needs private network access should be rejected by admission with a
-// reason that names the problem, which requires the job to be able to ask.
+// Network is the connectivity a task expects. Private exists so a job needing
+// private access is rejected by admission with a reason naming the problem.
 type Network struct {
 	Internet *bool `hcl:"internet,optional"`
 	Private  *bool `hcl:"private,optional"`
@@ -346,11 +288,9 @@ type ExecutionRequirements struct {
 
 // Retry is what to do when a task does not complete.
 //
-// Reroute distinguishes the two failures that look alike from a distance. An
-// infrastructure failure means no verdict was reached and another admitted
-// provider may produce one; a workload failure is a real answer and is returned
-// unchanged however many attempts remain. Retrying a failing build across three
-// providers burns free-tier capacity to reach the same result three times.
+// Reroute applies only to infrastructure failures, where no verdict was reached
+// and another provider may produce one. A workload failure is a real answer and
+// is returned unchanged however many attempts remain.
 type Retry struct {
 	Attempts *int     `hcl:"attempts,optional"`
 	Reroute  *bool    `hcl:"reroute,optional"`

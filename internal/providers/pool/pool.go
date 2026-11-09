@@ -45,6 +45,15 @@ const reservationTTL = 2 * time.Minute
 // TYPES
 // -------------------------------------------------------------------------
 
+// Compile-time proof the contract is met.
+var (
+	_ plugin.Provider        = (*Provider)(nil)
+	_ plugin.Live            = (*Provider)(nil)
+	_ plugin.MemberSubmitter = (*Provider)(nil)
+	_ plugin.LogStreamer     = (*Provider)(nil)
+	_ plugin.Releaser        = (*Provider)(nil)
+)
+
 // Provider is one declared pool. placed remembers which node this process sent
 // each execution to; reserved holds room on a node between placing work and
 // the node reporting it.
@@ -123,8 +132,7 @@ func (p *Provider) LiveCapabilities() (plugin.Capabilities, error) {
 		member := p.member(conn)
 		out.Members = append(out.Members, member)
 
-		// The summary is what any node offers, for a plan's display; admission
-		// judges the members, not this.
+		// The summary is only for display; admission judges the members
 		room := member.Capabilities.MaxResources
 		out.Drivers = union(out.Drivers, member.Capabilities.Drivers)
 		out.Architectures = union(out.Architectures, member.Capabilities.Architectures)
@@ -302,9 +310,7 @@ func (p *Provider) send(
 	p.placed[id.String()] = node
 	p.mu.Unlock()
 
-	// A workload that already finished is reported as running: a submission
-	// may not carry a terminal state without its result, and the next status
-	// call finds it finished.
+	// A finished workload reports running, since terminal needs a result
 	state := execution.State(sub.GetState())
 	if state.Terminal() {
 		state = execution.StateRunning

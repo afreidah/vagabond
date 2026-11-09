@@ -3,10 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// A score is a number nobody can check by eye, so what is asserted here is the
-// orderings it has to produce and the arithmetic behind them. The last test is
-// the one that matters most: the affinity the documented example actually
-// writes has to change which provider wins, or the example is decoration.
+// The orderings a score has to produce and the arithmetic behind them,
+// including that the affinity the documented example writes changes which
+// provider wins.
 // -------------------------------------------------------------------------------
 
 package scheduler
@@ -19,6 +18,10 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 )
+
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
 
 // candidate is a provider admitted with a stated free-tier standing.
 func candidate(name string, freePercent int) Candidate {
@@ -98,9 +101,8 @@ func TestRankDefaultsToFreeFirst(t *testing.T) {
 	}
 }
 
-// A strategy jobspec validation would have rejected still has to rank rather
-// than panic, because ranking is reachable from an API that did not parse a
-// file and cannot assume anything was checked.
+// A strategy validation would have rejected still ranks rather than panics,
+// since ranking is reachable from the API without a parsed file.
 func TestRankUnknownStrategyFallsBack(t *testing.T) {
 	t.Parallel()
 
@@ -161,8 +163,7 @@ func TestRankAffinityRaisesAMatch(t *testing.T) {
 		t.Errorf("ranking mismatch (-want +got):\n%s", diff)
 	}
 
-	// Half headroom with the affinity satisfied averages to 0.75, and with it
-	// unsatisfied to 0.25. An affinity nobody satisfies is not free.
+	// Half headroom averages with 1 to 0.75 and with 0 to 0.25
 	if got := rankOf(t, ranking, "matching").Percent(); got != 75 {
 		t.Errorf("matching score = %d, want 75", got)
 	}
@@ -172,9 +173,8 @@ func TestRankAffinityRaisesAMatch(t *testing.T) {
 	}
 }
 
-// Weight states relative importance among a job's affinities rather than an
-// absolute number of points, so satisfying the heavier of two scores higher
-// than satisfying the lighter.
+// Weight is relative among a job's affinities, so satisfying the heavier of two
+// scores higher than satisfying the lighter.
 func TestRankAffinityWeightsAreRelative(t *testing.T) {
 	t.Parallel()
 
@@ -210,8 +210,7 @@ func TestRankAffinityWeightsAreRelative(t *testing.T) {
 		t.Errorf("ranking mismatch (-want +got):\n%s", diff)
 	}
 
-	// Zero headroom averaged with the matched fraction of total weight: all of
-	// it, three quarters of it, and a quarter of it.
+	// Zero headroom averaged with all, three quarters and a quarter of the weight
 	for provider, want := range map[string]int{"both": 50, "heavy": 38, "light": 13} {
 		if got := rankOf(t, ranking, provider).Percent(); got != want {
 			t.Errorf("%s score = %d, want %d", provider, got, want)
@@ -266,9 +265,8 @@ func TestRankCarriesItsReasoning(t *testing.T) {
 // THE DOCUMENTED EXAMPLE
 // -------------------------------------------------------------------------
 
-// The example job prefers providers above fifty percent remaining, at weight
-// 75. That affinity has to change which provider wins, or the example is
-// teaching something the scheduler does not do.
+// The example job's affinity, above fifty percent remaining at weight 75,
+// separates the provider above the line from the one below it.
 func TestRankExampleAffinityChangesTheOutcome(t *testing.T) {
 	t.Parallel()
 
@@ -277,8 +275,7 @@ func TestRankExampleAffinityChangesTheOutcome(t *testing.T) {
 		candidate("below-the-line", 45),
 	}
 
-	// Both are scored on headroom alone without the affinity, and the ordering
-	// is the same either way here. What the affinity changes is the distance.
+	// The order is the same without the affinity; what it changes is the gap
 	plain := Rank(baseRequest(), candidates)
 
 	req := baseRequest()
@@ -302,8 +299,7 @@ func TestRankExampleAffinityChangesTheOutcome(t *testing.T) {
 			plainGap, affinityGap)
 	}
 
-	// Ten points of headroom apart becomes a clear preference: one satisfies the
-	// stated threshold and the other does not.
+	// Ten points of headroom apart becomes a clear preference
 	if got := rankOf(t, withAffinity, "above-the-line").Percent(); got != 78 {
 		t.Errorf("above-the-line score = %d, want 78", got)
 	}
@@ -444,8 +440,7 @@ func TestRankWeightedSingleTierScoresOne(t *testing.T) {
 func TestRankBreaksTiesByProvider(t *testing.T) {
 	t.Parallel()
 
-	// Admission hands ranking a name-ordered slice, so a stable sort is all a
-	// tiebreak needs to be.
+	// Admission hands over a name-ordered slice, so a stable sort breaks ties
 	candidates := []Candidate{
 		candidate("alpha", 50),
 		candidate("bravo", 50),

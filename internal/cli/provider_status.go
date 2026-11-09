@@ -20,6 +20,10 @@ import (
 	"github.com/afreidah/vagabond/internal/api"
 )
 
+// -------------------------------------------------------------------------
+// COMMAND
+// -------------------------------------------------------------------------
+
 // ProviderStatusCommand implements `vagabond provider status`.
 type ProviderStatusCommand struct {
 	*Meta

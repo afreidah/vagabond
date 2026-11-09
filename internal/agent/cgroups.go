@@ -7,7 +7,7 @@
 // for everything the agent runs. cgroup v2 lets a group either hold processes
 // or hand controllers to children, not both, so the agent first moves itself
 // into a leaf of its own group, then enables the cpu and memory controllers
-// for the children its workloads will be.
+// for the groups its workloads run in.
 // -------------------------------------------------------------------------------
 
 package agent

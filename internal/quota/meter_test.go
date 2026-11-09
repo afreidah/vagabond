@@ -15,6 +15,11 @@ import (
 	"time"
 )
 
+// -------------------------------------------------------------------------
+// METERS
+// -------------------------------------------------------------------------
+
+// Only the declared meters are valid.
 func TestMeter_Valid(t *testing.T) {
 	tests := []struct {
 		input Meter
@@ -37,6 +42,7 @@ func TestMeter_Valid(t *testing.T) {
 	}
 }
 
+// Each meter charges its own arithmetic over what the execution declared.
 func TestMeter_charge(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -127,6 +133,11 @@ func TestMeter_charge(t *testing.T) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// PERIODS
+// -------------------------------------------------------------------------
+
+// Only the declared periods are valid.
 func TestPeriod_Valid(t *testing.T) {
 	tests := []struct {
 		input Period
@@ -147,9 +158,8 @@ func TestPeriod_Valid(t *testing.T) {
 	}
 }
 
-// The key is UTC regardless of the caller's zone. An operator west of UTC late
-// in the evening is already on the provider's next day, and a key that said
-// otherwise would report headroom the provider does not agree exists.
+// The key is UTC regardless of the caller's zone, since an operator west of
+// UTC late in the evening is already on the provider's next day.
 func TestPeriod_Key(t *testing.T) {
 	west := time.FixedZone("UTC-7", -7*60*60)
 	evening := time.Date(2026, 9, 22, 18, 30, 0, 0, west) // 2026-09-23 01:30 UTC

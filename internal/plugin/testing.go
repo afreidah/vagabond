@@ -5,10 +5,8 @@
 //
 // Three snapshots covering the execution families, shaped after real providers
 // so that admission is exercised against limits that actually exist rather than
-// invented ones. Chunk 3 reuses them, which is why they live in the package
-// rather than in a test file.
-//
-// Nomad keeps its plugin test helpers the same way, in plugins/base/testing.go.
+// invented ones. The fake providers are built from them, which is why they live
+// in the package rather than in a test file.
 // -------------------------------------------------------------------------------
 
 package plugin
@@ -19,15 +17,8 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 )
 
-// FixtureContainer is a container-job provider, shaped after IBM Code Engine.
-//
-// It runs arbitrary images and advertises no duration limit, which is what
-// makes it the only family that can satisfy a general CI task.
-//
-// Four vCPU against eight gibibytes is one of Code Engine's real tiers. It does
-// not sell arbitrary sizes: a plugin rounds a request up to the nearest
-// combination its platform offers, and bills for the combination rather than
-// for what was asked.
+// FixtureContainer is a container-job provider, shaped after IBM Code Engine:
+// arbitrary images, no duration limit, and its real 4 vCPU / 8 GiB tier.
 func FixtureContainer(observedAt time.Time) Capabilities {
 	return Capabilities{
 		Drivers:         []job.DriverName{job.DriverContainer},
@@ -41,17 +32,10 @@ func FixtureContainer(observedAt time.Time) Capabilities {
 
 // FixtureFunction is a function provider, shaped after AWS Lambda.
 //
-// The 15 minute limit is the important part: it is the real bound that makes a
-// job with timeout = "15m" sit exactly on the edge, and rejecting anything past
-// it is a decision admission must reach without calling AWS.
-//
-// ArbitraryImages is false. Lambda accepts container images, but only ones
-// implementing its runtime contract, which is not the same claim.
-//
-// The CPU ceiling is derived rather than offered. Lambda gives no way to choose
-// CPU: it scales with the memory tier, and roughly six vCPU is what the largest
-// one implies. Advertising that beats leaving it nil, which this model reads
-// as no limit at all.
+// The 15 minute limit puts a job with timeout = "15m" exactly on the edge.
+// ArbitraryImages is false because Lambda only runs images implementing its
+// runtime contract. The CPU ceiling is what the largest memory tier implies,
+// since nil would read as no limit.
 func FixtureFunction(observedAt time.Time) Capabilities {
 	return Capabilities{
 		Drivers:         []job.DriverName{job.DriverFunction},
@@ -64,11 +48,8 @@ func FixtureFunction(observedAt time.Time) Capabilities {
 	}
 }
 
-// FixtureWorker is an edge provider, shaped after Cloudflare Workers.
-//
-// It runs no images at all and offers no architecture, because a Wasm sandbox
-// has no process to run a binary in. Its limits are small enough that most CI
-// work is rejected on resources even before the driver is considered.
+// FixtureWorker is an edge provider, shaped after Cloudflare Workers. It offers
+// no architecture, because a Wasm sandbox has no process to run a binary in.
 func FixtureWorker(observedAt time.Time) Capabilities {
 	return Capabilities{
 		Drivers:         []job.DriverName{job.DriverWorker},

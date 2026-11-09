@@ -20,6 +20,11 @@ import (
 	db "github.com/afreidah/vagabond/internal/state/postgres/sqlc"
 )
 
+// -------------------------------------------------------------------------
+// LEDGER
+// -------------------------------------------------------------------------
+
+// Compile-time proof the ledger's store contract is met.
 var _ ledger.Store = (*Store)(nil)
 
 // Reserve records r only if every charge fits. When it does not, the usage
@@ -91,10 +96,8 @@ func (s *Store) Reserved(ctx context.Context, id execution.ID) (bool, error) {
 	return held, nil
 }
 
-// ReadUsage returns settled plus reserved usage in the given periods.
-//
-// One statement reads both tables from one snapshot, so a settle moving an
-// amount between them is seen whole or not at all.
+// ReadUsage returns settled plus reserved usage in the given periods, from one
+// snapshot, so a settle moving an amount between them is seen whole or not.
 func (s *Store) ReadUsage(ctx context.Context, periods []string) (ledger.Usage, error) {
 	if len(periods) == 0 {
 		return ledger.Usage{}, nil
@@ -111,9 +114,8 @@ func (s *Store) ReadUsage(ctx context.Context, periods []string) (ledger.Usage, 
 // Reap claims reservations created before the cutoff and settles those that
 // settle returns true for.
 //
-// The claim holds its row locks while settle asks providers, which is what
-// keeps two reapers off the same execution. A retry after a serialization
-// failure asks again; the questions are reads, so asking twice is harmless.
+// The claim holds its row locks while settle asks providers, keeping two
+// reapers off one execution. A retry asks again; the questions are reads.
 func (s *Store) Reap(
 	ctx context.Context, before time.Time,
 	settle func(context.Context, ledger.Held) (map[ledger.PoolRef]int64, bool),
@@ -151,6 +153,10 @@ func (s *Store) Reap(
 
 	return reaped, err
 }
+
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
 
 // settleOne runs SettleQuota with actual flattened into its arrays.
 func settleOne(ctx context.Context, q *db.Queries, id execution.ID, actual map[ledger.PoolRef]int64) error {

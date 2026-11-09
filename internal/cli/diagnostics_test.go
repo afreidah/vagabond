@@ -3,9 +3,8 @@
 //
 // Author: Alex Freidah
 //
-// Rendered into a buffer rather than to a terminal, so these run in CI. The
-// cases that matter are the two kinds of diagnostic mixed together: parse
-// errors carry a range and get a source excerpt, validation errors carry none
+// Rendered into a buffer rather than to a terminal, so these run in CI. Parse
+// errors carry a range and get a source excerpt; validation errors carry none
 // and must not print a position at all.
 // -------------------------------------------------------------------------------
 
@@ -21,6 +20,11 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 )
 
+// -------------------------------------------------------------------------
+// HARNESS
+// -------------------------------------------------------------------------
+
+// diagSource is the file the positioned diagnostics below point into.
 const diagSource = `job "example" {
   type = "batch"
 }
@@ -59,8 +63,7 @@ func render(t *testing.T, files map[string]*hcl.File, diags hcl.Diagnostics, col
 // POSITIONED DIAGNOSTICS
 // -------------------------------------------------------------------------
 
-// A diagnostic with a range gets the offending line printed under it. That is
-// the difference between a validator people run and one they stop running.
+// A diagnostic with a range gets the offending line printed under it.
 func TestRenderDiagnostics_ShowsSourceExcerpt(t *testing.T) {
 	files := sourceFiles(t, "test.vagabond.hcl", diagSource)
 
@@ -135,8 +138,8 @@ func TestRenderDiagnostics_MixedKinds(t *testing.T) {
 	}
 }
 
-// Every problem is reported. hcl.Diagnostics.Error summarises as one and a
-// count of the rest, which is the opposite of what a validator is for.
+// Every problem is reported, where hcl.Diagnostics.Error would summarise the
+// rest as a count.
 func TestRenderDiagnostics_ReportsEveryProblem(t *testing.T) {
 	diags := hcl.Diagnostics{
 		{Severity: hcl.DiagError, Summary: "First"},
@@ -157,8 +160,7 @@ func TestRenderDiagnostics_ReportsEveryProblem(t *testing.T) {
 // COLOUR
 // -------------------------------------------------------------------------
 
-// Output that is not going to a terminal carries no escape sequences, which is
-// noticed immediately by anyone reading a CI log.
+// Output with colour disabled carries no escape sequences.
 func TestRenderDiagnostics_NoEscapesWithoutColor(t *testing.T) {
 	files := sourceFiles(t, "test.vagabond.hcl", diagSource)
 
@@ -177,6 +179,7 @@ func TestRenderDiagnostics_NoEscapesWithoutColor(t *testing.T) {
 	}
 }
 
+// NO_COLOR turns colour off whatever the stream.
 func TestUseColor_HonoursNoColor(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 
@@ -185,8 +188,7 @@ func TestUseColor_HonoursNoColor(t *testing.T) {
 	}
 }
 
-// A buffer is not a terminal, which is what keeps test output and CI logs
-// clean without anything having to ask.
+// A buffer is not a terminal, so test output and CI logs stay uncoloured.
 func TestIsTerminal_BufferIsNot(t *testing.T) {
 	if isTerminal(&bytes.Buffer{}) {
 		t.Error("a buffer reports as a terminal")

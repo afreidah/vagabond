@@ -24,6 +24,10 @@ import (
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
+
 // load is the common shape: decode a snippet and fail on any diagnostic.
 func load(t *testing.T, src string) *File {
 	t.Helper()
@@ -49,10 +53,20 @@ func loadErr(t *testing.T, src string) string {
 	return diags.Error()
 }
 
+// write puts one file in a directory.
+func write(t *testing.T, dir, name, body string) {
+	t.Helper()
+
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+		t.Fatalf("writing %s: %s", name, err)
+	}
+}
+
 // -------------------------------------------------------------------------
 // DECODING
 // -------------------------------------------------------------------------
 
+// Providers decode with their name, type, enabled flag, and the store's DSN.
 func TestLoadDecodesProviders(t *testing.T) {
 	t.Parallel()
 
@@ -108,11 +122,11 @@ func TestLoadWithoutStore(t *testing.T) {
 	}
 }
 
+// A misspelled attribute is refused rather than leaving a provider configured
+// differently than its file says.
 func TestLoadRejectsUnknownAttributes(t *testing.T) {
 	t.Parallel()
 
-	// A misspelled attribute that decoded silently would be a provider
-	// configured differently than its file says.
 	got := loadErr(t, `
 provider "ibm" {
   type   = "fake-container"
@@ -129,6 +143,7 @@ provider "ibm" {
 // VALIDATION
 // -------------------------------------------------------------------------
 
+// Configuration that decodes but means nothing is refused with a named reason.
 func TestValidateRejects(t *testing.T) {
 	t.Parallel()
 
@@ -188,6 +203,7 @@ provider "ibm" {
 // QUERIES
 // -------------------------------------------------------------------------
 
+// A provider is enabled unless its block says otherwise.
 func TestIsEnabledDefaultsToTrue(t *testing.T) {
 	t.Parallel()
 
@@ -267,6 +283,33 @@ func TestSchedulingTierMode(t *testing.T) {
 	}
 }
 
+// With no server block, or one naming no bind, the server listens on
+// localhost only.
+func TestServerAddress(t *testing.T) {
+	t.Parallel()
+
+	if got := load(t, `provider "p" { type = "fake-container" }`).Server.Address(); got != DefaultBind {
+		t.Errorf("no block: Address() = %q, want %q", got, DefaultBind)
+	}
+
+	if got := load(t, `server {}`).Server.Address(); got != DefaultBind {
+		t.Errorf("empty block: Address() = %q, want %q", got, DefaultBind)
+	}
+
+	if got := load(t, `server { bind = "0.0.0.0:9000" }`).Server.Address(); got != "0.0.0.0:9000" {
+		t.Errorf("Address() = %q, want 0.0.0.0:9000", got)
+	}
+
+	if got := load(t, `server {}`).Server.AgentAddress(); got != DefaultAgentBind {
+		t.Errorf("empty block: AgentAddress() = %q, want %q", got, DefaultAgentBind)
+	}
+
+	if got := load(t, `server { agent_bind = "0.0.0.0:9001" }`).Server.AgentAddress(); got != "0.0.0.0:9001" {
+		t.Errorf("AgentAddress() = %q, want 0.0.0.0:9001", got)
+	}
+}
+
+// A provider's meta block reads back as its string tags.
 func TestTags(t *testing.T) {
 	t.Parallel()
 
@@ -293,8 +336,7 @@ provider "untagged" { type = "fake-container" }
 		t.Errorf("tags mismatch (-want +got):\n%s", diff)
 	}
 
-	// Nil rather than empty, so that a provider nobody tagged contributes no
-	// attributes at all rather than a set of empty ones.
+	// Nil rather than empty, so an untagged provider contributes no attributes
 	untagged, diags := file.Providers[1].Tags()
 	if diags.HasErrors() {
 		t.Fatalf("reading absent tags failed: %s", diags.Error())
@@ -305,6 +347,7 @@ provider "untagged" { type = "fake-container" }
 	}
 }
 
+// A tag that is not a string is refused by name.
 func TestTagsRejectsNonStrings(t *testing.T) {
 	t.Parallel()
 
@@ -318,8 +361,7 @@ provider "tagged" {
 }
 `)
 
-	// Attributes reach a job as strings a constraint compares. A number that
-	// decoded here would be one the operator cannot predict the rendering of.
+	// A constraint compares strings, and a number's rendering is unpredictable
 	_, diags := file.Providers[0].Tags()
 	if !diags.HasErrors() {
 		t.Fatal("expected a non-string tag to be rejected")
@@ -334,6 +376,7 @@ provider "tagged" {
 // FILES
 // -------------------------------------------------------------------------
 
+// A missing file is reported as a diagnostic.
 func TestLoadFileMissing(t *testing.T) {
 	t.Parallel()
 
@@ -351,9 +394,8 @@ func TestLoadFileMissing(t *testing.T) {
 // DIRECTORIES
 // -------------------------------------------------------------------------
 
-// A directory loads every .hcl file in it, which is what makes a provider per
-// file possible once real credentials are involved and each one wants its own
-// review.
+// A directory loads every .hcl file in it, so each provider can have a file
+// and a review of its own.
 func TestLoadPathMergesADirectory(t *testing.T) {
 	t.Parallel()
 
@@ -450,32 +492,6 @@ func TestLoadPathRejectsSchedulingDeclaredTwice(t *testing.T) {
 	}
 }
 
-// With no server block, or one naming no bind, the server listens on
-// localhost only.
-func TestServerAddress(t *testing.T) {
-	t.Parallel()
-
-	if got := load(t, `provider "p" { type = "fake-container" }`).Server.Address(); got != DefaultBind {
-		t.Errorf("no block: Address() = %q, want %q", got, DefaultBind)
-	}
-
-	if got := load(t, `server {}`).Server.Address(); got != DefaultBind {
-		t.Errorf("empty block: Address() = %q, want %q", got, DefaultBind)
-	}
-
-	if got := load(t, `server { bind = "0.0.0.0:9000" }`).Server.Address(); got != "0.0.0.0:9000" {
-		t.Errorf("Address() = %q, want 0.0.0.0:9000", got)
-	}
-
-	if got := load(t, `server {}`).Server.AgentAddress(); got != DefaultAgentBind {
-		t.Errorf("empty block: AgentAddress() = %q, want %q", got, DefaultAgentBind)
-	}
-
-	if got := load(t, `server { agent_bind = "0.0.0.0:9001" }`).Server.AgentAddress(); got != "0.0.0.0:9001" {
-		t.Errorf("AgentAddress() = %q, want 0.0.0.0:9001", got)
-	}
-}
-
 // A store beside the providers, in a file of its own, is the layout a
 // directory exists for.
 func TestLoadPathMergesAStore(t *testing.T) {
@@ -511,6 +527,7 @@ func TestLoadPathRejectsAnEmptyDirectory(t *testing.T) {
 	}
 }
 
+// A path naming a file loads that file alone.
 func TestLoadPathReadsAFile(t *testing.T) {
 	t.Parallel()
 
@@ -527,6 +544,7 @@ func TestLoadPathReadsAFile(t *testing.T) {
 	}
 }
 
+// A path that does not exist is reported.
 func TestLoadPathMissing(t *testing.T) {
 	t.Parallel()
 
@@ -536,22 +554,12 @@ func TestLoadPathMissing(t *testing.T) {
 	}
 }
 
-// write puts one file in a directory.
-func write(t *testing.T, dir, name, body string) {
-	t.Helper()
-
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
-		t.Fatalf("writing %s: %s", name, err)
-	}
-}
-
 // -------------------------------------------------------------------------
 // THE OPAQUE BLOCK
 // -------------------------------------------------------------------------
 
-// A provider's own settings are not Vagabond's to understand. Cloud Run needs
-// a project and a runtime identity, Code Engine needs a GUID, and declaring
-// either here would make every provider carry another's fields.
+// A provider's own settings reach its plugin undecoded, nested blocks included,
+// since they are not Vagabond's to understand.
 func TestProviderConfigIsOpaque(t *testing.T) {
 	t.Parallel()
 
@@ -576,9 +584,7 @@ provider "gcp-cloud-run" {
 		t.Fatal("the config block did not reach the provider")
 	}
 
-	// Undecoded, so a plugin can ask for exactly the attributes it knows and
-	// report a typo against the line the operator wrote it on. A nested block
-	// is fine here precisely because nothing flattened it.
+	// A plugin asks for exactly the attributes it knows
 	content, _, diags := body.PartialContent(&hcl.BodySchema{
 		Attributes: []hcl.AttributeSchema{{Name: "project"}},
 	})
@@ -611,6 +617,7 @@ func TestProviderWithoutConfigBlock(t *testing.T) {
 // QUOTA POOLS
 // -------------------------------------------------------------------------
 
+// Pool blocks decode into the specs quota compiles.
 func TestLoadDecodesPools(t *testing.T) {
 	t.Parallel()
 
@@ -654,6 +661,8 @@ func TestProviderWithoutPools(t *testing.T) {
 	}
 }
 
+// A pool with an unknown meter or period, a non-positive limit, or a reused
+// name is refused.
 func TestPoolValidation(t *testing.T) {
 	t.Parallel()
 
@@ -781,8 +790,7 @@ func TestPoolRequiresEveryAttribute(t *testing.T) {
 	}
 }
 
-// The diagnostic lists what the operator could have written, which is the whole
-// value of transcribing a pricing page by hand.
+// The diagnostic lists every meter the operator could have written.
 func TestPoolDiagnosticListsVocabulary(t *testing.T) {
 	t.Parallel()
 
@@ -807,6 +815,7 @@ func TestPoolDiagnosticListsVocabulary(t *testing.T) {
 // NAMESPACES
 // -------------------------------------------------------------------------
 
+// Namespace quota blocks decode into the specs quota compiles.
 func TestLoadDecodesNamespaceShares(t *testing.T) {
 	t.Parallel()
 
@@ -839,6 +848,8 @@ namespace "empty" {}
 	}
 }
 
+// Duplicate namespaces and quotas, unknown providers, and bad share pools are
+// refused.
 func TestNamespaceValidation(t *testing.T) {
 	t.Parallel()
 

@@ -14,10 +14,8 @@ import (
 	"strings"
 )
 
-// metaFlags accumulates repeated key=value arguments.
-//
-// Implements flag.Value, which is what makes the flag repeatable: the standard
-// flag package calls Set once per occurrence rather than overwriting.
+// metaFlags accumulates repeated key=value arguments. As a flag.Value it is
+// repeatable, since the flag package calls Set once per occurrence.
 type metaFlags map[string]string
 
 // String renders the collected pairs, sorted by nothing in particular because
@@ -35,11 +33,8 @@ func (m *metaFlags) String() string {
 	return strings.Join(pairs, ",")
 }
 
-// Set records one key=value pair.
-//
-// A repeated key is an error rather than a silent overwrite. A caller passing
-// the same key twice has made a mistake somewhere upstream, and quietly taking
-// the last one hides which submission actually ran.
+// Set records one key=value pair. A repeated key is an error rather than a
+// silent overwrite, which would hide which value the submission ran with.
 func (m *metaFlags) Set(value string) error {
 	key, val, found := strings.Cut(value, "=")
 	if !found {

@@ -19,6 +19,10 @@ import (
 	"github.com/afreidah/vagabond/internal/plugin"
 )
 
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
+
 // member is a pool node with the baseline's capabilities, an architecture, the
 // memory it has free, and labels.
 func member(name string, arch job.Arch, memory int, labels map[string]string) plugin.Member {
@@ -46,6 +50,10 @@ func armWithMemory() *Request {
 
 	return req
 }
+
+// -------------------------------------------------------------------------
+// POOL ADMISSION
+// -------------------------------------------------------------------------
 
 // A node with arm64 and a node with the memory do not make a pool that can run
 // a task needing both.

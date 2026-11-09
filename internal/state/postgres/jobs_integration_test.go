@@ -22,6 +22,11 @@ import (
 	"github.com/afreidah/vagabond/internal/state/postgres"
 )
 
+// -------------------------------------------------------------------------
+// FIXTURES
+// -------------------------------------------------------------------------
+
+// One job's source as first written, reformatted only, and really changed.
 const (
 	ciSource = `job "ci" {
   type = "batch"
@@ -38,6 +43,7 @@ const (
 `
 )
 
+// mustRegister registers source as job ci, failing the test on an error.
 func mustRegister(ctx context.Context, t *testing.T, s *postgres.Store, source string) (int64, bool) {
 	t.Helper()
 
@@ -48,6 +54,10 @@ func mustRegister(ctx context.Context, t *testing.T, s *postgres.Store, source s
 
 	return version, changed
 }
+
+// -------------------------------------------------------------------------
+// REGISTRY
+// -------------------------------------------------------------------------
 
 // A version is made only when the job changed, and formatting alone is not a
 // change.

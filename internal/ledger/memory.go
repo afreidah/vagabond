@@ -20,12 +20,20 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 )
 
+// -------------------------------------------------------------------------
+// TYPES
+// -------------------------------------------------------------------------
+
 // Memory holds settled usage and open reservations in maps.
 type Memory struct {
 	mu   sync.Mutex
 	used Usage
 	held map[execution.ID]*Reservation
 }
+
+// -------------------------------------------------------------------------
+// CONSTRUCTOR
+// -------------------------------------------------------------------------
 
 // NewMemory builds a store holding used as already settled. Nil starts empty.
 func NewMemory(used Usage) *Memory {
@@ -38,6 +46,10 @@ func NewMemory(used Usage) *Memory {
 		held: make(map[execution.ID]*Reservation),
 	}
 }
+
+// -------------------------------------------------------------------------
+// STORE
+// -------------------------------------------------------------------------
 
 // Reserve records r if every charge fits against settled plus reserved usage.
 func (m *Memory) Reserve(_ context.Context, r *Reservation) (bool, Usage, error) {
@@ -131,6 +143,10 @@ func (m *Memory) Reap(
 
 	return reaped, nil
 }
+
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
 
 // settle does Settle's work. Callers hold the mutex.
 func (m *Memory) settle(id execution.ID, actual map[PoolRef]int64) {

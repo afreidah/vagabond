@@ -2,6 +2,10 @@
 // Memory Execution Store Tests
 //
 // Author: Alex Freidah
+//
+// The memory store has to keep the Postgres store's rules, so these pin the
+// same refusals: a stale update, a second finish, a lease held by another
+// owner, and a release mark an update must not clear.
 // -------------------------------------------------------------------------------
 
 package memory
@@ -15,6 +19,11 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 )
 
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
+
+// pending returns a fresh pending record for job ci, task test.
 func pending(t *testing.T) *execution.Record {
 	t.Helper()
 
@@ -33,6 +42,11 @@ func pending(t *testing.T) *execution.Record {
 	}
 }
 
+// -------------------------------------------------------------------------
+// RECORDS
+// -------------------------------------------------------------------------
+
+// A created record reads back, and the same ID is refused a second time.
 func TestExecutions_CreateThenGet(t *testing.T) {
 	s := NewExecutions()
 	r := pending(t)
@@ -76,6 +90,10 @@ func TestExecutions_UpdateIsConditional(t *testing.T) {
 		t.Errorf("stale Update() = %v, want ErrStale", err)
 	}
 }
+
+// -------------------------------------------------------------------------
+// DISPATCHES
+// -------------------------------------------------------------------------
 
 // A run finishes once: a second finish, or one for a run never recorded, is
 // refused as stale.
@@ -148,7 +166,10 @@ func TestExecutions_DispatchLeases(t *testing.T) {
 	}
 }
 
-// TestExecutions_GetUnknown reads an ID nothing recorded.
+// -------------------------------------------------------------------------
+// RELEASE AND READS
+// -------------------------------------------------------------------------
+
 // A record is unreleased until marked, only past the cutoff, and an update
 // after marking keeps the mark, as the Postgres store does.
 func TestExecutions_Release(t *testing.T) {
@@ -189,6 +210,7 @@ func TestExecutions_Release(t *testing.T) {
 	}
 }
 
+// Reading an ID nothing recorded is ErrNotFound.
 func TestExecutions_GetUnknown(t *testing.T) {
 	id, _ := execution.NewID()
 

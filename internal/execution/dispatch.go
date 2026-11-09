@@ -14,6 +14,7 @@ import "time"
 // DispatchState is where a run of a job stands.
 type DispatchState string
 
+// The states a run of a job moves through.
 const (
 	DispatchRunning    DispatchState = "running"
 	DispatchSucceeded  DispatchState = "succeeded"  // every task ran and passed

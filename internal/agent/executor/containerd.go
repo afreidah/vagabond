@@ -432,8 +432,7 @@ func (c *Containerd) Logs(ctx context.Context, id string, offset int64, w io.Wri
 			return err
 		}
 
-		// A workload released since the last copy has ended too, and the open
-		// file still holds whatever it wrote last.
+		// Ended or released: the open file still holds whatever it wrote last.
 		if err != nil || status.State.Terminal() {
 			_, err := io.Copy(w, file)
 

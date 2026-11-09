@@ -28,6 +28,10 @@ import (
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
+// -------------------------------------------------------------------------
+// FIXTURES
+// -------------------------------------------------------------------------
+
 // functionProvider has a request pool and a compute pool, as Lambda does.
 const functionProvider = `
 provider "fn" {
@@ -74,6 +78,10 @@ func (h *harness) exitWith(code int) {
 	p, _ := h.registry.Provider("fn")
 	p.(*plugin.FakeSyncProvider).ExitCode = new(code)
 }
+
+// -------------------------------------------------------------------------
+// RUNS
+// -------------------------------------------------------------------------
 
 // A job run through the CLI exits with the task's result, and the run, its
 // execution, and its charge read back as they happened.
@@ -124,6 +132,10 @@ func TestRun_TaskFailure(t *testing.T) {
 		t.Errorf("job run: exit %d, want %d:\n%s", code, cli.ExitFailure, stderr)
 	}
 }
+
+// -------------------------------------------------------------------------
+// REGISTERED JOBS
+// -------------------------------------------------------------------------
 
 // Register, dispatch by name, read status, stop, and a stopped job refused.
 func TestRegisteredJob_Lifecycle(t *testing.T) {

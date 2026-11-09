@@ -17,6 +17,10 @@ import (
 	"testing"
 )
 
+// -------------------------------------------------------------------------
+// HARNESS
+// -------------------------------------------------------------------------
+
 // planJob routes to two of the three providers below and constrains on an
 // attribute only the container ones publish.
 const planJob = `
@@ -77,6 +81,7 @@ func plan(t *testing.T, job, cfg string, extra ...string) (int, string, string) 
 // THE HAPPY PATH
 // -------------------------------------------------------------------------
 
+// A plan prints every provider's verdict, the selection, and its cost.
 func TestJobPlan_RendersTheTable(t *testing.T) {
 	code, stdout, stderr := plan(t, planJob, planConfig)
 
@@ -103,9 +108,8 @@ func TestJobPlan_RendersTheTable(t *testing.T) {
 	}
 }
 
-// Plan output is diffed in CI, so the same inputs have to produce the same
-// bytes. The observation timestamps come from a refresh, so this runs one plan
-// and compares the lines that are not time.
+// Plan output is diffed in CI, so the same inputs produce the same bytes once
+// the observation timestamps are stripped.
 func TestJobPlan_IsRepeatable(t *testing.T) {
 	_, first, _ := plan(t, planJob, planConfig)
 	_, second, _ := plan(t, planJob, planConfig)
@@ -128,18 +132,18 @@ func stripObserved(out string) string {
 	return strings.Join(lines, "\n")
 }
 
+// -verbose shows each scorer's contribution and every reason a provider was
+// rejected for.
 func TestJobPlan_Verbose(t *testing.T) {
 	_, stdout, _ := plan(t, planJob, planConfig, "-verbose")
 
-	// The score breakdown is what defends the number rather than asking to be
-	// trusted on it.
 	for _, want := range []string{"headroom", "affinity"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("verbose output is missing the %s scorer:\n%s", want, stdout)
 		}
 	}
 
-	// And a rejection shows every reason, not only the one that printed.
+	// A rejection shows every reason, not only the first
 	if !strings.Contains(stdout, "driver-unsupported") {
 		t.Errorf("verbose output omits the collected reasons:\n%s", stdout)
 	}
@@ -235,11 +239,8 @@ provider "aws-lambda" {
 	}
 }
 
-// A rejection that may pass on its own says so, which is the difference
-// between waiting and editing.
-//
-// Spent here means a pool smaller than one run of the task, since an empty
-// ledger is all config can express.
+// A rejection that may pass on its own says so. Spent here means a pool smaller
+// than one run of the task, since an empty ledger is all config can express.
 func TestJobPlan_TransientRejectionSaysSo(t *testing.T) {
 	const timed = `
 job "ci" {
@@ -385,6 +386,7 @@ func TestJobPlan_DefaultNamespaceHasNoShare(t *testing.T) {
 	}
 }
 
+// A namespace the configuration does not declare is refused by name.
 func TestJobPlan_UndeclaredNamespace(t *testing.T) {
 	code, _, stderr := plan(t, planJob, planConfig, "-namespace", "nowhere")
 
@@ -488,6 +490,7 @@ func TestJobPlan_InvalidJob(t *testing.T) {
 	}
 }
 
+// A parameterized job planned without its required metadata names the key.
 func TestJobPlan_MissingRequiredMeta(t *testing.T) {
 	const parameterized = `
 job "ci" {
@@ -550,6 +553,7 @@ job "ci" {
 	}
 }
 
+// A specification piped to "-" is planned like a file.
 func TestJobPlan_ReadsStdin(t *testing.T) {
 	s := serve(t, planConfig)
 
@@ -571,6 +575,7 @@ func TestJobPlan_ReadsStdin(t *testing.T) {
 // ARGUMENTS
 // -------------------------------------------------------------------------
 
+// No argument, or more than one, is a usage error that says what is expected.
 func TestJobPlan_WrongArgumentCount(t *testing.T) {
 	for _, args := range [][]string{
 		{"job", "plan"},
@@ -592,9 +597,8 @@ func TestJobPlan_WrongArgumentCount(t *testing.T) {
 // THE DOCUMENTED EXAMPLE
 // -------------------------------------------------------------------------
 
-// The example job and the example configuration have to work together. Two
-// examples that each parse and cannot be used with each other are worse than
-// one, because the first thing anyone does is run them side by side.
+// The shipped example job plans against the shipped example configuration,
+// since the first thing anyone does is run them side by side.
 func TestJobPlan_ShippedExamples(t *testing.T) {
 	examples := filepath.Join("..", "..", "examples")
 

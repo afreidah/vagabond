@@ -3,16 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// What is being placed: one task, plus the routing policy its job declared.
-// They arrive together because half the admission rules live on each, and
-// splitting them would leave the allowlist and the cost ceiling applied
-// somewhere outside the checker set, with their own reasons and their own
-// ordering.
-//
-// Everything here is derived once, before any provider is considered. Nomad
-// does the same with TaskGroupConstraints, for the same reason: admission fans
-// out across every provider, and a checker that parsed HCL on each one would
-// be doing the same work five times to reach the same answer.
+// What is being placed: one task, plus the routing policy its job declared,
+// together because half the admission rules live on each. Everything here is
+// derived once, before any provider is considered, since admission fans out
+// across every provider.
 // -------------------------------------------------------------------------------
 
 package scheduler
@@ -28,21 +22,10 @@ import (
 // TYPES
 // -------------------------------------------------------------------------
 
-// Request is one task and the policy governing where it may run.
-//
-// Routing is a pointer because a job that states no preference is admissible
-// everywhere, which is not the same as one declaring an empty provider list.
-//
-// Image is derived from the task's driver config rather than read from it,
-// because the config block's shape belongs to the driver and a checker must
-// not decode HCL. It is empty when the task names no image.
-//
-// Execution is what the task would charge a provider's quota pools. Derived
-// here so that admission's check, the free_quota_percent attribute and the
-// dispatcher's reservation are all pricing the same thing.
-//
-// ServerTiers is the deployment's tier mode, which the job's routing may
-// override. Empty reads as the default.
+// Request is one task and the policy governing where it may run. Image and
+// Execution are derived here once, so no checker decodes HCL and admission,
+// free_quota_percent and the dispatcher's reservation price the same thing.
+// ServerTiers is the deployment's tier mode, empty for the default.
 type Request struct {
 	Task        *job.Task
 	Routing     *job.Routing
@@ -51,12 +34,13 @@ type Request struct {
 	ServerTiers job.TierMode
 }
 
+// -------------------------------------------------------------------------
+// CONSTRUCTOR
+// -------------------------------------------------------------------------
+
 // NewRequest derives a request from a task, its job's routing and the server's
-// tier mode.
-//
-// ctx evaluates the driver config, which is left undecoded at parse time and
-// may still reference job metadata. Diagnostics rather than an error, so a bad
-// image expression is reported against the line the author wrote.
+// tier mode. ctx evaluates the driver config, which may reference job
+// metadata; diagnostics report a bad image against the line the author wrote.
 func NewRequest(
 	task *job.Task, routing *job.Routing, tiers job.TierMode, ctx *hcl.EvalContext,
 ) (*Request, hcl.Diagnostics) {
@@ -71,12 +55,9 @@ func NewRequest(
 	}, diags
 }
 
-// executionOf reads what the task declared, which is all a charge may rest on:
-// reserving happens before anything runs, and job plan prices a task it is not
-// going to dispatch.
-//
-// An unparseable timeout counts as none. Jobspec validation owns that error and
-// reports it against the line the author wrote.
+// executionOf reads what the task declared, which is all a charge may rest on
+// before anything runs. An unparseable timeout counts as none, since jobspec
+// validation reports it.
 func executionOf(task *job.Task) quota.Execution {
 	var e quota.Execution
 
@@ -103,10 +84,8 @@ func executionOf(task *job.Task) quota.Execution {
 // ROUTING POLICY
 // -------------------------------------------------------------------------
 
-// Providers returns the allowlist the job declared, which may be empty.
-//
-// An empty list means every provider is allowed. A job that named none did not
-// forbid all of them; it declined to have an opinion.
+// Providers returns the allowlist the job declared; an empty one allows every
+// provider.
 func (r *Request) Providers() []string {
 	if r.Routing == nil {
 		return nil
@@ -115,12 +94,8 @@ func (r *Request) Providers() []string {
 	return r.Routing.Providers
 }
 
-// MaxCost returns the most the job will pay for one execution.
-//
-// Zero when the job did not say. Vagabond brokers free capacity, so an author
-// who wrote no ceiling gets the one the tool exists to enforce rather than an
-// unbounded one. Paying is the deliberate act, the same way disabling a
-// provider is.
+// MaxCost returns the most the job will pay for one execution: zero when it
+// did not say, so paying is a deliberate act.
 func (r *Request) MaxCost() job.Cost {
 	if r.Routing == nil || r.Routing.MaxCost == nil {
 		return 0
@@ -129,21 +104,14 @@ func (r *Request) MaxCost() job.Cost {
 	return *r.Routing.MaxCost
 }
 
-// WillPay reports whether the job accepts capacity that costs money.
-//
-// This is what makes an exhausted free tier a rejection for most jobs and
-// merely a price for the rest. Without it, a job that explicitly budgeted for
-// paid capacity would still be refused the moment a free tier ran out, which
-// reads as a bug to everyone except the person who wrote the check.
+// WillPay reports whether the job accepts capacity that costs money, which
+// makes a spent budget a price for it rather than a rejection.
 func (r *Request) WillPay() bool {
 	return r.MaxCost() > 0
 }
 
-// Strategy returns how the job wants its candidates ordered.
-//
-// Free-first when the job did not say, which is the only strategy Vagabond
-// implements and the one the project exists for. A job that stated nothing gets
-// the behaviour it would have chosen.
+// Strategy returns how the job wants its candidates ordered, free-first when
+// it did not say.
 func (r *Request) Strategy() job.Strategy {
 	if r.Routing == nil || r.Routing.Strategy == nil {
 		return job.StrategyFreeFirst
@@ -217,11 +185,8 @@ func (r *Request) Memory() int {
 	return *r.Task.Resources.Memory
 }
 
-// NeedsInternet reports whether the task requires egress.
-//
-// An absent internet leaves the decision to the provider, so only an explicit
-// true is a requirement. An explicit false denies egress, which no provider is
-// rejected for being unable to offer.
+// NeedsInternet reports whether the task requires egress. Only an explicit
+// true is a requirement; absent leaves it to the provider, false denies it.
 func (r *Request) NeedsInternet() bool {
 	return r.Task.Network != nil &&
 		r.Task.Network.Internet != nil &&

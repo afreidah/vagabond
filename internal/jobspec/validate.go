@@ -3,20 +3,11 @@
 //
 // Author: Alex Freidah
 //
-// Decoding proves a file has the right shape. These rules ask whether the job
-// means anything: a task with no image, a backoff whose maximum is below its
-// initial, two tasks sharing a name, a timeout of zero.
-//
-// Validation knows only the job. If answering a question would need a
-// capability snapshot, it belongs to admission instead: a timeout of zero is
-// meaningless whatever runs it, while a timeout above some provider's limit is
-// a fact about that provider. The same field drives both, and the split is what
-// keeps two layers from each half-implementing the other.
-//
-// Diagnostics here carry no source range. The decoded specification does not
-// hold one, and the rules run against it rather than against the body, so a
-// message names the job and task instead. Nomad's structs.Job.Validate reports
-// the same way for the same reason.
+// Decoding proves a file has the right shape; these rules ask whether the job
+// means anything, such as a backoff whose maximum is below its initial or a
+// timeout of zero. A question needing a capability snapshot belongs to
+// admission instead. Diagnostics carry no source range, because the rules run
+// against the decoded specification, so a message names the job and task.
 // -------------------------------------------------------------------------------
 
 package jobspec
@@ -36,11 +27,8 @@ import (
 // ENTRY POINT
 // -------------------------------------------------------------------------
 
-// Validate reports every rule a file breaks.
-//
-// Collects rather than stopping at the first problem. A validator that returns
-// one error at a time makes an author fix a file one line per run, and
-// hcl.Diagnostics exists to carry a set.
+// Validate reports every rule a file breaks, collecting rather than stopping at
+// the first so an author can fix a file in one pass.
 func Validate(file *job.File) hcl.Diagnostics {
 	if file == nil {
 		return nil
@@ -53,9 +41,7 @@ func Validate(file *job.File) hcl.Diagnostics {
 			"A job file must declare a job."))
 	}
 
-	// One job per file. The specification holds a slice so that a second job
-	// is reported here rather than silently discarded by a parser that took the
-	// first and stopped.
+	// File holds a slice so a second job is reported here, not discarded
 	if len(file.Jobs) > 1 {
 		diags = append(diags, simple("Too many jobs",
 			fmt.Sprintf("A job file declares one job, and this one declares %d: %s.",
@@ -94,12 +80,8 @@ func validateJob(j *job.Job) hcl.Diagnostics {
 	return diags
 }
 
-// validateJobType enforces the closed vocabulary.
-//
-// Decoding cannot do this. gohcl converts by reflected kind, so a string-kinded
-// Type accepts any string and the UnmarshalText written alongside it is never
-// consulted. This is where an unknown value is caught, and the message lists
-// what would have been accepted.
+// validateJobType enforces the closed vocabulary, which decoding cannot: gohcl
+// converts by reflected kind and never calls UnmarshalText.
 func validateJobType(j *job.Job) hcl.Diagnostics {
 	if j.Type == nil {
 		return nil
@@ -168,35 +150,25 @@ func validateRouting(j *job.Job) hcl.Diagnostics {
 	return diags
 }
 
-// validateAttribute checks that a matched attribute is one a provider can
-// actually have.
-//
-// Two things pass: a name Vagabond publishes from a capability snapshot, and
-// anything under the operator's own prefix, which is deliberately unchecked.
-// Anything else matches nothing, so a job constraining on it would silently
-// exclude every provider and report as having no capacity. Nomad cannot make
-// this check because its node attributes are extensible by fingerprinters;
-// ours are a closed set, so it costs nothing to catch the typo.
+// validateAttribute accepts a published attribute or anything under the
+// unchecked provider.meta. and node.label. prefixes; others match nothing.
 func validateAttribute(jobName, kind, attribute string) hcl.Diagnostics {
 	if plugin.Matchable(attribute) {
 		return nil
 	}
 
 	detail := fmt.Sprintf("Attribute %q is not one Vagabond publishes about a "+
-		"provider. Known attributes are %s. Anything under %q is an operator's "+
-		"own and is not checked.",
-		attribute, strings.Join(plugin.KnownAttributes(), ", "), plugin.MetaPrefix)
+		"provider. Known attributes are %s. Anything under %q or %q is an "+
+		"operator's own and is not checked.",
+		attribute, strings.Join(plugin.KnownAttributes(), ", "),
+		plugin.MetaPrefix, plugin.NodeLabelPrefix)
 
 	return hcl.Diagnostics{simple(
 		fmt.Sprintf("Unknown %s attribute in %q", kind, jobName), detail)}
 }
 
-// validateOperator checks the comparison, and that it carries a value when it
-// needs one.
-//
-// The presence operators are the exception: is_set and is_not_set ask only
-// whether a provider published the attribute, so a value alongside one is a
-// misunderstanding worth reporting rather than something to ignore.
+// validateOperator checks the comparison and its value: a presence operator
+// takes none, and every other operator needs one.
 func validateOperator(jobName, kind string, op job.Operator, value string) hcl.Diagnostics {
 	if !op.Valid() {
 		return hcl.Diagnostics{simple(
@@ -290,13 +262,8 @@ func validateDriver(jobName string, task *job.Task) hcl.Diagnostics {
 			"Valid drivers are %s.", task.Driver, joinDrivers()))}
 }
 
-// validateConfig checks the little about a driver's configuration that
-// Vagabond can know.
-//
-// The block's schema belongs to the driver, so this asks only what is true of
-// the contract itself: a container task runs an image, and without one there is
-// nothing for a provider to pull. Anything more specific is the plugin's to
-// reject, since only it knows what its platform accepts.
+// validateConfig checks what the driver contract implies, that a container
+// task's config names an image; anything more is the plugin's to reject.
 func validateConfig(jobName string, task *job.Task) hcl.Diagnostics {
 	if task.Driver != job.DriverContainer {
 		return nil
@@ -339,10 +306,8 @@ func validateExecution(jobName string, task *job.Task) hcl.Diagnostics {
 			"Valid architectures are %s.", arch, joinArches()))}
 }
 
-// validateResources checks that requested resources are positive.
-//
-// Zero is rejected rather than read as "no preference", because an omitted
-// block already means that and the two spellings should not differ.
+// validateResources checks that requested resources are positive. Zero is
+// rejected, since omitting the value already means no preference.
 func validateResources(jobName string, task *job.Task) hcl.Diagnostics {
 	if task.Resources == nil {
 		return nil
@@ -368,12 +333,8 @@ func validateResources(jobName string, task *job.Task) hcl.Diagnostics {
 	return diags
 }
 
-// validateTimeout checks that a declared timeout parses and bounds something.
-//
-// Parsing is checked here rather than at decode because a Duration holds the
-// text a job file carried: gohcl decodes through gocty, which cannot convert a
-// string into a parsed duration, so the value stays text until something proves
-// it. This is that something.
+// validateTimeout checks that a declared timeout parses and is nonzero. Parsing
+// happens here because gohcl leaves a Duration as the text the file carried.
 func validateTimeout(jobName string, task *job.Task) hcl.Diagnostics {
 	if task.Timeout == nil {
 		return nil
@@ -433,8 +394,7 @@ func validateBackoff(jobName string, task *job.Task) hcl.Diagnostics {
 	initial, initialOK := checkDuration(jobName, task, "backoff initial", backoff.Initial, &diags)
 	maximum, maxOK := checkDuration(jobName, task, "backoff max", backoff.Max, &diags)
 
-	// A maximum below the initial delay is never reached, so the policy does
-	// not mean what it says.
+	// A maximum below the initial delay is never reached
 	if initialOK && maxOK && maximum < initial {
 		diags = append(diags, simple(
 			fmt.Sprintf("Invalid backoff in %q task %q", jobName, task.Name),
@@ -476,10 +436,6 @@ func checkDuration(
 }
 
 // simple builds a diagnostic with no source range.
-//
-// Validation runs against the decoded specification, which carries no ranges,
-// so the job and task are named in the message instead. Nomad reports the same
-// way, for the same reason.
 func simple(summary, detail string) *hcl.Diagnostic {
 	return &hcl.Diagnostic{
 		Severity: hcl.DiagError,
@@ -499,6 +455,7 @@ func jobNames(jobs []job.Job) []string {
 	return names
 }
 
+// joinDrivers lists the valid drivers for a diagnostic.
 func joinDrivers() string {
 	names := make([]string, 0, len(job.Drivers()))
 	for _, d := range job.Drivers() {
@@ -508,6 +465,7 @@ func joinDrivers() string {
 	return strings.Join(names, ", ")
 }
 
+// joinTypes lists the valid job types for a diagnostic.
 func joinTypes() string {
 	names := make([]string, 0, len(job.Types()))
 	for _, t := range job.Types() {
@@ -517,6 +475,7 @@ func joinTypes() string {
 	return strings.Join(names, ", ")
 }
 
+// joinArches lists the valid architectures for a diagnostic.
 func joinArches() string {
 	names := make([]string, 0, len(job.Arches()))
 	for _, a := range job.Arches() {
@@ -526,6 +485,7 @@ func joinArches() string {
 	return strings.Join(names, ", ")
 }
 
+// joinStrategies lists the valid routing strategies for a diagnostic.
 func joinStrategies() string {
 	names := make([]string, 0, len(job.Strategies()))
 	for _, s := range job.Strategies() {
@@ -545,6 +505,7 @@ func joinTierModes() string {
 	return strings.Join(names, ", ")
 }
 
+// joinOperators lists the valid operators for a diagnostic.
 func joinOperators() string {
 	names := make([]string, 0, len(job.Operators()))
 	for _, o := range job.Operators() {

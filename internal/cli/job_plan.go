@@ -24,6 +24,10 @@ import (
 	"github.com/afreidah/vagabond/internal/api"
 )
 
+// -------------------------------------------------------------------------
+// COMMAND
+// -------------------------------------------------------------------------
+
 // JobPlanCommand implements `vagabond job plan`.
 type JobPlanCommand struct {
 	*Meta
@@ -74,7 +78,8 @@ Plan Options:
     error.
 
   -verbose
-    Show every scorer's contribution rather than the final score alone.
+    Show every scorer's contribution rather than the final score alone, and
+    every further reason a rejected provider failed rather than the first.
 `
 
 	return strings.TrimSpace(text)
@@ -115,9 +120,8 @@ func (c *JobPlanCommand) Run(args []string) int {
 	return c.render(plan, verbose)
 }
 
-// isFile reports whether arg names a job file rather than a registered job:
-// standard input, anything shaped like a path, or a path that exists. A
-// mistyped file name is then reported as a missing file, not a missing job.
+// isFile reports whether arg names a job file rather than a registered job, so
+// that a mistyped file name is reported as a missing file, not a missing job.
 func isFile(arg string) bool {
 	if arg == stdinPath || strings.ContainsRune(arg, os.PathSeparator) || filepath.Ext(arg) == ".hcl" {
 		return true
@@ -172,9 +176,8 @@ func (c *JobPlanCommand) renderTask(t *api.TaskPlan, verbose bool) bool {
 	return true
 }
 
-// table renders candidates then rejections, both already ordered: ranked
-// candidates first because the answer is at the top, rejections in provider
-// order so the same plan diffs cleanly against itself.
+// table renders ranked candidates first, so the answer is at the top, then
+// rejections in provider order, so a plan diffs cleanly against itself.
 func table(t *api.TaskPlan, verbose bool) string {
 	return columns(func(w io.Writer) {
 		candidateRows(w, t.Candidates, verbose)
@@ -225,9 +228,8 @@ func observed(cand *api.Candidate) string {
 	return fmt.Sprintf("observed %s", stamp(cand.Observed))
 }
 
-// cost renders what an execution would be charged. Free is spelled rather than
-// printed as a zero, and a non-zero cost prints as a bare number, since its
-// unit is not pinned yet.
+// cost renders what an execution would be charged: "free" for zero, and
+// otherwise a bare number, since the unit is not pinned.
 func cost(c int64) string {
 	if c == 0 {
 		return "free"

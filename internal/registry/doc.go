@@ -5,7 +5,7 @@
 // needs. That is why it is here rather than in the scheduler, which depguard
 // forbids from importing a provider implementation at all.
 //
-// Nothing in admission may reach a network, so something has to own freshness.
-// This does. A snapshot is gathered when the registry is built or refreshed, and
-// admission reads whatever was gathered last.
+// Nothing in admission may reach a network, so the registry owns freshness: a
+// snapshot is gathered when the registry is built or refreshed, and admission
+// reads whatever was gathered last.
 package registry

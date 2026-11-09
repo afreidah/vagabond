@@ -5,11 +5,8 @@
 //
 // Job files match on provider properties by dotted name, so Capabilities needs
 // a string-keyed view. It is computed from the typed fields on every call
-// rather than stored beside them, so the two cannot disagree.
-//
-// Quota-derived attributes such as provider.free_quota_percent are not here.
-// Admission adds those, since it is the only layer holding both a capability
-// snapshot and a quota snapshot.
+// rather than stored beside them, so the two cannot disagree. Quota-derived
+// attributes are added by admission, the only layer holding both snapshots.
 // -------------------------------------------------------------------------------
 
 package plugin
@@ -24,19 +21,12 @@ import (
 // CONSTANTS
 // -------------------------------------------------------------------------
 
-// Prefix is reserved for attributes Vagabond publishes about a provider.
-//
-// Reserving it stops a plugin from shadowing an attribute the scheduler relies
-// on, and makes a constraint on an unpublished name under this prefix a
-// job-file error rather than a silent non-match.
+// Prefix is reserved for attributes Vagabond publishes about a provider, so a
+// plugin cannot shadow one and a typo under it is a job-file error.
 const Prefix = "provider."
 
-// The attributes derived from a capability snapshot.
-//
-// AttrArchitecture and AttrDrivers hold comma-separated sets, because a
-// provider can offer several of each. They match by membership rather than
-// equality, which is what SetValued reports; the operator that expresses this
-// is settled when matching is implemented.
+// The attributes derived from a capability snapshot. AttrArchitecture and
+// AttrDrivers hold comma-separated sets, which a job matches with set_contains.
 const (
 	AttrArchitecture    = Prefix + "architecture"
 	AttrDrivers         = Prefix + "drivers"
@@ -50,10 +40,7 @@ const (
 )
 
 // AttrFreeQuotaPercent is how much of a provider's free-tier allowance remains.
-//
-// Declared here so that the attribute vocabulary is in one place, but no
-// capability snapshot can populate it: the value comes from the quota ledger,
-// and admission is the only layer holding both.
+// It comes from the quota ledger, so admission adds it, not the snapshot.
 const AttrFreeQuotaPercent = Prefix + "free_quota_percent"
 
 // AttrTier is the operator's preference for a provider, lower first. Like
@@ -61,28 +48,20 @@ const AttrFreeQuotaPercent = Prefix + "free_quota_percent"
 // and admission adds it.
 const AttrTier = Prefix + "tier"
 
-// MetaPrefix is where an operator's own tags on a provider live.
-//
-// Everything under it is open. Nomad separates fingerprinted node attributes
-// from operator-set node metadata for the same reason, and cannot validate
-// either because both are extensible. Ours splits differently: the attributes
-// Vagabond derives are a closed set it can check, and this prefix is the escape
-// hatch for everything an operator wants to say that Vagabond has no opinion
-// about.
+// MetaPrefix is where an operator's own tags on a provider live. Vagabond's
+// attributes are a closed set it checks; everything under this is unchecked.
 const MetaPrefix = Prefix + "meta."
 
 // NodeLabelPrefix is where a pool node's labels live, from the agent's -label
 // flags. Open like MetaPrefix, and only present when a pool's node is judged.
 const NodeLabelPrefix = "node.label."
 
+// setValuedAttributes are matched by membership rather than equality.
 var setValuedAttributes = []string{AttrArchitecture, AttrDrivers}
 
-// knownAttributes is every name Vagabond publishes about a provider.
-//
-// A constraint naming something outside this set, and outside MetaPrefix, is a
-// typo rather than a preference. Catching it matters because the alternative is
-// a job that silently matches no provider and reports as having no capacity,
-// which is the most misleading failure this can produce.
+// knownAttributes is every name Vagabond publishes about a provider. A
+// constraint outside it and MetaPrefix is a typo, caught so the job does not
+// silently match nothing and report as having no capacity.
 var knownAttributes = []string{
 	AttrArchitecture,
 	AttrDrivers,
@@ -101,12 +80,8 @@ var knownAttributes = []string{
 // PROJECTION
 // -------------------------------------------------------------------------
 
-// Attributes returns the dotted view of the snapshot.
-//
-// A limit the provider never advertised is left out of the map. Writing it as
-// "0" would make a constraint read it as a real limit of zero. Cost is the
-// exception and is published even at zero, because a provider that charges
-// nothing is stating a fact rather than declining to state a limit.
+// Attributes returns the dotted view of the snapshot. An unadvertised limit is
+// left out rather than written as "0"; cost is published even at zero.
 func (c *Capabilities) Attributes() map[string]string {
 	attrs := map[string]string{
 		AttrInternetEgress:  strconv.FormatBool(c.InternetEgress),
@@ -164,20 +139,14 @@ func Reserved(name string) bool {
 	return strings.HasPrefix(name, Prefix)
 }
 
-// KnownAttributes returns every attribute Vagabond publishes about a provider.
-//
-// The returned slice is a copy, so a caller rendering it into an error cannot
-// reorder the vocabulary for everyone else.
+// KnownAttributes returns a copy of every attribute Vagabond publishes about a
+// provider, so a caller cannot reorder the vocabulary for everyone else.
 func KnownAttributes() []string {
 	return slices.Clone(knownAttributes)
 }
 
-// Matchable reports whether a constraint may name this attribute.
-//
-// True for the attributes Vagabond publishes, and for anything under
-// MetaPrefix or NodeLabelPrefix, which are an operator's own and deliberately
-// unchecked. A name that is neither is a mistake, not a preference nothing
-// happens to satisfy.
+// Matchable reports whether a constraint may name this attribute: one Vagabond
+// publishes, or anything under MetaPrefix or NodeLabelPrefix, left unchecked.
 func Matchable(name string) bool {
 	if strings.HasPrefix(name, MetaPrefix) || strings.HasPrefix(name, NodeLabelPrefix) {
 		return true

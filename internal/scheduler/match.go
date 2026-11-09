@@ -6,11 +6,8 @@
 // Evaluates a job's constraints and affinities against what a provider
 // publishes about itself. A constraint answers yes or no and decides admission;
 // an affinity answers the same question and contributes its weight to a score.
-//
-// Everything here is a pure function of an attribute map and a comparison.
-// Admission fans out across every configured provider on a plan, so nothing in
-// this path may allocate a connection, read a clock, or care what order it is
-// called in.
+// Everything here is a pure function of an attribute map and a comparison,
+// since admission fans out across every configured provider on a plan.
 // -------------------------------------------------------------------------------
 
 package scheduler
@@ -33,22 +30,15 @@ func MatchConstraint(attrs map[string]string, c *job.Constraint) bool {
 	return match(attrs, c.Attribute, c.Operator, c.Value)
 }
 
-// MatchAffinity reports whether a provider satisfies one affinity.
-//
-// Identical to a constraint; what differs is the consequence. Nomad shares the
-// implementation the same way, with checkAffinity calling straight through to
-// checkConstraint.
+// MatchAffinity reports whether a provider satisfies one affinity. The match is
+// a constraint's; only the consequence differs.
 func MatchAffinity(attrs map[string]string, a *job.Affinity) bool {
 	return match(attrs, a.Attribute, a.Operator, a.Value)
 }
 
-// match evaluates one comparison against a provider's attributes.
-//
-// Absence is handled per operator rather than uniformly. An attribute the
-// provider never published is not equal to anything, so != holds, and is_not_set
-// holds by definition; every other operator needs a value to compare and fails
-// without one. Nomad draws the same line, and getting it wrong means a provider
-// silently matching a constraint about a capability it never claimed.
+// match evaluates one comparison against a provider's attributes. An attribute
+// never published equals nothing, so != and is_not_set hold; every other
+// operator needs a value and fails without one.
 func match(attrs map[string]string, name string, op job.Operator, want string) bool {
 	got, found := attrs[name]
 
@@ -81,10 +71,8 @@ func match(attrs map[string]string, name string, op job.Operator, want string) b
 // SETS
 // -------------------------------------------------------------------------
 
-// setContains reports whether a comma-separated attribute holds a value.
-//
-// Whitespace around an entry is ignored, because a provider rendering a set and
-// a job author writing one should not have to agree about spacing.
+// setContains reports whether a comma-separated attribute holds a value,
+// ignoring whitespace around each entry.
 func setContains(set, want string) bool {
 	want = strings.TrimSpace(want)
 
@@ -101,16 +89,10 @@ func setContains(set, want string) bool {
 // ORDERING
 // -------------------------------------------------------------------------
 
-// compare evaluates an ordering operator, choosing how to read the operands.
-//
-// Durations first, then integers, then floats, then text. Nomad tries integer,
-// float, then text; durations are added ahead of those because
-// provider.max_duration is published as "15m0s" and every numeric reading of it
-// fails, leaving a text comparison that is nonsense dressed as an answer.
-//
-// The order is unambiguous rather than merely convenient: a bare number is not
-// a valid Go duration, so nothing that should be read as a number is read as a
-// duration first.
+// compare evaluates an ordering operator, reading the operands as durations,
+// then integers, then floats, then text. Durations come first because
+// provider.max_duration is published as "15m0s"; a bare number is not a valid
+// duration, so nothing numeric is misread as one.
 func compare(op job.Operator, got, want string) bool {
 	if result, ok := compareDurations(op, got, want); ok {
 		return result
@@ -205,11 +187,8 @@ func ordered(op job.Operator, cmp int) bool {
 // ADMISSION AND SCORING
 // -------------------------------------------------------------------------
 
-// UnmatchedConstraint returns the first constraint a provider fails, or nil.
-//
-// The first rather than all of them, because the plan table shows one reason per
-// provider and a provider failing four checks would otherwise crowd out the
-// three that did not.
+// UnmatchedConstraint returns the first constraint a provider fails, or nil,
+// since the plan table shows one reason per provider.
 func UnmatchedConstraint(attrs map[string]string, constraints []job.Constraint) *job.Constraint {
 	for i := range constraints {
 		if !MatchConstraint(attrs, &constraints[i]) {
@@ -221,12 +200,8 @@ func UnmatchedConstraint(attrs map[string]string, constraints []job.Constraint) 
 }
 
 // UnknownAttribute returns the first constraint or affinity naming an attribute
-// Vagabond does not publish, or an empty string.
-//
-// Separate from matching because it is a different kind of answer. A constraint
-// that does not hold is a provider being unsuitable; a constraint naming
-// provider.architekture is a job file being wrong, and reporting the second as
-// the first is how a typo comes to look like an outage.
+// Vagabond does not publish, or an empty string. Separate from matching, since
+// a misspelled attribute is a job file being wrong, not a provider unsuitable.
 func UnknownAttribute(constraints []job.Constraint, affinities []job.Affinity) string {
 	for i := range constraints {
 		if !plugin.Matchable(constraints[i].Attribute) {
@@ -243,11 +218,9 @@ func UnknownAttribute(constraints []job.Constraint, affinities []job.Affinity) s
 	return ""
 }
 
-// AffinityWeight sums the weights of every affinity a provider satisfies.
-//
-// An unsatisfied affinity contributes nothing rather than subtracting, which is
-// what keeps it a preference: a provider that matches none is still admissible,
-// merely ranked below one that matches some.
+// AffinityWeight sums the weights of every affinity a provider satisfies. An
+// unsatisfied one contributes nothing rather than subtracting, so it stays a
+// preference.
 func AffinityWeight(attrs map[string]string, affinities []job.Affinity) int {
 	total := 0
 
@@ -264,12 +237,8 @@ func AffinityWeight(attrs map[string]string, affinities []job.Affinity) int {
 	return total
 }
 
-// TotalAffinityWeight sums every affinity's weight, satisfied or not.
-//
-// The denominator scoring divides by, which is what makes a weight a statement
-// of relative importance rather than an absolute number of points. Without it,
-// a job with one affinity and a job with six would produce scores on different
-// scales and neither would be comparable to the other.
+// TotalAffinityWeight sums every affinity's weight, satisfied or not: the
+// denominator that makes a weight relative rather than a number of points.
 func TotalAffinityWeight(affinities []job.Affinity) int {
 	total := 0
 
@@ -280,17 +249,9 @@ func TotalAffinityWeight(affinities []job.Affinity) int {
 	return total
 }
 
-// AffinityScore reports how much of a job's stated preference a provider
-// satisfies, from zero to one.
-//
-// Nomad computes it the same way, as matched weight over total weight. A job
-// with no affinities scores zero here and the caller leaves this scorer out
-// entirely rather than averaging the zero in, because a preference nobody
-// stated is not one every provider failed.
-//
-// Weights are validated positive, so this cannot go negative. Nomad allows a
-// negative weight to mean avoidance and needs the wider range; a job here says
-// what it wants and constrains against what it does not.
+// AffinityScore reports matched weight over total weight, from zero to one;
+// weights are validated positive. A job with no affinities scores zero, and
+// the caller leaves this scorer out rather than average the zero in.
 func AffinityScore(attrs map[string]string, affinities []job.Affinity) float64 {
 	total := TotalAffinityWeight(affinities)
 	if total == 0 {
@@ -300,12 +261,8 @@ func AffinityScore(attrs map[string]string, affinities []job.Affinity) float64 {
 	return float64(AffinityWeight(attrs, affinities)) / float64(total)
 }
 
-// defaultAffinityWeight is what an affinity contributes when a job does not say.
-//
-// Nomad's weight range is -100 to 100 and its stanza requires one; ours is
-// optional, so an omitted weight has to mean something. Half of the maximum
-// reads as "prefer this, no strong feeling", which is what writing an affinity
-// and declining to weight it says.
+// defaultAffinityWeight is what an affinity contributes when a job does not
+// say: half the maximum, a preference with no strong feeling.
 const defaultAffinityWeight = 50
 
 // affinityWeight returns an affinity's declared weight, or the default.

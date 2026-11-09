@@ -24,6 +24,10 @@ import (
 	"github.com/afreidah/vagabond/internal/nodes"
 )
 
+// -------------------------------------------------------------------------
+// CONSTANTS
+// -------------------------------------------------------------------------
+
 // handshakeTimeout bounds an agent's TLS handshake.
 const handshakeTimeout = 10 * time.Second
 

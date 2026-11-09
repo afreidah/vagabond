@@ -5,13 +5,14 @@
 //
 // Cost carries one question: would this job spend anything. These tests pin
 // that answer, including for the negative values a credit or refund adjustment
-// could someday produce.
+// could produce.
 // -------------------------------------------------------------------------------
 
 package job
 
 import "testing"
 
+// Only zero is free; a negative amount is not.
 func TestCost_Free(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -33,9 +34,8 @@ func TestCost_Free(t *testing.T) {
 	}
 }
 
-// The zero value must be free without any construction, because an absent
-// max_cost_usd in a job file decodes to it and must not read as permission to
-// spend.
+// The zero value is free, because an absent max_cost_usd decodes to it and must
+// not read as permission to spend.
 func TestCost_ZeroValueIsFree(t *testing.T) {
 	var c Cost
 	if !c.Free() {

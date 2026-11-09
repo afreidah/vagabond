@@ -5,8 +5,9 @@
 #
 # Runs on push to main and on pull requests. Formatting, vet, lint, and tests
 # are the same gates `make check` runs locally, plus the integration suite and
-# the containerd executor tests, so a change that passes locally passes here. The golangci-lint version is pinned to match the Makefile; a
-# mismatch would mean local lint and CI lint disagree.
+# the containerd executor tests, so a change that passes locally passes here.
+# The golangci-lint version is pinned to match the Makefile; a mismatch would
+# mean local lint and CI lint disagree.
 # -------------------------------------------------------------------------------
 
 name: CI

@@ -6,9 +6,9 @@
 // Author: Alex Freidah
 //
 // Every case runs against Postgres and CockroachDB. Cockroach is not redundant
-// coverage: it is serializable by default and rejects sequences and triggers, so
-// a schema or a statement that only works under Postgres' defaults fails here
-// and nowhere else.
+// coverage: it is serializable by default and rejects sequences and triggers,
+// so a schema or a statement that only works under Postgres' defaults fails
+// here and nowhere else.
 // -------------------------------------------------------------------------------
 
 package postgres_test
@@ -28,6 +28,11 @@ import (
 	"github.com/afreidah/vagabond/internal/state/postgres/pgtest"
 )
 
+// -------------------------------------------------------------------------
+// SUITE
+// -------------------------------------------------------------------------
+
+// gbSeconds is one GB-second in the ledger's units.
 const gbSeconds = 1024 * 1000
 
 // TestMain starts each engine once for the whole package and stops it after.
@@ -51,11 +56,13 @@ func open(_ context.Context, t *testing.T, e *pgtest.Engine) *postgres.Store {
 // HELPERS
 // -------------------------------------------------------------------------
 
+// The provider-total counters fnReservation charges in September.
 var (
 	fnRequests = ledger.Key{Provider: "fn", Pool: "requests", Period: "2026-09"}
 	fnCompute  = ledger.Key{Provider: "fn", Pool: "compute", Period: "2026-09"}
 )
 
+// newID returns a fresh execution id, failing the test if one cannot be made.
 func newID(t *testing.T) execution.ID {
 	t.Helper()
 
@@ -100,6 +107,7 @@ func totalPool(pool string) ledger.PoolRef {
 	return ledger.PoolRef{Namespace: ledger.Total, Pool: pool}
 }
 
+// mustReserve reserves r, failing the test unless it fits.
 func mustReserve(ctx context.Context, t *testing.T, s *postgres.Store, r *ledger.Reservation) {
 	t.Helper()
 
@@ -113,6 +121,7 @@ func mustReserve(ctx context.Context, t *testing.T, s *postgres.Store, r *ledger
 	}
 }
 
+// readSeptember returns the usage recorded in the 2026-09 period.
 func readSeptember(ctx context.Context, t *testing.T, s *postgres.Store) ledger.Usage {
 	t.Helper()
 
@@ -420,6 +429,7 @@ func TestReadUsage_IsScopedToTheRequestedPeriods(t *testing.T) {
 	}
 }
 
+// Asking for no periods returns empty usage without an error.
 func TestReadUsage_NoPeriodsIsNotAQuery(t *testing.T) {
 	for _, e := range engines() {
 		t.Run(e.Name, func(t *testing.T) {

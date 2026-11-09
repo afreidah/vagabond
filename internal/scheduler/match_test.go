@@ -3,10 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// The cases worth covering are the ones where an operator meets a value it was
-// not obviously written for: equality against a set, an ordering comparison
-// against text, and an attribute the provider never published. Each of those
-// has a defensible answer and a tempting wrong one.
+// The cases where an operator meets a value it was not obviously written for:
+// equality against a set, an ordering comparison against text, and an
+// attribute the provider never published.
 // -------------------------------------------------------------------------------
 
 package scheduler
@@ -19,6 +18,10 @@ import (
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
 )
+
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
 
 // providerAttrs is what the container fixture publishes, with quota merged in,
 // which is what a constraint actually sees.
@@ -34,6 +37,7 @@ func providerAttrs(t *testing.T) map[string]string {
 	return in.Attributes(quota.Execution{})
 }
 
+// constrain builds a constraint comparing attribute to value with op.
 func constrain(attribute string, op job.Operator, value string) *job.Constraint {
 	return &job.Constraint{Attribute: attribute, Operator: op, Value: value}
 }
@@ -57,6 +61,7 @@ func TestMatch_EqualityAgainstASet(t *testing.T) {
 	}
 }
 
+// set_contains matches whole members only, ignoring surrounding whitespace.
 func TestMatch_SetContains(t *testing.T) {
 	attrs := map[string]string{"provider.architecture": "amd64, arm64 ,riscv64"}
 
@@ -85,6 +90,7 @@ func TestMatch_SetContains(t *testing.T) {
 	}
 }
 
+// Equality matches an identical value and nothing else.
 func TestMatch_Equality(t *testing.T) {
 	attrs := map[string]string{"provider.internet": "true"}
 
@@ -102,8 +108,7 @@ func TestMatch_Equality(t *testing.T) {
 // -------------------------------------------------------------------------
 
 // An attribute the provider never published is not equal to anything, so !=
-// holds. Nomad draws the same line, deliberately omitting the found check for
-// inequality, and it is easy to get backwards.
+// holds and every other comparison fails.
 func TestMatch_AbsentAttribute(t *testing.T) {
 	attrs := map[string]string{}
 
@@ -129,6 +134,7 @@ func TestMatch_AbsentAttribute(t *testing.T) {
 	}
 }
 
+// is_set and is_not_set test only whether the attribute was published.
 func TestMatch_PresenceOperators(t *testing.T) {
 	attrs := map[string]string{"provider.internet": "true"}
 
@@ -177,9 +183,7 @@ func TestMatch_NumericOrderingBeatsLexical(t *testing.T) {
 }
 
 // Durations are tried before numbers, because provider.max_duration is
-// published as "15m0s" and every numeric reading of it fails. Nomad falls back
-// to text here, which compares "15m0s" against "10m" as strings and produces an
-// answer that is nonsense dressed as a result.
+// published as "15m0s" and every numeric reading of it fails.
 func TestMatch_DurationOrdering(t *testing.T) {
 	attrs := map[string]string{"provider.max_duration": "15m0s"}
 
@@ -208,9 +212,8 @@ func TestMatch_DurationOrdering(t *testing.T) {
 	}
 }
 
-// Text that is neither a duration nor a number still orders, because an
-// operator's tag may hold anything and refusing to compare would be less useful
-// than comparing the only way left.
+// Text that is neither a duration nor a number still orders lexically, since
+// an operator's tag may hold anything.
 func TestMatch_LexicalFallback(t *testing.T) {
 	attrs := map[string]string{"provider.meta.tier": "gold"}
 
@@ -219,6 +222,7 @@ func TestMatch_LexicalFallback(t *testing.T) {
 	}
 }
 
+// Operands that parse as floats compare numerically.
 func TestMatch_FloatOrdering(t *testing.T) {
 	attrs := map[string]string{"provider.meta.ratio": "1.5"}
 
@@ -266,8 +270,8 @@ func TestUnmatchedConstraint(t *testing.T) {
 // UNKNOWN ATTRIBUTES
 // -------------------------------------------------------------------------
 
-// A typo is a different kind of answer from a provider being unsuitable, and
-// reporting the second as the first is how it comes to look like an outage.
+// A misspelled or unpublished attribute is reported as unknown; an operator's
+// tag is not.
 func TestUnknownAttribute(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -319,6 +323,7 @@ func TestUnknownAttribute(t *testing.T) {
 // AFFINITIES
 // -------------------------------------------------------------------------
 
+// Only satisfied affinities contribute their weight.
 func TestAffinityWeight(t *testing.T) {
 	attrs := providerAttrs(t)
 
@@ -340,8 +345,7 @@ func TestAffinityWeight(t *testing.T) {
 		t.Errorf("a satisfied affinity contributed %d, want 75", got)
 	}
 
-	// Unsatisfied contributes nothing rather than subtracting, which is what
-	// keeps an affinity a preference rather than a constraint in disguise.
+	// Unsatisfied contributes nothing rather than subtracting
 	if got := AffinityWeight(attrs, []job.Affinity{unsatisfied}); got != 0 {
 		t.Errorf("an unsatisfied affinity contributed %d, want 0", got)
 	}
@@ -367,6 +371,7 @@ func TestAffinityWeight_DefaultsWhenUnweighted(t *testing.T) {
 	}
 }
 
+// A job with no affinities contributes no weight.
 func TestAffinityWeight_NoAffinities(t *testing.T) {
 	if got := AffinityWeight(providerAttrs(t), nil); got != 0 {
 		t.Errorf("no affinities contributed %d, want 0", got)

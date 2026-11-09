@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------
-// Execution Status and Result Tests
+// Execution Status Tests
 //
 // Author: Alex Freidah
 //
@@ -16,6 +16,11 @@ import (
 	"time"
 )
 
+// -------------------------------------------------------------------------
+// HELPERS
+// -------------------------------------------------------------------------
+
+// newStatus returns a status with a minted ID, already in state.
 func newStatus(t *testing.T, state State) *Status {
 	t.Helper()
 
@@ -27,10 +32,23 @@ func newStatus(t *testing.T, state State) *Status {
 	return &Status{ID: id, State: state}
 }
 
+// mustTo applies a transition or fails the test, so that building a status in a
+// particular state stays a single expression.
+func mustTo(t *testing.T, s *Status, next State, at time.Time) *Status {
+	t.Helper()
+
+	if err := s.To(next, at); err != nil {
+		t.Fatalf("%q to %q refused: %v", s.State, next, err)
+	}
+
+	return s
+}
+
 // -------------------------------------------------------------------------
 // TRANSITIONS
 // -------------------------------------------------------------------------
 
+// A legal transition moves the state and stamps UpdatedAt.
 func TestStatus_To(t *testing.T) {
 	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 	s := newStatus(t, StatePending)
@@ -68,6 +86,7 @@ func TestStatus_ToRefusedLeavesStatusUntouched(t *testing.T) {
 	}
 }
 
+// Entering running stamps StartedAt and leaves EndedAt unset.
 func TestStatus_ToSetsStartedAt(t *testing.T) {
 	start := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 	s := newStatus(t, StateSubmitted)
@@ -85,6 +104,7 @@ func TestStatus_ToSetsStartedAt(t *testing.T) {
 	}
 }
 
+// Entering a terminal state stamps EndedAt without moving StartedAt.
 func TestStatus_ToSetsEndedAtOnTerminal(t *testing.T) {
 	start := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 	end := start.Add(time.Minute)
@@ -130,6 +150,7 @@ func TestStatus_SynchronousPathSkipsRunning(t *testing.T) {
 // LOST GRACE PERIOD
 // -------------------------------------------------------------------------
 
+// A lost execution expires exactly at the grace period, not before.
 func TestStatus_LostExpired(t *testing.T) {
 	lostAt := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 
@@ -190,18 +211,6 @@ func TestStatus_ExpiredLostCanBecomeFailed(t *testing.T) {
 // -------------------------------------------------------------------------
 // CAPACITY ACCOUNTING
 // -------------------------------------------------------------------------
-
-// mustTo applies a transition or fails the test, so that building a status in a
-// particular state stays a single expression.
-func mustTo(t *testing.T, s *Status, next State, at time.Time) *Status {
-	t.Helper()
-
-	if err := s.To(next, at); err != nil {
-		t.Fatalf("%q to %q refused: %v", s.State, next, err)
-	}
-
-	return s
-}
 
 // Capacity is charged from running onward, or while lost. This is the rule the
 // quota ledger reads, and it is derivable from the status alone.

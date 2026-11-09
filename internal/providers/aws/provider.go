@@ -28,7 +28,11 @@ import (
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
-// What Lambda will accept, published through Capabilities. CPU is derived from
+// -------------------------------------------------------------------------
+// CONSTANTS
+// -------------------------------------------------------------------------
+
+// What Lambda accepts, published through Capabilities. CPU is derived from
 // memory and cannot be chosen, so the ceiling is what 10 GB of memory brings.
 const (
 	maxCPU      = 6000
@@ -38,6 +42,16 @@ const (
 
 // logTailSize is how much log Lambda returns with a synchronous invoke.
 const logTailSize = 4096
+
+// -------------------------------------------------------------------------
+// CONSTRUCTOR
+// -------------------------------------------------------------------------
+
+// Compile-time proof the contract is met.
+var (
+	_ plugin.Provider       = (*Provider)(nil)
+	_ plugin.Recredentialer = (*Provider)(nil)
+)
 
 // Provider dispatches function tasks to AWS Lambda.
 type Provider struct {
@@ -87,6 +101,10 @@ func (p *Provider) Recredential(ctx context.Context, credential []byte) error {
 	return nil
 }
 
+// -------------------------------------------------------------------------
+// INVOCATION
+// -------------------------------------------------------------------------
+
 // Name returns the routing identifier.
 func (p *Provider) Name() string {
 	return p.name
@@ -109,10 +127,8 @@ func (p *Provider) Capabilities(context.Context) (plugin.Capabilities, error) {
 	}, nil
 }
 
-// Submit invokes the task's function and waits for it.
-//
-// A function error is the task failing, not the provider: the handler ran and
-// said no. There is no exit code, so it becomes 1, and success 0.
+// Submit invokes the task's function and waits for it. A function error is the
+// task failing, not the provider: it becomes exit code 1, and success 0.
 func (p *Provider) Submit(
 	ctx context.Context, id execution.ID, task *job.Task,
 ) (plugin.Submission, error) {

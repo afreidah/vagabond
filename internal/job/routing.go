@@ -3,10 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// Routing expresses preference and limits, not a failover chain. The provider
-// list is an allowlist and an ordering hint; admission still removes any
-// provider that cannot satisfy the task, and the scheduler scores whatever
-// survives. A job that names three providers is not promised any of them.
+// Routing expresses limits, not a failover chain. The provider list is an
+// allowlist and its order carries no meaning: admission removes any provider
+// that cannot satisfy the task, and ranking orders the survivors by tier and
+// score. A job that names three providers is not promised any of them.
 // -------------------------------------------------------------------------------
 
 package job
@@ -15,11 +15,8 @@ package job
 // ROUTING
 // -------------------------------------------------------------------------
 
-// Routing is a job's provider selection policy.
-//
-// MaxCost exists to make the free-tier guarantee explicit rather than implied.
-// A job declaring zero must never be dispatched to paid capacity, and an
-// integer comparison against zero is what makes that check exact.
+// Routing is a job's provider selection policy. MaxCost makes the no-spend
+// limit explicit: a job declaring zero is never dispatched to paid capacity.
 type Routing struct {
 	Strategy    *Strategy    `hcl:"strategy,optional"`
 	Providers   []string     `hcl:"providers,optional"`
@@ -35,14 +32,10 @@ type Routing struct {
 
 // Constraint is a hard requirement a provider must meet to be admitted.
 //
-// Attribute names the provider attribute to test, using the dotted form the
-// capability model publishes, such as provider.architecture. A constraint on an
-// attribute no provider publishes rejects that provider with its own reason
-// rather than matching nothing silently, so that a typo does not read like a
-// capacity problem.
-//
-// Value is empty for the presence operators, which ask only whether the
-// provider published the attribute at all.
+// Attribute uses the dotted form the capability model publishes, such as
+// provider.architecture. A provider that does not publish it is rejected with
+// its own reason, so a typo does not read like a capacity problem. Value is
+// empty for the presence operators.
 type Constraint struct {
 	Attribute string   `hcl:"attribute"`
 	Operator  Operator `hcl:"operator"`
@@ -50,11 +43,7 @@ type Constraint struct {
 }
 
 // Affinity is a soft preference that raises a provider's score without
-// affecting whether it is admitted.
-//
-// Weight is the contribution to the score when the comparison holds. An
-// unsatisfied affinity never removes a candidate, which is the whole difference
-// between this and Constraint.
+// affecting whether it is admitted. Weight is added when the comparison holds.
 type Affinity struct {
 	Attribute string   `hcl:"attribute"`
 	Operator  Operator `hcl:"operator"`

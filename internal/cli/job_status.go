@@ -20,6 +20,10 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 )
 
+// -------------------------------------------------------------------------
+// COMMAND
+// -------------------------------------------------------------------------
+
 // JobStatusCommand implements `vagabond job status`.
 type JobStatusCommand struct {
 	*Meta

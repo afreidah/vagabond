@@ -51,7 +51,7 @@ type Limits struct {
 type PoolUsage map[string]int64
 
 // -------------------------------------------------------------------------
-// CONSTRUCTION
+// CONSTRUCTOR
 // -------------------------------------------------------------------------
 
 // NewLimits compiles an operator's budgets, refusing a config it cannot
@@ -184,11 +184,8 @@ func (l Limits) Within(usage PoolUsage, e Execution) bool {
 }
 
 // FreePercent is the tightest remaining allowance among the pools e charges,
-// which is what provider.free_quota_percent reports.
-//
-// Shape-aware deliberately. A task declaring no duration is not constrained by
-// a spent compute budget, so a pool it does not charge cannot drag the number
-// down. A provider with no pools, or an execution that charges none, is 100.
+// which is what provider.free_quota_percent reports. A pool e does not charge
+// cannot drag it down, and with no pool charged it is 100.
 func (l Limits) FreePercent(usage PoolUsage, e Execution) int {
 	percent := 100
 

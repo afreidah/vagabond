@@ -1,15 +1,11 @@
 # -------------------------------------------------------------------------------
 # Go Test - stateless CI test run
 #
-# Project: Vagabond / Author: Alex Freidah
+# Author: Alex Freidah
 #
 # Runs a repository's test suite on any container provider with free-tier
 # capacity available. Admission determines which providers can satisfy the task;
 # the scheduler chooses among those admitted candidates.
-#
-# Nothing about this job is special to Vagabond. It names an image, a command,
-# and what the task needs to run; Vagabond neither knows nor cares what the
-# command does.
 #
 # If no eligible provider has capacity, Vagabond rejects the job. The caller
 # decides whether to fail, retry later, or fall back to another execution path.
@@ -44,9 +40,10 @@ job "go-test" {
   # ---------------------------------------------------------------------------
   # Routing
   #
-  # Provider order is a preference, not a hard failover chain. Admission first
-  # removes providers that cannot satisfy the task driver, resource constraints,
-  # cost policy, or current quota. The scheduler scores the remaining candidates.
+  # The provider list is an allowlist, not a failover chain, and its order
+  # carries no meaning. Admission removes providers that cannot satisfy the task
+  # driver, resource constraints, cost policy, or current quota. The scheduler
+  # ranks the remaining candidates by tier and score.
   # ---------------------------------------------------------------------------
 
   routing {
@@ -91,8 +88,7 @@ job "go-test" {
     driver = "container"
 
     # --- Container Configuration ---
-    # Image distribution is intentionally outside the POC. Vagabond assumes
-    # the selected provider can pull the image named by the job.
+    # Vagabond assumes the selected provider can pull the image the job names.
     config {
       image   = "golang:1.27"
       command = "go"

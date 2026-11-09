@@ -3,10 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// Paging is the whole subject here. A live run against a real project returned
-// two empty pages before the one holding the output, which is what entries.list
-// does when it scans storage in shards, and a reader that stopped at the first
-// page reported a build with no logs at all.
+// Paging is the whole subject here. entries.list scans storage in shards and
+// returns empty pages before the one holding the output, so a reader stopping
+// at the first page reports a build with no logs at all.
 // -------------------------------------------------------------------------------
 
 package gcp
@@ -16,6 +15,11 @@ import (
 	"testing"
 )
 
+// -------------------------------------------------------------------------
+// FIXTURES
+// -------------------------------------------------------------------------
+
+// logsRoute is the fake Google route Cloud Logging reads go to.
 const logsRoute = "POST /v2/entries:list"
 
 // entry is one Cloud Logging record.
@@ -33,7 +37,11 @@ func page(token string, entries ...any) map[string]any {
 	return out
 }
 
-// The bug a live run found: an empty page is not the end of the scan.
+// -------------------------------------------------------------------------
+// READING
+// -------------------------------------------------------------------------
+
+// An empty page is not the end of the scan.
 func TestLogsFollowsEmptyPages(t *testing.T) {
 	t.Parallel()
 
@@ -123,8 +131,8 @@ func TestLogsSkipsEmptyPayloads(t *testing.T) {
 	}
 }
 
-// A test suite can print megabytes, and holding all of it to hand back a
-// truncated copy is the one place this plugin could exhaust memory.
+// Output past maxLogBytes is cut and reported as truncated, so a test suite
+// printing megabytes cannot exhaust memory.
 func TestLogsTruncatesAtTheByteLimit(t *testing.T) {
 	t.Parallel()
 

@@ -43,8 +43,10 @@ Usage: vagabond job run [options] <path>
   ran and exited non-zero is an answer, not an outage, and is never retried
   elsewhere.
 
-  Each task's output is printed when it finishes. Output goes to stdout and
-  progress to stderr, so redirecting stdout captures the build alone.
+  Each task's output streams to stdout while it runs, on providers that can
+  stream it (Cloud Run and agent pools); on others it is printed when the task
+  finishes. Progress goes to stderr, so redirecting stdout captures the build
+  alone.
 
   Interrupting the command stops the execution on the provider before exiting.
 
@@ -53,7 +55,8 @@ Usage: vagabond job run [options] <path>
   Run will return one of the following exit codes:
     * 0: Every task ran and exited zero.
     * 1: A task ran and failed, or the job could not be sent.
-    * 2: The work never ran: nothing was eligible, or every provider failed.
+    * 2: The work never ran or did not finish: nothing was eligible, every
+         provider failed, or the run was interrupted.
 
 Run Options:
 
@@ -98,8 +101,7 @@ func (c *JobRunCommand) Run(args []string) int {
 		return code
 	}
 
-	// Interrupt stops the execution rather than the command alone, so that a
-	// container is not left running and billing after ctrl-C.
+	// Interrupt stops the execution too, so no container is left billing
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

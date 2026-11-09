@@ -31,6 +31,8 @@ func host(cgroup string, files map[string]string) fstest.MapFS {
 	return root
 }
 
+// Capacity is the least of the host, every cgroup limit up the tree, and the
+// operator's caps.
 func TestTake(t *testing.T) {
 	hostCPU := int64(runtime.NumCPU()) * 1000
 
