@@ -5,7 +5,7 @@
 //
 // Following a running execution's output over the API, from an offset, and
 // what is served once it has ended; how a follow ends, with its execution or
-// with the server.
+// with the server; and that writes flush through the request log.
 // -------------------------------------------------------------------------------
 
 package server
@@ -362,5 +362,53 @@ func TestServeListener_ShutdownEndsFollows(t *testing.T) {
 
 	if _, err := io.ReadAll(stream); err != nil {
 		t.Errorf("the follow ended with %v, want a closed stream", err)
+	}
+}
+
+// -------------------------------------------------------------------------
+// REQUEST LOG
+// -------------------------------------------------------------------------
+
+// A write flushed behind the request log reaches the client while the handler
+// is still running, so live output is not held until the response ends.
+func TestLogRequests_Flushes(t *testing.T) {
+	s := &Server{logger: slog.New(slog.DiscardHandler)}
+	flushed := make(chan error, 1)
+	release := make(chan struct{})
+
+	srv := httptest.NewServer(s.logRequests(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "first line\n")
+
+		err := http.NewResponseController(w).Flush()
+		flushed <- err
+
+		// A failed flush lets the response end, so the test reports it rather
+		// than waiting on headers that never arrive.
+		if err == nil {
+			<-release
+		}
+	})))
+
+	// Cleanups run last first: the handler is released before the server closes.
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest() = %v", err)
+	}
+
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if err := <-flushed; err != nil {
+		t.Fatalf("Flush() behind the request log = %v", err)
+	}
+
+	if line, err := bufio.NewReader(resp.Body).ReadString('\n'); err != nil || line != "first line\n" {
+		t.Errorf("read while the handler runs = %q, %v; want the flushed line", line, err)
 	}
 }

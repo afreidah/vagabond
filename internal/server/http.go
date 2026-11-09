@@ -162,6 +162,12 @@ func (r *statusRecorder) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
+// Unwrap exposes the writer underneath, so a ResponseController can flush a
+// live output stream through the request log.
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
 // logRequests logs every request at debug level with its status and how long
 // it took.
 func (s *Server) logRequests(next http.Handler) http.Handler {
