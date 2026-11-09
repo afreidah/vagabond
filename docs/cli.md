@@ -2,12 +2,13 @@
 title: "Command Line Interface"
 linkTitle: "CLI"
 seoTitle: "CLI Reference: Commands and Flags"
-description: "Every vagabond command and flag: job, execution and node commands, the server and the agent, environment variables and exit codes."
+description: "Every vagabond command and flag: job, execution, node and provider commands, the server and the agent, environment variables and exit codes."
 weight: 220
 ---
 
 One binary, `vagabond`, runs the server, the agent, and the commands that talk
-to a server. Commands are grouped by noun (`job`, `execution`, `node`) and take
+to a server. Commands are grouped by noun (`job`, `execution`, `node`,
+`provider`) and take
 single-dash flags.
 
 ## Usage
@@ -72,8 +73,10 @@ by the first 12 characters of the commit when it is known.
   at the first positional argument, so
   `vagabond job run job.hcl -meta version=1` treats `-meta` as a second
   argument and fails with `This command takes one argument: <path>`.
-- A flag given before the command fails with
-  `Invalid flags before the subcommand. If these flags are for the subcommand, please put them after the subcommand.`
+- A flag given before the command prints, across two lines,
+  `Invalid flags before the subcommand. If these flags are for` /
+  `the subcommand, please put them after the subcommand.`, followed by the
+  command's help.
 - A namespace on its own (`vagabond job`) prints its help and exits 1.
 - An unknown command prints the command list to stderr and exits 1.
 - A path argument of `-` reads the job file from standard input.
@@ -92,13 +95,15 @@ Every command except `job validate`, `server` and `agent` calls the server's
   is `http://10.0.0.5:4747`. Use `https://` for a server with a `tls` block.
 - The flag wins over the environment variable; an empty value falls through
   to the default.
-- `-namespace` is sent as `?namespace=` on job requests. The execution and
-  node commands accept it and ignore it: execution IDs are global, and nodes
-  belong to pools, not namespaces.
+- `-namespace` is sent as `?namespace=` on job requests. The execution, node
+  and provider commands accept it and ignore it: execution IDs are global,
+  nodes belong to pools, and provider usage is totalled across namespaces.
 - A job file that names its own `namespace` and a different `-namespace` is an
   error; see [namespace resolution](job-specification.md#job-block).
 
-Failures are printed as `Error: <message>` on stderr with exit code 1:
+Server failures are printed as `Error: <message>` on stderr with exit code 1.
+Local failures (an unreadable job file, a wrong number of arguments) print
+their message alone, also with exit code 1:
 
 ```shell
 $ vagabond job status
@@ -106,8 +111,10 @@ Error: contacting the server at http://127.0.0.1:4747: Get "http://127.0.0.1:474
 ```
 
 A job the server finds invalid is reported one diagnostic at a time, with the
-range as `<file>:<line>,<column>-<column>`. For a registered job the file is
-`<name> (version <n>)`:
+range as `<file>:<line>,<column>-<column>`, or
+`<file>:<line>,<column>-<line>,<column>` across lines. The file is `job` for a
+job file sent by `job plan`, `job run` or `job register`, and
+`<name> (version <n>)` for a registered job:
 
 ```text
 Error: Unsupported attribute
@@ -150,7 +157,8 @@ job's problem) from no capacity (an infrastructure problem).
   `vagabond job run job.hcl > build.log` captures the task output alone.
 - Times are printed in UTC as `2006-01-02 15:04:05Z`.
 - Job diagnostics are coloured when stderr is a terminal and `NO_COLOR` is
-  unset. Detail text wraps at 78 columns.
+  unset. Detail text of diagnostics with a source position wraps at 78
+  columns.
 
 ## Job commands
 
@@ -161,8 +169,9 @@ vagabond job validate [options] <path>
 ```
 
 Parses and validates a job file locally. No server or provider is contacted.
-Every problem is reported in one run: decode errors with the file, line and
-source excerpt, validation rules naming the job and task. See
+Decode errors are all reported in one run, with file, line and source excerpt.
+Validation rules run once the file decodes cleanly, and name the job and task.
+See
 [diagnostics](job-specification.md#diagnostics).
 
 | Flag | Default | Description |
@@ -215,7 +224,7 @@ as `job validate` reports them.
 |---|---|---|
 | `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server |
 | `-meta <key>=<value>` | none | Job metadata, repeatable |
-| `-namespace <name>` | `$VAGABOND_NAMESPACE`, then `default` | Namespace, for a job that names none |
+| `-namespace <name>` | `$VAGABOND_NAMESPACE`, then `default` | Namespace, for a job file that names none; for a registered job, the namespace it is registered in |
 | `-verbose` | `false` | Print each scorer's contribution under a candidate, and every further reason a rejected provider failed |
 
 | Exit | Meaning |
@@ -237,16 +246,17 @@ Estimated cost: free
 Admitted providers come first, in ranked order: by tier then score under
 `strict` tiers, by score under `weighted` (see [tiers](scheduling.md#tiers)).
 `Tiers:` names the mode used. Rejected providers follow in provider-name order
-with their first failed [reason code](scheduling.md#reason-codes). `observed
-never observed` means the provider has no snapshot yet. A non-zero estimated
+with their first failed [reason code](scheduling.md#reason-codes).
+`never observed` in place of `observed <time>` means the provider has no
+snapshot yet. A non-zero estimated
 cost is printed as a bare integer.
 
 ```shell
 $ vagabond job plan -meta version=v1.4.2 go-test.vagabond.hcl
 go-test.test (container)
-gcp-cloud-run  admitted  tier 0              score 91  observed 2026-09-28 14:02:11Z
-homelab        admitted  tier 0              score 88  observed 2026-09-28 14:02:09Z
-lambda         rejected  driver-unsupported  The task uses the container driver and this provider offers function.
+gcp-cloud-run  admitted  tier 0           score 91  observed 2026-09-28 14:02:11Z
+homelab        admitted  tier 0           score 88  observed 2026-09-28 14:02:09Z
+lambda         rejected  not-allowlisted  The job routes only to gcp-cloud-run, homelab.
 Tiers: strict
 Selected: gcp-cloud-run
 Estimated cost: free
@@ -264,7 +274,8 @@ gcp-cloud-run  admitted  tier 0  score 91  observed 2026-09-28 14:02:11Z
 homelab        admitted  tier 0  score 88  observed 2026-09-28 14:02:09Z
                            headroom 0.75
                            affinity 1.00
-lambda         rejected  driver-unsupported  The task uses the container driver and this provider offers function.
+lambda         rejected  not-allowlisted  The job routes only to gcp-cloud-run, homelab.
+                           driver-unsupported
                            image-unsupported
 Tiers: strict
 Selected: gcp-cloud-run
@@ -277,11 +288,13 @@ When nothing can run a task:
 $ vagabond job plan -meta version=v1.4.2 arm.vagabond.hcl
 go-test.test (container)
 gcp-cloud-run  rejected  constraint-unmet    The job requires provider.architecture set_contains "arm64" and this provider publishes "amd64".
+homelab        rejected  constraint-unmet    The job requires provider.architecture set_contains "arm64" and this provider publishes "amd64".
 lambda         rejected  driver-unsupported  The task uses the container driver and this provider offers function.
 No provider can run this task.
 ```
 
-If at least one rejection is transient (quota, health), the plan adds
+If any rejection's first reason is transient (`quota-exhausted`,
+`provider-disabled` or `provider-unhealthy`), the plan adds
 `At least one rejection is transient, so this may be admitted later.`
 
 ### `job run`
@@ -308,10 +321,14 @@ to finish. The job is not registered. The server makes the same selection
   then prints whatever of the stored copy did not stream, then the verdict
   line. On a provider that cannot stream, all of the output is printed when the
   task finishes.
-- A Cloud Run tail can only start at what is being logged now, so it cannot be
-  reopened from where it stopped. Once a Cloud Run stream ends early, the CLI
-  stops streaming that task and prints the rest from the stored copy when the
-  task finishes.
+- A Cloud Run tail can only start at what is being logged now, so the server
+  refuses to reopen one at an offset (`416`). Once a Cloud Run stream that has
+  printed output ends early, the CLI stops streaming that task and prints the
+  rest from the stored copy when the task finishes. A stream that ends before
+  printing anything is reopened at offset 0, which starts a new tail at what is
+  being logged now. Lines logged between the two tails do not stream, and the
+  stored copy printed at the end is read from the byte count that streamed, so
+  it can repeat or skip some lines.
 - Interrupting the command (SIGINT or SIGTERM) cancels the unfinished
   execution on the server, waiting up to 30 seconds for the cancel, then exits
   2.
@@ -334,13 +351,15 @@ to finish. The job is not registered. The server makes the same selection
 | Line | When |
 |---|---|
 | `==> dispatch <dispatch-id> of "<job>"` | The server accepted the run |
-| `==> <task> <state> on <provider>` | An execution changed state (`pending`, `submitted`, `accepted`, `running`) |
+| `==> <task> <state> on <provider>` | An execution changed state: `pending`, `submitted`, `accepted`, `running`, or `failed`, `cancelled` or `lost` when it ended without a result |
 | `... (attempt <n>)` | Appended from the second attempt on |
 | `... (<class> failure)` | Appended when the execution failed without a result (`infrastructure`, `internal`) |
 | `==> <task> succeeded on <provider> in <duration>` | The task exited 0 |
 | `==> <task> failed (exit <n>) on <provider> in <duration>` | The task exited non-zero |
 | `Output was truncated.` | Nothing streamed and the stored output hit its limit; only the tail is printed |
 | `Live output was interrupted. vagabond execution logs <id> has its stored tail.` | A stream broke and the stored copy is truncated, so where it left off cannot be found in it |
+| `Could not read the output of <id>: <error>` | The stored output could not be fetched after the task finished; the verdict line still follows |
+| `Could not stop <id>: <error>` | After an interrupt, the cancel request failed; the interrupted line still follows |
 | `Job "<job>" did not run: <error>` | The run ended with no answer; followed by `Run vagabond job plan to see where it can run.` |
 | `Job "<job>" was interrupted. The execution was stopped.` | Interrupted |
 
@@ -458,7 +477,7 @@ vagabond job status [options] [name]
 ```
 
 With no name, lists every job registered in the namespace, stopped ones
-included. With a name, shows that job's versions and its most recent
+included. With a name, shows that job's versions and its 20 most recent
 executions.
 
 | Flag | Default | Description |
@@ -610,7 +629,10 @@ reopened from the bytes already printed when a stream ends early, and finished
 from the stored copy once the execution ends, when the command exits. An
 execution that has already ended prints its stored output. On Cloud Run, a
 follow started after the task has begun printing starts at what is being
-logged now, so the stored output printed at the end can repeat some of it. An
+logged now. The stored copy printed at the end is read from the number of bytes
+that streamed, not from where the tail began, so it can skip the opening lines
+and repeat later ones. `vagabond execution logs <id>` without `-f` prints the
+stored copy whole once the execution has a result. An
 interrupt stops following and leaves the execution running;
 [`DELETE /v1/execution/{id}`](api.md#cancel-an-execution) stops it.
 
@@ -669,6 +691,11 @@ pi-02   homelab  10.0.4.35:40118  arm64  0/4000m     0/7680MiB      0          2
 $ vagabond node status
 No agent nodes are connected.
 ```
+
+| Exit | Meaning |
+|---|---|
+| `0` | Printed, including no connected nodes |
+| `1` | Server error, or arguments given |
 
 ## Provider commands
 
@@ -775,7 +802,7 @@ next server, which resumes them once their leases lapse (see
 | Message | Cause |
 |---|---|
 | `no configuration found. Looked in vagabond.hcl, <user dir>/vagabond/config.hcl, /etc/vagabond.d. Pass -config or set VAGABOND_CONFIG` | Nothing on the search path |
-| `configuration not found: -config names <path>, which cannot be read: ...` | `-config` or `$VAGABOND_CONFIG` names a missing path |
+| `configuration not found: <-config\|VAGABOND_CONFIG> names <path>, which cannot be read: ...` | `-config` or `$VAGABOND_CONFIG` names a missing path; the message names the source |
 | Configuration diagnostics | Invalid configuration, rendered like job diagnostics |
 | `No providers are configured, so there is nothing to run on.` | No `provider` blocks |
 | `The server needs a store block, or -dev to keep everything in memory.` | No `store` block and no `-dev` |
@@ -784,6 +811,8 @@ next server, which resumes them once their leases lapse (see
 | `agent_bind <addr> is reachable beyond this machine: add an agent_tls block ...` | Non-loopback `agent_bind` with no `agent_tls` |
 | `loading the agent listener's certificate: ...` / `loading the CA from <path>: ...` | `agent_tls` files unreadable or not PEM |
 | `listening for agents on <addr>: ...` | Agent address in use or not bindable |
+| `could not read quota usage: ...` | The store opened but the quota ledger could not be loaded |
+| `listening on <addr>: ...` | API `bind` address in use or not bindable |
 | `Invalid -log-level "<value>": use debug, info, warn or error.` | Bad log level |
 
 With `-dev` and a `store` block present, the server warns
@@ -845,6 +874,8 @@ namespace `vagabond`.
 | `-tls-ca, -tls-cert and -tls-key go together: set all three or none` | Some TLS flags without the others |
 | `-name "<name>" does not match the certificate's common name "<cn>"` | `-name` disagrees with the certificate |
 | `loading the agent's certificate: ...` / `loading the CA from <path>: ...` | TLS files unreadable or not PEM |
+| `-tls-server-name needs -tls-ca, -tls-cert and -tls-key` | `-tls-server-name` given with no TLS files |
+| `the agent's certificate has no common name` | TLS certificate has an empty CN |
 | `Invalid -log-level "<value>": use debug, info, warn or error.` | Bad log level |
 
 ```bash

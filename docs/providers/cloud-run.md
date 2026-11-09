@@ -16,7 +16,7 @@ resource and the output from Cloud Logging, then deletes the Job.
 | Package | `internal/providers/gcp` |
 | Drivers | `container` |
 | Execution family | asynchronous: `Submit` returns `accepted`, dispatch polls `Status` |
-| Optional interfaces | `LogStreamer`, `Releaser` |
+| Optional interfaces | `LogStreamer`, `Releaser`, `Recredentialer` |
 | APIs | Cloud Run Admin API v2 (`run.googleapis.com`), Cloud Logging API v2 (`logging.googleapis.com`) |
 
 The plugin calls both APIs over plain HTTPS with an OAuth2 client. It does not
@@ -80,8 +80,9 @@ covers the `config` block and the provider's behaviour.
 | An unknown attribute | HCL's unsupported-argument diagnostic, against the line |
 | An attribute set to `""` or whitespace | `Empty provider setting`: "Provider "gcp-cloud-run" sets region to an empty string." |
 | Credential missing or unparseable | `Unusable credential`: "Provider "gcp-cloud-run": ..." |
+| The credentials source cannot be read: missing file, unset variable, failing command | `Cannot resolve credentials`: "Provider "gcp-cloud-run": ..." |
 
-Any of these stops the server or CLI command from starting. Nothing is checked
+Any of these stops `vagabond server` from starting. Nothing is checked
 against Google at startup: a wrong project or region surfaces as an HTTP error
 on the first dispatch.
 
@@ -106,8 +107,16 @@ credentials {
 - Application Default Credentials and the metadata server are not used. A
   `cloud-run` provider without a `credentials` block fails with
   `no credential supplied`.
-- The key is resolved once, when the registry is built. Access tokens are
-  minted and refreshed from it automatically. Rotating the key needs a restart.
+- The key is resolved when the registry is built. Access tokens are minted and
+  refreshed from it automatically.
+- When a Cloud Run Admin API call made by dispatch returns 401 or 403, the
+  `credentials` block is resolved again, at most once a minute, the client is
+  rebuilt from the new key, and the call is made once more. See
+  [`credentials` block](../configuration.md#credentials-block).
+- A key the token endpoint refuses, such as a deleted one, fails before any
+  API call. It is classified `infrastructure`, is not resolved again, and is
+  rerouted when the task's `retry` block allows. Replacing a deleted key needs
+  a restart.
 
 ## IAM
 
@@ -193,8 +202,10 @@ task "test" {
 | `command` | string | no | `containers[0].command`, as a one-element list |
 | `args` | list of strings | no | `containers[0].args` |
 
-Other keys in the block are ignored. Values are evaluated against the job's
-variables, so `image = "ci/go:${meta.commit}"` works.
+Other keys in the block are ignored. A `command` that is not a string, or
+`args` that is not a list of strings, is ignored as if absent; validation does
+not check either. Values are evaluated against the job's variables, so
+`image = "ci/go:${meta.commit}"` works.
 
 `command` is a single string. It replaces the image's entrypoint; put every
 argument in `args`.
@@ -219,7 +230,8 @@ argument in `args`.
 | `resources.memory` | `2048` MiB |
 | `timeout` | `24h` (`86400s`) |
 
-A value of `0` or below is treated as unset.
+Validation refuses a `cpu` or `memory` of 0 or below and a `timeout` of zero,
+so these defaults apply only when the field is omitted.
 
 **Environment:** the task's `env` block plus one `VAGABOND_META_<KEY>` variable
 per job `meta` key, with an `env` entry winning over a metadata variable of the
@@ -250,7 +262,7 @@ limit).
 | `Result` | `GET .../executions` again, `GET /v2/<execution>/tasks`, then `POST /v2/entries:list` (paged) | Exit code, duration, logs |
 | `Cancel` | `DELETE .../jobs/vagabond-<id>` | `nil`, also when the job is already gone (404) |
 | `Release` | `DELETE .../jobs/vagabond-<id>` | Same call as `Cancel` |
-| `StreamLogs` | `POST /v2/entries:tail` | Writes output until the stream ends |
+| `StreamLogs` | `POST /v2/entries:tail` | Writes output until the stream ends; `plugin.ErrNoResume`, with no call made, for an offset above zero |
 
 If the `:run` call fails, `Submit` deletes the job it just created, ignoring
 the delete's own error, and returns the `:run` error.
@@ -345,7 +357,6 @@ transcoding:
 - Once the stream is open, a read or decode error ends it without an error.
 - Platform lines such as `Container called exit(0).` arrive on the same stream
   and are not filtered.
-
 - A tail starts at what is being logged now, so it cannot resume. An `offset`
   above zero returns `plugin.ErrNoResume` before anything is opened, which the
   server answers `416`, and the client finishes from the stored copy.
@@ -371,8 +382,8 @@ tasks, and the exit code with them. `Result` after `Cancel` fails with
 
 A job outlives its run when dispatch never reaches `Release`: a failed
 `Result`, a provider that stopped answering, a server that died. The release
-loop deletes it once `Status` reports the execution over and any quota
-reservation is settled. Leftover jobs count against Cloud Run's per-region job
+loop deletes it once the record has gone 10 minutes unchanged, `Status`
+reports the execution over and any quota reservation is settled. Leftover jobs count against Cloud Run's per-region job
 quota until then.
 
 ## Failure classification
@@ -384,13 +395,14 @@ within the task's retry budget and stops on `internal` ones; see
 | Condition | Class | Retryable | Notes |
 |---|---|---|---|
 | Connection, DNS or TLS failure, or error reading the response body | infrastructure | yes | |
+| Token exchange refused, e.g. a deleted or disabled key | infrastructure | yes | Raised by the OAuth2 transport before the API call; the key is not resolved again |
 | HTTP 408 or 429 | infrastructure | yes | `RetryAfter` from a `Retry-After` header in seconds, else 0 |
 | HTTP 5xx | infrastructure | yes | `RetryAfter` as above |
 | HTTP 404 on the executions listing | internal | no | Wraps `ErrUnknownExecution` |
 | HTTP 404 on the tasks call | internal | no | Wraps `ErrNotFound` |
 | HTTP 404 on `Cancel` or `Release` | none | | Returns `nil` |
 | HTTP 400, e.g. a CPU and memory pairing Cloud Run does not offer | internal | no | Google's `error.message` is included |
-| HTTP 401 or 403, rejected key, missing IAM permission or disabled API | internal | no | Wraps `ErrUnauthorized`: the key is resolved again and the call made once more |
+| HTTP 401 or 403: an access token Google refuses, a missing IAM permission or a disabled API | internal | no | Wraps `ErrUnauthorized`: on a dispatch call the key is resolved again and the call made once more |
 | HTTP 409, job name already exists | internal | no | |
 | Response body is not the expected JSON | internal | no | |
 | Task names no `image` | internal | no | Raised before any call |
@@ -400,6 +412,8 @@ within the task's retry budget and stops on `internal` ones; see
 | Execution reports `cancelled` | infrastructure | yes | Raised by dispatch after `Result`: no verdict was produced |
 | Container exits non-zero | none | | An answer: state `failed`, `Result.ExitCode` set, not rerouted |
 | Log read fails | none | | `Result` returns without logs |
+| `StreamLogs` with an offset above zero | none | | Returns `plugin.ErrNoResume`; the server answers 416 |
+| `entries:tail` cannot be opened | as for any call | | The server logs it and ends the response; the execution is unaffected |
 
 Google's error message is lifted out of the JSON error body; if the body is not
 in that shape, its first 500 bytes are used.
@@ -414,6 +428,7 @@ meters; quota behaviour is described in [Quotas](../quotas.md).
 | vCPU-seconds | `cpu_seconds` |
 | GiB-seconds | `gb_seconds` |
 | Requests | not applicable to Jobs |
+| Cloud Logging ingestion | none; not tracked by Vagabond |
 
 **Charging:** the reservation is the task's declared `resources` over its
 declared `timeout`. `Result` reports no bill, so settlement is the declared

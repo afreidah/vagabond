@@ -14,10 +14,13 @@ them, dispatches to the best, and records what the run used.
 
 ![The vagabond CLI calls the server's HTTP API. The server admits, ranks, dispatches and accounts for each task, keeps its records in Postgres or CockroachDB, and runs work on Cloud Run Jobs, AWS Lambda, or agent nodes.](assets/architecture.svg)
 
+Interactive version, with notes on each component:
+[System architecture](https://vagabond.munchbox.cc/diagrams/architecture/).
+
 | Component | Command | Does |
 |---|---|---|
 | Server | `vagabond server` | Serves the HTTP API on `127.0.0.1:4747` and accepts agents on `127.0.0.1:4748`. Holds the provider registry, admits and ranks tasks, runs dispatches, keeps the quota ledger, and runs the [background services](background-services.md). |
-| CLI | `vagabond job ...`, `execution ...`, `node ...` | Validates job files locally, then calls the server's [API](api.md). Holds no state. See the [CLI reference](cli.md). |
+| CLI | `vagabond job ...`, `execution ...`, `node ...`, `provider ...` | Validates job files locally, then calls the server's [API](api.md). Holds no state. See the [CLI reference](cli.md). |
 | Agent | `vagabond agent` | Runs on a node apart from the server. Dials the server, reports the node's architecture, CPU and memory, and runs the tasks placed on it in containerd. See [Agent](agent.md). |
 | Store | Postgres or CockroachDB | Holds registered jobs, dispatches and their leases, executions, and quota usage and reservations. Replaced by in-memory stores under `-dev`. See [Database](database.md). |
 | Providers | `provider` blocks in [configuration](configuration.md) | Plugins that run tasks on a backend: `cloud-run`, `lambda`, `pool` (agent nodes), and the `fake-container`, `fake-function` and `fake-worker` test providers. |
@@ -34,7 +37,10 @@ them, dispatches to the best, and records what the run used.
 
 ## Pipeline
 
-![A job file is validated, admitted against every provider and ranked. Dispatch then reserves quota, submits to the selected provider, watches the execution, settles what it used and releases what it left behind. An infrastructure failure moves the task to the next ranked provider.](assets/task-path.svg)
+![A job file is validated, admitted against every provider and ranked. Dispatch then reserves quota, submits to the selected provider, watches the execution, releases what it left behind and settles what it used. An infrastructure failure moves the task to the next ranked provider.](assets/task-path.svg)
+
+Interactive version, with notes on each stage:
+[Task path](https://vagabond.munchbox.cc/diagrams/task-path/).
 
 | Stage | Package | Does |
 |---|---|---|
@@ -42,19 +48,21 @@ them, dispatches to the best, and records what the run used.
 | Load | `jobs` | Load a job for `run`, `register` or `dispatch`; check dispatch metadata against `parameterized`; store and version registered jobs |
 | Begin | `dispatch` | Record the dispatch as `running`, leased to this server |
 | Admission | `scheduler` | Run 13 checks in 4 tiers against every provider; each rejection carries a reason code |
-| Ranking | `scheduler` | Score each candidate with `headroom` and any affinities; the score is their mean |
+| Ranking | `scheduler` | Score each candidate with `headroom`, any affinities and, under `weighted` tiers, `tier`; the score is their mean. Under `strict` tiers candidates order by tier, then score |
 | Reserve | `dispatch`, `ledger` | Charge the task's declared worst case against every pool it meters, provider total and namespace share; a refusal moves to the next candidate without spending a retry |
 | Submit | `dispatch`, `providers/*` | Hand the task to the plugin under a fresh execution ID |
-| Watch | `dispatch` | Poll status from 2 s backing off to 15 s |
-| Settle | `dispatch`, `ledger` | Replace the reservation with what the result says was used |
-| Release | `dispatch` | Ask the plugin to delete what the execution left behind |
+| Watch | `dispatch` | Poll status from 2 s backing off to 15 s; a synchronous submission returns its result from `Submit` and is not polled |
+| Release | `dispatch` | Ask the plugin to delete what the execution left behind: right after `Result` is read, or as soon as a synchronous `Submit` returns. Any other ending, and a failed release, is left to the [provider release](background-services.md#provider-release) service |
+| Settle | `dispatch`, `ledger` | Replace the reservation with what the result says was used. Without a result the reservation stands until the [reaper](background-services.md#reservation-reaper) resolves it |
 | Reroute | `dispatch` | On an `infrastructure` failure, move to the next ranked provider within the task's `retry` budget |
 
 - The CLI runs parse and validate locally before sending, and the server runs
   them again.
 - `job plan` stops after ranking and returns the result. It reserves nothing.
-- `job run` and `job dispatch` return a dispatch ID once the dispatch is
-  recorded; the rest runs in the background on the server.
+- `POST /v1/jobs/run` and `POST /v1/job/{name}/dispatch` return a dispatch ID
+  once the dispatch is recorded; the rest runs in the background on the server.
+  `job run` and `job dispatch` then poll it once a second and stream each
+  execution's output until the run ends.
 - Tasks in a job run in declaration order. The first task that fails or gets
   no answer ends the job.
 
@@ -67,14 +75,14 @@ Every package under `internal/`. `cmd/vagabond` only calls `cli.Run`.
 
 | Package | Responsibility |
 |---|---|
-| `agent` | The `vagabond agent` process: connection to the server, cgroup delegation, workload reporting |
+| `agent` | The `vagabond agent` process: connection to the server, cgroup delegation, workload reporting, and the executions endpoint the server calls (submit, cancel, release, stream logs) |
 | `agent/executor` | Runs an agent's workloads in containerd |
 | `agent/fingerprint` | Reads the architecture, CPU and memory an agent may use, bounded by host, cgroups and operator caps |
-| `agentrpc` | Agent protocol: generated gRPC bindings for `agent.proto` and the yamux session they run over |
+| `agentrpc` | Agent protocol: generated gRPC bindings for `agent.proto`, the yamux session they run over, and the mutual TLS configuration for both ends |
 | `api` | HTTP API request and response bodies, and the client the CLI uses |
 | `cli` | Every command, `server` and `agent` included |
-| `config` | Operator configuration: providers, pools, namespaces, `store`, `server`; config file discovery |
-| `dispatch` | Begin, reserve, submit, watch, settle, release, reroute; leases, resumption, reaping |
+| `config` | Operator configuration: providers, pools, namespaces, `scheduling`, `store`, `server`; credential sources; config file discovery |
+| `dispatch` | Begin, reserve, submit, watch, release, settle, reroute; leases, resumption, reaping, leftover release, the credential retry |
 | `execution` | Execution and dispatch IDs, records, and the execution state machine |
 | `integration` | End-to-end tests: a real server on Postgres with fake providers (build tag `integration`) |
 | `job` | The provider-independent workload model: tasks, drivers, resources, routing |
@@ -88,9 +96,9 @@ Every package under `internal/`. `cmd/vagabond` only calls `cli.Run`.
 | `providers/pool` | The `pool` provider: container tasks on agent nodes |
 | `ptr` | Helpers for reading optional specification fields |
 | `quota` | Pool budgets, meters and periods, and arithmetic over usage |
-| `registry` | Builds providers from configuration and holds their capability snapshots |
+| `registry` | Builds providers from configuration and holds their capability snapshots; resolves a provider's credential again after a 401 or 403 |
 | `scheduler` | Admission and ranking |
-| `server` | HTTP routes, agent connections, dispatches in the background, upkeep timers, lifecycle |
+| `server` | HTTP routes, live output streams, agent connections, dispatches in the background, upkeep timers, lifecycle |
 | `state` | Errors shared by every store |
 | `state/memory` | In-memory job and execution stores for `-dev` and tests |
 | `state/postgres` | Postgres and CockroachDB store: migrations, jobs, dispatches, executions, quota |
@@ -130,8 +138,10 @@ result.
 | Capabilities (drivers, architectures, limits, networking, images, cost) | `Provider.Capabilities`, stored in the registry | At server startup, then every minute |
 | Pool capabilities | `plugin.Live.LiveCapabilities`, the connected agent nodes | On every plan and every dispatch |
 | Enabled | `enabled` in the `provider` block | Fixed at startup |
-| Healthy | Whether the provider answered its last refresh | With capabilities |
+| Healthy | Whether the provider answered its last refresh; for a pool, whether any node is connected, read on every plan | With capabilities |
 | Tags | `meta` in the `provider` block, as `provider.meta.*` | Fixed at startup |
+| Tier | `tier` in the `provider` block | Fixed at startup |
+| Quota limits, provider total and namespace share | `pool` blocks in the `provider` block, `quota` blocks in the `namespace` block | Fixed at startup |
 | Quota usage, provider total and namespace share | The ledger's snapshot of the store | Every 15 seconds, and before admitting each task at dispatch |
 
 **Refresh behaviour:**
@@ -184,10 +194,11 @@ Optional interfaces, detected by type assertion:
 
 | Interface | Method | Used for | Implemented by |
 |---|---|---|---|
-| `plugin.LogStreamer` | `StreamLogs` | Output before the execution ends, for `GET /v1/execution/{id}/logs?follow=true` | `cloud-run`, `pool` |
+| `plugin.LogStreamer` | `StreamLogs` | Output before the execution ends, for `GET /v1/execution/{id}/logs?follow=true` | `cloud-run`, `pool`, `fake-container` |
 | `plugin.Releaser` | `Release` | Deleting what an execution left behind, after its result is read | `cloud-run`, `pool` |
 | `plugin.Live` | `LiveCapabilities` | Capabilities read on every plan instead of on the refresh timer | `pool` |
 | `plugin.MemberSubmitter` | `SubmitTo` | Submitting only to the members admission passed | `pool` |
+| `plugin.Recredentialer` | `Recredential` | Taking a credential resolved again from its source after the platform answered 401 or 403; the call is then made once more | `cloud-run`, `lambda` |
 
 See [Writing a provider](writing-a-provider.md).
 
@@ -212,19 +223,22 @@ One server process runs these concurrently:
 | Agent listener | Until shutdown | Accepts agent connections, one goroutine per session |
 | Dispatch | One per running dispatch | Runs the job's tasks to the end on a context that outlives the request that started it |
 | Lease renewal | One per running dispatch | Renews the dispatch lease every 20 seconds; the lease runs 60 seconds |
-| Log stream | One per open `?follow=true` request on a `LogStreamer` provider | Copies output to the client while the execution runs; ends 5 s after the execution does, or at once when shutdown begins |
-| Upkeep | Four tickers until shutdown | Capability refresh (1 min), usage refresh (15 s), reservation reaping (5 min), lapsed-lease claiming (30 s) |
+| Log stream | One per open `?follow=true` request on a `LogStreamer` provider | Re-reads the execution record every second while the request copies the provider's stream; ends the response 5 s after the execution does, or at once when shutdown begins |
+| Upkeep | Five tickers until shutdown | Capability refresh (1 min), usage refresh (15 s), reservation reaping (5 min), provider release (5 min), lapsed-lease claiming (30 s) |
 
 **Startup order:** load configuration, build the registry and refresh every
-provider, open and migrate the store (or build memory stores under `-dev`),
-start accepting agents, listen on the API address, claim dispatches with lapsed
+provider, open, migrate and verify the store and read quota usage into the
+ledger (or build memory stores under `-dev`), load the API certificate, start
+accepting agents, listen on the API address, claim dispatches with lapsed
 leases and resume each in the background, reap stale reservations, then start
 upkeep and serve HTTP.
 
 **Shutdown:** on SIGINT or SIGTERM the server stops accepting requests and gives
 in-flight ones 10 seconds to finish. Running dispatches are not cancelled; their
 leases lapse once the process exits, and the next server to claim them resumes
-each from its recorded state.
+each from its recorded state. Open `?follow=true` streams end at once. The
+agent listener closes and every agent session is closed; agents reconnect with
+backoff.
 
 Intervals, locks and failure handling for every loop are in
 [Background services](background-services.md).

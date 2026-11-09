@@ -1,0 +1,186 @@
+---
+title: "System Architecture"
+linkTitle: "Architecture"
+description: "Interactive diagram of the CLI, the server's API and internals, the store, and the providers and agent nodes it dispatches to, with implementation notes."
+weight: 1
+---
+
+The components of a Vagabond deployment: the CLI and the server's `/v1` API, the server's internals, the store, and the providers it dispatches to, agent nodes included. **Hover over any component** for implementation details.
+
+{{< diagram >}}
+
+<script>
+window.vagabondDiagram = {
+  source: [
+    'flowchart TD',
+    '    CLI([vagabond CLI]):::entry',
+    '    STORE[("Store<br>Postgres / CockroachDB")]:::storage',
+    '',
+    '    subgraph SRV [vagabond server]',
+    '        API[HTTP API<br>/v1]:::process',
+    '        JOBS[Job loading<br>jobspec, jobs]:::process',
+    '        SCHED{Admission<br>and ranking}:::decision',
+    '        DISP[Dispatcher]:::process',
+    '        LEDGER[Quota<br>ledger]:::process',
+    '        REG[Provider<br>registry]:::process',
+    '        UPKEEP[Upkeep<br>loops]:::background',
+    '        FOLLOW[Live output<br>streams]:::process',
+    '        PLUGIN[plugin.Provider]:::filter',
+    '        POOL[pool<br>provider]:::process',
+    '        NODES[(Connected<br>nodes)]:::storage',
+    '        AGENTL[Agent listener<br>mTLS, yamux]:::filter',
+    '    end',
+    '',
+    '    subgraph CLOUD [Cloud platforms]',
+    '        CLOUDRUN[cloud-run<br>Cloud Run Jobs]:::data',
+    '        CLOG[Cloud Logging]:::data',
+    '        LAMBDA[lambda<br>AWS Lambda]:::data',
+    '    end',
+    '',
+    '    subgraph AGENTNODE [Agent node]',
+    '        AGENT([vagabond agent]):::entry',
+    '        CONTAINERD[(containerd)]:::data',
+    '    end',
+    '',
+    '    CLI -->|HTTP/JSON| API',
+    '    API -->|register, run, plan| JOBS',
+    '    JOBS -->|plan| SCHED',
+    '    JOBS -->|run, dispatch| DISP',
+    '    DISP -->|each task| SCHED',
+    '    REG -->|capabilities| SCHED',
+    '    LEDGER -->|usage snapshot| SCHED',
+    '    DISP -->|reserve, settle| LEDGER',
+    '    DISP -->|submit, poll, release| PLUGIN',
+    '    API -->|logs follow| FOLLOW',
+    '    FOLLOW -->|StreamLogs| PLUGIN',
+    '    REG -->|Capabilities| PLUGIN',
+    '    UPKEEP -->|refresh| REG',
+    '    UPKEEP -->|refresh| LEDGER',
+    '    UPKEEP -->|reap, release, claim| DISP',
+    '',
+    '    PLUGIN --> CLOUDRUN',
+    '    PLUGIN --> LAMBDA',
+    '    PLUGIN --> POOL',
+    '    CLOUDRUN -->|output| CLOG',
+    '    POOL -->|reads| NODES',
+    '    AGENTL -->|register, remove| NODES',
+    '    AGENTL <-->|session the agent dials| AGENT',
+    '    POOL -->|AgentExecutions gRPC| AGENT',
+    '    AGENT -->|workloads| CONTAINERD',
+    '',
+    '    JOBS -->|jobs, versions| STORE',
+    '    DISP -->|dispatches, executions| STORE',
+    '    LEDGER -->|usage, reservations| STORE',
+  ].join('\n'),
+
+  info: {
+    CLI: {
+      title: 'vagabond CLI',
+      badge: 'entry', badgeText: 'client',
+      body: '<p>Every command is in <code>internal/cli</code>: <code>job validate</code>, <code>plan</code>, <code>run</code>, <code>register</code>, <code>dispatch</code>, <code>status</code> and <code>stop</code>; <code>execution status</code> and <code>logs</code>; <code>node status</code>; <code>provider status</code>; and the <code>server</code> and <code>agent</code> processes.</p><p>Parses and validates a job file locally with <code>jobspec</code> before sending it, and the server runs both again. <code>job validate</code> never contacts the server. Holds no state.</p><p>Calls the server through the <code>api</code> client at <code>-address</code>, then <code>VAGABOND_ADDR</code>, then <code>http://127.0.0.1:4747</code>. <code>job run</code> follows the run to its end, streaming output through the logs route.</p><p><a href="../../docs/cli/">CLI reference &rarr;</a></p>'
+    },
+    API: {
+      title: 'HTTP API (/v1)',
+      badge: 'process', badgeText: 'server',
+      body: '<p><code>net/http</code> mux in <code>internal/server</code>, on the <code>server</code> block&rsquo;s <code>bind</code> (default <code>127.0.0.1:4747</code>), with TLS when the block names a certificate and key. Routes that read or write jobs take <code>?namespace=</code>; routes addressed by an ID, <code>/v1/nodes</code>, <code>/v1/providers</code> and <code>/v1/health</code> ignore it.</p><p><b>Jobs:</b> <code>POST /v1/jobs</code>, <code>GET /v1/jobs</code>, <code>POST /v1/jobs/run</code>, <code>POST /v1/jobs/plan</code>, <code>GET</code> and <code>DELETE /v1/job/{name}</code>, <code>POST /v1/job/{name}/dispatch</code>.<br><b>Runs:</b> <code>GET /v1/dispatch/{id}</code>, <code>GET</code> and <code>DELETE /v1/execution/{id}</code>, <code>GET /v1/execution/{id}/logs</code>.<br><b>Fleet:</b> <code>GET /v1/nodes</code>, <code>GET /v1/providers</code>, <code>GET /v1/health</code>.</p><p>JSON request bodies are capped at 1 MiB and headers must arrive within 10s. <code>GET /v1/health</code> pings the store with a 5s timeout and answers 503 when it does not answer. On SIGINT or SIGTERM in-flight requests get 10s; running dispatches are left to their leases.</p><p><a href="../../docs/api/">API reference &rarr;</a></p>'
+    },
+    JOBS: {
+      title: 'Job loading (jobspec, jobs)',
+      badge: 'process', badgeText: 'parse and load',
+      body: '<p><code>jobspec</code> decodes the HCL, substitutes <code>${meta.*}</code> and validates, reporting diagnostics against source lines. An invalid job is a 400 carrying them.</p><p><code>jobs</code> loads a job for <code>run</code>, <code>register</code> and <code>dispatch</code>, and checks dispatch metadata against <code>parameterized</code>. Registered jobs are stored as numbered versions; a file that differs only in formatting adds none. A stopped job cannot be dispatched until it is registered again.</p><p>A job file sent to <code>POST /v1/jobs/run</code> is not registered, and its dispatch records <code>JobVersion</code> 0.</p><p><a href="../../docs/job-specification/">Job specification &rarr;</a></p>'
+    },
+    SCHED: {
+      title: 'Admission and ranking',
+      badge: 'decision', badgeText: 'scheduler',
+      body: '<p><code>scheduler.Admit</code> runs 13 checks in 4 tiers (policy, availability, mismatch, capacity) against every provider. Every check runs; the first rejection carries the reason code and the rest ride along.</p><p><code>scheduler.Rank</code> scores each candidate with <code>headroom</code>, any affinities and, under weighted tiers, <code>tier</code>; the score is their mean. Under strict tiers candidates order by tier, then score.</p><p>A pure function over the registry&rsquo;s capability snapshots and the ledger&rsquo;s usage snapshot: no network call, so a plan needs no provider credentials. <code>job plan</code> stops here and reserves nothing; a dispatch admits and ranks each task again when it runs.</p><p><a href="../admission/">Admission diagram &rarr;</a></p>'
+    },
+    DISP: {
+      title: 'Dispatcher',
+      badge: 'process', badgeText: 'dispatch',
+      body: '<p><code>dispatch.Dispatcher</code>. <code>Begin</code> records the dispatch <code>running</code>, leased to this server, and the request returns its ID; the run continues in its own goroutine on a context detached from the request.</p><p>Per task, in declaration order: re-read usage, admit and rank, then for each candidate reserve quota, record the attempt <code>pending</code>, submit, poll <code>Status</code> from 2s backing off to 15s, fetch the <code>Result</code>, release, then settle. An <code>infrastructure</code> failure moves to the next ranked provider within the task&rsquo;s <code>retry</code> budget. An exit code is an answer and is never rerouted.</p><p>The lease runs 60s and is renewed every 20s. A dispatch whose lease lapses is claimed by a server and resumed from its recorded executions.</p><p><a href="../task-path/">Task path diagram &rarr;</a></p>'
+    },
+    LEDGER: {
+      title: 'Quota ledger',
+      badge: 'process', badgeText: 'ledger',
+      body: '<p><code>ledger.Ledger</code> charges each attempt&rsquo;s declared worst case against every pool it meters, in the provider total and the namespace share, before it is submitted. The store decides each reservation in one statement, so two dispatches cannot both take the last room. A refusal skips the provider without spending a retry.</p><p>A result replaces the reservation with what the run used: what the platform billed when it says, otherwise the declared shape over the time it ran. A reservation still open after 1h is resolved by the reaper. Only providers with quota pools reserve anything.</p><p>Holds the usage snapshot admission reads, refreshed every 15s and before each task a dispatch runs.</p><p><a href="../quotas/">Quotas diagram &rarr;</a></p>'
+    },
+    REG: {
+      title: 'Provider registry',
+      badge: 'process', badgeText: 'registry',
+      body: '<p><code>registry</code> builds every <code>provider</code> block into its plugin, the one package that imports them all: <code>cloud-run</code>, <code>lambda</code>, <code>pool</code>, and the <code>fake-container</code>, <code>fake-function</code> and <code>fake-worker</code> test providers. It holds each one&rsquo;s capability snapshot, health, tags, tier and quota pools. A disabled provider is kept, so a plan can say why it was not used.</p><p><code>Refresh</code> asks every enabled provider for <code>Capabilities</code> in parallel, 30s each, at startup and every minute. One that fails is marked unhealthy and keeps its last snapshot. <code>pool</code> providers are skipped: their capabilities are built from connected nodes on every read.</p><p>Resolves a provider&rsquo;s credential again when the platform rejects it, at most once a minute.</p>'
+    },
+    UPKEEP: {
+      title: 'Upkeep loops',
+      badge: 'background', badgeText: 'timers',
+      body: '<p>Five tickers in <code>internal/server/upkeep.go</code>, started when the server begins serving and stopped at shutdown: capability refresh (1m), usage snapshot refresh (15s), reservation reaper (5m), provider release (5m) and dispatch claim (30s).</p><p>Capabilities and usage are read while the server is built, and the claim and the reaper run once before HTTP is served, so their first tick is one interval in. Provider release has no startup pass. A failure is logged and waits for the next tick.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
+    },
+    FOLLOW: {
+      title: 'Live output streams',
+      badge: 'process', badgeText: 'per request',
+      body: '<p><code>GET /v1/execution/{id}/logs?follow=true</code> on an execution that has not ended, whose provider implements <code>plugin.LogStreamer</code> (<code>cloud-run</code>, <code>pool</code>), copies the provider&rsquo;s stream to the client from <code>offset</code>, flushing every write.</p><p>The record is re-read every second, and the response ends 5s after the execution does, when the client goes, or at once when shutdown begins. A provider that cannot resume from an offset is answered 416 before any output. Any other request gets the stored output, the last 64 KiB.</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
+    },
+    PLUGIN: {
+      title: 'plugin.Provider',
+      badge: 'filter', badgeText: 'boundary',
+      body: '<p>The interface every provider implements: <code>Name</code>, <code>Capabilities</code>, <code>Submit</code>, <code>Status</code>, <code>Result</code>, <code>Cancel</code>. Optional interfaces are found by type assertion: <code>LogStreamer</code>, <code>Releaser</code>, <code>Live</code>, <code>MemberSubmitter</code>, <code>Recredentialer</code>.</p><p>A plugin translates a task into its platform&rsquo;s API and classifies failures as <code>infrastructure</code> (rerouted) or <code>internal</code> (not). It never retries or picks another provider; retries, rerouting, quota, records and leases belong to the control plane.</p><p>depguard keeps cloud SDKs inside <code>internal/providers/</code>, and provider imports out of <code>scheduler</code>, <code>job</code> and <code>quota</code>.</p><p><a href="../../docs/writing-a-provider/">Writing a provider &rarr;</a></p>'
+    },
+    POOL: {
+      title: 'pool provider',
+      badge: 'process', badgeText: 'provider',
+      body: '<p><code>providers/pool</code>: one provider per declared pool, made of the agent nodes that joined it with <code>-pool</code>. <code>LiveCapabilities</code> builds one member per connected node, sized by the room it has left, on every plan and dispatch. A pool with no nodes is unhealthy.</p><p><code>SubmitTo</code> places the task on the node with the most free memory among those admission passed, and holds a 2-minute reservation there until the node reports it. A node that refuses with <code>ResourceExhausted</code> is passed over for the next.</p><p>Executions on a node gone less than 5 minutes report <code>lost</code>; after that, calls fail as infrastructure.</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
+    },
+    NODES: {
+      title: 'Connected nodes',
+      badge: 'storage', badgeText: 'in memory',
+      body: '<p><code>nodes.Conns</code>, shared by the server and every pool provider: each connected node by name, with its last report, its session and a client for its executions. Read by <code>GET /v1/nodes</code>.</p><p>A report on a new session replaces and closes the old one. When a session ends, the node is removed and its departure time kept for the pool&rsquo;s 5-minute grace period.</p><p>Server memory only. After a restart, agents reconnect with backoff and report again.</p>'
+    },
+    AGENTL: {
+      title: 'Agent listener',
+      badge: 'filter', badgeText: 'agent connections',
+      body: '<p><code>Server.ServeAgents</code> accepts on <code>agent_bind</code>, default <code>127.0.0.1:4748</code>. A non-loopback address requires <code>agent_tls</code>: mutual TLS 1.2 or later, agent certificates signed by the configured CA, the handshake within 10s. Over TLS a node registers only under its certificate&rsquo;s common name.</p><p>Each connection is a yamux session carrying gRPC both ways: the agent calls <code>Node.Register</code>, and the server calls <code>AgentExecutions</code> down the same session. The session closing is the liveness signal; yamux keepalives run every 30s.</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
+    },
+    STORE: {
+      title: 'Store (Postgres or CockroachDB)',
+      badge: 'storage', badgeText: 'store',
+      body: '<p><code>state/postgres</code>: one implementation for Postgres and CockroachDB over <code>pgxpool</code>. Opened, migrated and schema-checked at startup. Connections time out after 5s unless the DSN sets one, and writes run in serializable transactions.</p><p>Tables: <code>jobs</code>, <code>job_versions</code>, <code>dispatches</code> (with leases), <code>executions</code> (results and the last 64 KiB of output), <code>quota_usage</code>, <code>quota_reservations</code>.</p><p>Under <code>-dev</code>, <code>state/memory</code> and an in-memory ledger store replace it, empty at every start. An unreachable store is answered 503.</p><p><a href="../database-schema/">Database schema diagram &rarr;</a></p>'
+    },
+    CLOUDRUN: {
+      title: 'cloud-run: Cloud Run Jobs',
+      badge: 'data', badgeText: 'provider',
+      body: '<p><code>providers/gcp</code>, for <code>container</code> tasks. One Job per execution, named <code>vagabond-&lt;execution id&gt;</code>: <code>Submit</code> creates it and calls <code>:run</code>, <code>Status</code> reads the Job&rsquo;s executions, and <code>Cancel</code> and <code>Release</code> delete the Job.</p><p>Stateless: every call derives the Job name from the execution ID, so a server that takes over a dispatch can poll a run it did not submit. Calls the Cloud Run and Cloud Logging REST APIs over HTTP.</p><p><a href="../../docs/providers/cloud-run/">Cloud Run provider &rarr;</a></p>'
+    },
+    CLOG: {
+      title: 'Cloud Logging',
+      badge: 'data', badgeText: 'output',
+      body: '<p>Where a Cloud Run execution&rsquo;s output comes from. <code>Result</code> pages <code>entries:list</code> filtered on the Job name, up to 1000 entries, 256 KiB or 20 pages, and sets <code>LogsTruncated</code> at a bound. A failed read returns the exit code with no logs.</p><p><code>StreamLogs</code> opens <code>entries:tail</code> with a 1s buffer window, so live output arrives in order. A tail starts at what is being logged now and cannot resume from an offset.</p><p><a href="../../docs/providers/cloud-run/#logs">Cloud Run logs &rarr;</a></p>'
+    },
+    LAMBDA: {
+      title: 'lambda: AWS Lambda',
+      badge: 'data', badgeText: 'provider',
+      body: '<p><code>providers/aws</code>, for <code>function</code> tasks. Invokes a function the operator deployed; Vagabond creates none.</p><p>The invocation is synchronous: the answer, the last 4 KB of the log and the billed duration come back from <code>Submit</code>, so nothing is polled. The charge settles at the billed duration when the log tail reports it, otherwise at the declared shape over the measured invocation.</p><p><code>Status</code>, <code>Result</code> and <code>Cancel</code> are unsupported, so the reaper settles a stale reservation at the reserved amount.</p><p><a href="../../docs/providers/lambda/">Lambda provider &rarr;</a></p>'
+    },
+    AGENT: {
+      title: 'vagabond agent',
+      badge: 'entry', badgeText: 'node process',
+      body: '<p><code>internal/agent</code>, on a node apart from the server. Reads the node&rsquo;s architecture, CPU and memory (<code>agent/fingerprint</code>), delegates its cgroup, then dials the server and stays connected, reconnecting with backoff from 1s doubling to 30s.</p><p>Registers the node with every workload it holds on connecting, after each submit, cancel or release, and every 10s. Checks room itself before starting a workload and refuses one that does not fit with <code>ResourceExhausted</code>.</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
+    },
+    CONTAINERD: {
+      title: 'containerd',
+      badge: 'data', badgeText: 'runtime',
+      body: '<p><code>agent/executor</code> runs each execution as one container in the <code>vagabond</code> namespace with the <code>io.containerd.runc.v2</code> runtime, in cgroup <code>&lt;parent&gt;/&lt;execution id&gt;</code> with its declared CPU and memory as limits, on the host network.</p><p>Start time, timeout and size are container labels, so a restarted agent finds its workloads and re-arms their timeouts. A timeout stops the workload with SIGTERM, then SIGKILL 10s later. Output goes to a log file, and the result carries its last 64 KiB.</p><p>Workloads belong to containerd and keep running while the agent is disconnected.</p>'
+    }
+  }
+};
+</script>
+
+## Legend
+
+| Node | Meaning |
+|------|---------|
+| <span class="dg-swatch dg-entry"></span> | Processes that dial the server: the CLI and the agent |
+| <span class="dg-swatch dg-process"></span> | Server components |
+| <span class="dg-swatch dg-decision"></span> | Admission and ranking |
+| <span class="dg-swatch dg-filter"></span> | Boundaries: the plugin interface and the agent listener |
+| <span class="dg-swatch dg-storage"></span> | State: the store and the connected nodes |
+| <span class="dg-swatch dg-success"></span> | External platforms and runtimes |
+| <span class="dg-swatch dg-background"></span> | Upkeep timers |

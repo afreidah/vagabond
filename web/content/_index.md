@@ -151,8 +151,8 @@ provider "aws-lambda" {
 `vagabond agent` registers a machine into a pool, and a `pool` provider
 schedules onto it like any other backend. Workloads run on the node's
 containerd, limited to the agent's CPU and memory, and are placed on the node
-with the most free memory. Agents connect over mutual TLS and register under
-their certificate's name.
+with the most free memory. Beyond loopback, agents connect over mutual TLS and
+register under their certificate's name.
 
 <a class="vb-more" href="docs/agent/">Agent →</a>
 

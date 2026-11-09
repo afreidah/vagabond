@@ -5,12 +5,15 @@ description: "Every periodic and long-running goroutine the server and agent run
 weight: 440
 ---
 
-The server keeps its view of providers, quota and dispatches current with four
-upkeep loops, and runs each dispatch, lease and agent session in its own
-goroutine. The agent holds one connection to the server and reports its
+The server keeps its view of providers, quota and dispatches current with five
+upkeep loops, and runs each dispatch, lease, agent session and followed log
+stream in its own goroutine. The agent holds one connection to the server and reports its
 workloads on a timer. None of the loops apply jitter, and none take a lock
 across servers: where two servers could collide, the store statement itself
 decides (see [Multiple servers](#multiple-servers)).
+
+Interactive version, with notes on each loop:
+[Background services](https://vagabond.munchbox.cc/diagrams/background-services/).
 
 ## Summary
 
@@ -25,6 +28,7 @@ decides (see [Multiple servers](#multiple-servers)).
 | [Dispatch claim](#dispatch-claim) | 30s | Yes, before serving | Store: dispatches with a lapsed lease | Warn, retried next tick |
 | [Dispatch runner](#dispatch-runner) | Per dispatch | | Providers, store, ledger | Dispatch ends `unanswered` |
 | [Lease renewal](#lease-renewal) | 20s per running dispatch | | Store: the dispatch's lease | Ignored; stale lease stops the run |
+| [Live output follow](#live-output-follow) | 1s record re-read, per followed request | | Store: one execution; provider `StreamLogs` | Response ends, warn |
 | [Agent listener](#agent-listener) | Long-running | Yes | Agent connections | Session dropped, node forgotten |
 | [Store health](#store-health) | Per request | | Store ping | 503 from `GET /v1/health` |
 
@@ -34,6 +38,7 @@ decides (see [Multiple servers](#multiple-servers)).
 |---|---|---|---|
 | [Server connection](#server-connection) | Reconnect backoff 1s to 30s | Server's agent address | Warn, dial again |
 | [Workload report](#workload-report) | 10s, and on every change | containerd; server `Register` | Warn, next report carries everything |
+| [Log stream](#log-stream) | 250ms, per followed workload | Log file; containerd task | Stream ends with an error |
 | [Timeout watcher](#timeout-watcher) | Per workload | containerd task | Workload left running |
 
 **Not loops:** pool reservation expiry and the departed-node grace period are
@@ -41,10 +46,12 @@ checked when read, not swept ([Pool reservations](#pool-reservations)).
 
 ## Server
 
-The four upkeep loops start when the server begins serving and stop when it
+The five upkeep loops start when the server begins serving and stop when it
 shuts down. Each tick runs synchronously; a run longer than its interval is
 followed immediately by the next, and ticks do not pile up. The first tick is
-one interval after startup, because each was already run once before serving.
+one interval after startup. Capability refresh, usage refresh, the reaper and
+the claim each ran once before serving; provider release has no startup pass,
+so its first pass is 5m in.
 A failure is logged and waits for the next tick; one loop failing never stops
 another.
 
@@ -117,6 +124,8 @@ Each stale reservation's provider is asked about the execution:
 - On Postgres the claim locks the rows with `FOR UPDATE SKIP LOCKED` and holds
   them while providers are asked, so two servers never resolve the same
   reservation. The whole pass is one serializable transaction.
+- A serialization failure retries the whole pass, asking every provider again,
+  up to 10 attempts ([Transactions](database.md#transactions)).
 - Provider calls have no timeout of their own; a slow provider holds the pass.
 - Only providers with quota pools reserve anything.
 
@@ -142,7 +151,7 @@ For each execution, in order:
 
 | Condition | Action |
 |---|---|
-| It is `lost` | Reconciled first ([Lost executions](dispatch.md#lost-executions)): its result recorded if the provider reports it over, `failed` if the provider forgot it or 24 hours passed. One still unresolved is skipped |
+| It is `lost` | Reconciled first ([Lost executions](dispatch.md#lost-executions)): its result recorded if the provider reports it over, `failed` if its provider forgot it or is no longer configured, or 24 hours after it was marked lost. One still unresolved is skipped |
 | It still holds a quota reservation | Skipped: the reaper settles it first by asking the provider, which a released execution can no longer answer |
 | Its provider is no longer configured, or implements no `Release` | Marked released; nothing to do |
 | No recorded result, provider reports it unknown | Marked released |
@@ -153,6 +162,7 @@ For each execution, in order:
   cannot be released yet never crowd out ones that can.
 - A pool node that is offline fails `Release` and is retried every pass until
   it returns.
+- Provider calls have no timeout of their own; a slow provider holds the pass.
 - Releases and marks are idempotent, so several servers running the loop at
   once is harmless.
 - If a reservation outlives the store being unreachable for longer than the
@@ -227,6 +237,26 @@ One goroutine per running or resumed dispatch, extending its lease
 
 **Logs:** none.
 
+### Live output follow
+
+Two goroutines per `GET /v1/execution/{id}/logs?follow=true` request on an
+execution that has not ended, when its provider streams output (`cloud-run`,
+`pool`): one copies the provider's stream to the client, flushing every write;
+the other re-reads the record to end the stream.
+
+| | |
+|---|---|
+| Interval | Record re-read every 1s |
+| Ends | 5s after the record is terminal; at once when the client goes or shutdown begins |
+| Touches | Store: the execution record; provider `StreamLogs` |
+
+- A record that cannot be read is retried the next second.
+- A provider that cannot resume from `offset` is answered 416, if no output was
+  written yet.
+- The stream never writes the record.
+
+**Logs:** warn `log stream ended early` with `execution` and `error`.
+
 ### Agent listener
 
 Accepts agent connections on the `server` block's `agent_bind` address
@@ -265,7 +295,7 @@ room is computed.
 | | |
 |---|---|
 | Reservation covers | 2m, or until the node reports the workload |
-| Removed | On `Release`, or when the node refuses the submission |
+| Removed | On `Release`, or when sending the workload to the node fails for any reason: the node left, refused it for room, or returned any other error |
 | Departed node grace | 5m: its executions report `lost` while it may reconnect |
 | After server start | 5m during which an execution no node has reported is `lost`, not unknown |
 
@@ -303,7 +333,7 @@ node's free room from these reports.
 | | |
 |---|---|
 | Interval | 10s |
-| Also | On connecting, and after every submit, cancel or release |
+| Also | On connecting, after every submit that succeeds, and after every cancel or release, whether or not it succeeded |
 | Touches | containerd container list; server `Register` |
 
 - Change signals coalesce: one pending signal covers any number of changes.
@@ -325,10 +355,23 @@ run that long.
 
 - Start time and timeout are stored as container labels, so a restarted agent
   watches the same deadline.
-- A workload without a timeout gets no watcher.
+- A workload without a timeout, or without a recorded start, gets no watcher.
 - A watcher that cannot load the task exits and leaves the workload running.
 
 **Logs:** none.
+
+### Log stream
+
+One goroutine per server `StreamLogs` call, copying the workload's log file
+from the requested offset as it grows.
+
+| | |
+|---|---|
+| Interval | 250ms between reads, each followed by a task status check |
+| Ends | After a last read once the workload is terminal or released, or when the server stops listening |
+| Touches | `<data-dir>/logs/<id>.log`; containerd task status |
+
+**Logs:** none on the agent; the server logs a broken stream.
 
 ## Multiple servers
 
@@ -339,5 +382,6 @@ store keeps them apart:
 |---|---|
 | Dispatch claim | One `UPDATE ... RETURNING` statement: a lapsed dispatch goes to exactly one server |
 | Reservation reaper | Row locks with `SKIP LOCKED`: each stale reservation is resolved by one server |
+| Provider release | Releases and marks are idempotent; two servers releasing one execution is harmless |
 | Usage refresh, capability refresh | Per-server reads; nothing to coordinate |
 | Agent sessions | Per server. An agent connects to one server, and its pools exist only there |

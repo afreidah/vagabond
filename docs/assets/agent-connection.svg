@@ -26,7 +26,8 @@
     <text x="525" y="240" text-anchor="middle" class="small" style="fill:#9a9ea6">on connect, on change, every 10s</text>
     <path class="line" marker-end="url(#arrow)" d="M338 285H712"/>
     <text x="525" y="270" text-anchor="middle" class="mono">AgentExecutions</text>
-    <text x="525" y="312" text-anchor="middle" class="small" style="fill:#9a9ea6">Submit · Status · Result · Cancel · Release</text>
+    <text x="525" y="310" text-anchor="middle" class="small" style="fill:#9a9ea6">Submit · Status · Result</text>
+    <text x="525" y="330" text-anchor="middle" class="small" style="fill:#9a9ea6">Cancel · Release · StreamLogs</text>
 
     <!-- Node -->
     <rect x="740" y="30" width="430" height="440" rx="30" class="frame"/>

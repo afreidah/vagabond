@@ -1,0 +1,253 @@
+/* -------------------------------------------------------------------------------
+ * Diagrams
+ *
+ * Author: Alex Freidah
+ *
+ * Presentation for the pages under diagrams/. Every page renders into
+ * #dg-diagram and shows details in #dg-tooltip, so styling both here reaches
+ * all of them. Every colour the diagram script uses is a --dg-* variable here,
+ * built on the site palette in custom.css, so the diagrams follow the light
+ * and dark themes.
+ * ------------------------------------------------------------------------------- */
+
+/* Node colours by role, as fill, stroke and text, then the lines and labels,
+   for each theme. The diagram script reads these, and the badges and legend
+   swatches use them too. */
+:root {
+  --dg-entry-fill: #c24f00;      --dg-entry-stroke: #c24f00;      --dg-entry-text: #ffffff;
+  --dg-success-fill: #e3f4ea;    --dg-success-stroke: #2e8b57;    --dg-success-text: #0f3b24;
+  --dg-process-fill: #fff4ea;    --dg-process-stroke: #e06a00;    --dg-process-text: #0d0e12;
+  --dg-decision-fill: #ffffff;   --dg-decision-stroke: #e06a00;   --dg-decision-text: #0d0e12;
+  --dg-storage-fill: #eaf0f7;    --dg-storage-stroke: #4a6fa5;    --dg-storage-text: #0d0e12;
+  --dg-filter-fill: #fbf3e0;     --dg-filter-stroke: #b8892b;     --dg-filter-text: #3d2f0b;
+  --dg-reject-fill: #fbe9e9;     --dg-reject-stroke: #c25454;     --dg-reject-text: #4a1212;
+  --dg-background-fill: #f2f3f5; --dg-background-stroke: #9a9ea6; --dg-background-text: #2b2f37;
+
+  --dg-line: #9a9ea6;
+  --dg-text: #2b2f37;
+  --dg-label-fill: var(--vb-surface);
+}
+
+.dark {
+  --dg-entry-fill: #c24f00;      --dg-entry-stroke: #ff8a2b;      --dg-entry-text: #ffffff;
+  --dg-success-fill: #12301f;    --dg-success-stroke: #4cb37a;    --dg-success-text: #d9f2e3;
+  --dg-process-fill: #241a12;    --dg-process-stroke: #d9670f;    --dg-process-text: #efeff1;
+  --dg-decision-fill: #15171c;   --dg-decision-stroke: #ff8a2b;   --dg-decision-text: #efeff1;
+  --dg-storage-fill: #141c27;    --dg-storage-stroke: #6f93c9;    --dg-storage-text: #dbe4f0;
+  --dg-filter-fill: #2a2414;     --dg-filter-stroke: #c9a24a;     --dg-filter-text: #f1e6c8;
+  --dg-reject-fill: #2c1616;     --dg-reject-stroke: #d06a6a;     --dg-reject-text: #f3d6d6;
+  --dg-background-fill: #1a1c21; --dg-background-stroke: #656a76; --dg-background-text: #d4d6db;
+
+  --dg-line: #656a76;
+  --dg-text: #c9ccd2;
+  --dg-label-fill: var(--vb-surface);
+}
+
+/* A legend swatch is a small node in its role's colours. */
+.dg-swatch {
+  display: inline-block;
+  width: 2.2rem;
+  height: 1.1rem;
+  vertical-align: middle;
+  border: 1.5px solid;
+  border-radius: 5px;
+}
+
+.dg-entry { background: var(--dg-entry-fill); border-color: var(--dg-entry-stroke); }
+.dg-success { background: var(--dg-success-fill); border-color: var(--dg-success-stroke); }
+.dg-process { background: var(--dg-process-fill); border-color: var(--dg-process-stroke); }
+.dg-decision { width: 1.1rem; background: var(--dg-decision-fill); border-color: var(--dg-decision-stroke); border-radius: 3px; transform: rotate(45deg) scale(0.8); }
+.dg-storage { background: var(--dg-storage-fill); border-color: var(--dg-storage-stroke); }
+.dg-filter { background: var(--dg-filter-fill); border-color: var(--dg-filter-stroke); }
+.dg-reject { background: var(--dg-reject-fill); border-color: var(--dg-reject-stroke); }
+.dg-background { background: var(--dg-background-fill); border-color: var(--dg-background-stroke); }
+
+/* The frame matches the site's code blocks, and the diagram is scaled to fit
+   it. */
+#dg-diagram {
+  margin: 2rem 0;
+  padding: 1.5rem 1rem;
+  background-color: var(--vb-surface);
+  border: 1px solid var(--vb-border);
+  border-radius: 0.75rem;
+}
+
+#dg-diagram svg {
+  display: block;
+  height: auto;
+  margin: 0 auto;
+}
+
+#dg-diagram .node rect {
+  rx: 10px;
+  ry: 10px;
+}
+
+#dg-diagram .edgeLabel {
+  color: var(--vb-muted);
+  font-size: 12px;
+}
+
+#dg-diagram .edgeLabel rect,
+#dg-diagram .edgeLabel .label-container,
+#dg-diagram .edgeLabel p {
+  background-color: var(--vb-surface) !important;
+  fill: var(--vb-surface) !important;
+}
+
+/* A subgraph is shown by its title alone; its frame is not drawn. */
+#dg-diagram .cluster rect {
+  display: none;
+}
+
+/* Mermaid sizes a subgraph title before this applies, so only its colour is
+   changed here; a different size or case would clip it. */
+#dg-diagram .cluster-label,
+#dg-diagram .cluster text {
+  color: var(--vb-muted) !important;
+  fill: var(--vb-muted) !important;
+}
+
+/* Hovering a node highlights every path through it and dims the rest. */
+#dg-diagram .node {
+  cursor: pointer;
+}
+
+#dg-diagram .node,
+#dg-diagram path.flowchart-link,
+#dg-diagram .edgeLabel {
+  transition: opacity 0.15s, filter 0.15s;
+}
+
+#dg-diagram svg.highlighting .node,
+#dg-diagram svg.highlighting path.flowchart-link,
+#dg-diagram svg.highlighting .edgeLabel {
+  opacity: 0.15;
+}
+
+#dg-diagram svg.highlighting .node.highlight,
+#dg-diagram svg.highlighting path.flowchart-link.highlight,
+#dg-diagram svg.highlighting .edgeLabel.highlight {
+  opacity: 1;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--vb-link) 45%, transparent));
+}
+
+/* -------------------------------------------------------------------------
+ * TOOLTIP
+ * ------------------------------------------------------------------------- */
+
+/* Positioned against the viewport. The largest entries are taller than it,
+   so the height is capped and the panel scrolls; it listens for its own
+   mouseleave, so the pointer can move in to scroll without dismissing it. */
+#dg-tooltip {
+  position: fixed;
+  z-index: 9999;
+  display: none;
+  max-width: 400px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.8rem 0.95rem;
+  color: var(--vb-text);
+  background-color: var(--vb-bg);
+  border: 1px solid var(--vb-border);
+  border-radius: 0.6rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+#dg-tooltip h3 {
+  margin: 0 0 0.3rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--vb-text);
+}
+
+#dg-tooltip p {
+  margin: 0 0 0.4rem;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--vb-muted);
+}
+
+#dg-tooltip a {
+  color: var(--vb-link);
+}
+
+#dg-tooltip code {
+  padding: 1px 4px;
+  font-size: 0.72rem;
+  background-color: var(--vb-surface);
+  border: 1px solid var(--vb-border);
+  border-radius: 3px;
+}
+
+#dg-tooltip .dg-metric {
+  font-style: italic;
+  font-size: 0.72rem;
+}
+
+#dg-tooltip::-webkit-scrollbar {
+  width: 8px;
+}
+
+#dg-tooltip::-webkit-scrollbar-thumb {
+  background: var(--vb-border);
+  border-radius: 4px;
+}
+
+/* The schema diagram's tooltips list a table's columns and indexes. */
+#dg-tooltip table.dg-cols {
+  width: 100%;
+  margin: 0.3rem 0;
+  border-collapse: collapse;
+  font-size: 0.68rem;
+}
+
+#dg-tooltip table.dg-cols th {
+  padding: 2px 6px 2px 0;
+  text-align: left;
+  font-weight: 600;
+  color: var(--vb-muted);
+  background: none;
+  border-bottom: 1px solid var(--vb-border);
+}
+
+#dg-tooltip table.dg-cols td {
+  padding: 1px 6px 1px 0;
+  border: none;
+}
+
+#dg-tooltip table.dg-cols td:first-child {
+  font-family: ui-monospace, monospace;
+  color: var(--vb-link);
+}
+
+#dg-tooltip table.dg-cols td.pk {
+  color: var(--dg-entry-stroke);
+}
+
+#dg-tooltip table.dg-cols td.fk {
+  color: var(--dg-storage-stroke);
+}
+
+#dg-tooltip .dg-idx {
+  margin-top: 0.2rem;
+  font-size: 0.66rem;
+  color: var(--vb-muted);
+}
+
+/* A badge names the node's role. The script sets --badge to its role's
+   stroke colour; a role it does not know keeps the link colour. */
+#dg-tooltip .dg-badge {
+  --badge: var(--vb-link);
+  display: inline-block;
+  margin-bottom: 0.45rem;
+  padding: 1px 7px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--badge);
+  background-color: color-mix(in srgb, var(--badge) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--badge) 40%, transparent);
+  border-radius: 4px;
+}

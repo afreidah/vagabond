@@ -827,7 +827,9 @@ See [dispatch](dispatch.md) for execution records and failure classes.
 
 The wait before attempt *n* (the first attempt is 0 and never waits) is
 `initial × 2^(n-1)`, capped at `max`. With the defaults: 5s, 10s, 20s, 30s,
-30s. A value of `0s` falls back to the default.
+30s. `0s` falls back to the default, but a `max` of `0s` beside a non-zero
+`initial` fails validation as below `initial`. With `max` omitted, an `initial`
+above 30s is used as written for the first wait, and later waits drop to 30s.
 
 **Validation:**
 
@@ -845,7 +847,8 @@ invalid one is reported by name rather than line.
 
 ## Diagnostics
 
-Two kinds of diagnostic are reported, all of them in one run:
+Two kinds of diagnostic are reported. Every diagnostic of one kind is reported
+in a single run:
 
 - **Decode errors** (syntax, unknown or missing attributes, wrong types,
   metadata references) carry a file, line and source excerpt, as HCL renders

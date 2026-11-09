@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
   <title id="title">Quota layers</title>
-  <desc id="desc">An execution in namespace ci on aws-lambda charges the provider's pools and the namespace's share of them. It is admitted only if every pool it touches has room in both layers. Dispatch reserves the charge in one statement and settles it with what the execution used.</desc>
+  <desc id="desc">An execution in namespace ci on aws-lambda charges the provider's pools and the namespace's share of them. It is admitted only if every pool it touches has room in both layers, unless the job pays (max_cost_usd above 0). Dispatch reserves the charge in one statement and settles it with what the execution used.</desc>
   <defs>
     <style>
       .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:20px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:13px;fill:#c9ccd3}.micro{font-size:13px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}.used{fill:#fd7300}.free{fill:none;stroke:#9a9ea6;stroke-width:1.5}
@@ -43,7 +43,7 @@
     <g class="small" text-anchor="middle" style="fill:#f8fafc">
       <text x="1040" y="254">reserve: all pools or none</text>
       <text x="1040" y="284">settle: what it used</text>
-      <text x="1040" y="314">no room: quota-exhausted</text>
+      <text x="1040" y="314">no room: next provider</text>
     </g>
   </g>
 </svg>

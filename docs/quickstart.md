@@ -62,8 +62,9 @@ elsewhere with `-address` or `$VAGABOND_ADDR`.
 
 Fake provider behaviour:
 
-- `fake-container` accepts a task and never finishes it. A run placed on one
-  waits until it is interrupted.
+- `fake-container` accepts a task and never finishes it. Its live output stream
+  prints `fake execution output` once and stays open. A run placed on one waits
+  until it is interrupted.
 - `fake-function` finishes inside the submit call with exit code 0, a duration
   of one second, and no output.
 - Capability snapshots report the time the server started as their observation
@@ -75,7 +76,7 @@ Fake provider behaviour:
 |---|---|
 | `No providers are configured, so there is nothing to run on.` | The configuration declares no `provider` block |
 | `The server needs a store block, or -dev to keep everything in memory.` | `-dev` omitted and no `store` block |
-| `Listening for agents on 127.0.0.1:4748: ...` | The agent port is taken |
+| `listening for agents on 127.0.0.1:4748: ...` | The agent port is taken |
 | `listening on 127.0.0.1:4747: ...` | The API port is taken |
 
 Run the commands below in a second terminal.
@@ -124,10 +125,11 @@ provider and returns the result. Nothing is dispatched or reserved.
 
 ```shell
 go-test.test (container)
-gcp-cloud-run       admitted  score 100        observed 2026-09-28 14:02:11Z
-ibm-code-engine     admitted  score 100        observed 2026-09-28 14:02:11Z
+gcp-cloud-run       admitted  tier 0           score 100  observed 2026-09-28 14:02:11Z
+ibm-code-engine     admitted  tier 0           score 100  observed 2026-09-28 14:02:11Z
 aws-lambda          rejected  not-allowlisted  The job routes only to ibm-code-engine, gcp-cloud-run.
 cloudflare-workers  rejected  not-allowlisted  The job routes only to ibm-code-engine, gcp-cloud-run.
+Tiers: strict
 Selected: gcp-cloud-run
 Estimated cost: free
 ```
@@ -135,12 +137,15 @@ Estimated cost: free
 Reading the output:
 
 - One block per task, headed `<job>.<task> (<driver>)`.
-- Admitted providers first, best score first; equal scores keep provider-name
-  order. Rejected providers follow in provider-name order.
+- Admitted providers first, by tier then score under `strict` tiers (by score
+  alone under `weighted`); equal standings keep provider-name order. Rejected
+  providers follow in provider-name order.
 - A rejected row shows the first rule the provider failed and a sentence
   explaining it. Reason codes are listed in
   [Scheduling](scheduling.md#reason-codes).
-- `observed` is the age of the capability snapshot the verdict was made from.
+- `observed` is when the capability snapshot the verdict was made from was
+  taken.
+- `Tiers` names the tier mode the candidates were ordered under.
 - `Selected` is where `job run` would send the task.
 
 Both container providers score 100 here because the dev ledger starts empty:
@@ -157,10 +162,10 @@ rule a rejected provider failed:
 
 ```shell
 go-test.test (container)
-gcp-cloud-run       admitted  score 100  observed 2026-09-28 14:02:11Z
+gcp-cloud-run       admitted  tier 0  score 100  observed 2026-09-28 14:02:11Z
                                 headroom 1.00
                                 affinity 1.00
-ibm-code-engine     admitted  score 100  observed 2026-09-28 14:02:11Z
+ibm-code-engine     admitted  tier 0  score 100  observed 2026-09-28 14:02:11Z
                                 headroom 1.00
                                 affinity 1.00
 aws-lambda          rejected  not-allowlisted  The job routes only to ibm-code-engine, gcp-cloud-run.
@@ -173,6 +178,9 @@ cloudflare-workers  rejected  not-allowlisted  The job routes only to ibm-code-e
                                 image-unsupported
                                 network-unsupported
                                 constraint-unmet
+Tiers: strict
+Selected: gcp-cloud-run
+Estimated cost: free
 ```
 
 `cloudflare-workers` is disabled, so it has never been refreshed and its
@@ -204,6 +212,7 @@ the run waits after acceptance:
 ```shell
 ==> dispatch 01a0c3f1-9e02-7a44-8c1d-6b2e3f4a5b6c of "go-test"
 ==> test accepted on gcp-cloud-run
+fake execution output
 ^CJob "go-test" was interrupted. The execution was stopped.
 ```
 
@@ -249,7 +258,7 @@ Output format:
 | Line | Printed when |
 |---|---|
 | `==> dispatch <id> of "<job>"` | The server accepted the run |
-| `==> <task> <state> on <provider>` | A poll sees the execution in a new non-terminal state; ` (attempt N)` is appended from the second attempt, ` (<class> failure)` when one is recorded |
+| `==> <task> <state> on <provider>` | A poll sees the execution in a new state before it has a result (including `failed`, `cancelled` or `lost` without one); ` (attempt N)` is appended from the second attempt, ` (<class> failure)` when one is recorded |
 | task output | While the task runs on a provider that streams, otherwise once it has a result; never with `-no-logs` |
 | `==> <task> succeeded on <provider> in <duration>` | The task exited 0 |
 | `==> <task> failed (exit N) on <provider> in <duration>` | The task exited non-zero |

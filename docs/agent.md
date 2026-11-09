@@ -21,8 +21,9 @@ it starts.
 | Requirement | Checked at | Failure |
 |---|---|---|
 | Linux with cgroup v2 (unified hierarchy) | startup | [Startup errors](#startup-errors) |
-| Read access to `/proc/meminfo` and `/proc/self/cgroup` | startup | |
-| Permission to create cgroups under its own, or `-cgroup-parent` | startup | |
+| Read access to `/proc/meminfo` and `/proc/self/cgroup` | startup | [Startup errors](#startup-errors) |
+| Permission to create cgroups under its own (no `-cgroup-parent`) | startup | [Startup errors](#startup-errors) |
+| `-cgroup-parent` exists and can parent workloads | first `Submit` | `Internal` `creating the task: ...` |
 | containerd reachable on `-containerd` | startup | |
 | `-data-dir` writable | startup | |
 | TCP reach to the server's `agent_bind` | after startup, retried | `connecting to the server` warnings |
@@ -45,10 +46,10 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=no -memory 12288 \
 | `-tls-ca <path>` | none | CA the server's certificate chains to. `-tls-ca`, `-tls-cert` and `-tls-key` are all set or none. See [Security](#security). |
 | `-tls-cert <path>` | none | This agent's certificate. Its common name is the node's name. |
 | `-tls-key <path>` | none | This agent's private key. |
-| `-tls-server-name <name>` | host part of `-server` | Name the server's certificate must carry. |
+| `-tls-server-name <name>` | host part of `-server` | Name the server's certificate must carry. Needs the three `-tls-*` flags. |
 | `-label <key>=<value>` | none | Node label, repeatable. Published to constraints as `node.label.<key>`. A repeated key, an empty key or a value without `=` is a flag error. |
-| `-cpu <millicores>` | `0` (no cap) | Upper bound on capacity CPU. |
-| `-memory <MiB>` | `0` (no cap) | Upper bound on capacity memory. |
+| `-cpu <millicores>` | `0` (no cap; negative is the same) | Upper bound on capacity CPU. |
+| `-memory <MiB>` | `0` (no cap; negative is the same) | Upper bound on capacity memory. |
 | `-containerd <path>` | `/run/containerd/containerd.sock` | containerd's socket. |
 | `-data-dir <path>` | `/var/lib/vagabond` | Workload output, under `<data-dir>/logs`. Created mode `0750` if missing. In a container it must be the same path inside and out. |
 | `-cgroup-parent <path>` | empty | cgroup v2 path to create workloads under, prepared by the operator. Skips [cgroup delegation](#cgroup-delegation). |
@@ -58,7 +59,8 @@ The full CLI reference is in [CLI](cli.md).
 
 ### Startup sequence
 
-1. Parse flags and the log level.
+1. Parse flags; with `-tls-*`, load the certificate, key and CA and take the
+   node's name from the certificate; parse the log level.
 2. Read the node: architecture, host CPU and memory, the agent's cgroup and
    the limits above it ([Capacity](#capacity)).
 3. Delegate the agent's cgroup, unless `-cgroup-parent` is set
@@ -68,7 +70,8 @@ The full CLI reference is in [CLI](cli.md).
 5. Re-arm the timeout of every workload already in the `vagabond` namespace
    ([Agent restarts](#agent-restarts)).
 6. Log the node, then dial the server and stay connected until `SIGINT` or
-   `SIGTERM`.
+   `SIGTERM`. Either signal closes the session and exits 0; workloads keep
+   running.
 
 ```text
 level=INFO msg=node name=box1 pool=homelab cpu=4000 memory=12288 cgroup=/system.slice/vagabond-agent.service
@@ -91,7 +94,7 @@ dimension is the smallest of:
 | Flags | `-cpu` | `-memory` |
 
 - A `cpu.max` or `memory.max` of `max`, or a file that does not exist, is no
-  limit. A flag of `0` is no cap.
+  limit. A flag of `0` or less is no cap.
 - The chain is read from the agent's own cgroup, also when `-cgroup-parent` is
   set.
 - Capacity is read once at startup. Changing a limit or a flag takes an agent
@@ -109,7 +112,9 @@ systemd unit with `CPUQuota=400%` and `MemoryMax=16G`, started with
 Workloads are created under the agent's cgroup, so the kernel holds their sum
 to the cgroup limits as well as to the per-workload limits described in
 [Workloads](#workloads). `-cpu` and `-memory` are enforced only by the room
-checks on the agent and the server, not by the kernel.
+checks on the agent and the server, not by the kernel. With `-cgroup-parent`,
+workloads are under that parent instead, so its limits apply, not those of the
+agent's chain that capacity is read from.
 
 ## Cgroup delegation
 
@@ -123,26 +128,44 @@ not both. At startup the agent prepares its own cgroup to parent workloads:
 3. Refuse the root cgroup `/`.
 4. Create the child `<cgroup>/agent`.
 5. Move its own PID into `<cgroup>/agent`.
-6. Enable the `cpu` and `memory` controllers in `<cgroup>/cgroup.subtree_control`.
+6. Enable the `cpu` and `memory` controllers for `<cgroup>`, in the
+   `cgroup.subtree_control` of each ancestor from the root down to
+   `<cgroup>`'s parent. `<cgroup>`'s own `cgroup.subtree_control` is written by
+   runc, which enables the available controllers along a workload's cgroup path
+   when it creates it; step 5 leaves `<cgroup>` without processes so it can.
 7. Create every workload at `<cgroup>/<execution-id>`.
 
-With `-cgroup-parent`, steps 1 to 6 are skipped and workloads are created at
-`<cgroup-parent>/<execution-id>`. The parent must already have `cpu` and
-`memory` enabled for its children; the agent does not check.
+With `-cgroup-parent`, steps 2 to 6 are skipped and workloads are created at
+`<cgroup-parent>/<execution-id>`. Step 1 still runs as part of reading
+capacity, so a cgroup v1 host is refused either way. The agent neither checks
+nor prepares the parent; runc enables controllers along the path when it
+creates each workload. A parent that holds processes cannot pass controllers to
+children, and the first `Submit` fails `creating the task: ...`.
 
 ### Startup errors
 
 | Condition | Error |
 |---|---|
-| cgroup v1 or hybrid host | `Reading the node: the host is not on cgroup v2, which the agent requires` |
+| cgroup v1 host (no `0::` line in `/proc/self/cgroup`) | `Reading the node: the host is not on cgroup v2, which the agent requires` |
+| `/proc/self/cgroup` unreadable | `Reading the node: reading the agent's cgroup: ...` |
 | `/proc/meminfo` unreadable | `Reading the node: reading host memory: ...` |
+| `MemTotal` missing or unparsable | `Reading the node: no MemTotal in /proc/meminfo` or `... parsing MemTotal: ...` |
+| `cpu.max` or `memory.max` unreadable or unparsable | `Reading the node: reading sys/fs/cgroup/<path>/<file>: ...` or `... parsing sys/fs/cgroup/<path>/cpu.max: ...` |
 | Agent's cgroup is `/` (container without `--cgroupns=host`) | `the agent's cgroup is the root. In a container, run it with --cgroupns=host so it sees its real cgroup, or pass -cgroup-parent` |
-| cgroup cannot be opened | `loading cgroup <path>: ...` |
+| Agent's cgroup path not clean and absolute | `loading cgroup <path>: cgroups: invalid group path` |
 | Creating the leaf, moving into it, or enabling controllers is refused | `cannot manage cgroups under <path>: <cause>. Under systemd, set Delegate=yes on the agent's unit; in a container, mount /sys/fs/cgroup writable with --cgroupns=host` |
-| Socket missing or unreachable | `connecting to containerd at <socket>: ...` or `containerd at <socket> does not answer: ...` |
+| Socket missing or unreachable | `containerd at <socket> does not answer: ...` |
+| `-containerd` not a usable address | `connecting to containerd at <socket>: ...` |
 | `<data-dir>/logs` cannot be created | `creating the log directory: ...` |
 | containerd cannot list containers | `Finding workloads from before: listing containers: ...` |
 | Bad `-log-level` | `Invalid -log-level "<value>": use debug, info, warn or error.` |
+| `-tls-ca`, `-tls-cert`, `-tls-key` partly set | `-tls-ca, -tls-cert and -tls-key go together: set all three or none` |
+| `-tls-server-name` without the other three | `-tls-server-name needs -tls-ca, -tls-cert and -tls-key` |
+| Certificate or key unreadable or mismatched | `loading the agent's certificate: ...` |
+| CA unreadable | `loading the CA from <path>: ...` |
+| Certificate without a common name | `the agent's certificate has no common name` |
+| `-name` differs from the certificate | `-name "<name>" does not match the certificate's common name "<cn>"` |
+| TLS set and `-server` has no port | `address <server>: missing port in address` |
 
 ## Deployment
 
@@ -257,7 +280,10 @@ server {
 
 See [`agent_tls` block](configuration.md#agent_tls-block) and
 [Security](#security). A listen failure stops the server with
-`listening for agents on <addr>: ...`.
+`listening for agents on <addr>: ...`, an unreadable `agent_tls` certificate or
+key with `loading the agent listener's certificate: ...`, and an unreadable CA
+with `loading the CA from <path>: ...`. Shutdown closes the listener and every
+agent session; agents log `lost the server` and keep dialing.
 
 ## Connection and reporting
 
@@ -275,9 +301,13 @@ Signals are coalesced: several changes while a report is pending send one
 report. A failed periodic report is logged as `reporting workloads` and not
 retried; the next carries everything.
 
-The connection closing is the only liveness signal. There is no separate
-heartbeat or timeout on top of TCP and yamux keepalives. When it closes, the
-server removes the node (`node disconnected`) and the agent dials again.
+The connection closing is the only liveness signal; there is no heartbeat of
+Vagabond's own. yamux runs with its defaults on both sides: each pings the
+other every 30 s and closes the session when a ping goes unanswered for 10 s,
+so a peer that vanishes is noticed within about 40 s. A stream the peer does
+not acknowledge within 75 s also closes the session. TCP keepalives are Go's
+defaults. When the session closes, the server removes the node
+(`node disconnected`) and the agent dials again.
 
 **Reconnect backoff:**
 
@@ -290,12 +320,17 @@ server removes the node (`node disconnected`) and the agent dials again.
 
 A dial or first registration that fails logs
 `connecting to the server server=... error=... retry=<wait>`. A session that
-was up and dropped logs `lost the server`.
+was up and dropped logs `lost the server`. A dial has no timeout of its own: an
+address that drops packets fails after the kernel's TCP connect timeout, about
+2 minutes with Linux defaults. The agent's TLS handshake has none either; a
+vagabond server drops it after 10 s.
 
 The server records each node as it arrives (`node registered node=... pool=...
 address=... cpu=... memory=... held=<n>`). Later reports from the same
 connection update the node silently. A report under a connected name from a
-new connection closes the old connection and replaces it.
+new connection closes the old connection and replaces it. A replacement, where
+the new connection registers while the old one is still open, logs neither
+`node registered` nor `node disconnected`.
 
 Agent reporting is one of the loops listed in
 [Background services](background-services.md).
@@ -315,7 +350,8 @@ provider "homelab" {
 }
 ```
 
-- A pool takes no `config` or `credentials`. It accepts the provider-level
+- A pool reads no `config` and no `credentials`: a `config` block is ignored,
+  and `credentials` are resolved but unused. It accepts the provider-level
   settings every provider does, such as quota `pool` blocks and `meta`; see
   [`provider` block](configuration.md#provider-block).
 - Only `vagabond server` can build a pool. Loading one elsewhere fails with
@@ -377,7 +413,7 @@ and 8 GiB is not admitted because one node is `arm64` and another has 8 GiB
 free.
 
 When no node passes, the pool is rejected with the reason code of the node
-that failed the fewest checks, its detail prefixed `closest node <name>: `.
+that failed the fewest checks, ties to the first by name, its detail prefixed `closest node <name>: `.
 
 See [Admission](scheduling.md#admission) and
 [Reason codes](scheduling.md#reason-codes).
@@ -436,8 +472,9 @@ nothing new.
 | Agent answer | Pool does |
 |---|---|
 | `ResourceExhausted` (`the node has <cpu> millicores and <mem> MiB free; the workload needs <cpu> and <mem>`) | Drops the reservation, marks the node tried, and places again on the next node. |
-| Any other error | Drops the reservation and returns an infrastructure failure. No other node is tried. |
+| Any other error (`submitting to node <name>: ...`) | Drops the reservation and returns an infrastructure failure. No other node is tried. |
 | Node disconnected between choosing and sending | Infrastructure failure `node <name> left before the workload reached it`. |
+| Task names no `image`, or its `env` or `timeout` does not evaluate | Internal failure `task "<name>" names no image`, `task "<name>" env: ...` or `task "<name>" timeout: ...`, before any node is chosen. Not sent to another provider. |
 | No untried node has room | Infrastructure failure `no node in pool "<pool>" has room for <cpu> millicores and <mem> MiB`. |
 
 An infrastructure failure sends dispatch to the next ranked provider; see
@@ -456,7 +493,7 @@ executions it holds:
 | Call | Within 5 minutes of leaving | After 5 minutes |
 |---|---|---|
 | Status | `lost` | Infrastructure failure `node <name> holding <id> is gone` |
-| Result, Cancel, Release | Infrastructure failure `the node holding <id> is not connected` | Infrastructure failure `node <name> holding <id> is gone` |
+| Result, Cancel, Release, StreamLogs | Infrastructure failure `the node holding <id> is not connected` | Infrastructure failure `node <name> holding <id> is gone` |
 
 `lost` is not terminal: dispatch keeps polling. A node that reconnects within
 the grace period reports its workloads, and they finish normally. After it,
@@ -467,8 +504,14 @@ is `failed` after 24 hours.
 
 **After a server restart**, the server has no record of which node holds an
 execution until a node reports it. For the first 5 minutes after the pool
-provider is built, an execution no connected node reports is `lost`; after
-that it is an unknown execution.
+provider is built, Status answers `lost` for an execution no connected node
+reports, and Result, Cancel, Release and StreamLogs fail
+`the node holding <id> is not connected`. After that it is an unknown
+execution: dispatch ends the attempt, and the release loop records a `lost`
+execution `failed` at once, not after 24 hours, and marks it released without
+reaching the node. A node that reconnects later keeps that container, its
+snapshot and `<data-dir>/logs/<id>.log`; remove them on the node with
+`ctr -n vagabond tasks rm -f <id>` and `ctr -n vagabond containers rm <id>`.
 
 ## Workloads
 
@@ -483,7 +526,8 @@ One container per execution, on the node's containerd.
 | Network | Host network namespace |
 | `/etc/resolv.conf`, `/etc/hosts` | The host's |
 | Mounts | containerd's default OCI spec; no host paths or volumes from the job |
-| Image | Pulled and unpacked on submit, name normalised (`alpine` → `docker.io/library/alpine:latest`). No registry credentials are passed. |
+| Image | Pulled and unpacked on every new submission for the node's platform, name normalised (`alpine` → `docker.io/library/alpine:latest`). Layers already on the node are not downloaded again, but the reference is always resolved against the registry, so an unreachable registry fails the submission even for a cached image. No registry credentials are passed. Images are never removed; delete them with `ctr -n vagabond images rm <ref>`. |
+| Snapshotter | containerd's default, `overlayfs`, unless the `vagabond` namespace carries a `containerd.io/defaults/snapshotter` label |
 | User | The image's |
 
 ### Process
@@ -532,6 +576,7 @@ with its result.
 ### Output
 
 - containerd writes stdout and stderr to `<data-dir>/logs/<execution-id>.log`.
+  The file is neither rotated nor capped; it grows until `Release` deletes it.
 - `Result` carries the last 64 KiB, with a truncated flag when earlier output
   was cut.
 - While the workload runs, the pool streams its output through
@@ -544,8 +589,10 @@ with its result.
 ### Timeouts
 
 A task `timeout` is enforced by the agent, measured from `vagabond.started`.
-When it passes, the agent sends `SIGTERM`, then `SIGKILL` 10 seconds later if
-the process has not exited. A timed-out workload is not labelled cancelled: it
+When it passes, the agent sends `SIGTERM` to the workload's first process, PID
+1 in its own PID namespace, then `SIGKILL` 10 seconds later if it has not
+exited. PID 1 ignores `SIGTERM` unless it installs a handler, so a plain
+`sleep` or `sh -c` workload is killed at 10 seconds. A timed-out workload is not labelled cancelled: it
 ends `failed` with its exit status, or `succeeded` if it exits 0 on `SIGTERM`.
 No `timeout` means no limit.
 
@@ -554,7 +601,9 @@ No `timeout` means no limit.
 `Cancel` labels the container `vagabond.cancelled=true`, sends `SIGTERM`, and
 returns. `SIGKILL` follows after 10 seconds if the process is still running.
 The workload ends `cancelled` whatever its exit code. Cancelling a container
-with no task only sets the label.
+with no task only sets the label. Cancelling a workload that already exited
+also sets the label, so its state becomes `cancelled` whatever it exited with.
+`SIGTERM` goes to the first process only, as for [Timeouts](#timeouts).
 
 ### Release
 
@@ -564,7 +613,8 @@ succeeds. Dispatch releases after reading the result; a workload that ended
 any other way, cancelled or with its result unread, is released by the
 server's [release loop](background-services.md#provider-release) once it has
 stopped. While the node is offline the release fails and is retried until the
-node reconnects.
+node reconnects. After a server restart this holds only for the pool's first 5
+minutes; see [Node leaving mid-run](#node-leaving-mid-run).
 
 ### Agent restarts
 
@@ -630,6 +680,9 @@ without the agent listening on anything.
 
 ![The agent dials one mutual TLS connection to the server, multiplexed with yamux, and presents a certificate whose common name is its node name. The agent calls the server's Node service to register under that name; the server calls the agent's AgentExecutions service to run workloads. The agent starts workloads on the node's containerd, inside the agent's cgroup.](assets/agent-connection.svg)
 
+Interactive version, with notes on each component:
+[Agents and pools](https://vagabond.munchbox.cc/diagrams/agents/).
+
 Package `vagabond.agent.v1`, defined in `internal/agentrpc/agent.proto`;
 regenerate with `make generate`.
 
@@ -653,7 +706,9 @@ regenerate with `make generate`.
 States travel as their names (`accepted`, `running`, `succeeded`, ...).
 `runtime` is left empty by the server and defaults to `io.containerd.runc.v2`.
 An agent that predates `offset` reads the request as an `execution_id` alone
-and streams from the start.
+and streams from the start; a reopened stream from such an agent repeats output
+the client already has. `provider_id` from the agent is the container ID, which
+is the execution ID; the pool ignores it and uses the node name.
 
 ### Status codes
 
@@ -663,15 +718,20 @@ and streams from the start.
 | `NotFound` | The node holds no container for the execution (`Status`, `Result`, `Cancel`) | Unknown execution |
 | `Internal` | Any other executor error: image pull, container create, `Result` before the workload finished, `StreamLogs` with no log file | Infrastructure failure |
 | Transport errors | Connection dropped mid-call | Infrastructure failure |
+| `Canceled`, `DeadlineExceeded` | The server's call ended first, including a `Submit` waiting on another in flight for the same execution | Infrastructure failure |
 
 ## Security
 
 | `agent_bind` | Agent connection | Who can register |
 |---|---|---|
-| Loopback (default `127.0.0.1:4748`) | Plain TCP, or mutual TLS with `agent_tls` | Local agents, under any name |
-| Anything else | Mutual TLS; the server refuses to start without `agent_tls` | Agents with a certificate the CA signed, under its common name |
+| Loopback: `localhost`, `127.0.0.0/8`, `::1` (default `127.0.0.1:4748`) | Plain TCP, or mutual TLS with `agent_tls` | Local agents, under any name |
+| Anything else, including an empty host such as `:4748` | Mutual TLS. Without `agent_tls` the server refuses to start: `agent_bind <addr> is reachable beyond this machine: add an agent_tls block to the server block so agents must present a certificate, or bind to 127.0.0.1` | Agents with a certificate the CA signed, under its common name |
 
 With mutual TLS:
+
+- Both sides require TLS 1.2 or later.
+- The server gives each handshake 10 s. One that fails or does not finish is
+  dropped and logged as `agent connection from=... error="TLS with <addr>: ..."`.
 
 - The server presents its certificate and requires one from every agent,
   signed by `agent_tls.ca`. A connection without a certificate, or with one
@@ -749,7 +809,9 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab \
 | Node listed, jobs never placed on it; plan shows `provider-unhealthy` or no pool | `-pool` does not match a `pool` provider name | Match the names. |
 | `closest node <name>: ...` in plan | No node passes admission | Read the reason; check `node.label.*` constraints and free room. |
 | Dispatch reports `no node in pool "<pool>" has room for ...` | Every admitted node full, or reservations pending | Wait for work to finish or add capacity. Reservations expire after 2 minutes. |
-| Two agents alternate in `node status`, both logging `lost the server` | Same `-name` on two hosts | Give each a unique `-name`. |
+| Two agents alternate in `node status`, both logging `lost the server` | Same `-name` on two hosts. The server logs nothing while they alternate. | Give each a unique `-name`. |
+| Agent logs `connecting to the server ... registering: rpc error: code = Unavailable ...`; server logs `agent connection ... tls: first record does not look like a TLS handshake` | Agent started without `-tls-*` against a server with `agent_tls` | Pass `-tls-ca`, `-tls-cert` and `-tls-key`. |
+| Node disk fills under containerd's root | Pulled images are never removed | `ctr -n vagabond images rm <ref>`. |
 | `cannot manage cgroups under ...` at startup | cgroup not delegated | `Delegate=yes`, or privileged container with `--cgroupns=host`. |
 | `the agent's cgroup is the root` at startup | Container without `--cgroupns=host` | Add it, or pass `-cgroup-parent`. |
 | Workloads die when the agent restarts under systemd | `KillMode=control-group` kills the unit's subtree | `KillMode=process`. |

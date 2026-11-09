@@ -13,6 +13,7 @@ run it and which one should, runs it there, and records what it used.
 |---|---|---|
 | Getting started | [Quickstart](quickstart.md) | A dev server, a plan and a run, with no cloud account |
 | | [Architecture](architecture.md) | Components, the pipeline, packages and boundaries |
+| | [Diagrams](../diagrams/) | Interactive diagrams of each part, with notes on every component |
 | Using Vagabond | [Job specification](job-specification.md) | Every block and attribute of a job file |
 | | [CLI](cli.md) | Every command and flag |
 | | [HTTP API](api.md) | Every route, request and response |
@@ -27,3 +28,5 @@ run it and which one should, runs it there, and records what it used.
 | Providers | [Cloud Run Jobs](providers/cloud-run.md) | The `cloud-run` provider |
 | | [AWS Lambda](providers/lambda.md) | The `lambda` provider |
 | | [Writing a provider](writing-a-provider.md) | The plugin contract |
+| Contributing | [Style guide](style-guide.md) | Coding conventions |
+| | [Contributing](../CONTRIBUTING.md) | Build, test and pull request workflow |
