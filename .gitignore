@@ -3,6 +3,7 @@
 *.test
 coverage.out
 integration-coverage.out
+containerd-coverage.out
 dist/
 
 # Hugo build output and caches

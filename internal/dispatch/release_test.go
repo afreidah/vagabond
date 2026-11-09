@@ -12,6 +12,7 @@
 package dispatch
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -24,6 +25,23 @@ import (
 // -------------------------------------------------------------------------
 // HELPERS
 // -------------------------------------------------------------------------
+
+// releasingProvider leaves a resource behind, as Cloud Run does.
+type releasingProvider struct {
+	scriptedProvider
+
+	releases      int
+	releasedAfter int   // how many Result calls had happened by then
+	releaseErr    error // what Release fails with, nil to succeed
+}
+
+// Release counts the call and fails with releaseErr when one is set.
+func (p *releasingProvider) Release(context.Context, execution.ID) error {
+	p.releases++
+	p.releasedAfter = p.results
+
+	return p.releaseErr
+}
 
 // releasing registers a releasing provider named "a" that ends in state after
 // polls Status calls.
@@ -325,5 +343,69 @@ func TestReleaseLoop_KeepsALostExecutionWhileTheProviderIsDown(t *testing.T) {
 
 	if got := record(t, reg, id).State; got != execution.StateLost {
 		t.Errorf("state = %s, want lost", got)
+	}
+}
+
+// -------------------------------------------------------------------------
+// RELEASE AFTER A RUN
+// -------------------------------------------------------------------------
+
+// Every run leaves a Cloud Run job against a per-region quota, so the normal
+// path deletes it at once rather than leaving it for the release loop.
+func TestReleaseIsCalledOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	p := &releasingProvider{
+		name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded,
+	}
+
+	d := newDispatcher(t, newRegistry(&p.scriptedProvider))
+	d.registry.(*fakeRegistry).providers["a"] = p
+
+	if _, err := d.RunTask(t.Context(), origin, containerTask(t, nil), nil, nil); err != nil {
+		t.Fatalf("RunTask failed: %v", err)
+	}
+
+	if p.releases != 1 {
+		t.Errorf("released %d times, want 1", p.releases)
+	}
+
+	// Releasing may destroy what Result reads, so the order is load-bearing.
+	if p.releasedAfter != 1 {
+		t.Error("released before the result was fetched")
+	}
+}
+
+// A failing build still leaves the resource behind.
+func TestReleaseIsCalledOnAFailedWorkload(t *testing.T) {
+	t.Parallel()
+
+	p := &releasingProvider{
+		name: "a", pollsToFinish: 1, finalState: execution.StateFailed, exitCode: 1,
+	}
+
+	d := newDispatcher(t, newRegistry(&p.scriptedProvider))
+	d.registry.(*fakeRegistry).providers["a"] = p
+
+	if _, err := d.RunTask(t.Context(), origin, containerTask(t, nil), nil, nil); err != nil {
+		t.Fatalf("RunTask failed: %v", err)
+	}
+
+	if p.releases != 1 {
+		t.Errorf("released %d times, want 1", p.releases)
+	}
+}
+
+// A provider with nothing to release is not asked to.
+func TestNoReleaseWhenUnsupported(t *testing.T) {
+	t.Parallel()
+
+	p := &scriptedProvider{
+		name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded,
+	}
+
+	if _, err := newDispatcher(t, newRegistry(p)).
+		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil); err != nil {
+		t.Fatalf("RunTask failed: %v", err)
 	}
 }

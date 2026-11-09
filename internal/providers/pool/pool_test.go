@@ -5,7 +5,7 @@
 //
 // Real agents over TCP, with fake executors, registered into a node set the
 // pool reads: capabilities following the nodes, placement by room, the room a
-// reservation holds, and a node that leaves mid-run.
+// reservation holds, a node that leaves mid-run, and output streamed back.
 // -------------------------------------------------------------------------------
 
 package pool
@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -83,7 +84,18 @@ func (f *fakeExecutor) Release(_ context.Context, id string) error {
 	return nil
 }
 
-func (f *fakeExecutor) Logs(context.Context, string, io.Writer) error { return nil }
+// Logs writes one line naming a held workload from offset on, as one that
+// printed it and ended.
+func (f *fakeExecutor) Logs(ctx context.Context, id string, offset int64, w io.Writer) error {
+	if _, err := f.Status(ctx, id); err != nil {
+		return err
+	}
+
+	line := "output of " + id + "\n"
+	_, err := io.WriteString(w, line[min(offset, int64(len(line))):])
+
+	return err
+}
 
 // Held reports every workload as running with what it declared.
 func (f *fakeExecutor) Held(context.Context) ([]executor.Held, error) {
@@ -406,3 +418,53 @@ func TestPool_NodeLeavingMidRun(t *testing.T) {
 		t.Errorf("Status() after the grace = %v, want an infrastructure failure", err)
 	}
 }
+
+// Output streams from the node holding the execution and ends with it. A node
+// that no longer holds it answers unknown, and a writer that fails is internal.
+func TestPool_StreamLogs(t *testing.T) {
+	h := newHarness(t)
+	exec := newFakeExecutor()
+	h.join(t, "box1", 4096, exec)
+
+	id := newExecutionID(t)
+
+	if _, err := h.pool.Submit(t.Context(), id, task(t, 1024)); err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+
+	var out strings.Builder
+
+	if err := h.pool.StreamLogs(t.Context(), id, 0, &out); err != nil || out.String() != "output of "+id.String()+"\n" {
+		t.Errorf("StreamLogs() = %q, %v; want the node's output", out.String(), err)
+	}
+
+	var rest strings.Builder
+
+	if err := h.pool.StreamLogs(t.Context(), id, int64(len("output of ")), &rest); err != nil || rest.String() != id.String()+"\n" {
+		t.Errorf("StreamLogs() from an offset = %q, %v; want the rest of the line", rest.String(), err)
+	}
+
+	err := h.pool.StreamLogs(t.Context(), id, 0, failingWriter{})
+	if failure, ok := errors.AsType[*plugin.Error](err); !ok || failure.Class != plugin.ClassInternal {
+		t.Errorf("StreamLogs() into a failing writer = %v, want an internal failure", err)
+	}
+
+	// The node lets the workload go while this process still places it there.
+	_ = exec.Release(t.Context(), id.String())
+
+	if err := h.pool.StreamLogs(t.Context(), id, 0, io.Discard); !errors.Is(err, plugin.ErrUnknownExecution) {
+		t.Errorf("StreamLogs() of a released workload = %v, want ErrUnknownExecution", err)
+	}
+
+	// One no node has reported yet may still be about to, so it is not there
+	// to stream from rather than unknown.
+	if err := h.pool.StreamLogs(t.Context(), newExecutionID(t), 0, io.Discard); !plugin.Reroutable(err) {
+		t.Errorf("StreamLogs() of one no node holds = %v, want an infrastructure failure", err)
+	}
+}
+
+// failingWriter refuses every write.
+type failingWriter struct{}
+
+// Write fails.
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("closed") }

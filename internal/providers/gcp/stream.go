@@ -29,10 +29,15 @@ import (
 // arriving before the stdout that preceded it.
 const bufferWindow = "1s"
 
-// StreamLogs writes a running execution's output to w as it arrives.
+// StreamLogs writes a running execution's output to w as it arrives. A tail
+// starts at what is being logged now, so it cannot resume from an offset.
 func (p *Provider) StreamLogs(
-	ctx context.Context, id execution.ID, w io.Writer,
+	ctx context.Context, id execution.ID, offset int64, w io.Writer,
 ) error {
+	if offset > 0 {
+		return plugin.ErrNoResume
+	}
+
 	resp, err := p.openTail(ctx, jobName(id))
 	if err != nil {
 		return err

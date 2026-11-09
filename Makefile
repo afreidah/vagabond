@@ -174,6 +174,12 @@ containerd-test: ## Run the containerd executor tests (requires root and contain
 	$(GO) test -c -race -tags=containerd -o bin/executor.test ./internal/agent/executor
 	sudo ./bin/executor.test -test.v -test.timeout 5m
 
+# The profile is written as root, so it is handed back to the user after.
+containerd-coverage: ## Write containerd-coverage.out from the containerd executor tests (requires root and containerd)
+	$(GO) test -c $(COVER_FLAGS) -tags=containerd -o bin/executor.test ./internal/agent/executor
+	sudo ./bin/executor.test -test.v -test.timeout 5m -test.coverprofile=containerd-coverage.out
+	sudo chown "$$(id -u):$$(id -g)" containerd-coverage.out
+
 # -------------------------------------------------------------------------
 # SECURITY
 # -------------------------------------------------------------------------
@@ -252,4 +258,4 @@ clean: ## Remove build and coverage artifacts
 	rm -f coverage.out integration-coverage.out vagabond
 	rm -rf bin
 
-.PHONY: help build install uninstall builder docker scan push fmt fmt-check vet lint test test-fast integration-test coverage integration-coverage containerd-test govulncheck check generate generate-check web-serve web-build web-docker web-push tools clean
+.PHONY: help build install uninstall builder docker scan push fmt fmt-check vet lint test test-fast integration-test coverage integration-coverage containerd-test containerd-coverage govulncheck check generate generate-check web-serve web-build web-docker web-push tools clean

@@ -68,7 +68,6 @@ type TaskOutcome struct {
 	ID         execution.ID
 	State      execution.State // the terminal state the provider reported; the verdict
 	Result     *execution.Result
-	Streamed   bool                  // output was shown live; do not print it again
 	Attempts   []Attempt             // every provider tried, including the one that answered
 	Rejections []scheduler.Rejection // why the ineligible providers were never tried
 }

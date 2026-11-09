@@ -58,7 +58,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		ErrorWriter: stderr,
 	}
 
-	meta := &Meta{Ui: ui, Stdin: stdin, ErrStream: stderr}
+	meta := &Meta{Ui: ui, Stdin: stdin, Stdout: stdout, ErrStream: stderr}
 
 	app := &cli.CLI{
 		Name:                       binaryName,

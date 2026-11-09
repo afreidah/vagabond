@@ -153,7 +153,7 @@ type AgentExecutionsClient interface {
 	Result(ctx context.Context, in *ExecutionRequest, opts ...grpc.CallOption) (*ExecutionResult, error)
 	Cancel(ctx context.Context, in *ExecutionRequest, opts ...grpc.CallOption) (*Empty, error)
 	Release(ctx context.Context, in *ExecutionRequest, opts ...grpc.CallOption) (*Empty, error)
-	StreamLogs(ctx context.Context, in *ExecutionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error)
+	StreamLogs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error)
 }
 
 type agentExecutionsClient struct {
@@ -214,13 +214,13 @@ func (c *agentExecutionsClient) Release(ctx context.Context, in *ExecutionReques
 	return out, nil
 }
 
-func (c *agentExecutionsClient) StreamLogs(ctx context.Context, in *ExecutionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error) {
+func (c *agentExecutionsClient) StreamLogs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &AgentExecutions_ServiceDesc.Streams[0], AgentExecutions_StreamLogs_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[ExecutionRequest, LogChunk]{ClientStream: stream}
+	x := &grpc.GenericClientStream[LogsRequest, LogChunk]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -242,7 +242,7 @@ type AgentExecutionsServer interface {
 	Result(context.Context, *ExecutionRequest) (*ExecutionResult, error)
 	Cancel(context.Context, *ExecutionRequest) (*Empty, error)
 	Release(context.Context, *ExecutionRequest) (*Empty, error)
-	StreamLogs(*ExecutionRequest, grpc.ServerStreamingServer[LogChunk]) error
+	StreamLogs(*LogsRequest, grpc.ServerStreamingServer[LogChunk]) error
 	mustEmbedUnimplementedAgentExecutionsServer()
 }
 
@@ -268,7 +268,7 @@ func (UnimplementedAgentExecutionsServer) Cancel(context.Context, *ExecutionRequ
 func (UnimplementedAgentExecutionsServer) Release(context.Context, *ExecutionRequest) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method Release not implemented")
 }
-func (UnimplementedAgentExecutionsServer) StreamLogs(*ExecutionRequest, grpc.ServerStreamingServer[LogChunk]) error {
+func (UnimplementedAgentExecutionsServer) StreamLogs(*LogsRequest, grpc.ServerStreamingServer[LogChunk]) error {
 	return status.Error(codes.Unimplemented, "method StreamLogs not implemented")
 }
 func (UnimplementedAgentExecutionsServer) mustEmbedUnimplementedAgentExecutionsServer() {}
@@ -383,11 +383,11 @@ func _AgentExecutions_Release_Handler(srv interface{}, ctx context.Context, dec 
 }
 
 func _AgentExecutions_StreamLogs_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(ExecutionRequest)
+	m := new(LogsRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(AgentExecutionsServer).StreamLogs(m, &grpc.GenericServerStream[ExecutionRequest, LogChunk]{ServerStream: stream})
+	return srv.(AgentExecutionsServer).StreamLogs(m, &grpc.GenericServerStream[LogsRequest, LogChunk]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.

@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/hashicorp/go-cleanhttp"
@@ -165,9 +166,9 @@ func (c *Client) Execution(ctx context.Context, id string) (*Execution, error) {
 	return &out, c.do(ctx, http.MethodGet, "/v1/execution/"+url.PathEscape(id), "", nil, &out)
 }
 
-// Logs reads an execution's stored output.
-func (c *Client) Logs(ctx context.Context, id string) ([]byte, error) {
-	resp, err := c.send(ctx, http.MethodGet, "/v1/execution/"+url.PathEscape(id)+"/logs", "", nil)
+// Logs reads an execution's stored output from byte offset on.
+func (c *Client) Logs(ctx context.Context, id string, offset int64) ([]byte, error) {
+	resp, err := c.openLogs(ctx, id, offset, false)
 	if err != nil {
 		return nil, err
 	}
@@ -180,6 +181,40 @@ func (c *Client) Logs(ctx context.Context, id string) ([]byte, error) {
 	}
 
 	return logs, nil
+}
+
+// FollowLogs copies a running execution's output from byte offset on to w as
+// it is written, until the server ends the stream. An error means the stream
+// broke rather than ended.
+func (c *Client) FollowLogs(ctx context.Context, id string, offset int64, w io.Writer) error {
+	resp, err := c.openLogs(ctx, id, offset, true)
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		return fmt.Errorf("following the output of %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// openLogs requests an execution's output from byte offset on, followed live
+// when follow is set.
+func (c *Client) openLogs(ctx context.Context, id string, offset int64, follow bool) (*http.Response, error) {
+	query := url.Values{}
+
+	if offset > 0 {
+		query.Set("offset", strconv.FormatInt(offset, 10))
+	}
+
+	if follow {
+		query.Set("follow", "true")
+	}
+
+	return c.send(ctx, http.MethodGet, "/v1/execution/"+url.PathEscape(id)+"/logs", query, nil)
 }
 
 // Cancel stops an execution, and the whole run when the server is running it.
@@ -256,9 +291,16 @@ func (c *Client) Health(ctx context.Context) (*Health, error) {
 // TRANSPORT
 // -------------------------------------------------------------------------
 
-// do sends body as JSON and decodes a 2xx answer into out.
+// do sends body as JSON, as ?namespace= when namespace is set, and decodes a
+// 2xx answer into out.
 func (c *Client) do(ctx context.Context, method, path, namespace string, body, out any) error {
-	resp, err := c.send(ctx, method, path, namespace, body)
+	var query url.Values
+
+	if namespace != "" {
+		query = url.Values{"namespace": {namespace}}
+	}
+
+	resp, err := c.send(ctx, method, path, query, body)
 	if err != nil {
 		return err
 	}
@@ -272,14 +314,11 @@ func (c *Client) do(ctx context.Context, method, path, namespace string, body, o
 	return nil
 }
 
-// send makes one request with namespace as ?namespace= when set, and turns a
-// non-2xx answer into a *ResponseError. The caller closes a 2xx body.
-func (c *Client) send(ctx context.Context, method, path, namespace string, body any) (*http.Response, error) {
+// send makes one request with query, and turns a non-2xx answer into a
+// *ResponseError. The caller closes a 2xx body.
+func (c *Client) send(ctx context.Context, method, path string, query url.Values, body any) (*http.Response, error) {
 	target := c.base.JoinPath(path)
-
-	if namespace != "" {
-		target.RawQuery = url.Values{"namespace": {namespace}}.Encode()
-	}
+	target.RawQuery = query.Encode()
 
 	var reader io.Reader
 

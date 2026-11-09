@@ -103,6 +103,11 @@ type Server struct {
 	now        func() time.Time
 	tiers      job.TierMode // the deployment's tier mode; empty is the default
 
+	followPoll   time.Duration
+	followLinger time.Duration
+	stopping     chan struct{} // closed when shutdown begins, ending every live output stream
+	stopOnce     sync.Once
+
 	mu      sync.Mutex
 	running map[execution.ID]context.CancelFunc
 
@@ -149,18 +154,21 @@ func New(
 	logger *slog.Logger, opts ...Option,
 ) *Server {
 	s := &Server{
-		registry:   reg,
-		ledger:     ledger,
-		executions: executions,
-		jobs:       jobStore,
-		owner:      dispatch.ProcessOwner("server"),
-		leaseTTL:   dispatch.LeaseTTL,
-		leaseRenew: dispatch.LeaseRenew,
-		claimEvery: claimInterval,
-		logger:     logger,
-		now:        time.Now,
-		running:    make(map[execution.ID]context.CancelFunc),
-		nodeConns:  nodes.New(),
+		registry:     reg,
+		ledger:       ledger,
+		executions:   executions,
+		jobs:         jobStore,
+		owner:        dispatch.ProcessOwner("server"),
+		leaseTTL:     dispatch.LeaseTTL,
+		leaseRenew:   dispatch.LeaseRenew,
+		claimEvery:   claimInterval,
+		logger:       logger,
+		now:          time.Now,
+		followPoll:   defaultFollowPoll,
+		followLinger: defaultFollowLinger,
+		stopping:     make(chan struct{}),
+		running:      make(map[execution.ID]context.CancelFunc),
+		nodeConns:    nodes.New(),
 	}
 
 	for _, opt := range opts {
@@ -231,6 +239,9 @@ func (s *Server) ServeListener(ctx context.Context, listener net.Listener, tlsCo
 		ReadHeaderTimeout: headerTimeout,
 		TLSConfig:         tlsConfig,
 	}
+
+	// A live output stream would otherwise hold shutdown open until it timed out.
+	httpServer.RegisterOnShutdown(s.endStreams)
 
 	errs := make(chan error, 1)
 

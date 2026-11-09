@@ -70,7 +70,7 @@ service AgentExecutions {
   rpc Result(ExecutionRequest) returns (ExecutionResult);
   rpc Cancel(ExecutionRequest) returns (Empty);
   rpc Release(ExecutionRequest) returns (Empty);
-  rpc StreamLogs(ExecutionRequest) returns (stream LogChunk);
+  rpc StreamLogs(LogsRequest) returns (stream LogChunk);
 }
 
 // Workload is a task already translated to what a container needs: the server
@@ -116,6 +116,14 @@ message ExecutionResult {
   google.protobuf.Duration duration = 2;
   bytes logs = 3;
   bool logs_truncated = 4;
+}
+
+// LogsRequest's offset is how many bytes of output the caller already has.
+// Its first field matches ExecutionRequest, so an agent that predates it reads
+// the request as one and streams from the start.
+message LogsRequest {
+  string execution_id = 1;
+  int64 offset = 2;
 }
 
 message LogChunk {

@@ -365,27 +365,6 @@ func TestRunTaskSkipsPollingWhenSynchronous(t *testing.T) {
 	}
 }
 
-// The verdict of a synchronous run is the caller's to report with its result,
-// so progress carries no terminal state and nothing prints twice.
-func TestSynchronousRunReportsNoTerminalProgress(t *testing.T) {
-	t.Parallel()
-
-	var events []Event
-
-	p := &scriptedProvider{name: "a", synchronous: true}
-	d := over(newRegistry(p), WithSleeper(noWait), WithProgress(func(e Event) { events = append(events, e) }))
-
-	if _, err := d.RunTask(t.Context(), origin, containerTask(t, nil), nil, nil); err != nil {
-		t.Fatalf("RunTask failed: %v", err)
-	}
-
-	for _, e := range events {
-		if e.State.Terminal() {
-			t.Errorf("progress reported terminal state %s", e.State)
-		}
-	}
-}
-
 // -------------------------------------------------------------------------
 // THE RULE
 // -------------------------------------------------------------------------
@@ -975,5 +954,57 @@ func TestCancelledContextStopsTheRun(t *testing.T) {
 	_, err := d.RunTask(ctx, origin, containerTask(t, nil), nil, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
+// A caller that gave up leaves work running and billing, so it is stopped.
+func TestCancelledRunStopsTheExecution(t *testing.T) {
+	t.Parallel()
+
+	p := &scriptedProvider{
+		name: "a", pollsToFinish: 100, finalState: execution.StateSucceeded,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	polls := 0
+
+	d := over(newRegistry(p), WithSleeper(func(context.Context, time.Duration) error {
+		polls++
+		if polls > 1 {
+			cancel()
+
+			return context.Canceled
+		}
+
+		return nil
+	}))
+
+	_, err := d.RunTask(ctx, origin, containerTask(t, nil), nil, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+
+	if p.cancels != 1 {
+		t.Errorf("called Cancel %d times, want 1", p.cancels)
+	}
+}
+
+// A provider that failed on its own is not still running, so nothing is
+// cancelled.
+func TestProviderFailureDoesNotCancel(t *testing.T) {
+	t.Parallel()
+
+	p := &scriptedProvider{
+		name: "a", statusErr: plugin.Infrastructure(errors.New("503")),
+	}
+
+	if _, err := newDispatcher(t, newRegistry(p)).
+		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil); err == nil {
+		t.Fatal("expected a failure")
+	}
+
+	if p.cancels != 0 {
+		t.Errorf("called Cancel %d times on a provider failure, want 0", p.cancels)
 	}
 }

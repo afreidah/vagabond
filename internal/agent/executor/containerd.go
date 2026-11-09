@@ -408,9 +408,9 @@ func (c *Containerd) Result(ctx context.Context, id string) (*execution.Result, 
 	return result, nil
 }
 
-// Logs copies a workload's output to w as it is written, until the workload
-// ends or ctx does.
-func (c *Containerd) Logs(ctx context.Context, id string, w io.Writer) error {
+// Logs copies a workload's output from byte offset on to w as it is written,
+// until the workload ends, is released, or ctx ends.
+func (c *Containerd) Logs(ctx context.Context, id string, offset int64, w io.Writer) error {
 	file, err := os.Open(c.logPath(id))
 	if err != nil {
 		return fmt.Errorf("opening the log of %s: %w", id, err)
@@ -418,17 +418,23 @@ func (c *Containerd) Logs(ctx context.Context, id string, w io.Writer) error {
 
 	defer func() { _ = file.Close() }()
 
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return fmt.Errorf("seeking the log of %s: %w", id, err)
+	}
+
 	for {
 		if _, err := io.Copy(w, file); err != nil {
 			return err
 		}
 
 		status, err := c.Status(ctx, id)
-		if err != nil {
+		if err != nil && !errors.Is(err, ErrUnknown) {
 			return err
 		}
 
-		if status.State.Terminal() {
+		// A workload released since the last copy has ended too, and the open
+		// file still holds whatever it wrote last.
+		if err != nil || status.State.Terminal() {
 			_, err := io.Copy(w, file)
 
 			return err

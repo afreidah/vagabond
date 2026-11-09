@@ -3,8 +3,8 @@
 //
 // Author: Alex Freidah
 //
-// Status, results, cancellation and release, each sent to the node holding the
-// execution. Which node that is comes from this process's own placements, or
+// Status, results, live output, cancellation and release, each sent to the node
+// holding the execution. Which node that is comes from this process's own placements, or
 // from what the nodes report holding, so it survives a server restart without
 // being stored. A node that drops is given a grace period to come back before
 // its executions are given up on.
@@ -14,7 +14,9 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -128,6 +130,39 @@ func (p *Provider) Release(ctx context.Context, id execution.ID) error {
 	p.mu.Unlock()
 
 	return nil
+}
+
+// StreamLogs copies an execution's output from byte offset on, from its node to
+// w as it is written, until the workload ends or ctx does.
+func (p *Provider) StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error {
+	conn, err := p.connected(id)
+	if err != nil {
+		return err
+	}
+
+	// Cancelled on the way out, which closes a stream left unread on error.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stream, err := conn.Executions.StreamLogs(ctx, &agentrpc.LogsRequest{ExecutionId: id.String(), Offset: offset})
+	if err != nil {
+		return p.failure(id, err)
+	}
+
+	for {
+		chunk, err := stream.Recv()
+
+		switch {
+		case errors.Is(err, io.EOF):
+			return nil
+		case err != nil:
+			return p.failure(id, err)
+		}
+
+		if _, err := w.Write(chunk.GetData()); err != nil {
+			return plugin.Internal(fmt.Errorf("writing log output: %w", err))
+		}
+	}
 }
 
 // -------------------------------------------------------------------------

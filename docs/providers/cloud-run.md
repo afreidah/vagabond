@@ -346,9 +346,15 @@ transcoding:
 - Platform lines such as `Container called exit(0).` arrive on the same stream
   and are not filtered.
 
-Output runs several seconds behind the container. The server passes dispatch
-no log writer, so `vagabond server` does not call `StreamLogs`; output is read
-from `Result` once the execution ends. See [Dispatch](../dispatch.md#output).
+- A tail starts at what is being logged now, so it cannot resume. An `offset`
+  above zero returns `plugin.ErrNoResume` before anything is opened, which the
+  server answers `416`, and the client finishes from the stored copy.
+
+Output runs several seconds behind the container, so the server holds a
+followed stream open for 5 s after the execution ends. `StreamLogs` is called
+for `GET /v1/execution/{id}/logs?follow=true`
+([API](../api.md#read-execution-logs)); the stored output is still read from
+`Result` once the execution ends. See [Dispatch](../dispatch.md#output).
 
 ## Cleanup
 

@@ -13,6 +13,7 @@ package gcp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/afreidah/vagabond/internal/plugin"
 )
 
 // -------------------------------------------------------------------------
@@ -171,7 +174,7 @@ func TestStreamLogsSendsAnArrayBody(t *testing.T) {
 
 	var out bytes.Buffer
 
-	if err := p.StreamLogs(t.Context(), newID(t), &out); err != nil {
+	if err := p.StreamLogs(t.Context(), newID(t), 0, &out); err != nil {
 		t.Fatalf("StreamLogs failed: %v", err)
 	}
 
@@ -204,8 +207,29 @@ func TestStreamLogsClassifiesAFailedOpen(t *testing.T) {
 	// Nothing registered for entries:tail, so it 404s.
 	_ = g
 
-	if err := p.StreamLogs(t.Context(), newID(t), io.Discard); err == nil {
+	if err := p.StreamLogs(t.Context(), newID(t), 0, io.Discard); err == nil {
 		t.Fatal("a failed open was reported as success")
+	}
+}
+
+// A tail starts at what is being logged now, so resuming from an offset is
+// refused before anything is opened.
+func TestStreamLogsCannotResume(t *testing.T) {
+	t.Parallel()
+
+	var body []byte
+
+	server := newRecordingServer(t, &body, `[]`)
+
+	p := &Provider{name: "gcp", cfg: &Config{Project: "test-project"}, logsURL: server.URL}
+	p.http.Store(server.Client())
+
+	if err := p.StreamLogs(t.Context(), newID(t), 10, io.Discard); !errors.Is(err, plugin.ErrNoResume) {
+		t.Errorf("StreamLogs() from offset 10 = %v, want ErrNoResume", err)
+	}
+
+	if body != nil {
+		t.Errorf("opened a tail for an offset it cannot honour: %s", body)
 	}
 }
 

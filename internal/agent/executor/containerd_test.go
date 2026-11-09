@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -87,6 +88,25 @@ func finished(t *testing.T, c *Containerd, id string) execution.Status {
 	return execution.Status{}
 }
 
+// gatedWriter collects what is written to it, holding its first write until
+// open is closed and announcing it by closing first.
+type gatedWriter struct {
+	first chan struct{}
+	open  chan struct{}
+	once  sync.Once
+	buf   strings.Builder
+}
+
+// Write blocks the first time until the gate opens, then collects p.
+func (g *gatedWriter) Write(p []byte) (int, error) {
+	g.once.Do(func() {
+		close(g.first)
+		<-g.open
+	})
+
+	return g.buf.Write(p)
+}
+
 // A workload runs, exits with its own code, and its output and duration come
 // back; released, it is gone.
 func TestContainerd_RunsAWorkload(t *testing.T) {
@@ -135,6 +155,66 @@ func TestContainerd_RunsAWorkload(t *testing.T) {
 
 	if _, err := c.Status(t.Context(), id); !errors.Is(err, ErrUnknown) {
 		t.Errorf("Status() after release = %v, want ErrUnknown", err)
+	}
+}
+
+// Output read from an offset starts after the bytes the caller already has.
+func TestContainerd_LogsFromAnOffset(t *testing.T) {
+	c := newTestExecutor(t)
+	id := "exec-offset-" + time.Now().Format("150405.000")
+
+	run(t, c, id, "echo hello from vagabond", 0)
+	finished(t, c, id)
+
+	var rest strings.Builder
+
+	if err := c.Logs(t.Context(), id, 6, &rest); err != nil || rest.String() != "from vagabond\n" {
+		t.Errorf("Logs() from offset 6 = %q, %v; want the rest of the line", rest.String(), err)
+	}
+}
+
+// A follower whose workload is released mid-follow, as the dispatcher releases
+// one once it has the result, still gets every line and ends without an error.
+func TestContainerd_LogsFollowsThroughRelease(t *testing.T) {
+	c := newTestExecutor(t)
+	id := "exec-logs-" + time.Now().Format("150405.000")
+
+	run(t, c, id, "echo first; sleep 1; echo last", 0)
+
+	w := &gatedWriter{first: make(chan struct{}), open: make(chan struct{})}
+	done := make(chan error, 1)
+
+	go func() { done <- c.Logs(t.Context(), id, 0, w) }()
+
+	select {
+	case <-w.first:
+	case err := <-done:
+		t.Fatalf("Logs() = %v before any output", err)
+	case <-time.After(time.Minute):
+		t.Fatal("Logs() wrote nothing")
+	}
+
+	// The follower is held inside its first write while the workload ends and
+	// its container goes.
+	finished(t, c, id)
+
+	if err := c.Release(t.Context(), id); err != nil {
+		t.Fatalf("Release() = %v", err)
+	}
+
+	close(w.open)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Logs() = %v, want nil after a release", err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("Logs() did not end after the release")
+	}
+
+	if got := w.buf.String(); got != "first\nlast\n" {
+		t.Errorf("logs = %q, want both lines", got)
 	}
 }
 

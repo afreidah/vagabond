@@ -101,7 +101,7 @@ func TestRun_EndToEnd(t *testing.T) {
 		t.Errorf("execution = %+v, %v", e, err)
 	}
 
-	if _, err := client.Logs(context.Background(), e.ID); err != nil {
+	if _, err := client.Logs(context.Background(), e.ID, 0); err != nil {
 		t.Errorf("Logs() = %v", err)
 	}
 

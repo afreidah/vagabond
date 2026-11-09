@@ -43,11 +43,6 @@ const (
 	releaseTimeout = 30 * time.Second
 )
 
-// DefaultLinger is how long a log stream is held open after the execution
-// ends. Cloud Logging runs seconds behind the container, so a job that
-// finishes promptly finishes before its own last lines are readable.
-const DefaultLinger = 5 * time.Second
-
 // DefaultPoll starts responsive and settles into something cheap.
 //
 // Two seconds catches a function invocation that finished almost immediately;
@@ -110,12 +105,10 @@ func (d *Dispatcher) submit(
 }
 
 // answer is how an execution ended: the provider's terminal state, which is
-// the verdict, what the task produced, and whether its output was already
-// shown live.
+// the verdict, and what the task produced.
 type answer struct {
-	state    execution.State
-	result   *execution.Result
-	streamed bool
+	state  execution.State
+	result *execution.Result
 }
 
 // execute runs a task on one provider under an id the caller reserved quota
@@ -125,10 +118,6 @@ func (d *Dispatcher) execute(
 	ctx context.Context, provider plugin.Provider, task *job.Task, run *tracked, members []string,
 ) (answer, error) {
 	id := run.rec.ID
-
-	event := Event{
-		Task: task.Name, Provider: provider.Name(), ID: id, Attempt: run.rec.Attempt,
-	}
 
 	submission, err := d.submit(ctx, provider, id, task, members)
 	if err == nil {
@@ -147,14 +136,6 @@ func (d *Dispatcher) execute(
 
 	run.submitted(ctx, &submission)
 
-	event.State = submission.State
-
-	// A terminal state is left to the caller, which reports it with the
-	// result, as watch does; reporting it here prints the verdict twice.
-	if !submission.State.Terminal() {
-		d.report(event)
-	}
-
 	// A function or worker finished inside Submit and has nothing to poll.
 	if submission.Synchronous() {
 		d.release(provider, id)
@@ -162,28 +143,16 @@ func (d *Dispatcher) execute(
 		return answer{state: submission.State, result: submission.Result}, nil
 	}
 
-	return d.follow(ctx, provider, run, event)
+	return d.follow(ctx, provider, run)
 }
 
-// follow watches a submitted execution to its end, streaming its output, and
-// collects its result. Shared by a fresh submission and one resumed after a
-// restart, which differ only in how they got here.
-func (d *Dispatcher) follow(
-	ctx context.Context, provider plugin.Provider, run *tracked, event Event,
-) (answer, error) {
+// follow watches a submitted execution to its end and collects its result.
+// Shared by a fresh submission and one resumed after a restart, which differ
+// only in how they got here.
+func (d *Dispatcher) follow(ctx context.Context, provider plugin.Provider, run *tracked) (answer, error) {
 	id := run.rec.ID
 
-	stream := d.startStream(ctx, provider, id)
-	defer stream.stop()
-
-	state, err := d.watch(ctx, provider, run, event)
-
-	// Settled before anything else prints, so the tail of a build does not land
-	// underneath the result.
-	d.settle(ctx, stream)
-
-	streamed := stream.wrote()
-
+	state, err := d.watch(ctx, provider, run)
 	if err != nil {
 		// The caller gave up rather than the provider failing, so the work is
 		// still out there. Stop it, or it keeps running and billing.
@@ -194,7 +163,7 @@ func (d *Dispatcher) follow(
 			run.failed(ctx, err)
 		}
 
-		return answer{streamed: streamed}, err
+		return answer{}, err
 	}
 
 	result, err := authorized(ctx, d, provider, func() (*execution.Result, error) {
@@ -203,13 +172,13 @@ func (d *Dispatcher) follow(
 	run.finish(ctx, state, result)
 
 	if err != nil {
-		return answer{streamed: streamed}, err
+		return answer{}, err
 	}
 
 	// After the result, because releasing may destroy what it reads.
 	d.release(provider, id)
 
-	ended := answer{state: state, result: result, streamed: streamed}
+	ended := answer{state: state, result: result}
 
 	// A provider that reported cancelled produced no verdict about the work,
 	// so it is not an answer even though a result came back.
@@ -259,11 +228,7 @@ func (d *Dispatcher) abandon(provider plugin.Provider, id execution.ID) {
 //
 // Returns the terminal state unrecorded, because the caller records it with
 // the result that goes with it.
-func (d *Dispatcher) watch(
-	ctx context.Context, provider plugin.Provider, run *tracked, event Event,
-) (execution.State, error) {
-	last := event.State
-
+func (d *Dispatcher) watch(ctx context.Context, provider plugin.Provider, run *tracked) (execution.State, error) {
 	for n := 0; ; n++ {
 		if err := d.sleep(ctx, d.poll.interval(n)); err != nil {
 			return "", err
@@ -274,21 +239,12 @@ func (d *Dispatcher) watch(
 			return "", err
 		}
 
-		// A terminal state is left unreported: the caller announces that itself
-		// once the last of the output has arrived, and reporting it here puts
-		// "succeeded" above the build it describes.
 		if status.State.Terminal() {
 			return status.State, nil
 		}
 
-		// Only on a change, so a job that provisions for two minutes reports
-		// once rather than every poll.
-		if status.State != last {
-			last = status.State
-			event.State = status.State
-
-			run.to(ctx, status.State)
-			d.report(event)
-		}
+		// Writes only on a change, so a job that provisions for two minutes is
+		// recorded once rather than every poll.
+		run.to(ctx, status.State)
 	}
 }
