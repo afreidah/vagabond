@@ -5,7 +5,7 @@ description: "Interactive diagram of a running execution's output from the provi
 weight: 6
 ---
 
-How a running execution's output reaches the terminal: the CLI follower, the server's follow route, the pool and Cloud Run streams behind it, and the stored copy that finishes what did not stream. **Hover over any component** for implementation details.
+How a running execution's output reaches the terminal: the CLI follower, the server's follow route, the pool, Cloud Run and Code Engine streams behind it, and the stored copy that finishes what did not stream. **Hover over any component** for implementation details.
 
 {{< diagram >}}
 
@@ -46,10 +46,16 @@ window.vagabondDiagram = {
     '        TAIL --> CLOUDLOG[(Cloud Logging)]:::storage',
     '    end',
     '',
+    '    subgraph IBMSIDE [Code Engine provider]',
+    '        CESL["Wait for the container:<br>pod lookup every 2 s"]:::process -->|started| CEFOLLOW["pods/log?follow=true,<br>skip offset bytes"]:::process',
+    '        CEFOLLOW --> PODLOG[(Pod log)]:::storage',
+    '    end',
+    '',
     '    FOLLOWER -->|"follow=true,<br>offset=N"| ROUTE',
     '    REST -->|"offset=N"| ROUTE',
     '    FOLLOW -->|pool| POOLSL',
     '    FOLLOW -->|Cloud Run| CRSL',
+    '    FOLLOW -->|Code Engine| CESL',
     '    NORESUME --> R416',
   ].join('\n'),
 
@@ -97,7 +103,7 @@ window.vagabondDiagram = {
     STREAMSEL: {
       title: 'Stream or Stored?',
       badge: 'decision', badgeText: 'streamer',
-      body: '<p><code>Server.streamer</code> streams only when the request has <code>follow=true</code>, the record is not terminal, the provider it ran on is still configured, and that provider implements <code>plugin.LogStreamer</code>: pools and Cloud Run.</p><p>Anything else gets the stored copy, so a client can always ask to follow. A <code>lost</code> execution is not terminal, so it is still streamed.</p><p><a href="../../docs/writing-a-provider/#logstreamer">LogStreamer &rarr;</a></p>'
+      body: '<p><code>Server.streamer</code> streams only when the request has <code>follow=true</code>, the record is not terminal, the provider it ran on is still configured, and that provider implements <code>plugin.LogStreamer</code>: pools, Cloud Run and Code Engine.</p><p>Anything else gets the stored copy, so a client can always ask to follow. A <code>lost</code> execution is not terminal, so it is still streamed.</p><p><a href="../../docs/writing-a-provider/#logstreamer">LogStreamer &rarr;</a></p>'
     },
     STORED: {
       title: 'Stored Copy from Offset',
@@ -117,7 +123,7 @@ window.vagabondDiagram = {
     ENDFOLLOW: {
       title: 'End of Follow',
       badge: 'background', badgeText: 'per stream',
-      body: '<p><code>Server.endFollow</code> runs beside each stream. It re-reads the execution record every second, retrying a read that fails. Once the record is terminal it waits 5 s more and cancels the stream, because some providers&rsquo; logs trail the work: Cloud Logging runs seconds behind the container.</p><p>A Cloud Run tail never ends by itself, so this is what ends it. A pool stream usually ends first, when the agent sees the workload exit.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
+      body: '<p><code>Server.endFollow</code> runs beside each stream. It re-reads the execution record every second, retrying a read that fails. Once the record is terminal it waits 5 s more and cancels the stream, because some providers&rsquo; logs trail the work: Cloud Logging runs seconds behind the container.</p><p>A Cloud Run tail never ends by itself, so this is what ends it. A pool stream usually ends first, when the agent sees the workload exit, and a Code Engine stream when its container exits.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
     },
     SHUTDOWN: {
       title: 'Shutdown: endStreams',
@@ -163,6 +169,21 @@ window.vagabondDiagram = {
       title: 'Cloud Logging',
       badge: 'storage', badgeText: 'Google Cloud',
       body: '<p>Where the Cloud Run job&rsquo;s container output lands, seconds behind the container. The tail reads it live; <code>Result</code> reads the stored copy from it with <code>entries:list</code> once the job finishes.</p>'
+    },
+    CESL: {
+      title: 'Code Engine: Wait for the Container',
+      badge: 'process', badgeText: 'Code Engine provider',
+      body: '<p><code>ibm.Provider.StreamLogs</code> looks up the run&rsquo;s pod by its <code>codeengine.cloud.ibm.com/job-run</code> label every 2 s until <code>user-container</code> is running or has exited. Before that the log cannot be opened, and asking answers 400.</p><p>Waiting on the pod&rsquo;s state, rather than retrying a 400, means a real 400 is not hidden. A container that never starts, such as one whose image cannot be pulled, is waited on until the end of follow cancels the stream, which is a normal end. A pod lookup that fails ends the response early.</p>'
+    },
+    CEFOLLOW: {
+      title: 'pods/log?follow=true',
+      badge: 'process', badgeText: 'Kubernetes API',
+      body: '<p><code>openFollow</code> opens <code>GET /api/v1/namespaces/{ns}/pods/{pod}/log?follow=true&amp;container=user-container</code> on the project&rsquo;s Kubernetes API with the same IAM token as every other call. A refusal is classified like any call and ends the response early.</p><p>The followed log starts at the container&rsquo;s first line, so <code>copyFollow</code> discards the first <code>offset</code> bytes and copies the rest as it arrives. Unlike Cloud Run, a reopened stream resumes exactly where the last one stopped and is never answered <code>416</code>. A read that fails ends the copy quietly; the stream ends when the container exits.</p><p><a href="../../docs/providers/code-engine/#live-output">Code Engine live output &rarr;</a></p>'
+    },
+    PODLOG: {
+      title: 'Pod Log',
+      badge: 'storage', badgeText: 'Code Engine',
+      body: '<p>The task container&rsquo;s stdout and stderr, interleaved, each in order but not always in order with each other, kept with the pod after the container exits. <code>Result</code> reads up to 256 KiB of it from the start; deleting the job run removes it.</p>'
     }
   }
 };

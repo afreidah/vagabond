@@ -80,7 +80,7 @@ window.vagabondDiagram = {
     ACCEPTED: {
       title: 'accepted',
       badge: 'process', badgeText: 'queued',
-      body: '<p>The provider queued the work but has not started it; a Cloud Run Job reports it from <code>Submit</code>. Optional: a provider may go straight to <code>running</code> or a terminal state.</p><p>Written on change by the status poll, 2s doubling to 15s. Capacity is consumed from <code>running</code> on, so work a provider accepted and dropped before starting cost nothing.</p>'
+      body: '<p>The provider queued the work but has not started it; a Cloud Run Job and a Code Engine job run report it from <code>Submit</code>. Optional: a provider may go straight to <code>running</code> or a terminal state.</p><p>Written on change by the status poll, 2s doubling to 15s. Capacity is consumed from <code>running</code> on, so work a provider accepted and dropped before starting cost nothing.</p>'
     },
     RUNNING: {
       title: 'running',

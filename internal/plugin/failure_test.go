@@ -294,6 +294,29 @@ func TestClassifyHTTP_CarriesRetryAfter(t *testing.T) {
 	}
 }
 
+// Retry-After is read as whole seconds; an absent, malformed or negative value
+// is zero, leaving the backoff to the dispatcher.
+func TestRetryAfter(t *testing.T) {
+	cases := map[string]time.Duration{
+		"30":   30 * time.Second,
+		"0":    0,
+		"":     0,
+		"soon": 0,
+		"-5":   0,
+	}
+
+	for header, want := range cases {
+		resp := &http.Response{Header: http.Header{}}
+		if header != "" {
+			resp.Header.Set("Retry-After", header)
+		}
+
+		if got := RetryAfter(resp); got != want {
+			t.Errorf("RetryAfter(%q) = %v, want %v", header, got, want)
+		}
+	}
+}
+
 // The message carries the status and the cause stays reachable.
 func TestClassifyHTTP_PreservesStatusAndCause(t *testing.T) {
 	err := ClassifyHTTP(http.StatusServiceUnavailable, 0, errUnderlying)

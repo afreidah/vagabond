@@ -667,7 +667,7 @@ arrives, flushing each write. Headers go out with the first output.
 - A provider stream that breaks ends the response early, still with status
   200, and the server logs `log stream ended early`. Reconnect with `offset`
   set to the bytes received.
-- The pool honours `offset`. A Cloud Run tail can only start at what is being
+- The pool and Code Engine honour `offset`. A Cloud Run tail can only start at what is being
   logged now, so a follow from an `offset` above zero there is answered `416`
   with the JSON error body, before any output. Read the rest from the stored
   copy with `?offset=` once the execution ends.

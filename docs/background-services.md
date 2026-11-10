@@ -135,7 +135,7 @@ were settled; warn `resolving abandoned quota reservations` on error.
 ### Provider release
 
 Releases what providers still hold for executions that are over: a Cloud Run
-Job, a stopped container on a pool node. Dispatch releases after it reads a
+Job, a Code Engine job run, a stopped container on a pool node. Dispatch releases after it reads a
 result; every other ending leaves the release to this service: a cancelled
 run, a provider that stopped answering, a `Result` that failed, a server that
 died mid-run, a release that failed.
@@ -241,7 +241,7 @@ One goroutine per running or resumed dispatch, extending its lease
 
 Two goroutines per `GET /v1/execution/{id}/logs?follow=true` request on an
 execution that has not ended, when its provider streams output (`cloud-run`,
-`pool`): one copies the provider's stream to the client, flushing every write;
+`code-engine`, `pool`): one copies the provider's stream to the client, flushing every write;
 the other re-reads the record to end the stream.
 
 | | |

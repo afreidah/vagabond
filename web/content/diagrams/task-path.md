@@ -154,7 +154,7 @@ window.vagabondDiagram = {
     RELEASE: {
       title: 'Release',
       badge: 'background', badgeText: 'cleanup',
-      body: '<p>For a provider implementing <code>plugin.Releaser</code>, <code>Release</code> deletes what the execution left behind: the Cloud Run Job resource, or the pool workload&rsquo;s task, container, snapshot and log file on its node. Called after <code>Result</code>, because releasing may delete what the result reads, and as soon as <code>Submit</code> returns for a synchronous submission.</p><p>Own context, 30s timeout. Success, or an unknown execution, sets <code>released_at</code>; a failed release does not fail the execution. Endings that skip this step, and releases that failed, are left to the provider release loop.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
+      body: '<p>For a provider implementing <code>plugin.Releaser</code>, <code>Release</code> deletes what the execution left behind: the Cloud Run Job resource, the Code Engine job run and its pod, or the pool workload&rsquo;s task, container, snapshot and log file on its node. Called after <code>Result</code>, because releasing may delete what the result reads, and as soon as <code>Submit</code> returns for a synchronous submission.</p><p>Own context, 30s timeout. Success, or an unknown execution, sets <code>released_at</code>; a failed release does not fail the execution. Endings that skip this step, and releases that failed, are left to the provider release loop.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
     },
     SETTLE: {
       title: 'Settle Quota',

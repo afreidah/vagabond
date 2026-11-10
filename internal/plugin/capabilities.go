@@ -107,6 +107,28 @@ func (c *Capabilities) Clone() Capabilities {
 }
 
 // -------------------------------------------------------------------------
+// CONSTRUCTOR
+// -------------------------------------------------------------------------
+
+// CloudContainer is the capability set of a managed platform that runs any
+// amd64 container image with internet egress and no private network, within
+// the given limits. Each call builds its own slices and limits.
+func CloudContainer(cpu, memory int, maxDuration time.Duration) Capabilities {
+	return Capabilities{
+		Drivers:       []job.DriverName{job.DriverContainer},
+		Architectures: []job.Arch{job.ArchAMD64},
+
+		MaxResources: Limits{CPU: new(cpu), Memory: new(memory)},
+		MaxDuration:  maxDuration,
+
+		InternetEgress:  true,
+		ArbitraryImages: true,
+
+		ObservedAt: time.Now(),
+	}
+}
+
+// -------------------------------------------------------------------------
 // QUERIES
 // -------------------------------------------------------------------------
 

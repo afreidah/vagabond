@@ -28,6 +28,7 @@ backend, and records what it used.
 | | [Background services](background-services.md) | Every periodic loop the server and agent run |
 | Own nodes | [Agent](agent.md) | Pools of your own nodes running containerd |
 | Providers | [Cloud Run Jobs](providers/cloud-run.md) | The `cloud-run` provider |
+| | [Code Engine Jobs](providers/code-engine.md) | The `code-engine` provider |
 | | [AWS Lambda](providers/lambda.md) | The `lambda` provider |
 | | [Writing a provider](writing-a-provider.md) | The plugin contract |
 | Contributing | [Style guide](style-guide.md) | Coding conventions |

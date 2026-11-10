@@ -113,18 +113,7 @@ func (p *Provider) Name() string {
 // Capabilities reports what Cloud Run can do: constants, since nothing here
 // varies by account. ObservedAt is set anyway, as admission requires.
 func (p *Provider) Capabilities(context.Context) (plugin.Capabilities, error) {
-	return plugin.Capabilities{
-		Drivers:       []job.DriverName{job.DriverContainer},
-		Architectures: []job.Arch{job.ArchAMD64},
-
-		MaxResources: plugin.Limits{CPU: new(maxCPU), Memory: new(maxMemory)},
-		MaxDuration:  maxDuration,
-
-		InternetEgress:  true,
-		ArbitraryImages: true,
-
-		ObservedAt: time.Now(),
-	}, nil
+	return plugin.CloudContainer(maxCPU, maxMemory, maxDuration), nil
 }
 
 // -------------------------------------------------------------------------

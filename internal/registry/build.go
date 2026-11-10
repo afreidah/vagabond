@@ -23,6 +23,7 @@ import (
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/providers/aws"
 	"github.com/afreidah/vagabond/internal/providers/gcp"
+	"github.com/afreidah/vagabond/internal/providers/ibm"
 	"github.com/afreidah/vagabond/internal/providers/pool"
 )
 
@@ -41,6 +42,7 @@ const (
 // providerTypes is every type Build constructs, in the order errors list them.
 var providerTypes = []string{
 	gcp.Type,
+	ibm.Type,
 	aws.Type,
 	pool.Type,
 
@@ -83,6 +85,14 @@ func Build(
 	case gcp.Type:
 		// A failed build returns a nil interface, not one holding a nil pointer.
 		p, diags := gcp.New(ctx, settings.Name, settings.Config, settings.Credentials)
+		if diags.HasErrors() {
+			return nil, diags
+		}
+
+		return p, diags
+
+	case ibm.Type:
+		p, diags := ibm.New(ctx, settings.Name, settings.Config, settings.Credentials)
 		if diags.HasErrors() {
 			return nil, diags
 		}

@@ -87,7 +87,7 @@ func (p *Provider) openTail(ctx context.Context, job string) (*http.Response, er
 
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxLogBytes))
 
-		return nil, plugin.ClassifyHTTP(resp.StatusCode, retryAfter(resp),
+		return nil, plugin.ClassifyHTTP(resp.StatusCode, plugin.RetryAfter(resp),
 			fmt.Errorf("tail: %s", googleError(body)))
 	}
 

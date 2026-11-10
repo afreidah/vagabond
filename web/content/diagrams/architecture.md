@@ -34,6 +34,8 @@ window.vagabondDiagram = {
     '    subgraph CLOUD [Cloud platforms]',
     '        CLOUDRUN[cloud-run<br>Cloud Run Jobs]:::data',
     '        CLOG[Cloud Logging]:::data',
+    '        CODEENGINE[code-engine<br>Code Engine Jobs]:::data',
+    '        CEKUBE[Code Engine<br>Kubernetes API]:::data',
     '        LAMBDA[lambda<br>AWS Lambda]:::data',
     '    end',
     '',
@@ -59,9 +61,11 @@ window.vagabondDiagram = {
     '    UPKEEP -->|reap, release, claim| DISP',
     '',
     '    PLUGIN --> CLOUDRUN',
+    '    PLUGIN --> CODEENGINE',
     '    PLUGIN --> LAMBDA',
     '    PLUGIN --> POOL',
     '    CLOUDRUN -->|output| CLOG',
+    '    CODEENGINE -->|exit code, output| CEKUBE',
     '    POOL -->|reads| NODES',
     '    AGENTL -->|register, remove| NODES',
     '    AGENTL <-->|session the agent dials| AGENT',
@@ -107,7 +111,7 @@ window.vagabondDiagram = {
     REG: {
       title: 'Provider registry',
       badge: 'process', badgeText: 'registry',
-      body: '<p><code>registry</code> builds every <code>provider</code> block into its plugin, the one package that imports them all: <code>cloud-run</code>, <code>lambda</code>, <code>pool</code>, and the <code>fake-container</code>, <code>fake-function</code> and <code>fake-worker</code> test providers. It holds each one&rsquo;s capability snapshot, health, tags, tier and quota pools. A disabled provider is kept, so a plan can say why it was not used.</p><p><code>Refresh</code> asks every enabled provider for <code>Capabilities</code> in parallel, 30s each, at startup and every minute. One that fails is marked unhealthy and keeps its last snapshot. <code>pool</code> providers are skipped: their capabilities are built from connected nodes on every read.</p><p>Resolves a provider&rsquo;s credential again when the platform rejects it, at most once a minute.</p>'
+      body: '<p><code>registry</code> builds every <code>provider</code> block into its plugin, the one package that imports them all: <code>cloud-run</code>, <code>code-engine</code>, <code>lambda</code>, <code>pool</code>, and the <code>fake-container</code>, <code>fake-function</code> and <code>fake-worker</code> test providers. It holds each one&rsquo;s capability snapshot, health, tags, tier and quota pools. A disabled provider is kept, so a plan can say why it was not used.</p><p><code>Refresh</code> asks every enabled provider for <code>Capabilities</code> in parallel, 30s each, at startup and every minute. One that fails is marked unhealthy and keeps its last snapshot. <code>pool</code> providers are skipped: their capabilities are built from connected nodes on every read.</p><p>Resolves a provider&rsquo;s credential again when the platform rejects it, at most once a minute.</p>'
     },
     UPKEEP: {
       title: 'Upkeep loops',
@@ -117,7 +121,7 @@ window.vagabondDiagram = {
     FOLLOW: {
       title: 'Live output streams',
       badge: 'process', badgeText: 'per request',
-      body: '<p><code>GET /v1/execution/{id}/logs?follow=true</code> on an execution that has not ended, whose provider implements <code>plugin.LogStreamer</code> (<code>cloud-run</code>, <code>pool</code>), copies the provider&rsquo;s stream to the client from <code>offset</code>, flushing every write.</p><p>The record is re-read every second, and the response ends 5s after the execution does, when the client goes, or at once when shutdown begins. A provider that cannot resume from an offset is answered 416 before any output. Any other request gets the stored output, the last 64 KiB.</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
+      body: '<p><code>GET /v1/execution/{id}/logs?follow=true</code> on an execution that has not ended, whose provider implements <code>plugin.LogStreamer</code> (<code>cloud-run</code>, <code>code-engine</code>, <code>pool</code>), copies the provider&rsquo;s stream to the client from <code>offset</code>, flushing every write.</p><p>The record is re-read every second, and the response ends 5s after the execution does, when the client goes, or at once when shutdown begins. A provider that cannot resume from an offset is answered 416 before any output. Any other request gets the stored output, the last 64 KiB.</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
     },
     PLUGIN: {
       title: 'plugin.Provider',
@@ -153,6 +157,16 @@ window.vagabondDiagram = {
       title: 'Cloud Logging',
       badge: 'data', badgeText: 'output',
       body: '<p>Where a Cloud Run execution&rsquo;s output comes from. <code>Result</code> pages <code>entries:list</code> filtered on the Job name, up to 1000 entries, 256 KiB or 20 pages, and sets <code>LogsTruncated</code> at a bound. A failed read returns the exit code with no logs.</p><p><code>StreamLogs</code> opens <code>entries:tail</code> with a 1s buffer window, so live output arrives in order. A tail starts at what is being logged now and cannot resume from an offset.</p><p><a href="../../docs/providers/cloud-run/#logs">Cloud Run logs &rarr;</a></p>'
+    },
+    CODEENGINE: {
+      title: 'code-engine: Code Engine Jobs',
+      badge: 'data', badgeText: 'provider',
+      body: '<p><code>providers/ibm</code>, for <code>container</code> tasks. One job run per execution, named <code>vagabond-&lt;execution id&gt;</code>, with the image and settings inline: <code>Submit</code> creates it, <code>Status</code> reads it, and <code>Cancel</code> and <code>Release</code> delete it. A task runs at the smallest vCPU and memory size that holds what it declared.</p><p>Stateless: every call derives the run name from the execution ID. Calls the Code Engine, Kubernetes and IAM REST APIs over HTTP, all with one IAM token, refreshed from the API key.</p><p><a href="../../docs/providers/code-engine/">Code Engine provider &rarr;</a></p>'
+    },
+    CEKUBE: {
+      title: 'Code Engine Kubernetes API',
+      badge: 'data', badgeText: 'exit code, output',
+      body: '<p>Where a job run&rsquo;s exit code and output come from, since the v2 API reports neither. The run&rsquo;s pod is found by its <code>codeengine.cloud.ibm.com/job-run</code> label in the project&rsquo;s namespace, read once from the kubeconfig.</p><p><code>Result</code> reads the container&rsquo;s exit code and up to 256 KiB of its log while the pod exists; deleting the run removes it. <code>StreamLogs</code> waits for the container to start, then follows its log from the first line, so it can resume from an offset.</p><p><a href="../../docs/providers/code-engine/#logs">Code Engine logs &rarr;</a></p>'
     },
     LAMBDA: {
       title: 'lambda: AWS Lambda',

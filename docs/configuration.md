@@ -212,6 +212,7 @@ provider "aws-lambda" {
 | Type | Plugin | `config` block | `credentials` |
 |---|---|---|---|
 | `cloud-run` | [Google Cloud Run Jobs](providers/cloud-run.md) | required: `project`, `region`, `runtime_service_account` | required: service account JSON key |
+| `code-engine` | [IBM Code Engine Jobs](providers/code-engine.md) | required: `region`, `project_id`; optional: `image_secret` | required: IAM API key |
 | `lambda` | [AWS Lambda](providers/lambda.md) | required: `region` | optional: `credential_process` JSON; without it, the AWS SDK default chain |
 | `pool` | The [agent](agent.md#pools) nodes connected to this server that joined the pool named by the label | ignored | resolved, unused |
 | `fake-container` | In-memory container provider | ignored | resolved, unused |
@@ -255,7 +256,7 @@ provider "homelab" {
 Plugin-specific settings. Vagabond passes the block to the plugin undecoded, so
 each plugin defines its own attributes and reports its own errors against the
 line they were written on. Attribute reference: [Cloud Run](providers/cloud-run.md),
-[Lambda](providers/lambda.md).
+[Code Engine](providers/code-engine.md), [Lambda](providers/lambda.md).
 
 ```hcl
 config {
@@ -267,7 +268,7 @@ config {
 
 | Condition | Diagnostic |
 |---|---|
-| Block missing on `cloud-run` or `lambda` | `Missing provider configuration`, naming the attributes it needs |
+| Block missing on `cloud-run`, `code-engine` or `lambda` | `Missing provider configuration`, naming the attributes it needs |
 | Required attribute missing | `Missing required argument` |
 | Unknown attribute | `Unsupported argument` |
 | Attribute set to `""` or whitespace | `Empty provider setting` |
