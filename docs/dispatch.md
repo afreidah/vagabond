@@ -274,6 +274,7 @@ implement `plugin.Releaser`:
 | Provider | Release |
 |---|---|
 | Cloud Run | Deletes the execution's Job resource |
+| Code Engine | Deletes the execution's job run, and its pod with it |
 | `pool` | Deletes the workload's task, container, snapshot and log file from the node |
 
 - Called after `Result`, because releasing may delete what the result reads.

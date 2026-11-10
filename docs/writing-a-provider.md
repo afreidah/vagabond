@@ -17,6 +17,7 @@ time.
 | Reference | Package | Shows |
 |---|---|---|
 | Cloud Run Jobs | `internal/providers/gcp` | Asynchronous family, `LogStreamer` refusing an offset with `ErrNoResume`, `Releaser`, `Recredentialer`, raw HTTP against `httptest` |
+| Code Engine Jobs | `internal/providers/ibm` | Asynchronous family, `LogStreamer` resuming from an offset, `Releaser`, a `Recredentialer` whose token refusals are unauthorized, a fixed size table, two APIs behind one token |
 | AWS Lambda | `internal/providers/aws` | Synchronous family, the `NotSupported` embeds, `Result.Billed`, `Recredentialer`, a cloud SDK against `httptest` |
 | Pool | `internal/providers/pool` | `Live`, `MemberSubmitter`, `LogStreamer` with `offset`, `Releaser`, `Capabilities.Members` |
 | Fakes | `internal/plugin/fake.go` | The smallest implementations of both families |

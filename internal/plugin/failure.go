@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -205,4 +206,15 @@ func ClassifyHTTP(status int, retryAfter time.Duration, err error) *Error {
 	default:
 		return Infrastructure(wrapped)
 	}
+}
+
+// RetryAfter reads how long a platform asked the caller to wait, in seconds.
+// Zero, the common case, leaves the backoff to the dispatcher.
+func RetryAfter(resp *http.Response) time.Duration {
+	seconds, err := strconv.Atoi(resp.Header.Get("Retry-After"))
+	if err != nil || seconds < 0 {
+		return 0
+	}
+
+	return time.Duration(seconds) * time.Second
 }

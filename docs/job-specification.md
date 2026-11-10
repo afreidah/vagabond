@@ -516,7 +516,7 @@ task "test" {
 
 | Driver | Contract | Providers offering it |
 |---|---|---|
-| `container` | Run an arbitrary container image to completion; the exit status is the result | Cloud Run (`cloud-run`), pool (`pool`) |
+| `container` | Run an arbitrary container image to completion; the exit status is the result | Cloud Run (`cloud-run`), Code Engine (`code-engine`), pool (`pool`) |
 | `function` | Invoke a predeployed function that implements the platform's handler contract | Lambda (`lambda`) |
 | `worker` | Invoke a predeployed constrained executor, such as an edge or Wasm runtime | None; every provider rejects it with `driver-unsupported` |
 

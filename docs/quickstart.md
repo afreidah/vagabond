@@ -449,6 +449,6 @@ every mode. See [Database](database.md) for what the store holds.
 - [Job specification](job-specification.md): every block and attribute of a job
   file
 - [Agent](agent.md): run work on your own nodes through a pool provider
-- [Cloud Run](providers/cloud-run.md) and [Lambda](providers/lambda.md): real
-  providers
+- [Cloud Run](providers/cloud-run.md), [Code Engine](providers/code-engine.md)
+  and [Lambda](providers/lambda.md): real providers
 - [Architecture](architecture.md): the components and the path a task takes

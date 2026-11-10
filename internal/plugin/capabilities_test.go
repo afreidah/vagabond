@@ -87,6 +87,44 @@ func TestCapabilities_CloneCopiesScalars(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
+// CONSTRUCTOR
+// -------------------------------------------------------------------------
+
+// A cloud container platform runs any amd64 image with internet and no private
+// network, within the limits given, observed now.
+func TestCloudContainer(t *testing.T) {
+	before := time.Now()
+	caps := CloudContainer(8000, 32768, 24*time.Hour)
+
+	if !caps.SupportsDriver(job.DriverContainer) || caps.SupportsDriver(job.DriverFunction) ||
+		!caps.SupportsArch(job.ArchAMD64) || caps.SupportsArch(job.ArchARM64) {
+		t.Errorf("drivers %v, architectures %v", caps.Drivers, caps.Architectures)
+	}
+
+	if *caps.MaxResources.CPU != 8000 || *caps.MaxResources.Memory != 32768 || caps.MaxDuration != 24*time.Hour {
+		t.Errorf("limits = %d millicores, %d MiB, %s",
+			*caps.MaxResources.CPU, *caps.MaxResources.Memory, caps.MaxDuration)
+	}
+
+	if !caps.InternetEgress || !caps.ArbitraryImages || caps.PrivateNetwork || caps.ObservedAt.Before(before) {
+		t.Errorf("capabilities = %+v", caps)
+	}
+}
+
+// Two snapshots share nothing, so a caller changing one cannot change the next.
+func TestCloudContainer_SharesNothing(t *testing.T) {
+	first := CloudContainer(8000, 32768, time.Hour)
+	second := CloudContainer(8000, 32768, time.Hour)
+
+	first.Drivers[0] = job.DriverWorker
+	*first.MaxResources.CPU = 1
+
+	if second.Drivers[0] != job.DriverContainer || *second.MaxResources.CPU != 8000 {
+		t.Error("two snapshots share state")
+	}
+}
+
+// -------------------------------------------------------------------------
 // QUERIES
 // -------------------------------------------------------------------------
 

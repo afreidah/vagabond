@@ -18,8 +18,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
-	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -107,7 +105,7 @@ func (p *Provider) call(ctx context.Context, method, url string, payload, out an
 	}
 
 	if resp.StatusCode >= http.StatusMultipleChoices {
-		return plugin.ClassifyHTTP(resp.StatusCode, retryAfter(resp),
+		return plugin.ClassifyHTTP(resp.StatusCode, plugin.RetryAfter(resp),
 			fmt.Errorf("%s: %s", method, googleError(received)))
 	}
 
@@ -120,17 +118,6 @@ func (p *Provider) call(ctx context.Context, method, url string, payload, out an
 	}
 
 	return nil
-}
-
-// retryAfter reads how long Google asked the caller to wait. Zero, the common
-// case, leaves the backoff to the dispatcher.
-func retryAfter(resp *http.Response) time.Duration {
-	seconds, err := strconv.Atoi(resp.Header.Get("Retry-After"))
-	if err != nil || seconds < 0 {
-		return 0
-	}
-
-	return time.Duration(seconds) * time.Second
 }
 
 // googleError renders whatever Google said went wrong, lifting the message out

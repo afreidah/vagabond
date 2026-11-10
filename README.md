@@ -24,9 +24,9 @@ in Nomad-style HCL. For each task, the server rejects backends that fail the
 job's constraints, resources, cost limit or remaining quota, scores the rest,
 runs the task on the selected backend, and stores the result.
 
-Backends are provider plugins: Google Cloud Run Jobs, AWS Lambda, and agent
-nodes, which are hosts running `vagabond agent` that execute tasks on the
-host's containerd.
+Backends are provider plugins: Google Cloud Run Jobs, IBM Code Engine Jobs, AWS
+Lambda, and agent nodes, which are hosts running `vagabond agent` that execute
+tasks on the host's containerd.
 
 Usage is recorded for every run and checked against quotas set per backend,
 optionally split per namespace. `job plan` prints every backend with its score
@@ -73,6 +73,7 @@ Backends:
 | Backend | Driver | Doc |
 |---|---|---|
 | Google Cloud Run Jobs | `container` | [cloud-run.md](docs/providers/cloud-run.md) |
+| IBM Code Engine Jobs | `container` | [code-engine.md](docs/providers/code-engine.md) |
 | AWS Lambda | `function` | [lambda.md](docs/providers/lambda.md) |
 | Agent nodes (`vagabond agent`, `pool` provider) | `container` | [agent.md](docs/agent.md) |
 
@@ -224,6 +225,7 @@ Details: [architecture.md](docs/architecture.md).
 | Periodic loops in the server and agent | [background-services.md](docs/background-services.md) |
 | Running workloads on your own nodes | [agent.md](docs/agent.md) |
 | Google Cloud Run Jobs | [providers/cloud-run.md](docs/providers/cloud-run.md) |
+| IBM Code Engine Jobs | [providers/code-engine.md](docs/providers/code-engine.md) |
 | AWS Lambda | [providers/lambda.md](docs/providers/lambda.md) |
 | Writing a provider plugin | [writing-a-provider.md](docs/writing-a-provider.md) |
 | Coding conventions | [style-guide.md](docs/style-guide.md) |
