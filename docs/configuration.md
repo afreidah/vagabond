@@ -7,8 +7,7 @@ weight: 410
 
 The server configuration declares which providers exist, how to reach them, how
 much of each may be spent, and where the server listens and persists state. It
-is HCL, read once by `vagabond server` at startup. Job files say what to run;
-this file says what is available to run it on.
+is HCL, read once by `vagabond server` at startup.
 
 Every other command talks to a running server and reads no configuration; it
 needs only `-address` or `$VAGABOND_ADDR` (default `http://127.0.0.1:4747`). See
@@ -305,9 +304,9 @@ The plugin receives bytes and never learns the source. When the platform
 rejects the credential (HTTP 401 or 403), the source is resolved again: the
 file re-read, the variable re-read, the command re-run. The provider rebuilds
 its client from the result, and the call is made once more. A source is
-re-resolved at most once a minute per provider, so a credential that is
-simply wrong does not rerun its command on every call. An expired session
-token or a rotated secret therefore takes effect without a restart. This covers
+re-resolved at most once a minute per provider, so a credential that is wrong
+does not rerun its command on every call. A renewed session token or a rotated
+secret therefore takes effect without a restart. This covers
 every call dispatch, the reaper and the release loop make.
 `DELETE /v1/execution/{id}` for an execution no dispatch on this server is
 running, and live output streams, call the provider directly: a rejected
@@ -377,8 +376,8 @@ pool "compute" {
 | Meter | Unit | Charge per execution |
 |---|---|---|
 | `executions` | executions | 1 |
-| `gb_seconds` | GB-seconds | declared memory × declared timeout |
-| `cpu_seconds` | vCPU-seconds | declared CPU × declared timeout |
+| `gb_seconds` | GB-seconds | declared memory * declared timeout |
+| `cpu_seconds` | vCPU-seconds | declared CPU * declared timeout |
 | `seconds` | seconds | declared timeout |
 
 | Period | Resets |

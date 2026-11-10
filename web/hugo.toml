@@ -57,6 +57,9 @@ enableRobotsTXT = true
   [markup.goldmark.renderer]
     # The landing page and the diagrams are HTML around shortcodes.
     unsafe = true
+  # Keep rendered text ASCII: no curly quotes, en/em dashes or ellipses.
+  [markup.goldmark.extensions.typographer]
+    disable = true
   [markup.highlight]
     noClasses = false
 
@@ -86,8 +89,8 @@ enableRobotsTXT = true
       icon = "github"
 
 [params]
-  description = "Run serverless jobs across public clouds and your own infrastructure. An homage to HashiCorp Nomad."
-  homeTitle = "Vagabond: serverless jobs on clouds and your own nodes"
+  description = "Compute broker for short-lived, stateless jobs on Cloud Run Jobs, AWS Lambda and agent nodes."
+  homeTitle = "Vagabond: compute broker for short-lived jobs"
   # Social card for pages with no image of their own. With one set, links
   # shared to Slack, X or LinkedIn get the large-image card.
   images = ["og-card.png"]

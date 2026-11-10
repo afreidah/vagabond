@@ -19,88 +19,54 @@
   <strong><a href="https://vagabond.munchbox.cc">Project website</a></strong>
 </p>
 
-Vagabond is a compute broker for short-lived, stateless workloads. A job is
-described once in Nomad-style HCL, with parameters, constraints, and resources;
-Vagabond decides which backend can run it and which one should, runs it there,
-and reports the result.
+Vagabond is a compute broker for short-lived, stateless jobs. Jobs are written
+in Nomad-style HCL. For each task, the server rejects backends that fail the
+job's constraints, resources, cost limit or remaining quota, scores the rest,
+runs the task on the selected backend, and stores the result.
 
-Backends are provider plugins. Each translates a task into its platform's API
-and classifies that platform's failures; scheduling, retries and accounting
-stay in Vagabond. Google Cloud Run Jobs and AWS Lambda are implemented, and the
-plugin boundary is meant for more: IBM Code Engine, Azure Container Apps jobs,
-AWS Fargate, Fly Machines, or Cloudflare Workers for edge-sized tasks.
+Backends are provider plugins: Google Cloud Run Jobs, AWS Lambda, and agent
+nodes, which are hosts running `vagabond agent` that execute tasks on the
+host's containerd.
 
-Your own machines are a backend too. Run `vagabond agent` on one: a lightweight
-process, on bare metal or in a container, that connects to the server and joins
-a named pool of nodes. The server sends it workloads, which it runs on the
-machine's containerd, held to whatever CPU and memory you allow the agent.
+Usage is recorded for every run and checked against quotas set per backend,
+optionally split per namespace. `job plan` prints every backend with its score
+or the reason it was rejected.
 
-Every decision is explainable: `job plan` shows each backend with its score, or
-the rule it failed and why. Vagabond tracks what every run uses, so a backend
-the job would push past a configured quota is never chosen. Quotas can be set
-per backend and shared out per namespace, which makes it as useful for keeping
-work inside cloud free tiers as for capping spend.
-
-It runs as a server in the Nomad mould: a CLI and HTTP API for submitting,
-registering and dispatching jobs, agents on your nodes connecting back, and a
-Postgres or CockroachDB store, so executions survive restarts and a failed
-backend is routed around. It is an homage to HashiCorp Nomad, meant to feel
-familiar to a Nomad user, but it does not depend on Nomad.
-
-## Highlights
-
-- **Placement you can read.** `job plan` lists every backend with its score,
-  or with the rule it failed and why. Admission never calls a provider, so a
-  plan works offline and reserves nothing.
-- **Free-tier aware by default.** A quota ledger tracks what every run uses
-  against each provider's free allowance, with optional per-namespace shares.
-  `max_cost_usd` defaults to 0, so a job never lands somewhere that would bill
-  it unless it opts in.
-- **Cloud and your own hardware behind one interface.** Cloud Run Jobs, AWS
-  Lambda and your own containerd nodes are all just backends. Tiers rank them
-  in the order you prefer (for example, homelab first and cloud as overflow),
-  either strictly or weighted into the score.
-- **Built to survive failure.** Dispatches are leased and stored in Postgres or
-  CockroachDB. A server picks up the work a dead process left behind, routes
-  around a backend that stops answering, and refreshes a rejected credential
-  instead of needing a restart.
-- **Feels like Nomad.** HCL job files, `register` / `dispatch` / `status`,
-  parameterized jobs with `meta_required`, and a server that agents dial back
-  to, with no dependency on Nomad itself.
+The CLI, job format and server/agent layout follow HashiCorp Nomad. Vagabond
+does not use or require Nomad.
 
 ## Features
 
 - Nomad-style HCL job files, validated with line-and-column diagnostics.
-- Admission: 13 checks across policy, availability, capability and quota decide
-  which providers can run a task. `max_cost_usd` defaults to 0, so work stays
-  on free capacity unless a job opts in to paying.
-- Ranking: survivors are scored and one is selected. Provider tiers express
-  preference, either `strict` (a lower tier always wins) or `weighted` (tier
-  averaged into the score). `job plan` prints every provider with its score or
-  the rule it failed.
-- Dispatch: submit, watch, collect output, reroute around
-  providers that fail to answer, release what the execution left behind. A
-  401 or 403 makes the provider re-resolve its credentials and retry once.
+- Admission: 13 checks across policy, availability, capability and quota.
+  `max_cost_usd` defaults to 0; a job must raise it to run on a backend that
+  bills.
+- Ranking: admitted providers are scored and one is selected. Tiers are
+  `strict` (lower tier always wins) or `weighted` (tier averaged into the
+  score).
+- Dispatch: submit, watch, collect output, release what the execution left on
+  the provider. Reroutes when a provider stops responding. A 401 or 403 makes
+  the provider reload its credentials and retry once.
 - Quota ledger: budget pools per provider, in executions, GB-seconds,
   CPU-seconds or seconds, reset daily or monthly, with optional per-namespace
-  shares. Reservations are atomic across processes; settlement uses what the
-  platform billed when it reports it.
+  shares. Reservations are atomic across processes. Settlement uses the
+  platform's billed usage when it reports one.
 - Registered jobs: versioned on change, dispatched by name, parameterized with
   `meta_required` and `meta_optional`. Tasks receive `VAGABOND_META_<KEY>`.
 - Namespaces, declared in configuration.
-- Execution history: every dispatch and attempt recorded, with output.
-- Live output: `job run`, `job dispatch` and `execution logs -f` stream a
-  running task's output from Cloud Run and agent nodes, and finish from the
-  stored copy, the last 64 KiB.
-- Server: an HTTP API over the same operations. Dispatches are leased, so a
-  server resumes the ones a dead process left running.
-- Store outages fail closed: new work is refused with 503, running work
-  finishes, and what the outage lost is repaired when the store returns.
-  `GET /v1/health` reports it.
-- Postgres or CockroachDB as the store.
-- Agent nodes: `vagabond agent` registers a node into a pool and runs workloads
-  on its containerd, held to the agent's cgroup. Beyond loopback, agents
-  connect over mutual TLS and register under their certificate's name.
+- Execution history: every dispatch and attempt, with output.
+- Live output: `job run`, `job dispatch` and `execution logs -f` stream output
+  from Cloud Run and agent nodes while the task runs, then finish from the
+  stored copy (last 64 KiB).
+- Server: HTTP API over the same operations. Dispatches are leased; a server
+  resumes ones a dead process left running.
+- Store outages: new work is refused with 503, running work finishes, and what
+  the outage lost is repaired when the store returns. `GET /v1/health` reports
+  it.
+- Store: Postgres or CockroachDB.
+- Agent nodes: `vagabond agent` registers a node into a pool and runs tasks on
+  its containerd, limited to the agent's cgroup. Off loopback, agents connect
+  over mutual TLS and register under their certificate's name.
 
 Backends:
 
@@ -108,7 +74,7 @@ Backends:
 |---|---|---|
 | Google Cloud Run Jobs | `container` | [cloud-run.md](docs/providers/cloud-run.md) |
 | AWS Lambda | `function` | [lambda.md](docs/providers/lambda.md) |
-| Your own nodes, via `vagabond agent` and a `pool` provider | `container` | [agent.md](docs/agent.md) |
+| Agent nodes (`vagabond agent`, `pool` provider) | `container` | [agent.md](docs/agent.md) |
 
 The `worker` driver is modeled and admitted; no plugin implements it yet.
 

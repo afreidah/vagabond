@@ -167,7 +167,7 @@ For each execution, in order:
   once is harmless.
 - If a reservation outlives the store being unreachable for longer than the
   execution's provider keeps it, the reaper finds it unknown and drops its
-  charge. Only an outage long enough for that loses the charge.
+  charge.
 
 **Logs:** info `released provider leftovers` with `count` when any were
 released; warn `releasing provider leftovers` with the joined errors when any

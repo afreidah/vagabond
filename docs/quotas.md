@@ -84,13 +84,13 @@ A charge is computed from what the task declares, not from what it uses, so
 | Meter | Unit | Charge per execution | Counted in |
 |---|---|---|---|
 | `executions` | executions | 1 | executions |
-| `gb_seconds` | GB-seconds | `memory / 1024 × timeout` | MiB-milliseconds |
-| `cpu_seconds` | vCPU-seconds | `cpu / 1000 × timeout` | millicore-milliseconds |
+| `gb_seconds` | GB-seconds | `memory / 1024 * timeout` | MiB-milliseconds |
+| `cpu_seconds` | vCPU-seconds | `cpu / 1000 * timeout` | millicore-milliseconds |
 | `seconds` | seconds | `timeout` | milliseconds |
 
 - GB means GiB: 1024 MiB is one GB-second per second.
 - Counters are integers in the base unit. A limit is multiplied into base units
-  when the configuration loads (for `gb_seconds`, × 1,024,000).
+  when the configuration loads (for `gb_seconds`, by 1,024,000).
 - The timeout is rounded up to a whole millisecond.
 - A task with no `timeout` charges 0 to `gb_seconds`, `cpu_seconds` and
   `seconds` pools. A pool charged 0 is skipped: it cannot reject the task and
@@ -125,8 +125,8 @@ come in two layers:
 
 | Layer | Declared in | Counted under |
 |---|---|---|
-| Provider total | `provider` → `pool` | the provider |
-| Namespace share | `namespace` → `quota "<provider>"` → `pool` | the namespace, on that provider |
+| Provider total | `provider` -> `pool` | the provider |
+| Namespace share | `namespace` -> `quota "<provider>"` -> `pool` | the namespace, on that provider |
 
 - An execution charges both layers and must fit both.
 - The provider total is checked first; the first pool without room is the one
@@ -146,7 +146,7 @@ specific task:
 
 ```
 pool free %  = 100                                  if nothing is counted
-             = floor((limit - used) × 100 / limit)  otherwise, 0 when used ≥ limit
+             = floor((limit - used) * 100 / limit)  otherwise, 0 when used >= limit
 free_quota_percent = min(pool free % over every pool the task charges,
                          in the provider's pools and the namespace's share)
 ```
@@ -242,8 +242,8 @@ reservation was made in.
 
 | Provider reports | Charged as |
 |---|---|
-| A billed amount | Billed memory × billed duration, billed CPU (0 when not reported) × billed duration |
-| No billed amount | Declared CPU and memory × the execution's measured duration |
+| A billed amount | Billed memory * billed duration, billed CPU (0 when not reported) * billed duration |
+| No billed amount | Declared CPU and memory * the execution's measured duration |
 
 `executions` pools are charged 1 either way, and `seconds` pools the billed or
 measured duration.
@@ -253,7 +253,7 @@ measured duration.
   function's configured size, not the task's declaration, and no CPU is
   reported, so `cpu_seconds` pools are charged 0 for that execution. See
   [Lambda](providers/lambda.md).
-- Every other provider settles at declared resources × measured duration.
+- Every other provider settles at declared resources * measured duration.
 
 Edge cases:
 
@@ -286,7 +286,7 @@ For each claimed execution it asks the provider for the execution's status:
 | Error, or not yet terminal | Kept |
 | Terminal, never started | Settled at duration 0 (`executions` charged 1) |
 | Terminal, started, no end time | Settled at the reserved amounts |
-| Terminal, started and ended | Settled at declared resources × (end − start) |
+| Terminal, started and ended | Settled at declared resources * (end - start) |
 
 A kept reservation is asked about again on the next pass. The server logs
 `resolved abandoned quota reservations` with a count when any were settled or
@@ -336,15 +336,15 @@ task "resize" {
 | Pool | Formula | Charge | Base units |
 |---|---|---|---|
 | `requests` | 1 | 1 execution | 1 |
-| `compute` (total and share) | 512 / 1024 × 300 s | 150 GB-seconds | 512 × 300000 = 153,600,000 |
+| `compute` (total and share) | 512 / 1024 * 300 s | 150 GB-seconds | 512 * 300000 = 153,600,000 |
 
 **Usage** this month:
 
 | Layer | Pool | Limit | Used | Fits 1 / 150 more | Free % |
 |---|---|---|---|---|---|
-| `aws-lambda` total | `requests` | 1000000 | 42000 | yes | floor(958000 × 100 / 1000000) = 95 |
-| `aws-lambda` total | `compute` | 400000 | 310000 | yes (310150 ≤ 400000) | floor(90000 × 100 / 400000) = 22 |
-| `ci` share | `compute` | 100000 | 99900 | no (100050 > 100000) | floor(100 × 100 / 100000) = 0 |
+| `aws-lambda` total | `requests` | 1000000 | 42000 | yes | floor(958000 * 100 / 1000000) = 95 |
+| `aws-lambda` total | `compute` | 400000 | 310000 | yes (310150 <= 400000) | floor(90000 * 100 / 400000) = 22 |
+| `ci` share | `compute` | 100000 | 99900 | no (100050 > 100000) | floor(100 * 100 / 100000) = 0 |
 
 **In namespace `ci`**, `free_quota_percent` is min(95, 22, 0) = 0, headroom
 0.00, and admission rejects `aws-lambda`:
@@ -366,7 +366,7 @@ open.
 | Pool | Charge |
 |---|---|
 | `requests` | 1 |
-| `compute` | 1024 / 1024 × 42.3 s = 42.3 GB-seconds |
+| `compute` | 1024 / 1024 * 42.3 s = 42.3 GB-seconds |
 
 Total `compute` usage settles at 310042.3. Had the platform reported nothing,
-the charge would have been the declared 512 MiB × the measured duration.
+the charge would have been the declared 512 MiB times the measured duration.

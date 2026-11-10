@@ -98,12 +98,10 @@ Spacing rules:
   comment and its declaration
 
 **When to use them.** Every file with more than one logical group of
-declarations carries section boxes, so a reader lands in a familiar shape
-whichever file they open, and every declaration in it sits under one. A file
-with a single concern does not: one under roughly 100 lines, or one that
-defines or tests a single type at any length. A box per file is noise, not
-structure. In a test file, the fixtures and helpers count as a group of their
-own.
+declarations carries section boxes, and every declaration in it sits under
+one. A file with a single concern does not: one under roughly 100 lines, or one
+that defines or tests a single type at any length. In a test file, the fixtures
+and helpers count as a group of their own.
 
 **Section vocabulary.** Prefer these names, in this order, so the same concept
 is not called three things across the tree:
@@ -120,7 +118,7 @@ is not called three things across the tree:
 | `INTERNALS` / `HELPERS` | unexported helpers the sections above call |
 | `FIXTURES` / `HARNESS` | in tests, the doubles and fixtures the tests share, and the setup that wires them |
 
-Domain sections carry the weight. A file split into `ADMISSION` /
+Prefer domain sections to generic ones. A file split into `ADMISSION` /
 `REJECTION REASONS` / `INTERNALS` tells a reader more than one split into
 `PUBLIC API` / `PRIVATE`.
 
@@ -194,8 +192,7 @@ every YAML file, Makefile, and HCL example in the repository.
 Every package carries a `doc.go` whose comment explains **why the package
 exists and what design decision it embodies**, not what its name already says.
 
-A doc comment that restates the package name is worse than none, because it
-occupies the place where the reasoning should have been.
+A doc comment that restates the package name is worse than none.
 
 ```go
 // Package ledger keeps Vagabond's own account of what each provider's quota
@@ -291,10 +288,9 @@ suffix names the producer concept.
 
 ## Architectural Boundaries
 
-These are the rules the whole design rests on. They are enforced mechanically
-by `depguard`; this section explains why each one exists.
+`depguard` enforces the first three; this section explains why each one exists.
 
-### The scheduler does not know what a cloud is
+### The scheduler does not import provider code
 
 `internal/scheduler`, `internal/job`, and `internal/quota` must not import any
 package under `internal/providers/`. Admission produces normalized candidates;
@@ -317,9 +313,9 @@ No package outside `internal/state/` may import a database driver or
 ### Admission performs no I/O
 
 Shared admission rules are a pure function over a capability snapshot and a
-quota snapshot. `vagabond job plan` fans out across every configured provider
-and must stay fast, free, and side-effect-free by construction rather than by
-discipline. Provider-specific limits are contributed through an optional
+quota snapshot. `vagabond job plan` fans out across every configured provider,
+so admission must not call a provider, cost anything, or change state.
+Provider-specific limits are contributed through an optional
 interface that is likewise pure.
 
 ---
@@ -339,9 +335,9 @@ classifications, and plugin authors are responsible for assigning it:
 A task that ran and exited non-zero carries no class: it is the task's result,
 returned unchanged and never rerouted.
 
-`ClassInternal` exists because misattributing Vagabond's own bug to the user's
-workload is the worst available outcome: it reports a broken build to someone
-whose build is fine, and because it is not rerouted, it never self-corrects.
+`ClassInternal` exists so that a Vagabond bug is not reported as the user's
+workload failing. That would report a broken build to someone whose build is
+fine, and since workload failures are not rerouted, nothing would correct it.
 
 **Retryability is an independent flag, not derived from the class.** A provider
 429 and a provider 503 are both infrastructure failures wanting different

@@ -61,9 +61,9 @@ Rules that apply to every method:
   runs work the ledger never recorded; disable SDK retryers.
 - **Do not modify `*job.Task`.** The same task is offered to the next provider
   on reroute.
-- **The ID is the key.** `execution.ID` is a UUIDv7 minted and stored before
-  `Submit`. Derive every platform name from it, so any process can find the
-  work later without plugin state.
+- **Derive platform names from the ID.** `execution.ID` is a UUIDv7 minted and
+  stored before `Submit`, so any process can find the work later without
+  plugin state.
 - **Return `*plugin.Error`.** An unclassified error is treated as not
   reroutable.
 - **Honour `ctx`.** Dispatch cancels it when the caller gives up.
@@ -93,7 +93,7 @@ Never called on the request path.
 Starts the task under `id` and reports what the platform said.
 
 - **Idempotent on `id`:** a second call with the same ID must not start a
-  second run. Naming the platform resource after the ID gets this for free on
+  second run. Naming the platform resource after the ID provides this on
   platforms that reject a duplicate name.
 - **Clean up on partial failure:** if `Submit` creates a resource and a later
   step fails, delete it before returning.

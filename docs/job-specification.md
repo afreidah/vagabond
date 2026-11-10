@@ -82,7 +82,7 @@ job "go-test" {
 
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
-| label | string | yes | — | Job name. Identifies the job in the registry, plans and execution records |
+| label | string | yes | - | Job name. Identifies the job in the registry, plans and execution records |
 | `namespace` | string | no | see below | Namespace the job runs and registers in |
 | `type` | string | no | `batch` | Scheduling model. `batch` runs each task to completion |
 
@@ -264,8 +264,8 @@ routing {
 | `tiers` | string | no | server's `scheduling.tiers`, else `strict` | Tier mode, `strict` or `weighted`. See [tiers](scheduling.md#tiers) |
 | `providers` | list(string) | no | all providers | Provider names the job may use. Empty or omitted admits all |
 | `max_cost_usd` | integer | no | `0` | Highest per-execution estimated cost accepted |
-| `constraint` | block | no | — | Hard requirement, repeatable |
-| `affinity` | block | no | — | Preference, repeatable |
+| `constraint` | block | no | - | Hard requirement, repeatable |
+| `affinity` | block | no | - | Preference, repeatable |
 
 **`providers`:** an allowlist, not a failover chain. A provider absent from a
 non-empty list is rejected with `not-allowlisted`; the rest are admitted or
@@ -319,8 +319,8 @@ constraint {
 
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `attribute` | string | yes | — | Attribute to test. See [attributes](#attributes) |
-| `operator` | string | yes | — | Comparison. See [operators](#operators) |
+| `attribute` | string | yes | - | Attribute to test. See [attributes](#attributes) |
+| `operator` | string | yes | - | Comparison. See [operators](#operators) |
 | `value` | string | for comparisons | `""` | Right-hand side. Must be omitted for `is_set` and `is_not_set` |
 
 Plan output for a failed constraint:
@@ -345,8 +345,8 @@ affinity {
 
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `attribute` | string | yes | — | Attribute to test |
-| `operator` | string | yes | — | Comparison |
+| `attribute` | string | yes | - | Attribute to test |
+| `operator` | string | yes | - | Comparison |
 | `value` | string | for comparisons | `""` | Right-hand side |
 | `weight` | integer | no | `50` | Relative importance. Must be positive |
 
@@ -421,7 +421,7 @@ Published attributes:
 | `provider.private_network` | bool | Always | `true` when the provider offers private network access |
 | `provider.arbitrary_images` | bool | Always | `true` when any container image may be run |
 | `provider.estimated_cost` | integer | Always, including `0` | Estimated cost per execution |
-| `provider.free_quota_percent` | integer | Always | Tightest remaining allowance, 0–100, see below |
+| `provider.free_quota_percent` | integer | Always | Tightest remaining allowance, 0-100, see below |
 | `provider.tier` | integer | Always, including `0` | The provider's [`tier`](configuration.md#tiers) from the server configuration |
 
 A limit the provider never stated is absent rather than `0`, so `is_set` and
@@ -492,17 +492,17 @@ task "test" {
 
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
-| label | string | yes | — | Task name, unique within the job |
-| `driver` | string | yes | — | Execution contract: `container`, `function` or `worker` |
+| label | string | yes | - | Task name, unique within the job |
+| `driver` | string | yes | - | Execution contract: `container`, `function` or `worker` |
 | `working_directory` | string | no | image default | Directory the command runs in. Applied by the pool provider only |
 | `timeout` | duration | no | none | Maximum runtime. See [`timeout`](#timeout) |
-| `config` | block | depends on driver | — | Driver configuration |
-| `env` | block | no | — | Environment variables |
-| `source` | block | no | — | Source repository reference |
-| `resources` | block | no | — | CPU and memory required |
-| `network` | block | no | — | Connectivity required |
-| `execution` | block | no | — | Architecture and privilege required |
-| `retry` | block | no | — | Retry and reroute policy |
+| `config` | block | depends on driver | - | Driver configuration |
+| `env` | block | no | - | Environment variables |
+| `source` | block | no | - | Source repository reference |
+| `resources` | block | no | - | CPU and memory required |
+| `network` | block | no | - | Connectivity required |
+| `execution` | block | no | - | Architecture and privilege required |
+| `retry` | block | no | - | Retry and reroute policy |
 
 **Validation:**
 
@@ -565,7 +565,7 @@ config {
 
 | Key | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `image` | string | yes | — | Image reference to pull and run |
+| `image` | string | yes | - | Image reference to pull and run |
 | `command` | string | no | image entrypoint | Replaces the entrypoint with this single executable |
 | `args` | list(string) | no | image default | Arguments. Each element is one argument; nothing is split on spaces |
 
@@ -588,8 +588,8 @@ config {
 
 | Key | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `function` | string | yes | — | Function name or ARN to invoke |
-| `args` | list(string) | no | — | Passed in the event as `args` |
+| `function` | string | yes | - | Function name or ARN to invoke |
+| `args` | list(string) | no | - | Passed in the event as `args` |
 
 Do not set `image` on a function task: Lambda publishes
 `provider.arbitrary_images = false` and would reject the task with
@@ -656,10 +656,10 @@ source {
 
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `type` | string | yes | — | Source type, e.g. `git`. Not checked |
-| `repository` | string | yes | — | Repository URL |
-| `ref` | string | no | — | Revision |
-| `destination` | string | no | — | Path |
+| `type` | string | yes | - | Source type, e.g. `git`. Not checked |
+| `repository` | string | yes | - | Repository URL |
+| `ref` | string | no | - | Revision |
+| `destination` | string | no | - | Path |
 
 No provider reads this block: nothing is fetched before the task starts. A
 task that needs its source checks it out itself, for example from
@@ -695,7 +695,7 @@ against CPU- and memory-metered pools. See [quotas](quotas.md).
 |---|---|---|---|
 | Cloud Run | 1000 | 2048 | CPU rounded up to whole vCPUs (minimum 1); memory in MiB. Limits 8000 millicores, 32768 MiB |
 | Pool | 1000 | 1024 | Passed to the agent as the workload's cgroup limits. Limit is the largest node's capacity |
-| Lambda | — | — | Not applied; the function's own configuration decides. Limits 6000 millicores, 10240 MiB |
+| Lambda | - | - | Not applied; the function's own configuration decides. Limits 6000 millicores, 10240 MiB |
 
 **Validation:**
 
@@ -769,7 +769,7 @@ execution {
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `architecture` | string | no | any | `amd64` or `arm64`. A provider not offering it is rejected with `arch-unsupported` |
-| `privileged` | bool | no | — | Accepted and stored. No provider or admission check reads it |
+| `privileged` | bool | no | - | Accepted and stored. No provider or admission check reads it |
 
 Architectures offered: Cloud Run `amd64`; Lambda `amd64`, `arm64`; a pool the
 union of its connected nodes' architectures.
@@ -797,7 +797,7 @@ retry {
 |---|---|---|---|---|
 | `attempts` | integer | no | `1` | Total submissions, including the first. `0` means `1` |
 | `reroute` | bool | no | `false` | Allow later attempts on the next provider in the ranking |
-| `backoff` | block | no | — | Delay between attempts |
+| `backoff` | block | no | - | Delay between attempts |
 
 **Semantics:**
 
@@ -826,7 +826,7 @@ See [dispatch](dispatch.md) for execution records and failure classes.
 | `max` | duration | no | `30s` | Ceiling on the wait |
 
 The wait before attempt *n* (the first attempt is 0 and never waits) is
-`initial × 2^(n-1)`, capped at `max`. With the defaults: 5s, 10s, 20s, 30s,
+`initial * 2^(n-1)`, capped at `max`. With the defaults: 5s, 10s, 20s, 30s,
 30s. `0s` falls back to the default, but a `max` of `0s` beside a non-zero
 `initial` fails validation as below `initial`. With `max` omitted, an `initial`
 above 30s is used as written for the first wait, and later waits drop to 30s.

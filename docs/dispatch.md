@@ -151,9 +151,9 @@ terminal state only with a result. A submission that breaks this is an
 
 ## Failure classes and rerouting
 
-Rule: an exit code is an answer and ends the task; only a provider that failed
-to produce an answer is worth another provider, since a workload failure would
-repeat anywhere.
+A task that returns a result, with any exit code, ends there: a workload
+failure would repeat on any provider. Only an attempt that gets no answer from
+the provider is retried or rerouted.
 
 | Failure | Behaviour |
 |---|---|
