@@ -43,7 +43,7 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=no -memory 12288 \
 | `-server <addr>` | `127.0.0.1:4748` | The server's `agent_bind` address, `host:port`. |
 | `-pool <name>` | `default` | Pool the node joins. Must match the name of a `pool` provider on the server to receive work. |
 | `-name <name>` | the certificate's common name with TLS, else the hostname | Node name. Unique per server: an agent registering under a name already connected replaces that connection. With TLS it must match the certificate. |
-| `-tls-ca <path>` | none | CA the server's certificate chains to. `-tls-ca`, `-tls-cert` and `-tls-key` are all set or none. See [Security](#security). |
+| `-tls-ca <path>` | none | CA file, or directory of them, the server's certificate chains to. `-tls-ca`, `-tls-cert` and `-tls-key` are all set or none. See [Security](#security). |
 | `-tls-cert <path>` | none | This agent's certificate. Its common name is the node's name. |
 | `-tls-key <path>` | none | This agent's private key. |
 | `-tls-server-name <name>` | host part of `-server` | Name the server's certificate must carry. Needs the three `-tls-*` flags. |
@@ -161,8 +161,8 @@ children, and the first `Submit` fails `creating the task: ...`.
 | Bad `-log-level` | `Invalid -log-level "<value>": use debug, info, warn or error.` |
 | `-tls-ca`, `-tls-cert`, `-tls-key` partly set | `-tls-ca, -tls-cert and -tls-key go together: set all three or none` |
 | `-tls-server-name` without the other three | `-tls-server-name needs -tls-ca, -tls-cert and -tls-key` |
-| Certificate or key unreadable or mismatched | `loading the agent's certificate: ...` |
-| CA unreadable | `loading the CA from <path>: ...` |
+| Certificate or key unreadable or mismatched | `loading the certificate <cert>: ...` |
+| CA missing or not PEM | `loading the CA from <path>: ...` |
 | Certificate without a common name | `the agent's certificate has no common name` |
 | `-name` differs from the certificate | `-name "<name>" does not match the certificate's common name "<cn>"` |
 | TLS set and `-server` has no port | `address <server>: missing port in address` |
@@ -281,8 +281,9 @@ server {
 See [`agent_tls` block](configuration.md#agent_tls-block) and
 [Security](#security). A listen failure stops the server with
 `listening for agents on <addr>: ...`, an unreadable `agent_tls` certificate or
-key with `loading the agent listener's certificate: ...`, and an unreadable CA
-with `loading the CA from <path>: ...`. Shutdown closes the listener and every
+key with `loading the certificate <cert>: ...`, an unreadable CA with
+`loading the CA from <path>: ...`, and an `agent_tls` block with no `ca` with
+`Missing agent CA`. Shutdown closes the listener and every
 agent session; agents log `lost the server` and keep dialing.
 
 ## Connection and reporting
@@ -729,10 +730,9 @@ is the execution ID; the pool ignores it and uses the node name.
 
 With mutual TLS:
 
-- Both sides require TLS 1.2 or later.
+- Both sides require TLS 1.3.
 - The server gives each handshake 10 s. One that fails or does not finish is
   dropped and logged as `agent connection from=... error="TLS with <addr>: ..."`.
-
 - The server presents its certificate and requires one from every agent,
   signed by `agent_tls.ca`. A connection without a certificate, or with one
   from another CA, fails the handshake and never registers.
@@ -750,7 +750,10 @@ nothing.
 
 ### Certificates
 
-One CA signs the server's certificate and every agent's. With `openssl`:
+One CA signs the server's agent-listener certificate and every agent's. Keep it
+for agents only: API client certificates come from another CA, since a client
+certificate this CA signed could register as a node named for it. See
+[Deployment](deployment.md#network-exposure). With `openssl`:
 
 ```bash
 # CA, kept off the nodes.
@@ -795,6 +798,8 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab \
 ```
 
 - Keep `ca-key.pem` off the server and the nodes; it mints node identities.
+- The agent's `-tls-*` flags are not read from `$VAGABOND_TLS_*`; those are for
+  the client commands, whose certificates come from the API's CA.
 - Certificates are read once at startup. Replacing one takes a restart of the
   server or the agent.
 - There is no revocation list. To remove a node's access, issue new

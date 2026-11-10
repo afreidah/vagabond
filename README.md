@@ -58,8 +58,9 @@ does not use or require Nomad.
 - Live output: `job run`, `job dispatch` and `execution logs -f` stream output
   from Cloud Run and agent nodes while the task runs, then finish from the
   stored copy (last 64 KiB).
-- Server: HTTP API over the same operations. Dispatches are leased; a server
-  resumes ones a dead process left running.
+- Server: HTTP API over the same operations, optionally over TLS with client
+  certificates. Dispatches are leased; a server resumes ones a dead process
+  left running.
 - Store outages: new work is refused with 503, running work finishes, and what
   the outage lost is repaired when the store returns. `GET /v1/health` reports
   it.
@@ -85,8 +86,9 @@ The `worker` driver is modeled and admitted; no plugin implements it yet.
   [HTTP API](docs/api.md).
 - Every command but `server`, `agent` and `job validate` is an API client,
   finding the server with `-address` or
-  `$VAGABOND_ADDR` (default `http://127.0.0.1:4747`). Runners need an address,
-  not cloud or database credentials.
+  `$VAGABOND_ADDR` (default `http://127.0.0.1:4747`), with `-tls-*` or
+  `$VAGABOND_TLS_*` for a server that requires a client certificate. Runners
+  need an address and a certificate, not cloud or database credentials.
 - `vagabond server -dev` keeps every store in memory, for development and
   single-machine use.
 - `job validate` is local, and job files are validated locally before they are
@@ -236,8 +238,8 @@ Details: [architecture.md](docs/architecture.md).
 Not implemented yet. Tracked in [issues](https://github.com/afreidah/vagabond/issues).
 
 - Own nodes: a Firecracker runtime.
-- Server: API authentication, degraded mode that keeps dispatching through a
-  store outage.
+- Server: API tokens scoped to namespaces, degraded mode that keeps
+  dispatching through a store outage.
 - Operations: periodic jobs, an event stream, blocking queries, disabling a
   provider at runtime.
 - Jobs: submission hooks, variables and workload identity, execution garbage

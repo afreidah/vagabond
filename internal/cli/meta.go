@@ -39,6 +39,7 @@ type Meta struct {
 
 	address   string
 	namespace string
+	tls       tlsFlags
 }
 
 // color reports whether diagnostics should carry escape sequences.
@@ -57,10 +58,40 @@ const (
 	namespaceEnv = "VAGABOND_NAMESPACE"
 )
 
-// clientFlags registers -address and -namespace, which every command that
+// clientOptions documents the flags every command that talks to a server
+// takes, appended to each one's help by clientHelp.
+const clientOptions = `Client Options:
+
+  -address <addr>
+    The server's address. Defaults to $VAGABOND_ADDR, then
+    http://127.0.0.1:4747. The -tls options need an https:// address.
+
+  -tls-ca <path>
+    The CA file, or directory of them, the server's certificate must chain
+    to. Defaults to $VAGABOND_TLS_CA, then the system's roots.
+
+  -tls-cert <path>, -tls-key <path>
+    A client certificate and its key, for a server that requires one. Both or
+    neither. Default to $VAGABOND_TLS_CERT and $VAGABOND_TLS_KEY.
+
+  -tls-server-name <name>
+    The name the server's certificate must carry. Defaults to
+    $VAGABOND_TLS_SERVER_NAME, then the address's host.`
+
+// clientHelp is a client command's usage text followed by the client options.
+func clientHelp(text string) string {
+	return strings.TrimSpace(text) + "\n\n" + clientOptions
+}
+
+// clientFlags registers -address and the -tls flags, which every command that
 // talks to a server takes.
 func (m *Meta) clientFlags(fs *flag.FlagSet) {
 	fs.StringVar(&m.address, "address", os.Getenv(addressEnv), "server address")
+	m.tls.register(fs, tlsFromEnv())
+}
+
+// namespaceFlag registers -namespace, for the commands that act in one.
+func (m *Meta) namespaceFlag(fs *flag.FlagSet) {
 	fs.StringVar(&m.namespace, "namespace", os.Getenv(namespaceEnv), "namespace")
 }
 
@@ -74,7 +105,15 @@ func (m *Meta) connect(fs *flag.FlagSet, args []string, want operands, help stri
 		return nil, nil
 	}
 
-	client, err := api.NewClient(m.address, nil)
+	// net/http checks the server's certificate against the address's host
+	tlsConfig, err := m.tls.config("")
+	if err != nil {
+		m.Ui.Error(err.Error())
+
+		return nil, nil
+	}
+
+	client, err := api.NewClient(m.address, tlsConfig)
 	if err != nil {
 		m.Ui.Error(err.Error())
 

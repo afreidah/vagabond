@@ -13,7 +13,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
 )
 
 // NodeStatusCommand implements `vagabond node status`.
@@ -34,15 +33,9 @@ Usage: vagabond node status [options]
   Lists the agent nodes connected to the server now, by name, with what each
   may use and how much its running workloads have taken. A node that loses its
   connection leaves the list until it reconnects.
-
-Status Options:
-
-  -address <addr>
-    The server to read. Defaults to $VAGABOND_ADDR, then
-    http://127.0.0.1:4747.
 `
 
-	return strings.TrimSpace(text)
+	return clientHelp(text)
 }
 
 // Run lists the connected nodes as a table, or says there are none.

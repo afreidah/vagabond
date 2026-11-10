@@ -33,6 +33,10 @@ import (
 // maxBody bounds a request body. A job file is a few kilobytes.
 const maxBody = 1 << 20
 
+// healthPath is the one route a client without a certificate may ask, since a
+// load balancer or service check probes it.
+const healthPath = "/v1/health"
+
 // -------------------------------------------------------------------------
 // TYPES
 // -------------------------------------------------------------------------
@@ -144,6 +148,25 @@ func decode(r *http.Request, v any) error {
 	}
 
 	return nil
+}
+
+// -------------------------------------------------------------------------
+// CLIENT CERTIFICATES
+// -------------------------------------------------------------------------
+
+// requireCertificate answers 401 to a request that presented no verified
+// client certificate, health checks aside. The listener verifies a certificate
+// only when one is given, so the health check can still connect without one.
+func requireCertificate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != healthPath && (r.TLS == nil || len(r.TLS.VerifiedChains) == 0) {
+			write(w, http.StatusUnauthorized, api.Error{Error: "this server requires a client certificate"})
+
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // -------------------------------------------------------------------------

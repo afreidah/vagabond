@@ -181,9 +181,14 @@ func New(
 	return s
 }
 
-// Handler returns the route table. Every route takes ?namespace=, defaulting to
-// the default namespace.
+// Handler returns the route table behind the request log.
 func (s *Server) Handler() http.Handler {
+	return s.logRequests(s.routes())
+}
+
+// routes is the route table. The job routes take ?namespace=, defaulting to
+// the default namespace.
+func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /v1/jobs", s.wrap(s.registerJob))
@@ -197,11 +202,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/execution/{id}", s.wrap(s.executionStatus))
 	mux.HandleFunc("GET /v1/execution/{id}/logs", s.executionLogs)
 	mux.HandleFunc("DELETE /v1/execution/{id}", s.wrap(s.cancelExecution))
-	mux.HandleFunc("GET /v1/health", s.health)
+	mux.HandleFunc("GET "+healthPath, s.health)
 	mux.HandleFunc("GET /v1/nodes", s.wrap(s.listNodes))
 	mux.HandleFunc("GET /v1/providers", s.wrap(s.listProviders))
 
-	return s.logRequests(mux)
+	return mux
 }
 
 // -------------------------------------------------------------------------
@@ -223,7 +228,8 @@ func (s *Server) Serve(ctx context.Context, addr string, tlsConfig *tls.Config) 
 
 // ServeListener serves on an existing listener until ctx is done. Dispatches a
 // dead owner left are claimed and stale reservations reaped before serving,
-// then upkeep runs on its timers until the server stops.
+// then upkeep runs on its timers until the server stops. A tlsConfig with
+// client CAs requires a verified client certificate on every route but health.
 func (s *Server) ServeListener(ctx context.Context, listener net.Listener, tlsConfig *tls.Config) error {
 	s.claim(ctx)
 	s.reap(ctx)
@@ -234,8 +240,13 @@ func (s *Server) ServeListener(ctx context.Context, listener net.Listener, tlsCo
 	defer upkeep.Wait()
 	defer stopUpkeep()
 
+	var routes http.Handler = s.routes()
+	if tlsConfig != nil && tlsConfig.ClientCAs != nil {
+		routes = requireCertificate(routes)
+	}
+
 	httpServer := &http.Server{
-		Handler:           s.Handler(),
+		Handler:           s.logRequests(routes),
 		ReadHeaderTimeout: headerTimeout,
 		TLSConfig:         tlsConfig,
 	}

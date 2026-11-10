@@ -40,10 +40,12 @@ a larger body is a 400.
 | Response body | `application/json`, except `GET /v1/execution/{id}/logs` |
 | Logs response | `text/plain; charset=utf-8`, with `X-Content-Type-Options: nosniff` |
 
-**Authentication:** none. The API has no authentication or authorization;
-anyone who can reach the listener can register, run and cancel jobs. The
-default bind is loopback for this reason. Bind to a wider address only behind a
-network or proxy you control.
+**Authentication:** client certificates, when the `server` block's `tls` block
+names a `ca`; see [TLS](#tls). Without one, anyone who can reach the listener
+can register, run and cancel jobs. The default bind is loopback for this
+reason, and the server warns at startup when the API is reachable beyond
+loopback with no `ca`. There is no authorization: every client with a valid
+certificate can use every route.
 
 **Logging:** every request is logged at `debug` with method, path, status and
 duration. 500s are logged at `error`; a 503 for an unreachable store at `warn`,
@@ -104,6 +106,7 @@ Every non-2xx response from a route in the table below has this body:
 |---|---|
 | 200 | Success. Every route answers 200; none use 201 or 204 |
 | 400 | Unreadable or oversized body; invalid job file (with `Diagnostics`); metadata the job does not permit; conflicting or undeclared namespace; malformed dispatch or execution ID; plan with both `Source` and `Name`; an `offset` that is not a byte count |
+| 401 | No verified client certificate, on a server whose `tls` block names a `ca`. Body `this server requires a client certificate`. Never on `/v1/health` |
 | 404 | Job not registered in the namespace; no such dispatch or execution |
 | 409 | Dispatching or planning (by `Name`) a stopped job |
 | 416 | `GET /v1/execution/{id}/logs?follow=true` with `offset` above 0 on a running execution whose provider cannot resume its stream (Cloud Run). Sent before any output |
@@ -878,29 +881,48 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4747/v1/health
 
 ## TLS
 
-A `tls` block in the `server` block serves the API over HTTPS:
+A `tls` block in the `server` block serves the API over HTTPS, and with a `ca`
+requires a client certificate:
 
 ```hcl
 server {
   bind = "0.0.0.0:4747"
 
   tls {
-    cert = "/etc/vagabond/server.crt" # PEM certificate, chain included
-    key  = "/etc/vagabond/server.key" # PEM private key
+    cert = "/etc/vagabond/server.crt"    # PEM certificate, chain included
+    key  = "/etc/vagabond/server.key"    # PEM private key
+    ca   = "/etc/vagabond/clients-ca.pem" # optional: CA client certificates chain to
   }
 }
 ```
 
-- Both attributes are required. Minimum protocol TLS 1.2.
-- The pair is loaded once at startup. A missing or mismatched file stops the
-  server with `loading the server certificate: <error>`.
-- No client certificates are requested or verified. TLS does not add
-  authentication.
-- The block covers the API listener only, not `agent_bind`.
-- Without the block the API is plain HTTP.
+- `cert` and `key` are required. Minimum protocol TLS 1.3.
+- The files are loaded once at startup. A missing or mismatched pair stops the
+  server with `loading the certificate <cert>: <error>`; an unreadable `ca`
+  with `loading the CA from <path>: <error>`.
+- `ca` is a PEM file of one or more certificates, or a directory of them.
+
+With `ca`:
+
+| Client | Result |
+|---|---|
+| Certificate that chains to `ca` | Every route |
+| No certificate | `GET /v1/health` only; every other route answers 401 |
+| Certificate that does not chain to `ca`, or is expired | The handshake fails; no route answers, health included |
+
+- `/v1/health` is exempt so load balancers and service checks can probe the
+  server without a certificate.
+- Any verified certificate is accepted; its subject is not checked. Issue API
+  client certificates from a CA of their own, not `agent_tls`'s: the agent
+  listener registers a node under any certificate its CA signed. See
+  [Deployment](deployment.md#network-exposure).
+
+Without `ca` no client certificate is requested. Without the block the API is
+plain HTTP.
 
 ```bash
 curl -s --cacert /etc/vagabond/ca.crt https://vagabond.internal:4747/v1/health
+curl -s --cacert /etc/vagabond/ca.crt --cert ci.pem --key ci-key.pem https://vagabond.internal:4747/v1/jobs
 ```
 
 ## Go client
@@ -920,18 +942,31 @@ if failure, ok := errors.AsType[*api.ResponseError](err); ok {
 }
 ```
 
-**Constructor:** `NewClient(address string, httpClient *http.Client) (*Client, error)`.
+**Constructor:** `NewClient(address string, tlsConfig *tls.Config) (*Client, error)`.
+The client has a pooled transport of its own (`go-cleanhttp`), not
+`http.DefaultClient`'s.
 
 | Input | Behaviour |
 |---|---|
 | `address` empty | `api.DefaultAddress`, `http://127.0.0.1:4747` |
 | `address` without `://` | Prefixed with `http://`; pass `https://...` for TLS |
 | `address` unparseable | Error `server address "<addr>": <error>` |
-| `httpClient` nil | A pooled client of its own (`go-cleanhttp`), not `http.DefaultClient` |
-| `httpClient` set | Used as given; pass one with a `tls.Config` for a private CA |
+| `tlsConfig` nil | Default TLS for an `https://` address: the system's roots, no client certificate |
+| `tlsConfig` set | Used for the connection: a private CA, a client certificate. An empty `ServerName` is the address's host |
+| `tlsConfig` set with an `http://` address | Error `server address "<addr>": TLS options need an https:// address` |
 
-The client does not read environment variables. The CLI passes `-address`,
-defaulting to `$VAGABOND_ADDR`; see [CLI](cli.md).
+```go
+cfg, err := tlsconfig.Client("/etc/vagabond/ca.pem", "ci.pem", "ci-key.pem", "")
+if err != nil {
+	return err
+}
+
+client, err := api.NewClient("https://vagabond.internal:4747", cfg)
+```
+
+The client does not read environment variables. The CLI passes `-address` and
+the `-tls-*` flags, defaulting to `$VAGABOND_ADDR` and `$VAGABOND_TLS_*`; see
+[CLI](cli.md#connecting-to-the-server).
 
 **Methods:**
 

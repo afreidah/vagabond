@@ -22,7 +22,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/config"
 	"github.com/afreidah/vagabond/internal/ledger"
 	"github.com/afreidah/vagabond/internal/nodes"
@@ -30,6 +29,7 @@ import (
 	"github.com/afreidah/vagabond/internal/server"
 	"github.com/afreidah/vagabond/internal/state/memory"
 	"github.com/afreidah/vagabond/internal/state/postgres"
+	"github.com/afreidah/vagabond/internal/tlsconfig"
 )
 
 // -------------------------------------------------------------------------
@@ -55,9 +55,11 @@ Usage: vagabond server [options]
   and store, until interrupted. Requires a store block unless -dev is given.
 
   Listens on the server block's bind address, 127.0.0.1:4747 by default, with
-  TLS when the block names a certificate and key, and for agents on its
-  agent_bind address, 127.0.0.1:4748 by default. An agent_bind beyond loopback
-  requires an agent_tls block, so every agent presents a certificate.
+  TLS when its tls block names a certificate and key, and requiring a client
+  certificate on every route but /v1/health when the block also names a ca.
+  Listens for agents on its agent_bind address, 127.0.0.1:4748 by default. An
+  agent_bind beyond loopback requires an agent_tls block, so every agent
+  presents a certificate.
 
   Stopping the server drains requests and leaves running dispatches to the
   next server, which resumes them once their leases lapse.
@@ -153,10 +155,12 @@ func (c *ServerCommand) Run(args []string) int {
 		return c.Errorf("%s", err)
 	}
 
-	tlsConfig, err := serverTLS(cfg.Server)
+	tlsConfig, err := apiTLS(cfg.Server)
 	if err != nil {
 		return c.Errorf("%s", err)
 	}
+
+	c.warnOpenAPI(cfg.Server.Address(), tlsConfig)
 
 	agents, err := agentListener(ctx, cfg.Server)
 	if err != nil {
@@ -268,7 +272,7 @@ func agentListener(ctx context.Context, block *config.ServerBlock) (net.Listener
 		var err error
 
 		t := block.AgentTLS
-		if tlsConfig, err = agentrpc.ServerTLS(t.Cert, t.Key, t.CA); err != nil {
+		if tlsConfig, err = tlsconfig.Server(t.Cert, t.Key, t.CA, tls.RequireAndVerifyClientCert); err != nil {
 			return nil, err
 		}
 	} else if !loopback(addr) {
@@ -307,17 +311,26 @@ func loopback(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// serverTLS loads the certificate and key the server block names, or returns
-// nil to serve plain HTTP.
-func serverTLS(block *config.ServerBlock) (*tls.Config, error) {
+// apiTLS is the API's TLS from the server block's tls block, or nil to serve
+// plain HTTP. With a ca, a client certificate is verified when one is given,
+// so the health check still connects without one.
+func apiTLS(block *config.ServerBlock) (*tls.Config, error) {
 	if block == nil || block.TLS == nil {
 		return nil, nil
 	}
 
-	cert, err := tls.LoadX509KeyPair(block.TLS.Cert, block.TLS.Key)
-	if err != nil {
-		return nil, fmt.Errorf("loading the server certificate: %w", err)
+	t := block.TLS
+
+	return tlsconfig.Server(t.Cert, t.Key, t.CA, tls.VerifyClientCertIfGiven)
+}
+
+// warnOpenAPI warns when the API at addr is reachable beyond this machine and
+// verifies no client certificates, so anyone who can reach it can use it.
+func (c *ServerCommand) warnOpenAPI(addr string, tlsConfig *tls.Config) {
+	if (tlsConfig != nil && tlsConfig.ClientCAs != nil) || loopback(addr) {
+		return
 	}
 
-	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
+	c.Ui.Warn(fmt.Sprintf("The API on %s is reachable beyond this machine and accepts any client. "+
+		"Name a ca in the server block's tls block so clients must present a certificate.", addr))
 }

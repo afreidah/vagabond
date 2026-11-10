@@ -13,6 +13,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -57,10 +58,11 @@ func (e *ResponseError) Error() string {
 // CONSTRUCTOR
 // -------------------------------------------------------------------------
 
-// NewClient returns a client for the server at address. An address without a
-// scheme is taken as http, and an empty one is DefaultAddress. A nil
-// httpClient is a pooled one of its own, not the process-wide default.
-func NewClient(address string, httpClient *http.Client) (*Client, error) {
+// NewClient returns a client for the server at address, on a pooled transport
+// of its own rather than the process-wide default. An address without a scheme
+// is taken as http, and an empty one is DefaultAddress. A tlsConfig needs an
+// https address.
+func NewClient(address string, tlsConfig *tls.Config) (*Client, error) {
 	if address == "" {
 		address = DefaultAddress
 	}
@@ -74,11 +76,14 @@ func NewClient(address string, httpClient *http.Client) (*Client, error) {
 		return nil, fmt.Errorf("server address %q: %w", address, err)
 	}
 
-	if httpClient == nil {
-		httpClient = cleanhttp.DefaultPooledClient()
+	if tlsConfig != nil && base.Scheme != "https" {
+		return nil, fmt.Errorf("server address %q: TLS options need an https:// address", address)
 	}
 
-	return &Client{base: base, http: httpClient}, nil
+	transport := cleanhttp.DefaultPooledTransport()
+	transport.TLSClientConfig = tlsConfig
+
+	return &Client{base: base, http: &http.Client{Transport: transport}}, nil
 }
 
 // -------------------------------------------------------------------------

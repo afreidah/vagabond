@@ -63,10 +63,6 @@ Usage: vagabond job plan [options] <path or name>
 
 Plan Options:
 
-  -address <addr>
-    The server to plan on. Defaults to $VAGABOND_ADDR, then
-    http://127.0.0.1:4747.
-
   -meta <key>=<value>
     Supply job metadata, repeatable. Values are substituted into the job before
     it is planned, so a specification that interpolates meta.version is planned
@@ -82,7 +78,7 @@ Plan Options:
     every further reason a rejected provider failed rather than the first.
 `
 
-	return strings.TrimSpace(text)
+	return clientHelp(text)
 }
 
 // Run plans the named job file or registered job on the server.
@@ -95,6 +91,7 @@ func (c *JobPlanCommand) Run(args []string) int {
 	flags := c.FlagSet("job plan")
 	flags.Var(&meta, "meta", "job metadata as key=value, repeatable")
 	flags.BoolVar(&verbose, "verbose", false, "show each scorer's contribution")
+	c.namespaceFlag(flags)
 
 	client, paths := c.connect(flags, args, oneArg("<path or name>"), c.Help())
 	if client == nil {

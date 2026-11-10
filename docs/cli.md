@@ -84,22 +84,48 @@ by the first 12 characters of the commit when it is known.
 ## Connecting to the server
 
 Every command except `job validate`, `server` and `agent` calls the server's
-[HTTP API](api.md). They share two flags:
+[HTTP API](api.md). They share these flags, listed under "Client Options" in
+each command's `-help` and left out of the flag tables below:
 
 | Flag | Default | Description |
 |---|---|---|
 | `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server API address |
-| `-namespace <name>` | `$VAGABOND_NAMESPACE`, then `default` | Namespace for job commands |
+| `-tls-ca <path>` | `$VAGABOND_TLS_CA`, then the system's roots | CA file, or directory of them, the server's certificate must chain to |
+| `-tls-cert <path>` | `$VAGABOND_TLS_CERT` | Client certificate, for a server whose `tls` block names a `ca` |
+| `-tls-key <path>` | `$VAGABOND_TLS_KEY` | The client certificate's key |
+| `-tls-server-name <name>` | `$VAGABOND_TLS_SERVER_NAME`, then the address's host | Name the server's certificate must carry |
+
+The `job` commands also take `-namespace <name>`, defaulting to
+`$VAGABOND_NAMESPACE`, then `default`; the execution, node and provider
+commands refuse it: execution IDs are global, nodes belong to pools, and
+provider usage is totalled across namespaces.
 
 - An address without a scheme is taken as `http://`: `-address 10.0.0.5:4747`
   is `http://10.0.0.5:4747`. Use `https://` for a server with a `tls` block.
-- The flag wins over the environment variable; an empty value falls through
-  to the default.
-- `-namespace` is sent as `?namespace=` on job requests. The execution, node
-  and provider commands accept it and ignore it: execution IDs are global,
-  nodes belong to pools, and provider usage is totalled across namespaces.
-- A job file that names its own `namespace` and a different `-namespace` is an
-  error; see [namespace resolution](job-specification.md#job-block).
+- A flag wins over its environment variable; an empty value falls through to
+  the default.
+- Any `-tls-*` flag needs an `https://` address:
+  `server address "http://10.0.0.5:4747": TLS options need an https:// address`.
+- `-tls-cert` and `-tls-key` are both set or neither:
+  `-tls-cert and -tls-key go together: set both or neither`.
+- TLS 1.3 is the minimum. There is no option to skip verifying the server.
+- `-namespace` is sent as `?namespace=` on job requests. A job file that names
+  its own `namespace` and a different `-namespace` is an error; see
+  [namespace resolution](job-specification.md#job-block).
+
+```shell
+export VAGABOND_ADDR=https://vagabond.internal:4747
+export VAGABOND_TLS_CA=/etc/vagabond/ca.pem
+export VAGABOND_TLS_CERT=$HOME/.vagabond/ci.pem
+export VAGABOND_TLS_KEY=$HOME/.vagabond/ci-key.pem
+
+vagabond job status
+```
+
+A server that requires a client certificate answers a command without one with
+`Error: this server requires a client certificate`. A certificate from another
+CA fails the handshake, reported as `Error: contacting the server at ...` with
+the TLS alert the server sent.
 
 Server failures are printed as `Error: <message>` on stderr with exit code 1.
 Local failures (an unreadable job file, a wrong number of arguments) print
@@ -133,7 +159,11 @@ registered jobs.
 | Variable | Used by | Description |
 |---|---|---|
 | `VAGABOND_ADDR` | client commands | Default for `-address` |
-| `VAGABOND_NAMESPACE` | client commands | Default for `-namespace` |
+| `VAGABOND_NAMESPACE` | `job` commands | Default for `-namespace` |
+| `VAGABOND_TLS_CA` | client commands | Default for `-tls-ca` |
+| `VAGABOND_TLS_CERT` | client commands | Default for `-tls-cert` |
+| `VAGABOND_TLS_KEY` | client commands | Default for `-tls-key` |
+| `VAGABOND_TLS_SERVER_NAME` | client commands | Default for `-tls-server-name` |
 | `VAGABOND_CONFIG` | `server` | Configuration file or directory, when `-config` is not given |
 | `NO_COLOR` | `job validate` and every command rendering job diagnostics | Set to any value to disable colour in diagnostics |
 
@@ -222,7 +252,6 @@ as `job validate` reports them.
 
 | Flag | Default | Description |
 |---|---|---|
-| `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server |
 | `-meta <key>=<value>` | none | Job metadata, repeatable |
 | `-namespace <name>` | `$VAGABOND_NAMESPACE`, then `default` | Namespace, for a job file that names none; for a registered job, the namespace it is registered in |
 | `-verbose` | `false` | Print each scorer's contribution under a candidate, and every further reason a rejected provider failed |
@@ -335,7 +364,6 @@ to finish. The job is not registered. The server makes the same selection
 
 | Flag | Default | Description |
 |---|---|---|
-| `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server |
 | `-meta <key>=<value>` | none | Job metadata, repeatable. Each task receives `VAGABOND_META_<KEY>` |
 | `-namespace <name>` | `$VAGABOND_NAMESPACE`, then `default` | Namespace, for a job that names none |
 | `-no-logs` | `false` | Do not fetch or print task output. Progress and the exit status are still reported |
@@ -415,7 +443,6 @@ runs.
 
 | Flag | Default | Description |
 |---|---|---|
-| `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server |
 | `-namespace <name>` | `$VAGABOND_NAMESPACE`, then `default` | Namespace, for a job that names none |
 
 | Exit | Meaning |
@@ -448,7 +475,6 @@ takes no `-meta`; otherwise every key must be declared and every
 
 | Flag | Default | Description |
 |---|---|---|
-| `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server |
 | `-meta <key>=<value>` | none | Job metadata, repeatable |
 | `-namespace <name>` | `$VAGABOND_NAMESPACE`, then `default` | Namespace the job is registered in |
 | `-no-logs` | `false` | Do not fetch or print task output |
@@ -482,7 +508,6 @@ executions.
 
 | Flag | Default | Description |
 |---|---|---|
-| `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server |
 | `-namespace <name>` | `$VAGABOND_NAMESPACE`, then `default` | Namespace |
 
 | Exit | Meaning |
@@ -542,7 +567,6 @@ running are not affected.
 
 | Flag | Default | Description |
 |---|---|---|
-| `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server |
 | `-namespace <name>` | `$VAGABOND_NAMESPACE`, then `default` | Namespace the job is registered in |
 
 | Exit | Meaning |
@@ -567,11 +591,8 @@ listed in a dispatch's record, `GET /v1/dispatch/<id>` in the [API](api.md);
 vagabond execution status [options] <id>
 ```
 
-Prints one execution's record. Fields with no value yet are left out.
-
-| Flag | Default | Description |
-|---|---|---|
-| `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server |
+Prints one execution's record. Fields with no value yet are left out. Takes
+only the [client flags](#connecting-to-the-server).
 
 | Field | Description |
 |---|---|
@@ -638,7 +659,6 @@ interrupt stops following and leaves the execution running;
 
 | Flag | Default | Description |
 |---|---|---|
-| `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server |
 | `-f` | `false` | Follow the output until the execution ends |
 
 ```shell
@@ -665,11 +685,8 @@ vagabond node status [options]
 ```
 
 Lists the [agent](agent.md) nodes connected to the server now. A node that
-loses its connection leaves the list until it reconnects. Takes no arguments.
-
-| Flag | Default | Description |
-|---|---|---|
-| `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server |
+loses its connection leaves the list until it reconnects. Takes no arguments,
+and only the [client flags](#connecting-to-the-server).
 
 | Column | Description |
 |---|---|
@@ -715,11 +732,8 @@ time and age are printed under the output.
 
 Usage counts settled charges plus what running jobs have reserved, at their
 declared resources for their full timeout. It falls when those jobs settle at
-what they actually took.
-
-| Flag | Default | Description |
-|---|---|---|
-| `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server |
+what they actually took. Takes only the
+[client flags](#connecting-to-the-server).
 
 **List.** One row per provider, by tier and then name, which is the order work
 goes to them.
@@ -781,10 +795,11 @@ vagabond server [options]
 ```
 
 Runs the server until SIGINT or SIGTERM: the HTTP API under `/v1` on the
-`server` block's `bind` address (`127.0.0.1:4747` by default, with TLS when the
-block names a certificate and key), and the agent listener on `agent_bind`
-(`127.0.0.1:4748` by default). See [configuration](configuration.md) and
-[deployment](deployment.md).
+`server` block's `bind` address (`127.0.0.1:4747` by default, with TLS when its
+`tls` block names a certificate and key, and requiring a client certificate on
+every route but `/v1/health` when it also names a `ca`), and the agent listener
+on `agent_bind` (`127.0.0.1:4748` by default). See
+[configuration](configuration.md) and [deployment](deployment.md).
 
 | Flag | Default | Description |
 |---|---|---|
@@ -812,7 +827,8 @@ does not fall through to the search path.
    `Some providers did not answer: <error>`.
 3. Without `-dev`: connect to the store, apply migrations and verify the
    schema (see [database](database.md)).
-4. Listen for agents, then serve the API.
+4. Load the `tls` files, warning when `bind` is beyond loopback and the API
+   verifies no client certificates. Listen for agents, then serve the API.
 
 **Shutdown:** in-flight requests drain. Running dispatches are left to the
 next server, which resumes them once their leases lapse (see
@@ -830,9 +846,9 @@ next server, which resumes them once their leases lapse (see
 | `No providers are configured, so there is nothing to run on.` | No `provider` blocks |
 | `The server needs a store block, or -dev to keep everything in memory.` | No `store` block and no `-dev` |
 | `could not open the store: ...` / `could not prepare the store: ...` | Store unreachable, migration or schema check failed |
-| `loading the server certificate: ...` | TLS certificate or key unreadable |
+| `loading the certificate <cert>: ...` | `tls` or `agent_tls` certificate or key unreadable or mismatched |
+| `loading the CA from <path>: ...` | `tls` or `agent_tls` `ca` missing or not PEM |
 | `agent_bind <addr> is reachable beyond this machine: add an agent_tls block ...` | Non-loopback `agent_bind` with no `agent_tls` |
-| `loading the agent listener's certificate: ...` / `loading the CA from <path>: ...` | `agent_tls` files unreadable or not PEM |
 | `listening for agents on <addr>: ...` | Agent address in use or not bindable |
 | `could not read quota usage: ...` | The store opened but the quota ledger could not be loaded |
 | `listening on <addr>: ...` | API `bind` address in use or not bindable |
@@ -840,6 +856,8 @@ next server, which resumes them once their leases lapse (see
 
 With `-dev` and a `store` block present, the server warns
 `Running with -dev: the store block is ignored and everything is kept in memory.`
+With a `bind` beyond loopback and no `tls` `ca`, it warns `The API on <addr> is
+reachable beyond this machine and accepts any client. ...`.
 
 ```bash
 vagabond server -config /etc/vagabond.d -log-level debug
@@ -870,7 +888,7 @@ writable in a container).
 | `-server <addr>` | `127.0.0.1:4748` | Server's agent address (`agent_bind`), not its API address |
 | `-pool <name>` | `default` | Pool the node joins. Jobs reach it through a `pool` provider of this name |
 | `-name <name>` | certificate's common name with TLS, else hostname | Node name, shown in `node status` and as the execution's provider ID. With TLS it must match the certificate |
-| `-tls-ca <path>` | none | CA the server's certificate chains to. With `-tls-cert` and `-tls-key`: all three or none |
+| `-tls-ca <path>` | none | CA file or directory the server's certificate chains to. With `-tls-cert` and `-tls-key`: all three or none. Not read from `$VAGABOND_TLS_CA`, which is the client commands' |
 | `-tls-cert <path>` | none | This agent's certificate; its common name is the node's name |
 | `-tls-key <path>` | none | This agent's private key |
 | `-tls-server-name <name>` | host part of `-server` | Name the server's certificate must carry |
@@ -896,7 +914,7 @@ namespace `vagabond`.
 | `Finding workloads from before: ...` | Recovering existing workloads failed |
 | `-tls-ca, -tls-cert and -tls-key go together: set all three or none` | Some TLS flags without the others |
 | `-name "<name>" does not match the certificate's common name "<cn>"` | `-name` disagrees with the certificate |
-| `loading the agent's certificate: ...` / `loading the CA from <path>: ...` | TLS files unreadable or not PEM |
+| `loading the certificate <cert>: ...` / `loading the CA from <path>: ...` | TLS files unreadable or not PEM |
 | `-tls-server-name needs -tls-ca, -tls-cert and -tls-key` | `-tls-server-name` given with no TLS files |
 | `the agent's certificate has no common name` | TLS certificate has an empty CN |
 | `Invalid -log-level "<value>": use debug, info, warn or error.` | Bad log level |

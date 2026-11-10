@@ -40,15 +40,9 @@ Usage: vagabond execution status [options] <id>
   Shows one execution's record: its job, task and provider, the state it
   reached, and its result once it has one. Its output is read with execution
   logs.
-
-Status Options:
-
-  -address <addr>
-    The server to read. Defaults to $VAGABOND_ADDR, then
-    http://127.0.0.1:4747.
 `
 
-	return strings.TrimSpace(text)
+	return clientHelp(text)
 }
 
 // Run reads the execution and prints its record.

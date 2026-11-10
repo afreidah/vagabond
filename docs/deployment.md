@@ -12,7 +12,7 @@ a supervisor.
 
 ## Building
 
-Requires the Go version in `go.mod` (1.27.3).
+Requires the Go version in `go.mod` (1.27.4).
 
 ```bash
 make build                       # ./vagabond, version from .version (dev if the file is missing)
@@ -43,7 +43,7 @@ make push DOCKER_REGISTRY=registry.internal   # linux/amd64 and linux/arm64, tag
 
 | | |
 |---|---|
-| Build / run base | `golang:1.27.3-alpine` / `alpine:3.21` with `ca-certificates` |
+| Build / run base | `golang:1.27.4-alpine` / `alpine:3.21` with `ca-certificates` |
 | User | `appuser`, UID 10001 |
 | Entrypoint | `vagabond`; pass `server ...` or `agent ...` |
 | Ports | `EXPOSE 4747 4748` |
@@ -80,7 +80,8 @@ What startup does, in order:
    providers unhealthy.
 4. Opens the store, applies migrations, verifies the schema version, reads
    quota usage ([database](database.md#startup)).
-5. Loads the `tls` certificate, then listens for agents on `agent_bind`.
+5. Loads the `tls` certificate and CA, warns when the API is reachable beyond
+   loopback without a `ca`, then listens for agents on `agent_bind`.
 6. Binds `bind`, claims dispatches whose lease lapsed, reaps stale quota
    reservations, starts the upkeep loops, then serves the API.
 
@@ -147,23 +148,60 @@ Details: [database](database.md#in-memory-store--dev).
 
 | Listener | Default | Protocol | TLS | Authentication |
 |---|---|---|---|---|
-| API, `bind` | `127.0.0.1:4747` | HTTP, JSON | Optional, `server { tls { ... } }` | None |
+| API, `bind` | `127.0.0.1:4747` | HTTP, JSON | Optional, `server { tls { ... } }` | Client certificate when `tls` names a `ca`; otherwise none |
 | Agents, `agent_bind` | `127.0.0.1:4748` | gRPC over a multiplexed TCP session | Mutual, `server { agent_tls { ... } }`; required beyond loopback | Agent certificate; node name is its common name |
 
-**The API has no authentication and no authorization.** Anyone who can reach
-`bind` can register, run, stop and cancel jobs in any namespace, and spend
-every configured provider's quota.
+**Without a `ca` the API has no authentication.** Anyone who can reach `bind`
+can register, run, stop and cancel jobs in any namespace, and spend every
+configured provider's quota. The server warns at startup when `bind` is beyond
+loopback and the `tls` block names no `ca`. With one, every route but
+`/v1/health` needs a certificate that chains to it. There is no authorization:
+a valid certificate can use every route.
+
+```hcl
+server {
+  bind       = "0.0.0.0:4747"
+  agent_bind = "0.0.0.0:4748"
+
+  tls {
+    cert = "/etc/vagabond/tls/api.pem"
+    key  = "/etc/vagabond/tls/api-key.pem"
+    ca   = "/etc/vagabond/tls/clients-ca.pem" # CLI and CI certificates
+  }
+
+  agent_tls {
+    cert = "/etc/vagabond/tls/agents.pem"
+    key  = "/etc/vagabond/tls/agents-key.pem"
+    ca   = "/etc/vagabond/tls/agents-ca.pem"  # agent certificates only
+  }
+}
+```
+
+```bash
+vagabond job status -address https://vagabond.internal:4747 \
+  -tls-ca /etc/vagabond/ca.pem -tls-cert ci.pem -tls-key ci-key.pem
+```
+
+**Issue agent certificates and API client certificates from different CAs.**
+Each listener accepts any certificate its CA signed:
+
+- The agent listener registers a node under the certificate's common name. A
+  client certificate from the agent CA could join a pool as a node named for
+  it and be sent workloads, with their environment.
+- The API accepts any certificate from its `ca`. An agent certificate from the
+  same CA could submit and dispatch jobs.
+
+Two CAs, such as two Vault PKI mounts or two intermediates, keep each kind of
+certificate to its own listener. The server does not check this.
 
 - Keep the API on localhost, or bind it to an interface only trusted hosts
-  reach: a private network, a VPN, or firewall rules.
-- `tls` encrypts the API and lets clients verify the server. It does not
-  authenticate clients. Clients use `-address https://host:4747` and verify
-  against the system trust store.
+  reach, unless the `tls` block names a `ca`.
+- Clients use `-address https://host:4747`, verify the server against `-tls-ca`
+  or the system trust store, and present `-tls-cert` and `-tls-key`; see
+  [CLI](cli.md#connecting-to-the-server).
 - The agent listener binds beyond loopback only with `agent_tls`: every agent
   presents a certificate from its CA and registers under that certificate's
   common name. See [agent](agent.md#security).
-- A reverse proxy in front of the API can add authentication. The server
-  itself does not read any identity from requests.
 
 ## Running agents
 

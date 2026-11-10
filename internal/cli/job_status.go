@@ -44,21 +44,20 @@ Usage: vagabond job status [options] [name]
 
 Status Options:
 
-  -address <addr>
-    The server to read. Defaults to $VAGABOND_ADDR, then
-    http://127.0.0.1:4747.
-
   -namespace <name>
     Defaults to $VAGABOND_NAMESPACE, then "default".
 `
 
-	return strings.TrimSpace(text)
+	return clientHelp(text)
 }
 
 // Run lists the namespace's jobs with no argument, or shows the one job it
 // names.
 func (c *JobStatusCommand) Run(args []string) int {
-	client, names := c.connect(c.FlagSet("job status"), args, optionalArg("[name]"), c.Help())
+	flags := c.FlagSet("job status")
+	c.namespaceFlag(flags)
+
+	client, names := c.connect(flags, args, optionalArg("[name]"), c.Help())
 	if client == nil {
 		return ExitFailure
 	}

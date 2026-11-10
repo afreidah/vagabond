@@ -56,7 +56,8 @@ func (s *SchedulingBlock) TierMode() job.TierMode {
 }
 
 // Where the server listens for API clients and for agents when nothing says
-// otherwise: localhost only, since the API has no authentication.
+// otherwise: localhost only, since without a CA to verify clients against the
+// API accepts anyone who can reach it.
 const (
 	DefaultBind      = "127.0.0.1:4747"
 	DefaultAgentBind = "127.0.0.1:4748"
@@ -65,24 +66,19 @@ const (
 // ServerBlock configures vagabond server. Absent means the defaults. TLS
 // covers the API; AgentTLS covers the agent listener at AgentBind.
 type ServerBlock struct {
-	Bind      *string        `hcl:"bind,optional"`
-	AgentBind *string        `hcl:"agent_bind,optional"`
-	TLS       *TLSBlock      `hcl:"tls,block"`
-	AgentTLS  *AgentTLSBlock `hcl:"agent_tls,block"`
+	Bind      *string   `hcl:"bind,optional"`
+	AgentBind *string   `hcl:"agent_bind,optional"`
+	TLS       *TLSBlock `hcl:"tls,block"`
+	AgentTLS  *TLSBlock `hcl:"agent_tls,block"`
 }
 
-// TLSBlock names the certificate and key the server presents.
+// TLSBlock is one listener's TLS: the certificate and key the server presents,
+// and the CA its clients' certificates must chain to. The API verifies clients
+// only when CA is set; the agent listener always does, so agent_tls needs one.
 type TLSBlock struct {
 	Cert string `hcl:"cert"`
 	Key  string `hcl:"key"`
-}
-
-// AgentTLSBlock is mutual TLS on the agent listener: the certificate and key
-// the server presents, and the CA every agent's certificate must chain to.
-type AgentTLSBlock struct {
-	Cert string `hcl:"cert"`
-	Key  string `hcl:"key"`
-	CA   string `hcl:"ca"`
+	CA   string `hcl:"ca,optional"`
 }
 
 // Address returns where the server listens. A nil block is the default.
@@ -334,6 +330,16 @@ func (f *File) validate() hcl.Diagnostics {
 			Detail: "The store block names no database. Set dsn to a Postgres or " +
 				"CockroachDB connection string, or run the server with -dev to keep " +
 				"everything in memory.",
+		})
+	}
+
+	if f.Server != nil && f.Server.AgentTLS != nil && f.Server.AgentTLS.CA == "" {
+		diags = append(diags, &hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Missing agent CA",
+			Detail: "The agent_tls block names no ca. An agent registers under its " +
+				"certificate's common name, so every agent certificate must be " +
+				"verified against a CA.",
 		})
 	}
 

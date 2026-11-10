@@ -16,7 +16,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 // JobRegisterCommand implements `vagabond job register`.
@@ -47,22 +46,21 @@ Usage: vagabond job register [options] <path>
 
 Register Options:
 
-  -address <addr>
-    The server to register with. Defaults to $VAGABOND_ADDR, then
-    http://127.0.0.1:4747.
-
   -namespace <name>
     The namespace to register in, for a job that names none. Defaults to
     $VAGABOND_NAMESPACE, then "default".
 `
 
-	return strings.TrimSpace(text)
+	return clientHelp(text)
 }
 
 // Run validates the job file and registers it, reporting whether it made a new
 // version.
 func (c *JobRegisterCommand) Run(args []string) int {
-	client, paths := c.connect(c.FlagSet("job register"), args, oneArg("<path>"), c.Help())
+	flags := c.FlagSet("job register")
+	c.namespaceFlag(flags)
+
+	client, paths := c.connect(flags, args, oneArg("<path>"), c.Help())
 	if client == nil {
 		return ExitFailure
 	}

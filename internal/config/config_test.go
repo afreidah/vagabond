@@ -186,6 +186,17 @@ provider "ibm" {
 			src:  `scheduling { tiers = "bogus" }`,
 			want: "Unknown tier mode",
 		},
+		"agent_tls without a ca": {
+			src: `
+server {
+  agent_tls {
+    cert = "server.pem"
+    key  = "server-key.pem"
+  }
+}
+`,
+			want: "Missing agent CA",
+		},
 	}
 
 	for name, tc := range tests {
@@ -306,6 +317,36 @@ func TestServerAddress(t *testing.T) {
 
 	if got := load(t, `server { agent_bind = "0.0.0.0:9001" }`).Server.AgentAddress(); got != "0.0.0.0:9001" {
 		t.Errorf("AgentAddress() = %q, want 0.0.0.0:9001", got)
+	}
+}
+
+// The API's tls block takes a CA or not, and agent_tls decodes to the same
+// shape.
+func TestServerTLS(t *testing.T) {
+	t.Parallel()
+
+	file := load(t, `
+server {
+  tls {
+    cert = "api.pem"
+    key  = "api-key.pem"
+  }
+
+  agent_tls {
+    cert = "agents.pem"
+    key  = "agents-key.pem"
+    ca   = "agents-ca.pem"
+  }
+}
+`)
+
+	want := &ServerBlock{
+		TLS:      &TLSBlock{Cert: "api.pem", Key: "api-key.pem"},
+		AgentTLS: &TLSBlock{Cert: "agents.pem", Key: "agents-key.pem", CA: "agents-ca.pem"},
+	}
+
+	if diff := cmp.Diff(want, file.Server); diff != "" {
+		t.Errorf("server block mismatch (-want +got):\n%s", diff)
 	}
 }
 

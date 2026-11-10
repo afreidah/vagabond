@@ -47,13 +47,9 @@ Logs Options:
   -f
     Follow the output while the execution runs. An interrupt stops following
     and leaves the execution running.
-
-  -address <addr>
-    The server to read. Defaults to $VAGABOND_ADDR, then
-    http://127.0.0.1:4747.
 `
 
-	return strings.TrimSpace(text)
+	return clientHelp(text)
 }
 
 // Run prints the execution's stored output to stdout, or follows it with -f.
