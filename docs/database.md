@@ -194,7 +194,7 @@ serves the [release loop](background-services.md#provider-release).
 | `namespace` | `''` for the provider's own pools; otherwise that namespace's share |
 | `provider`, `pool` | Labels from the configuration |
 | `period` | Calendar key: `2026-09` for monthly, `2026-09-22` for daily, UTC |
-| `used`, `amount` | Base units: executions; MiB·ms for `gb_seconds`; millicore·ms for `cpu_seconds`; ms for `seconds` |
+| `used`, `amount` | Base units: executions; MiB-ms for `gb_seconds`; millicore-ms for `cpu_seconds`; ms for `seconds` |
 | `quota_reservations.cpu`, `memory` | Declared shape, so the reaper can price a run it did not dispatch |
 | `quota_reservations.created_at` | Reservations older than 1 hour are reaped |
 
@@ -229,7 +229,7 @@ reservations could both read room.
 
 A serialization failure (SQLSTATE `40001`) is retried whole, up to 10
 attempts in all. Before retry *n* the wait is random, up to
-min(5 ms × 2ⁿ, 500 ms): up to 10 ms before the first, 500 ms from the seventh.
+min(5 ms * 2^n, 500 ms): up to 10 ms before the first, 500 ms from the seventh.
 A context cancelled during the wait ends the call with its error. After 10
 attempts the call fails with `gave up after 10 serialization failures: ...`.
 Other errors are not retried.

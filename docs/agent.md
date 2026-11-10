@@ -89,8 +89,8 @@ dimension is the smallest of:
 
 | Source | CPU | Memory |
 |---|---|---|
-| Host | CPUs available to the process × 1000 | `MemTotal` from `/proc/meminfo`, kB / 1024 |
-| cgroup chain | `cpu.max` quota × 1000 / period, tightest of the agent's cgroup and every ancestor to the root | `memory.max` bytes / 2^20, tightest of the chain |
+| Host | CPUs available to the process * 1000 | `MemTotal` from `/proc/meminfo`, kB / 1024 |
+| cgroup chain | `cpu.max` quota * 1000 / period, tightest of the agent's cgroup and every ancestor to the root | `memory.max` bytes / 2^20, tightest of the chain |
 | Flags | `-cpu` | `-memory` |
 
 - A `cpu.max` or `memory.max` of `max`, or a file that does not exist, is no
@@ -436,7 +436,7 @@ The node name is the execution's provider ID.
 A node's room is:
 
 ```text
-capacity − Σ declared size of running workloads − Σ unexpired reservations not yet reported
+capacity - sum(declared size of running workloads) - sum(unexpired reservations not yet reported)
 ```
 
 - Declared sizes, not live usage. Each workload is capped at what it declared,
@@ -526,7 +526,7 @@ One container per execution, on the node's containerd.
 | Network | Host network namespace |
 | `/etc/resolv.conf`, `/etc/hosts` | The host's |
 | Mounts | containerd's default OCI spec; no host paths or volumes from the job |
-| Image | Pulled and unpacked on every new submission for the node's platform, name normalised (`alpine` → `docker.io/library/alpine:latest`). Layers already on the node are not downloaded again, but the reference is always resolved against the registry, so an unreachable registry fails the submission even for a cached image. No registry credentials are passed. Images are never removed; delete them with `ctr -n vagabond images rm <ref>`. |
+| Image | Pulled and unpacked on every new submission for the node's platform, name normalised (`alpine` -> `docker.io/library/alpine:latest`). Layers already on the node are not downloaded again, but the reference is always resolved against the registry, so an unreachable registry fails the submission even for a cached image. No registry credentials are passed. Images are never removed; delete them with `ctr -n vagabond images rm <ref>`. |
 | Snapshotter | containerd's default, `overlayfs`, unless the `vagabond` namespace carries a `containerd.io/defaults/snapshotter` label |
 | User | The image's |
 
@@ -544,7 +544,7 @@ One container per execution, on the node's containerd.
   name. See [`env` block](job-specification.md#env-block).
 - **Working directory:** the task's `working_directory`, else the image's.
 - **Limits:** `memory` MiB becomes the container's memory limit; `cpu`
-  millicores becomes a CFS quota of `cpu × 100` µs per 100000 µs period.
+  millicores becomes a CFS quota of `cpu * 100` us per 100000 us period.
 
 ### Labels
 

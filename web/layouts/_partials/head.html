@@ -17,7 +17,7 @@
     {{- if .IsHome -}}
       {{ site.Params.homeTitle | default .Site.Title -}}
     {{ else -}}
-      {{ with .Params.seoTitle | default .Title }}{{ . }} – {{ end -}}
+      {{ with .Params.seoTitle | default .Title }}{{ . }} - {{ end -}}
       {{ .Site.Title -}}
     {{ end -}}
   </title>

@@ -1,6 +1,6 @@
 ---
 title: "Vagabond"
-description: "Run serverless jobs on Cloud Run, Lambda and your own nodes from one Nomad-style job file, with explained placement and enforced quotas."
+description: "Compute broker for short-lived, stateless jobs on Cloud Run Jobs, AWS Lambda and agent nodes, with quota admission and per-run usage tracking."
 layout: hextra-home
 ---
 
@@ -11,18 +11,18 @@ layout: hextra-home
 
 <div class="hx:mt-8 hx:mb-6">
 {{< hextra/hero-headline >}}
-  Serverless jobs across public clouds&nbsp;<br class="hx:sm:block hx:hidden" />and your own infrastructure
+  Compute broker for short-lived,<br class="hx:sm:block hx:hidden" /> stateless jobs
 {{< /hextra/hero-headline >}}
 </div>
 
 <div class="hx:mb-10">
 {{< hextra/hero-subtitle style="margin: 0 auto;" >}}
-  Describe a job once in HCL. Vagabond decides which backend can run it, from Cloud Run and Lambda&nbsp;<br class="hx:sm:block hx:hidden" />to machines you run yourself, runs it there, tracks what it used, and tells you why it chose that backend.
+  Jobs are written in Nomad-style HCL and run on Cloud Run Jobs, AWS Lambda or agent nodes.<br class="hx:sm:block hx:hidden" /> Backends are checked against each job's constraints, resources, cost limit and quota, and usage is recorded per run.
 {{< /hextra/hero-subtitle >}}
 </div>
 
 <div class="hx:mb-10 vb-homage">
-  An homage to <a href="https://www.nomadproject.io/" target="_blank" rel="noopener">HashiCorp Nomad</a>, built to feel familiar to Nomad users.
+  An homage to <a href="https://www.nomadproject.io/" target="_blank" rel="noopener">HashiCorp Nomad</a>. The CLI, job format and server/agent layout follow Nomad; Nomad is not required.
 </div>
 
 <div class="hx:flex hx:flex-wrap hx:gap-3 hx:justify-center hx:mb-6">
@@ -48,7 +48,7 @@ Jobs, tasks, constraints, resources and parameters in Nomad-style HCL. Files
 are validated with line-and-column diagnostics before they are sent.
 Registered jobs are versioned on change and dispatched by name.
 
-<a class="vb-more" href="docs/job-specification/">Job specification →</a>
+<a class="vb-more" href="docs/job-specification/">Job specification</a>
 
 </div>
 <div class="vb-example">
@@ -90,7 +90,7 @@ job "go-test" {
 backends can run a task. `job plan` lists each backend with its score, or the
 check that rejected it and why. Planning reserves and runs nothing.
 
-<a class="vb-more" href="docs/scheduling/#admission">Admission →</a>
+<a class="vb-more" href="docs/scheduling/#admission">Admission</a>
 
 </div>
 <div class="vb-example">
@@ -117,7 +117,7 @@ daily or monthly, with optional shares per namespace. A backend the task would
 push past a limit is rejected. `max_cost_usd` defaults to 0, so a job runs
 only on free capacity unless it sets a budget.
 
-<a class="vb-more" href="docs/quotas/">Quotas →</a>
+<a class="vb-more" href="docs/quotas/">Quotas</a>
 
 </div>
 <div class="vb-example">
@@ -154,7 +154,7 @@ containerd, limited to the agent's CPU and memory, and are placed on the node
 with the most free memory. Beyond loopback, agents connect over mutual TLS and
 register under their certificate's name.
 
-<a class="vb-more" href="docs/agent/">Agent →</a>
+<a class="vb-more" href="docs/agent/">Agent</a>
 
 </div>
 <div class="vb-example">

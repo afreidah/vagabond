@@ -1,8 +1,5 @@
 # Contributing to Vagabond
 
-Thanks for your interest in contributing. This document covers everything you
-need to get started.
-
 ## Prerequisites
 
 - **Go 1.27+** (version pinned in `go.mod`, resolved automatically through
@@ -28,9 +25,8 @@ make help
 make check
 ```
 
-`make check` is formatting, vet, lint, tests, and a vulnerability scan. If it
-passes locally it passes in CI, because CI runs the same targets with the same
-pinned tool versions.
+`make check` is formatting, vet, lint, tests, and a vulnerability scan. CI runs
+the same targets with the same pinned tool versions.
 
 ## Testing
 
@@ -71,11 +67,9 @@ Docker must be running, but nothing needs starting by hand.
 make govulncheck
 ```
 
-`govulncheck` is declared as a tool directive in `go.mod`, so its version is
-pinned by the module graph rather than by whatever a developer happens to have
-installed. The analysis is call-graph based: a vulnerable dependency is only
-reported when a path to the affected symbol actually exists, so a finding is
-always actionable.
+`govulncheck` is declared as a tool directive in `go.mod`, so the module graph
+pins its version. The analysis is call-graph based: a vulnerable dependency is
+reported only when a path to the affected symbol exists.
 
 ## Code Style
 
@@ -91,20 +85,18 @@ points:
 
 ## Architectural Boundaries
 
-Three rules carry the whole design, and `depguard` enforces all three
-mechanically. Breaking one is a lint failure, not a review comment:
+`depguard` enforces three import rules; breaking one fails lint:
 
-- **The scheduler does not know what a cloud is.** `internal/scheduler`,
+- **The scheduler does not import provider code.** `internal/scheduler`,
   `internal/job`, and `internal/quota` cannot import `internal/providers/`.
 - **Cloud SDKs live only in `internal/providers/`.** An SDK import elsewhere
   means a provider-specific type escaped the plugin boundary.
 - **Database access lives only in `internal/state/`.** Everything else takes a
   narrow interface.
 
-A fourth rule is not mechanically enforceable but matters as much: **admission
-performs no I/O.** Shared admission rules are a pure function over a capability
-snapshot and a quota snapshot, so that `vagabond job plan` is fast and
-side-effect-free by construction.
+A fourth rule is not enforced by a linter: **admission performs no I/O.**
+Shared admission rules are a pure function over a capability snapshot and a
+quota snapshot, so `vagabond job plan` calls no provider and reserves nothing.
 
 ## Version Control
 
@@ -155,7 +147,6 @@ topic.
 
 ## Pull Requests
 
-The PR template includes a boundaries checklist. It duplicates what `depguard`
-already enforces, deliberately: the checklist is there so that a reviewer
-thinks about whether a *new* boundary should have been added, which no linter
-can catch.
+The PR template includes a boundaries checklist. It repeats the `depguard` rules
+and asks the reviewer whether the change needs a new boundary, which `depguard`
+cannot check.

@@ -127,8 +127,9 @@ reason a reader sees.
 - **Capacity last.** A provider that cannot run the task at all reports why,
   not its remaining allowance.
 
-`attribute` runs before `constraint` because an attribute that does not exist
-cannot fail to match.
+`attribute` runs before `constraint`, so a constraint naming an attribute
+Vagabond does not publish is rejected as `attribute-unknown`, not
+`constraint-unmet`.
 
 ### Transient reasons
 
@@ -218,7 +219,7 @@ mean of the scorers that apply.
 |---|---|---|
 | `headroom` | Always | `clamp(free_quota_percent / 100)` |
 | `affinity` | Job declares at least one `affinity` | `matched weight / total weight` |
-| `tier` | Tier mode is `weighted` | `(highest tier − tier) / (highest tier − lowest tier)`, over the candidates |
+| `tier` | Tier mode is `weighted` | `(highest tier - tier) / (highest tier - lowest tier)`, over the candidates |
 
 ```
 score = mean(headroom, affinity, tier)   # affinity only when declared, tier only when weighted
@@ -228,9 +229,8 @@ score = mean(headroom, affinity, tier)   # affinity only when declared, tier onl
 remaining percentage among the pools the task charges, across the provider's
 pools and the namespace's share, floored to an integer. A provider with no
 pools, or none the task charges, scores 1.00. The value is clamped to `[0, 1]`.
-It prefers the provider with the most allowance left, which spends the
-allowance of widely eligible providers first and keeps the others for work
-that can run nowhere else. See [Quotas](quotas.md#headroom).
+It prefers the provider with the most allowance left. See
+[Quotas](quotas.md#headroom).
 
 **`affinity`** divides the summed weight of satisfied affinities by the summed
 weight of all affinities. `weight` defaults to 50 and must be positive. An
@@ -313,7 +313,7 @@ rank the same.
   admission already ordered candidates by provider name, so ties rank by name.
 - The selected provider is the first in the ranking. With no candidates,
   nothing is selected.
-- The printed score is `round(score × 100)`.
+- The printed score is `round(score * 100)`.
 - The estimated cost is the selected provider's `estimated_cost`, which is 0
   for every provider and prints as `free`.
 

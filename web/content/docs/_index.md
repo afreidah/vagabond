@@ -5,9 +5,11 @@ seoTitle: "Documentation Overview"
 description: "Vagabond documentation: job files, scheduling, quotas, dispatch, configuration, deployment, agents and provider plugins."
 ---
 
-Vagabond runs short-lived, stateless jobs on public cloud backends and on your
-own nodes. A job is described once in HCL; Vagabond decides which backend can
-run it and which one should, runs it there, and records what it used.
+Vagabond is a compute broker for short-lived, stateless jobs on Cloud Run Jobs,
+AWS Lambda and agent nodes. Jobs are written in Nomad-style HCL. For each task,
+the server rejects backends that fail the job's constraints, resources, cost
+limit or remaining quota, scores the rest, runs the task on the selected
+backend, and records what it used.
 
 | Section | Page | Covers |
 |---|---|---|
