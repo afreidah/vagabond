@@ -232,11 +232,13 @@ type ProviderListStub struct {
 	Pools   []ProviderPool
 }
 
-// ProviderPool is one budget, with Used and Limit in the unit its meter is
-// written in. They are for display; the ledger's counters stay whole numbers.
+// ProviderPool is one budget, with Used and Limit in Unit, the unit its meter
+// is written in. They are for display; the ledger's counters stay whole
+// numbers.
 type ProviderPool struct {
 	Name        string
 	Meter       string
+	Unit        string
 	Period      string
 	Used        float64
 	Limit       float64

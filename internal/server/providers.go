@@ -55,6 +55,7 @@ func providerStub(in *scheduler.Input) api.ProviderListStub {
 		out.Pools = append(out.Pools, api.ProviderPool{
 			Name:        p.Name,
 			Meter:       string(p.Meter),
+			Unit:        p.Meter.Unit(),
 			Period:      string(p.Period),
 			Used:        p.Meter.Natural(used),
 			Limit:       p.Meter.Natural(p.Limit),
