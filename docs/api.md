@@ -794,6 +794,7 @@ Response, `ProviderList`:
         {
           "Name": "cpu",
           "Meter": "cpu_seconds",
+          "Unit": "vCPU-seconds",
           "Period": "monthly",
           "Used": 1179.5,
           "Limit": 192000,
@@ -822,6 +823,7 @@ Response, `ProviderList`:
 | `Providers[].Pools` | Its quota pools; `[]` when it declares none |
 | `Pools[].Name` | Pool name |
 | `Pools[].Meter` | What the pool counts: `executions`, `gb_seconds`, `cpu_seconds` or `seconds` |
+| `Pools[].Unit` | The unit `Used` and `Limit` are in: `executions`, `GB-seconds`, `vCPU-seconds` or `seconds` |
 | `Pools[].Period` | When it resets: `daily` or `monthly` |
 | `Pools[].Used` | Charged this period, in the meter's unit |
 | `Pools[].Limit` | The pool's limit, in the meter's unit |

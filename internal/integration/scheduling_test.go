@@ -100,7 +100,7 @@ func TestPlan_RanksByHeadroom(t *testing.T) {
 }
 
 // Usage already in the store reaches the API in the pool's own unit, and the
-// CLI's table shows it.
+// CLI shows it: the share left in the list, the figures in the detail view.
 func TestProviderStatus_ShowsStoredUsage(t *testing.T) {
 	h := newHarness(t, twoProviders)
 	h.spend("a", "runtime", 900*second, 1000*second)
@@ -121,8 +121,13 @@ func TestProviderStatus_ShowsStoredUsage(t *testing.T) {
 	}
 
 	code, stdout, stderr := run("provider", "status")
-	if code != cli.ExitSuccess || !strings.Contains(stdout, "900") || !strings.Contains(stdout, "10%") {
+	if code != cli.ExitSuccess || !strings.Contains(stdout, "runtime 10%") {
 		t.Errorf("provider status: exit %d\n%s%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = run("provider", "status", "a")
+	if code != cli.ExitSuccess || !strings.Contains(stdout, "900") || !strings.Contains(stdout, "1,000") {
+		t.Errorf("provider status a: exit %d\n%s%s", code, stdout, stderr)
 	}
 }
 

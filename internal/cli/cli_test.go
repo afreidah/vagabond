@@ -159,7 +159,7 @@ func TestClientCommands_WrongArgumentsExplainThemselves(t *testing.T) {
 		{args: []string{"execution", "status"}, want: "one argument: <id>"},
 		{args: []string{"execution", "logs"}, want: "one argument: <id>"},
 		{args: []string{"node", "status", "extra"}, want: "no arguments."},
-		{args: []string{"provider", "status", "extra"}, want: "no arguments."},
+		{args: []string{"provider", "status", "one", "two"}, want: "at most one argument: [name]"},
 	}
 
 	for _, tt := range tests {

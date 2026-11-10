@@ -79,8 +79,8 @@ func TestProviderStub_ConvertsToNaturalUnits(t *testing.T) {
 	}
 
 	want := []api.ProviderPool{
-		{Name: "cpu", Meter: "cpu_seconds", Period: "monthly", Used: 250, Limit: 1000, FreePercent: 75},
-		{Name: "memory", Meter: "gb_seconds", Period: "daily", Used: 500, Limit: 2000, FreePercent: 75},
+		{Name: "cpu", Meter: "cpu_seconds", Unit: "vCPU-seconds", Period: "monthly", Used: 250, Limit: 1000, FreePercent: 75},
+		{Name: "memory", Meter: "gb_seconds", Unit: "GB-seconds", Period: "daily", Used: 500, Limit: 2000, FreePercent: 75},
 	}
 
 	if len(got.Pools) != len(want) {

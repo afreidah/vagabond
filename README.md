@@ -131,7 +131,7 @@ See [quickstart.md](docs/quickstart.md). `make install` puts the binary on your
 | `job status [name]` | Registered jobs, or one job's versions and recent executions |
 | `job stop <name>` | Stop a registered job from being dispatched |
 | `node status` | Connected agent nodes |
-| `provider status` | Configured providers and their quota usage |
+| `provider status [name]` | Configured providers and their quota left; one provider's pools in full |
 | `agent` | Run the agent on a node that executes workloads ([agent.md](docs/agent.md)) |
 | `execution status <id>` | One execution's record and result |
 | `execution logs <id>` | One execution's stored output, or with `-f` its live output |

@@ -42,7 +42,7 @@ Available commands are:
 | [`execution status`](#execution-status) | Show one execution | yes |
 | [`execution logs`](#execution-logs) | Print an execution's output | yes |
 | [`node status`](#node-status) | List the connected agent nodes | yes |
-| [`provider status`](#provider-status) | List the providers and what each has used | yes |
+| [`provider status`](#provider-status) | List the providers and what each has left | yes |
 | [`server`](#server) | Run the Vagabond server | runs one |
 | [`agent`](#agent) | Run the agent that executes workloads on this node | dials one |
 
@@ -702,18 +702,18 @@ No agent nodes are connected.
 ### `provider status`
 
 ```text
-vagabond provider status [options]
+vagabond provider status [options] [name]
 ```
 
-Lists the providers the server is configured with, whether each can take work,
-and how much of each [quota pool](quotas.md) it has used this period. Takes no
-arguments.
+Lists the providers the server is configured with, one row each: whether each
+can take work, and the share of each [quota pool](quotas.md) it has left this
+period. Given a provider's name, shows its pools in full.
 
 Figures are provider totals across every namespace. No provider is contacted:
 usage comes from the server's last [snapshot](quotas.md#usage-snapshot), whose
-time is printed under the table.
+time and age are printed under the output.
 
-`USED` counts settled charges plus what running jobs have reserved, at their
+Usage counts settled charges plus what running jobs have reserved, at their
 declared resources for their full timeout. It falls when those jobs settle at
 what they actually took.
 
@@ -721,35 +721,58 @@ what they actually took.
 |---|---|---|
 | `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server |
 
+**List.** One row per provider, by tier and then name, which is the order work
+goes to them.
+
 | Column | Description |
 |---|---|
-| `NAME` | Provider label |
+| `PROVIDER` | Provider label |
 | `TIER` | Operator's preference, lower first |
-| `ENABLED` | Whether configuration enables it |
-| `HEALTHY` | Whether its last health check passed |
-| `POOL` | Pool name; further pools take their own row with the provider columns blank |
-| `METER` | What the pool counts |
-| `USED` | Charged this period, in the meter's unit, to one decimal place |
-| `LIMIT` | The pool's limit, in the meter's unit |
-| `FREE` | Whole percent left, rounded down; `0%` when `USED` passes `LIMIT` |
-| `PERIOD` | When the pool resets: `daily` or `monthly` |
-
-A provider with no pools shows `-` in every pool column.
+| `STATUS` | `healthy`; `unhealthy` when its last health check failed; `disabled` when configuration turns it off |
+| `QUOTA LEFT` | Each pool's name and whole percent left, rounded down and `0%` once a pool is spent; `no quota` for a provider with no pools |
 
 ```shell
 $ vagabond provider status
-NAME           TIER  ENABLED  HEALTHY  POOL    METER        USED    LIMIT   FREE  PERIOD
-gcp-cloud-run  0     true     true     cpu     cpu_seconds  1179.5  192000  99%   monthly
-                                       memory  gb_seconds   2358    360000  99%   monthly
-homelab        1     true     true     -       -            -       -       -     -
+PROVIDER         TIER  STATUS   QUOTA LEFT
+gcp-cloud-run    0     healthy  cpu 95%, memory 94%
+ibm-code-engine  0     healthy  cpu 100%, memory 100%
+homelab          1     healthy  no quota
 
-Usage refreshed 2026-11-05 14:02:11Z
+Usage as of 2026-11-10 09:43:17Z (4s ago).
 ```
+
+**One provider.** Its fields, then one row per pool.
+
+| Column | Description |
+|---|---|
+| `POOL` | Pool name |
+| `USED` | Charged this period, rounded to a whole number |
+| `LIMIT` | The pool's limit |
+| `UNIT` | The unit both figures are in: `executions`, `GB-seconds`, `vCPU-seconds` or `seconds` |
+| `LEFT` | Whole percent left, as in the list |
+| `PERIOD` | When the pool resets: `daily` or `monthly` |
+
+```shell
+$ vagabond provider status gcp-cloud-run
+Name   = gcp-cloud-run
+Tier   = 0
+Status = healthy
+
+POOL    USED    LIMIT    UNIT          LEFT  PERIOD
+cpu     9,431   192,000  vCPU-seconds  95%   monthly
+memory  18,843  360,000  GB-seconds    94%   monthly
+
+Usage as of 2026-11-10 09:43:17Z (4s ago).
+```
+
+A provider with no pools prints `No quota pools.` under its fields. A name no
+provider has fails with `Error: no provider is named "<name>". Configured: ...`,
+listing the configured names.
 
 | Exit | Meaning |
 |---|---|
 | `0` | Printed |
-| `1` | Server error, or arguments given |
+| `1` | Server error, a name no provider has, or more than one argument |
 
 ## `server`
 
