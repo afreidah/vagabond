@@ -12,20 +12,9 @@
 package server
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"log/slog"
-	"math/big"
-	"net"
-	"os"
-	"path/filepath"
 	"testing"
-	"time"
 
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc/codes"
@@ -33,110 +22,9 @@ import (
 
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/state/memory"
+	"github.com/afreidah/vagabond/internal/tlsconfig"
+	"github.com/afreidah/vagabond/internal/tlsconfig/tlstest"
 )
-
-// -------------------------------------------------------------------------
-// CERTIFICATES
-// -------------------------------------------------------------------------
-
-// testCA is a certificate authority written to a temporary directory.
-type testCA struct {
-	cert   *x509.Certificate
-	key    *ecdsa.PrivateKey
-	caFile string
-	dir    string
-}
-
-// newTestCA mints a CA and writes its certificate to disk.
-func newTestCA(t *testing.T) *testCA {
-	t.Helper()
-
-	key := newKey(t)
-	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "vagabond test CA"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatalf("CreateCertificate(CA) = %v", err)
-	}
-
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatalf("ParseCertificate(CA) = %v", err)
-	}
-
-	dir := t.TempDir()
-	caFile := filepath.Join(dir, "ca.pem")
-	writePEM(t, caFile, "CERTIFICATE", der)
-
-	return &testCA{cert: cert, key: key, caFile: caFile, dir: dir}
-}
-
-// issue signs a certificate for commonName, for a server on 127.0.0.1 or for
-// an agent, and returns its certificate and key files.
-func (ca *testCA) issue(t *testing.T, commonName string, server bool) (certFile, keyFile string) {
-	t.Helper()
-
-	key := newKey(t)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()),
-		Subject:      pkix.Name{CommonName: commonName},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}
-
-	if server {
-		template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
-		template.IPAddresses = []net.IP{net.ParseIP("127.0.0.1")}
-	}
-
-	der, err := x509.CreateCertificate(rand.Reader, template, ca.cert, &key.PublicKey, ca.key)
-	if err != nil {
-		t.Fatalf("CreateCertificate(%s) = %v", commonName, err)
-	}
-
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		t.Fatalf("MarshalECPrivateKey() = %v", err)
-	}
-
-	certFile = filepath.Join(ca.dir, commonName+".pem")
-	keyFile = filepath.Join(ca.dir, commonName+"-key.pem")
-	writePEM(t, certFile, "CERTIFICATE", der)
-	writePEM(t, keyFile, "EC PRIVATE KEY", keyDER)
-
-	return certFile, keyFile
-}
-
-// newKey generates a P-256 key.
-func newKey(t *testing.T) *ecdsa.PrivateKey {
-	t.Helper()
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("GenerateKey() = %v", err)
-	}
-
-	return key
-}
-
-// writePEM writes one PEM block to path.
-func writePEM(t *testing.T, path, blockType string, der []byte) {
-	t.Helper()
-
-	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: blockType, Bytes: der}), 0o600); err != nil {
-		t.Fatalf("writing %s: %v", path, err)
-	}
-}
 
 // -------------------------------------------------------------------------
 // HARNESS
@@ -145,7 +33,7 @@ func writePEM(t *testing.T, path, blockType string, der []byte) {
 // tlsHarness is a server accepting agents over mutual TLS, trusting ca.
 type tlsHarness struct {
 	*agentHarness
-	ca *testCA
+	ca *tlstest.CA
 }
 
 // newTLSHarness starts a server whose agent listener requires certificates
@@ -153,12 +41,12 @@ type tlsHarness struct {
 func newTLSHarness(t *testing.T) *tlsHarness {
 	t.Helper()
 
-	ca := newTestCA(t)
-	certFile, keyFile := ca.issue(t, "server", true)
+	ca := tlstest.NewCA(t)
+	certFile, keyFile := ca.Server(t)
 
-	serverTLS, err := agentrpc.ServerTLS(certFile, keyFile, ca.caFile)
+	serverTLS, err := tlsconfig.Server(certFile, keyFile, ca.File, tls.RequireAndVerifyClientCert)
 	if err != nil {
-		t.Fatalf("ServerTLS() = %v", err)
+		t.Fatalf("Server() = %v", err)
 	}
 
 	reg, led := fixtures(t)
@@ -168,14 +56,14 @@ func newTLSHarness(t *testing.T) *tlsHarness {
 }
 
 // clientTLS is an agent's TLS with a certificate for commonName from ca.
-func (h *tlsHarness) clientTLS(t *testing.T, ca *testCA, commonName string) *tls.Config {
+func (h *tlsHarness) clientTLS(t *testing.T, ca *tlstest.CA, commonName string) *tls.Config {
 	t.Helper()
 
-	certFile, keyFile := ca.issue(t, commonName, false)
+	certFile, keyFile := ca.Client(t, commonName)
 
-	cfg, err := agentrpc.ClientTLS(certFile, keyFile, h.ca.caFile, "127.0.0.1")
+	cfg, err := tlsconfig.Client(h.ca.File, certFile, keyFile, "127.0.0.1")
 	if err != nil {
-		t.Fatalf("ClientTLS() = %v", err)
+		t.Fatalf("Client() = %v", err)
 	}
 
 	return cfg
@@ -225,8 +113,8 @@ func TestAgentTLS_RefusesUntrustedAgents(t *testing.T) {
 
 	tests := map[string]*tls.Config{
 		"no TLS":            nil,
-		"no certificate":    {RootCAs: h.clientTLS(t, h.ca, "unused").RootCAs, ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12},
-		"another CA's cert": h.clientTLS(t, newTestCA(t), "box1"),
+		"no certificate":    {RootCAs: h.clientTLS(t, h.ca, "unused").RootCAs, ServerName: "127.0.0.1", MinVersion: tls.VersionTLS13},
+		"another CA's cert": h.clientTLS(t, tlstest.NewCA(t), "box1"),
 	}
 
 	for name, cfg := range tests {

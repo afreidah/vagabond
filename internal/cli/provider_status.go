@@ -54,15 +54,9 @@ Usage: vagabond provider status [options] [name]
 
   These are provider totals across every namespace. No provider is contacted:
   usage comes from the server's last snapshot, whose age is shown.
-
-Status Options:
-
-  -address <addr>
-    The server to read. Defaults to $VAGABOND_ADDR, then
-    http://127.0.0.1:4747.
 `
 
-	return strings.TrimSpace(text)
+	return clientHelp(text)
 }
 
 // Run lists the configured providers, or shows the one named. A server always

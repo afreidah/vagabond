@@ -484,6 +484,7 @@ server {
   tls {                         # the API
     cert = "/etc/vagabond/tls/server.crt"
     key  = "/etc/vagabond/tls/server.key"
+    ca   = "/etc/vagabond/tls/clients-ca.pem"
   }
 
   agent_tls {                   # the agent listener, mutual TLS
@@ -498,8 +499,14 @@ server {
 |---|---|---|---|---|
 | `bind` | string | no | `127.0.0.1:4747` | `host:port` for the HTTP API |
 | `agent_bind` | string | no | `127.0.0.1:4748` | `host:port` [agents](agent.md) dial |
-| `tls` | block | no | plain HTTP | Certificate for the API |
+| `tls` | block | no | plain HTTP | Certificate for the API, and the CA client certificates must chain to |
 | `agent_tls` | block | when `agent_bind` is not loopback | plain TCP | Mutual TLS for agents |
+
+Both blocks take the same attributes. A `ca` is a PEM file of one or more CA
+certificates, or a directory of them. Both listeners require TLS 1.3. Use a
+different CA for each: the agent listener registers a node under any
+certificate its CA signed, and the API accepts any certificate its CA signed.
+See [Deployment](deployment.md#network-exposure).
 
 ### `tls` block
 
@@ -507,14 +514,20 @@ server {
 |---|---|---|---|
 | `cert` | string | yes | PEM certificate (chain) path |
 | `key` | string | yes | PEM private key path |
+| `ca` | string | no | CA file or directory API client certificates must chain to |
 
-- Loaded at startup; a bad pair fails with `loading the server certificate:
-  ...`. Minimum TLS 1.2.
+- Loaded at startup; a bad pair fails with `loading the certificate <cert>:
+  ...`, an unreadable `ca` with `loading the CA from <path>: ...`.
 - Covers the API listener only; `agent_tls` covers agents.
-- The API has no authentication. Anyone who can reach `bind` can register,
-  run and cancel jobs. See [Deployment](deployment.md#network-exposure).
-- Clients reach a TLS server with `-address https://host:4747`; the certificate
-  is verified against the system trust store.
+- With `ca`, every route but `/v1/health` needs a client certificate that
+  chains to it: no certificate is a 401, one from another CA fails the
+  handshake. See [API: TLS](api.md#tls).
+- Without `ca` the API has no authentication. Anyone who can reach `bind` can
+  register, run and cancel jobs, and the server warns at startup when `bind`
+  is not loopback.
+- Clients reach a TLS server with `-address https://host:4747`, verifying it
+  against `-tls-ca` or the system trust store, and present `-tls-cert` and
+  `-tls-key`. See [CLI](cli.md#connecting-to-the-server).
 
 ### `agent_tls` block
 
@@ -525,7 +538,7 @@ must present a certificate `ca` signed.
 |---|---|---|---|
 | `cert` | string | yes | PEM certificate (chain) the server presents to agents |
 | `key` | string | yes | Its PEM private key |
-| `ca` | string | yes | PEM file of the CA certificates agent certificates must chain to |
+| `ca` | string | yes | CA file or directory agent certificates must chain to. Without it: `Missing agent CA` |
 
 - Required when `agent_bind` is not a loopback address. Without it the server
   refuses to start: `agent_bind <addr> is reachable beyond this machine: add an
@@ -538,9 +551,8 @@ must present a certificate `ca` signed.
   replaced by an agent holding its certificate.
 - The server certificate must carry the name agents dial as a SAN (an IP
   address or DNS name), or agents set `-tls-server-name`.
-- Loaded at startup; minimum TLS 1.2. A handshake not finished within 10
-  seconds is dropped. Generating the certificates:
-  [agent](agent.md#certificates).
+- Loaded at startup. A handshake not finished within 10 seconds is dropped.
+  Generating the certificates: [agent](agent.md#certificates).
 
 ## `store` block
 
@@ -647,10 +659,13 @@ Other startup errors:
 | `listening on <addr>: ...` | `bind` in use or not bindable |
 | `Invalid -log-level "x": use debug, info, warn or error.` | Bad `-log-level` |
 | `Cannot read configuration` | A discovered path that cannot be read |
-| `loading the server certificate: ...` | `tls` pair unreadable or mismatched |
-| `loading the agent listener's certificate: ...` | `agent_tls` pair unreadable or mismatched |
-| `loading the CA from <path>: ...` | `agent_tls` `ca` unreadable |
+| `loading the certificate <cert>: ...` | `tls` or `agent_tls` pair unreadable or mismatched |
+| `loading the CA from <path>: ...` | `tls` or `agent_tls` `ca` missing, or holding no PEM certificate |
 | `agent_bind <addr> is reachable beyond this machine: ...` | Non-loopback `agent_bind` without `agent_tls` |
+
+A non-loopback `bind` without a `tls` `ca` starts, with the warning `The API on
+<addr> is reachable beyond this machine and accepts any client. Name a ca in
+the server block's tls block so clients must present a certificate.`
 
 Certificates load after the store is opened and migrated.
 
@@ -666,6 +681,7 @@ server {
   tls {
     cert = "/etc/vagabond/tls/server.crt"
     key  = "/etc/vagabond/tls/server.key"
+    ca   = "/etc/vagabond/tls/clients-ca.pem"
   }
 
   agent_tls {

@@ -101,9 +101,9 @@ Agent Options:
     container it must be the same path inside and out.
 
   -tls-ca <path>, -tls-cert <path>, -tls-key <path>
-    Mutual TLS with a server that has agent_tls: the CA the server's
-    certificate chains to, and this agent's certificate and key. All three or
-    none.
+    Mutual TLS with a server that has agent_tls: the CA file or directory the
+    server's certificate chains to, and this agent's certificate and key. All
+    three or none.
 
   -tls-server-name <name>
     The name the server's certificate must carry. Defaults to the host part of
@@ -127,7 +127,7 @@ func (c *AgentCommand) Run(args []string) int {
 		server, pool, name, socket, dataDir, cgroupParent, logLevel string
 		labels                                                      metaFlags
 		caps                                                        fingerprint.Caps
-		certs                                                       agentCerts
+		certs                                                       tlsFlags
 	)
 
 	host, _ := os.Hostname()
@@ -143,16 +143,13 @@ func (c *AgentCommand) Run(args []string) int {
 	flags.StringVar(&dataDir, "data-dir", defaultDataDir, "where workload output is kept")
 	flags.StringVar(&cgroupParent, "cgroup-parent", "", "a cgroup to create workloads under")
 	flags.StringVar(&logLevel, "log-level", "info", "debug, info, warn or error")
-	flags.StringVar(&certs.ca, "tls-ca", "", "the CA the server's certificate chains to")
-	flags.StringVar(&certs.cert, "tls-cert", "", "this agent's certificate")
-	flags.StringVar(&certs.key, "tls-key", "", "this agent's key")
-	flags.StringVar(&certs.serverName, "tls-server-name", "", "the name the server's certificate carries")
+	certs.register(flags, tlsFlags{})
 
 	if err := flags.Parse(args); err != nil {
 		return ExitFailure
 	}
 
-	tlsConfig, name, err := certs.identify(server, name, flagSet(flags, "name"))
+	tlsConfig, name, err := identify(&certs, server, name, flagSet(flags, "name"))
 	if err != nil {
 		return c.Errorf("%s", err)
 	}
@@ -212,15 +209,10 @@ func (c *AgentCommand) Run(args []string) int {
 // TLS
 // -------------------------------------------------------------------------
 
-// agentCerts is what the -tls flags name.
-type agentCerts struct {
-	ca, cert, key, serverName string
-}
-
 // identify builds the agent's TLS and settles the node's name: with TLS it is
 // the certificate's common name, which a given -name must match.
-func (a *agentCerts) identify(server, name string, nameGiven bool) (*tls.Config, string, error) {
-	tlsConfig, err := a.config(server)
+func identify(certs *tlsFlags, server, name string, nameGiven bool) (*tls.Config, string, error) {
+	tlsConfig, err := agentTLS(certs, server)
 	if err != nil || tlsConfig == nil {
 		return tlsConfig, name, err
 	}
@@ -237,41 +229,31 @@ func (a *agentCerts) identify(server, name string, nameGiven bool) (*tls.Config,
 	return tlsConfig, identity, nil
 }
 
-// config builds the agent's TLS for dialing server, or nil when no -tls flag
-// is set. The CA, certificate and key come together or not at all.
-func (a *agentCerts) config(server string) (*tls.Config, error) {
-	set := 0
-
-	for _, path := range []string{a.ca, a.cert, a.key} {
-		if path != "" {
-			set++
-		}
-	}
-
-	switch set {
-	case 0:
-		if a.serverName != "" {
-			return nil, errors.New("-tls-server-name needs -tls-ca, -tls-cert and -tls-key")
-		}
-
+// agentTLS builds the agent's TLS for dialing server, or nil when no -tls flag
+// is set. The CA, certificate and key come together or not at all, since the
+// agent listener always verifies agents.
+func agentTLS(certs *tlsFlags, server string) (*tls.Config, error) {
+	switch {
+	case !certs.set():
 		return nil, nil
-	case 3:
-	default:
+	case certs.ca == "" && certs.cert == "" && certs.key == "":
+		return nil, errors.New("-tls-server-name needs -tls-ca, -tls-cert and -tls-key")
+	case certs.ca == "" || certs.cert == "" || certs.key == "":
 		return nil, errors.New("-tls-ca, -tls-cert and -tls-key go together: set all three or none")
 	}
 
-	// The server's certificate must carry the dialled host by default
-	serverName := a.serverName
-	if serverName == "" {
-		host, _, err := net.SplitHostPort(server)
-		if err != nil {
+	// The server's certificate must carry the dialled host by default, since
+	// the session dials TCP and handshakes itself
+	host := certs.serverName
+	if host == "" {
+		var err error
+
+		if host, _, err = net.SplitHostPort(server); err != nil {
 			return nil, err
 		}
-
-		serverName = host
 	}
 
-	return agentrpc.ClientTLS(a.cert, a.key, a.ca, serverName)
+	return certs.config(host)
 }
 
 // flagSet reports whether name was given on the command line, as opposed to

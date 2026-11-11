@@ -15,7 +15,6 @@ import (
 	"context"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 )
 
@@ -46,10 +45,6 @@ Usage: vagabond job dispatch [options] <name>
 
 Dispatch Options:
 
-  -address <addr>
-    The server to dispatch on. Defaults to $VAGABOND_ADDR, then
-    http://127.0.0.1:4747.
-
   -meta <key>=<value>
     Supply job metadata, repeatable.
 
@@ -61,7 +56,7 @@ Dispatch Options:
     Do not print the task's output. The exit status is still reported.
 `
 
-	return strings.TrimSpace(text)
+	return clientHelp(text)
 }
 
 // Run dispatches the named job's current version and follows the run to its
@@ -75,6 +70,7 @@ func (c *JobDispatchCommand) Run(args []string) int {
 	flags := c.FlagSet("job dispatch")
 	flags.Var(&meta, "meta", "job metadata as key=value, repeatable")
 	flags.BoolVar(&noLogs, "no-logs", false, "do not print the task's output")
+	c.namespaceFlag(flags)
 
 	client, names := c.connect(flags, args, oneArg("<name>"), c.Help())
 	if client == nil {

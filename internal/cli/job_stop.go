@@ -12,7 +12,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 // JobStopCommand implements `vagabond job stop`.
@@ -37,21 +36,20 @@ Usage: vagabond job stop [options] <name>
 
 Stop Options:
 
-  -address <addr>
-    The server the job is registered with. Defaults to $VAGABOND_ADDR, then
-    http://127.0.0.1:4747.
-
   -namespace <name>
     The namespace the job is registered in. Defaults to $VAGABOND_NAMESPACE,
     then "default".
 `
 
-	return strings.TrimSpace(text)
+	return clientHelp(text)
 }
 
 // Run stops the named job. Its executions already running are left alone.
 func (c *JobStopCommand) Run(args []string) int {
-	client, names := c.connect(c.FlagSet("job stop"), args, oneArg("<name>"), c.Help())
+	flags := c.FlagSet("job stop")
+	c.namespaceFlag(flags)
+
+	client, names := c.connect(flags, args, oneArg("<name>"), c.Help())
 	if client == nil {
 		return ExitFailure
 	}
