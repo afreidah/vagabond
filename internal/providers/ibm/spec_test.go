@@ -4,14 +4,15 @@
 // Author: Alex Freidah
 //
 // The translation's three load-bearing settings: the size a task rounds up to,
-// retries left off, and no identity for the workload. Plus the timeout and the
-// environment, which have to arrive exactly as declared.
+// retries left off, and no identity for the workload. Plus the timeout, the
+// environment and the command line, which have to arrive exactly as declared.
 // -------------------------------------------------------------------------------
 
 package ibm
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/afreidah/vagabond/internal/job"
@@ -262,11 +263,118 @@ func TestBuildSpec_Refusals(t *testing.T) {
 			Config:  rawBlock(t, "image = \"alpine:3.20\"\n"),
 			Timeout: new(job.Duration("48h")),
 		},
+		"env takes a carried name": {
+			Name: "test", Driver: job.DriverContainer,
+			Config: rawBlock(t, "image = \"alpine:3.20\"\nargs = [\"a\\nb\"]\n"),
+			Env:    rawBlock(t, "VAGABOND_ARG_0 = \"mine\"\n"),
+		},
 	}
 
 	for name, task := range cases {
 		if _, err := p.buildSpec("vagabond-run", task); err == nil || plugin.Reroutable(err) {
 			t.Errorf("%s: buildSpec() = %v, want an internal failure", name, err)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------
+// THE COMMAND LINE
+// -------------------------------------------------------------------------
+
+// A one-line command or argument is sent escaped, and one holding a line break
+// is carried in env and sent as $(name). Env values are escaped too.
+func TestBuildSpec_CommandLine(t *testing.T) {
+	t.Parallel()
+
+	_, p := newFakeIBM(t)
+
+	literal := func(name, value string) envVar { return envVar{Type: "literal", Name: name, Value: value} }
+
+	cases := []struct {
+		name      string
+		config    string
+		env       string
+		commands  []string
+		arguments []string
+		vars      []envVar
+	}{
+		{
+			name:      "one line is escaped",
+			config:    `command = "sh"` + "\n" + `args = ["-c", "echo $HOME $(PWD)"]`,
+			env:       `PRICE = "$5"`,
+			commands:  []string{"sh"},
+			arguments: []string{"-c", "echo $$HOME $$(PWD)"},
+			vars:      []envVar{literal("PRICE", "$$5")},
+		},
+		{
+			name:      "a newline is carried after the task's env",
+			config:    `command = "sh"` + "\n" + `args = ["-ec", "set -x\necho $HOME"]`,
+			env:       `CI = "true"`,
+			commands:  []string{"sh"},
+			arguments: []string{"-ec", "$(VAGABOND_ARG_1)"},
+			vars:      []envVar{literal("CI", "true"), literal("VAGABOND_ARG_1", "set -x\necho $$HOME")},
+		},
+		{
+			name:      "a carriage return is carried",
+			config:    `args = ["a\rb"]`,
+			arguments: []string{"$(VAGABOND_ARG_0)"},
+			vars:      []envVar{literal("VAGABOND_ARG_0", "a\rb")},
+		},
+		{
+			name:     "a multi-line command is carried",
+			config:   `command = "a\nb"`,
+			commands: []string{"$(VAGABOND_COMMAND)"},
+			vars:     []envVar{literal("VAGABOND_COMMAND", "a\nb")},
+		},
+		{
+			name:      "a carried name the task sets is its own when nothing is carried",
+			config:    `args = ["one line"]`,
+			env:       `VAGABOND_ARG_0 = "mine"`,
+			arguments: []string{"one line"},
+			vars:      []envVar{literal("VAGABOND_ARG_0", "mine")},
+		},
+	}
+
+	for _, tc := range cases {
+		spec, err := p.buildSpec("vagabond-run", &job.Task{
+			Name:   "test",
+			Driver: job.DriverContainer,
+			Config: rawBlock(t, "image = \"alpine:3.20\"\n"+tc.config+"\n"),
+			Env:    rawBlock(t, tc.env+"\n"),
+		})
+		if err != nil {
+			t.Errorf("%s: buildSpec() = %v", tc.name, err)
+
+			continue
+		}
+
+		if !slices.Equal(spec.Commands, tc.commands) || !slices.Equal(spec.Arguments, tc.arguments) {
+			t.Errorf("%s: commands %q, arguments %q; want %q, %q",
+				tc.name, spec.Commands, spec.Arguments, tc.commands, tc.arguments)
+		}
+
+		if !slices.Equal(spec.Env, tc.vars) {
+			t.Errorf("%s: env %q, want %q", tc.name, spec.Env, tc.vars)
+		}
+	}
+}
+
+// Doubling every $ is what Kubernetes' halving gives back as the original.
+func TestEscape(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"":           "",
+		"no dollars": "no dollars",
+		"$HOME":      "$$HOME",
+		"$(NAME)":    "$$(NAME)",
+		"$$":         "$$$$",
+		"trailing $": "trailing $$",
+	}
+
+	for in, want := range cases {
+		if got := escape(in); got != want {
+			t.Errorf("escape(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

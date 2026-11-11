@@ -100,6 +100,11 @@ Starts the task under `id` and reports what the platform said.
   step fails, delete it before returning.
 - **Validate before calling out:** a task missing a required `config` key is
   an `Internal` error, raised before any request.
+- **Deliver the task as written:** the container receives the command,
+  arguments and env values the task declared, byte for byte, so a job file
+  behaves the same on every provider. A platform that refuses or rewrites a
+  value gets a translation that undoes it, as Code Engine's does for line breaks
+  and `$(NAME)` expansion; see [Code Engine](providers/code-engine.md#command-line).
 
 `Submission` fields:
 

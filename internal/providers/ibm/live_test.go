@@ -151,6 +151,59 @@ args    = ["-c", "echo hello-stdout; echo hello-stderr >&2; sleep 10; exit 3"]
 	}
 }
 
+// A multi-line script reaches the container as written, $ and all, though Code
+// Engine refuses a line break in an argument and rewrites $(NAME) and $$.
+func TestLiveMultiLine(t *testing.T) {
+	p := liveProvider(t)
+	id := newID(t)
+
+	// $0 is the one-line third argument and LIVE_PRICE an env value, both echoed as received
+	task := &job.Task{
+		Name:   "live",
+		Driver: job.DriverContainer,
+		Config: rawBlock(t, `
+image   = "alpine:3.20"
+command = "sh"
+args    = ["-ec", "if true; then\n  echo line-one\nfi\necho \"$0 / $LIVE_PRICE\"", "$(UNSET) $$"]
+`),
+		Env:       rawBlock(t, `LIVE_PRICE = "$(UNSET) costs $$5"`+"\n"),
+		Resources: &job.Resources{CPU: new(125), Memory: new(256)},
+		Timeout:   new(job.Duration("5m")),
+	}
+
+	submission, err := p.Submit(t.Context(), id, task)
+	if err != nil {
+		t.Fatalf("Submit failed: %v", err)
+	}
+
+	t.Logf("submitted %s", submission.ProviderID)
+
+	// Its own context: t.Context is cancelled before cleanups run
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		if err := p.Cancel(ctx, id); err != nil {
+			t.Errorf("cleaning up %s failed: %v", submission.ProviderID, err)
+		}
+	})
+
+	if state := pollToCompletion(t, p, id); state != execution.StateSucceeded {
+		t.Errorf("state = %s, want succeeded", state)
+	}
+
+	result, err := p.Result(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Result failed: %v", err)
+	}
+
+	t.Logf("exit=%d logs=%q", ptr.Deref(result.ExitCode), result.Logs)
+
+	if want := "line-one\n$(UNSET) $$ / $(UNSET) costs $$5\n"; string(result.Logs) != want {
+		t.Errorf("logs = %q, want %q", result.Logs, want)
+	}
+}
+
 // follow streams the execution's output in the background, returning what it
 // wrote and a wait for the stream to end once the container has.
 func follow(t *testing.T, p *Provider, id execution.ID) (*lockedBuffer, func()) {

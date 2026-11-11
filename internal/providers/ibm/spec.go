@@ -7,7 +7,8 @@
 // most: retries, because Code Engine's default would multiply a failing run
 // behind the ledger's back; the size, because Code Engine runs only fixed vCPU
 // and memory pairs; and the service account, because the default hands the
-// workload an identity inside the project.
+// workload an identity inside the project. The command line and environment
+// are escaped and carried so the container receives them as the task wrote them.
 // -------------------------------------------------------------------------------
 
 package ibm
@@ -41,6 +42,13 @@ const (
 const (
 	defaultCPU    = 1000
 	defaultMemory = 2048
+)
+
+// The variables carrying a command or argument that holds a line break.
+// VAGABOND_ARG_<i> counts from zero, as args does.
+const (
+	carriedCommand   = "VAGABOND_COMMAND"
+	carriedArgPrefix = "VAGABOND_ARG_"
 )
 
 // bytesPerMiB and bytesPerGB convert between Vagabond's binary MiB and Code
@@ -143,12 +151,8 @@ func (p *Provider) buildSpec(name string, task *job.Task) (*jobRunSpec, error) {
 		spec.ImageSecret = *p.cfg.ImageSecret
 	}
 
-	if command, ok := task.ConfigString("command"); ok {
-		spec.Commands = []string{command}
-	}
-
-	if args, ok := task.ConfigStrings("args"); ok {
-		spec.Arguments = args
+	if err := spec.invoke(task); err != nil {
+		return nil, plugin.Internal(fmt.Errorf("task %q: %w", task.Name, err))
 	}
 
 	return spec, nil
@@ -220,9 +224,9 @@ func executionSeconds(task *job.Task) (int, error) {
 // THE DRIVER CONFIG
 // -------------------------------------------------------------------------
 
-// environment renders a task's environment as literal variables: its env block
-// plus the VAGABOND_META_* variables. One that does not evaluate is an internal
-// failure, never a job run with no environment.
+// environment renders a task's environment as escaped literal variables: its
+// env block plus the VAGABOND_META_* variables. One that does not evaluate is
+// an internal failure, never a job run with no environment.
 func environment(task *job.Task) ([]envVar, error) {
 	attrs, diags := task.Environment()
 	if diags.HasErrors() {
@@ -231,11 +235,68 @@ func environment(task *job.Task) ([]envVar, error) {
 
 	env := make([]envVar, 0, len(attrs))
 	for name, value := range attrs {
-		env = append(env, envVar{Type: "literal", Name: name, Value: value})
+		env = append(env, envVar{Type: "literal", Name: name, Value: escape(value)})
 	}
 
 	// Sorted, so two submissions of the same task send identical specs
 	slices.SortFunc(env, func(a, b envVar) int { return strings.Compare(a.Name, b.Name) })
 
 	return env, nil
+}
+
+// -------------------------------------------------------------------------
+// THE COMMAND LINE
+// -------------------------------------------------------------------------
+
+// invoke sets the run's command and arguments from the task's, each escaped,
+// and each holding a line break carried in the environment instead.
+func (s *jobRunSpec) invoke(task *job.Task) error {
+	if command, ok := task.ConfigString("command"); ok {
+		sent, err := s.carry(carriedCommand, command)
+		if err != nil {
+			return err
+		}
+
+		s.Commands = []string{sent}
+	}
+
+	if args, ok := task.ConfigStrings("args"); ok {
+		s.Arguments = make([]string, len(args))
+
+		for i, arg := range args {
+			sent, err := s.carry(carriedArgPrefix+strconv.Itoa(i), arg)
+			if err != nil {
+				return err
+			}
+
+			s.Arguments[i] = sent
+		}
+	}
+
+	return nil
+}
+
+// carry returns what to send for one command or argument. Code Engine refuses
+// a line break in either, so a value holding one moves into the environment
+// under name, and $(name), which Kubernetes expands at start, goes in its place.
+func (s *jobRunSpec) carry(name, value string) (string, error) {
+	if !strings.ContainsAny(value, "\r\n") {
+		return escape(value), nil
+	}
+
+	// The task's own value would be overwritten, or would overwrite the carried one
+	if slices.ContainsFunc(s.Env, func(v envVar) bool { return v.Name == name }) {
+		return "", fmt.Errorf("env sets %s, which carries a multi-line command or argument", name)
+	}
+
+	s.Env = append(s.Env, envVar{Type: "literal", Name: name, Value: escape(value)})
+
+	return "$(" + name + ")", nil
+}
+
+// escape doubles every $. Kubernetes expands $(NAME) and turns $$ into $ in a
+// container's command, arguments and env values, so an escaped value reaches
+// the container as written.
+func escape(value string) string {
+	return strings.ReplaceAll(value, "$", "$$")
 }

@@ -195,7 +195,8 @@ task "test" {
 The same keys as [Cloud Run](cloud-run.md#driver-config-keys), read the same
 way: other keys are ignored, a value of the wrong type is ignored as if absent,
 and values are evaluated against the job's variables. `command` replaces the
-image's entrypoint.
+image's entrypoint. `command` and `args` are escaped, and carried when they
+hold a line break; see [Command line](#command-line).
 
 ### Job run fields
 
@@ -206,7 +207,7 @@ image's entrypoint.
 | `image_secret` | `image_secret` | From provider config; omitted when unset |
 | `resources.cpu` and `resources.memory` | `scale_cpu_limit`, `scale_memory_limit` | Rounded **up** to a valid size; see below |
 | `timeout` | `scale_max_execution_time` | Whole seconds, rounded **up**, at least 1 |
-| `env` block and `meta` | `run_env_variables` | Each `type: literal`, sorted by name |
+| `env` block and `meta` | `run_env_variables` | Each `type: literal`, escaped, sorted by name, then any carried variables |
 | none | `run_mode` | Always `task` |
 | none | `scale_array_spec` | Always `"0"`: one instance |
 | none | `scale_retry_limit` | Always `0`, always sent |
@@ -236,6 +237,47 @@ One that fails to evaluate fails the submission as `internal`.
 **Not translated:** `source`, `working_directory`, `network` and `execution`
 blocks are not sent. `network` and `execution.architecture` are enforced by
 admission against the capabilities above.
+
+### Command line
+
+Code Engine runs a job run as a Kubernetes pod, which changes two things before
+the container starts:
+
+- **Line breaks:** a `run_commands` or `run_arguments` item holding a newline is
+  refused with `400 field_invalid ... REGEXP`. Env values may hold one.
+- **Expansion:** in a command, an argument or an env value, `$(NAME)` becomes
+  the value of `NAME` when the spec sets it, and `$$` becomes `$`.
+
+The translation undoes both, so the container receives what the task wrote:
+
+| Task value | Sent as |
+|---|---|
+| `command` or `args` item on one line | The item with every `$` doubled |
+| `command` holding `\n` or `\r` | `$(VAGABOND_COMMAND)`, with the value in a literal variable of that name |
+| `args` item `<i>` holding `\n` or `\r` | `$(VAGABOND_ARG_<i>)`, counting from 0, likewise |
+| Env value: `env`, `meta`, carried | The value with every `$` doubled |
+
+```hcl
+config {
+  image   = "alpine:3.20"
+  command = "sh"
+  args    = ["-ec", "go vet ./...\necho \"vetted $PWD\""]
+}
+```
+
+is sent as:
+
+```json
+"run_commands": ["sh"],
+"run_arguments": ["-ec", "$(VAGABOND_ARG_1)"],
+"run_env_variables": [
+  {"type": "literal", "name": "VAGABOND_ARG_1", "value": "go vet ./...\necho \"vetted $$PWD\""}
+]
+```
+
+- The carried variables are visible to the workload in its environment.
+- A task whose `env` sets a carried name, while that item is carried, fails as
+  `internal`. When the item is on one line, the name is the task's own.
 
 ### Sizes
 
@@ -497,7 +539,7 @@ those figures. Vagabond ships no defaults.
 - **Sub-second timeouts** are rounded up to whole seconds.
 - **Spec size:** Code Engine refuses a job run spec over 10 KiB with
   `spec_too_large`, classified internal. A task's `env`, `meta` and `args`
-  count toward it.
+  count toward it, each `$` twice once [escaped](#command-line).
 - **Project limits:** a run Code Engine holds back while the project is over
   its instance or CPU limits reports `pending`, which is `accepted`, until it
   starts.
@@ -516,7 +558,7 @@ those figures. Vagabond ships no defaults.
 ## Testing against a real project
 
 The unit tests run against an `httptest` server standing in for IAM, the v2 API
-and the Kubernetes API. A live round trip is included and skips unless a key is
+and the Kubernetes API. Two live tests are included and skip unless a key is
 supplied:
 
 ```bash
@@ -532,9 +574,13 @@ go test -run TestLive -v -timeout 10m ./internal/providers/ibm/
 | `VAGABOND_IBM_PROJECT` | yes | none |
 | `VAGABOND_IBM_REGION` | yes, since a wrong one answers 403 | none |
 
-The test runs `alpine:3.20` at 0.125 vCPU / 0.5G, writing one line to stdout
-and one to stderr, sleeping 10 seconds and exiting 3. It follows the output
-while the run is going, polls to completion for up to 6 minutes, and asserts
-state `failed`, exit code 3, and both lines in both the stream and `Result`.
-It then releases the run, asserts the run is gone, and deletes it again in a
-cleanup that runs even when an assertion fails.
+`TestLiveRoundTrip` runs `alpine:3.20` at 0.125 vCPU / 0.5G, writing one line
+to stdout and one to stderr, sleeping 10 seconds and exiting 3. It follows the
+output while the run is going, polls to completion for up to 6 minutes, and
+asserts state `failed`, exit code 3, and both lines in both the stream and
+`Result`. It then releases the run, asserts the run is gone, and deletes it
+again in a cleanup that runs even when an assertion fails.
+
+`TestLiveMultiLine` runs a multi-line `sh -ec` script with a one-line argument
+and an env value holding `$(UNSET)` and `$$`, and asserts that the output is
+exactly the script's, `$` for `$`.
