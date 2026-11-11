@@ -46,6 +46,7 @@ type Registry interface {
 type Ledger interface {
 	Reserve(ctx context.Context, id execution.ID, namespace, provider string, e quota.Execution, pays bool) error
 	Settle(ctx context.Context, id execution.ID, namespace, provider string, actual quota.Execution) error
+	Drop(ctx context.Context, id execution.ID) error
 	Reserved(ctx context.Context, id execution.ID) (bool, error)
 	Reap(ctx context.Context, resolve ledger.Resolver) (int, error)
 	Refresh(ctx context.Context) error
@@ -354,7 +355,7 @@ func (d *Dispatcher) attempt(
 		tried++
 
 		ended, err := d.execute(ctx, provider, task, run, ranking[i].Members)
-		d.charge(ctx, &run.rec, ended.result)
+		d.charge(ctx, &run.rec, ended)
 
 		outcome.Attempts = append(outcome.Attempts, Attempt{
 			Provider: name,
@@ -451,12 +452,19 @@ func (d *Dispatcher) pause(ctx context.Context, p policy, tried int) error {
 	return d.sleep(ctx, p.backoff(tried))
 }
 
-// charge settles what an execution cost: what the platform billed when the
-// result carries it, otherwise the declared shape over how long it ran.
-// Without a result the worst-case reservation stands, since the run may still
-// be out there.
-func (d *Dispatcher) charge(ctx context.Context, rec *execution.Record, result *execution.Result) {
-	if result == nil {
+// charge settles what an execution cost: nothing for a submission the provider
+// refused, what the platform billed when the result carries it, otherwise the
+// declared shape over how long it ran. Without a result the worst-case
+// reservation stands, since the run may still be out there.
+func (d *Dispatcher) charge(ctx context.Context, rec *execution.Record, ended answer) {
+	result := ended.result
+
+	switch {
+	case ended.refused:
+		_ = d.ledger.Drop(ctx, rec.ID)
+
+		return
+	case result == nil:
 		return
 	}
 

@@ -54,7 +54,7 @@ Interactive version, with notes on each stage:
 | Submit | `dispatch`, `providers/*` | Hand the task to the plugin under a fresh execution ID |
 | Watch | `dispatch` | Poll status from 2 s backing off to 15 s; a synchronous submission returns its result from `Submit` and is not polled |
 | Release | `dispatch` | Ask the plugin to delete what the execution left behind: right after `Result` is read, or as soon as a synchronous `Submit` returns. Any other ending, and a failed release, is left to the [provider release](background-services.md#provider-release) service |
-| Settle | `dispatch`, `ledger` | Replace the reservation with what the result says was used. Without a result the reservation stands until the [reaper](background-services.md#reservation-reaper) resolves it |
+| Settle | `dispatch`, `ledger` | Replace the reservation with what the result says was used. A submission the provider refused as `internal` drops it at zero. Without a result otherwise, the reservation stands until the [reaper](background-services.md#reservation-reaper) resolves it |
 | Reroute | `dispatch` | On an `infrastructure` failure, move to the next ranked provider within the task's `retry` budget |
 
 - The CLI runs parse and validate locally before sending, and the server runs

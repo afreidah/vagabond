@@ -259,7 +259,12 @@ Edge cases:
 
 - The actual charge may exceed the reservation. Settlement is not checked
   against the limit, so settled usage can pass it; later tasks are refused.
-- An attempt that returns no result is not settled. Its reservation stands at the declared charge until
+- A `Submit` the provider refused with an `internal` error, such as an HTTP
+  400, ran nothing. Its reservation is dropped at once and charges nothing,
+  the execution count included.
+- Any other attempt that returns no result is not settled. This includes a
+  `Submit` that failed as `infrastructure` or with an unclassified error,
+  since the run may exist. Its reservation stands at the declared charge until
   the reaper resolves it.
 - A failed settle write leaves the reservation standing for the reaper.
 - Settling an execution with no reservation rows does nothing, so a settle

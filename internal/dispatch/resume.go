@@ -84,7 +84,7 @@ func (d *Dispatcher) resume(ctx context.Context, rec *execution.Record) {
 	}
 
 	ended, _ := d.follow(ctx, provider, run)
-	d.charge(ctx, &run.rec, ended.result)
+	d.charge(ctx, &run.rec, ended)
 }
 
 // -------------------------------------------------------------------------
