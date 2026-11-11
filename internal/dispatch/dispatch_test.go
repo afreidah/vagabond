@@ -722,6 +722,61 @@ func TestLostRunKeepsItsReservation(t *testing.T) {
 	}
 }
 
+// A submission the provider refused ran nothing, so its reservation is given
+// back in full rather than held for the reaper.
+func TestRefusedSubmissionChargesNothing(t *testing.T) {
+	t.Parallel()
+
+	p := &scriptedProvider{name: "a", submitErr: plugin.Internal(errors.New("400 bad request"))}
+	reg := newRegistry(p)
+
+	if _, err := newDispatcher(t, reg).
+		RunTask(t.Context(), origin, containerTask(t, nil), nil, nil); err == nil {
+		t.Fatal("a refused submission reported success")
+	}
+
+	usage := usageOf(reg, "a")
+
+	for _, pool := range []string{"cpu", "compute"} {
+		if usage[pool] != 0 {
+			t.Errorf("%s = %d, want 0 for a run that never existed", pool, usage[pool])
+		}
+	}
+
+	if got := usage["requests"]; got != 10_000 {
+		t.Errorf("requests = %d, want the 10000 already charged and no more", got)
+	}
+}
+
+// A submission that failed in transit may have started a run, so it keeps the
+// worst case for the reaper, whether the failure was an outage or one nobody
+// classified.
+func TestFailedSubmissionKeepsItsReservation(t *testing.T) {
+	t.Parallel()
+
+	for name, submitErr := range map[string]error{
+		"infrastructure": plugin.Infrastructure(errors.New("503")),
+		"unclassified":   errors.New("connection reset"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			reg := newRegistry(&scriptedProvider{name: "a", submitErr: submitErr})
+
+			if _, err := newDispatcher(t, reg).
+				RunTask(t.Context(), origin, containerTask(t, nil), nil, nil); err == nil {
+				t.Fatal("a failed submission reported success")
+			}
+
+			want := quota.FixtureContainer().Deltas(quota.Execution{CPU: 1000, Memory: 512, Duration: 5 * time.Minute})
+
+			if got := usageOf(reg, "a")["compute"]; got != want["compute"] {
+				t.Errorf("compute = %d, want the reserved %d", got, want["compute"])
+			}
+		})
+	}
+}
+
 // A refusal sent nothing, so the task's single attempt is still there for the
 // next provider.
 func TestRefusedProviderDoesNotSpendAnAttempt(t *testing.T) {

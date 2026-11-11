@@ -99,10 +99,12 @@ func (d *Dispatcher) submit(
 }
 
 // answer is how an execution ended: the provider's terminal state, which is
-// the verdict, and what the task produced.
+// the verdict, and what the task produced. refused is a submission the
+// provider turned down, so nothing ran and nothing is owed.
 type answer struct {
-	state  execution.State
-	result *execution.Result
+	state   execution.State
+	result  *execution.Result
+	refused bool
 }
 
 // execute runs a task on one provider under an id the caller reserved quota
@@ -114,14 +116,15 @@ func (d *Dispatcher) execute(
 	id := run.rec.ID
 
 	submission, err := d.submit(ctx, provider, id, task, members)
-	if err == nil {
-		// An incoherent submission is a plugin bug, not an outage, so no reroute
-		if invalid := submission.Validate(); invalid != nil {
-			err = plugin.Internal(invalid)
-		}
+	if err != nil {
+		run.failed(ctx, err)
+
+		return answer{refused: turnedDown(err)}, err
 	}
 
-	if err != nil {
+	// An incoherent submission is a plugin bug, not an outage, so no reroute
+	if invalid := submission.Validate(); invalid != nil {
+		err = plugin.Internal(invalid)
 		run.failed(ctx, err)
 
 		return answer{}, err
@@ -137,6 +140,15 @@ func (d *Dispatcher) execute(
 	}
 
 	return d.follow(ctx, provider, run)
+}
+
+// turnedDown reports whether a Submit error means nothing ran: only one
+// classified internal, Vagabond's request refused or never sent, says so. An
+// outage, or an error nobody classified, may have left a run behind.
+func turnedDown(err error) bool {
+	classified, ok := errors.AsType[*plugin.Error](err)
+
+	return ok && classified.Class == plugin.ClassInternal
 }
 
 // follow watches a submitted execution to its end and collects its result.

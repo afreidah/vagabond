@@ -143,6 +143,20 @@ func (m *MockserverLedger) EXPECT() *MockserverLedgerMockRecorder {
 	return m.recorder
 }
 
+// Drop mocks base method.
+func (m *MockserverLedger) Drop(ctx context.Context, id execution.ID) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Drop", ctx, id)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Drop indicates an expected call of Drop.
+func (mr *MockserverLedgerMockRecorder) Drop(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Drop", reflect.TypeOf((*MockserverLedger)(nil).Drop), ctx, id)
+}
+
 // PoolUsage mocks base method.
 func (m *MockserverLedger) PoolUsage(namespace, provider string) (quota.PoolUsage, quota.PoolUsage) {
 	m.ctrl.T.Helper()

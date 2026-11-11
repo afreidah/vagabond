@@ -251,6 +251,16 @@ func (l *Ledger) Settle(
 	return nil
 }
 
+// Drop removes a reservation whose execution the provider never ran, charging
+// nothing, as the reaper does for one the provider has never heard of.
+func (l *Ledger) Drop(ctx context.Context, id execution.ID) error {
+	if err := l.store.Settle(ctx, id, nil); err != nil {
+		return fmt.Errorf("dropping the reservation: %w", err)
+	}
+
+	return nil
+}
+
 // Reserved reports whether id still holds a reservation, which the reaper
 // settles by asking its provider what it did.
 func (l *Ledger) Reserved(ctx context.Context, id execution.ID) (bool, error) {

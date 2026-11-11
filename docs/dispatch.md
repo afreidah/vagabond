@@ -159,8 +159,8 @@ the provider is retried or rerouted.
 |---|---|
 | Provider reports `failed` with a result (a non-zero exit, a function error) | Ends the task and the job. Never retried |
 | `infrastructure` | Next ranked provider, if the retry budget allows |
-| `internal` | Stops the task immediately |
-| Unclassified error | Treated as not reroutable, and recorded with `Failure` `internal` |
+| `internal` | Stops the task immediately. When `Submit` fails this way the provider ran nothing, so the quota reservation is dropped at zero |
+| Unclassified error | Treated as not reroutable, and recorded with `Failure` `internal`. From `Submit` the run may exist, so the reservation stands for the reaper |
 | Credential rejected (HTTP 401 or 403) | The credential is resolved again and the same call is made once more on the same provider. A second rejection is `internal`. See [`credentials` block](configuration.md#credentials-block) |
 | `Result` fails | Classified like any error. `infrastructure` reroutes; the terminal state is recorded without a result and the reservation stands for the reaper |
 | Driver config fails to evaluate | Stops the task before admission: `building the request: <diagnostics>` |

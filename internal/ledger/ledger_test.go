@@ -474,6 +474,54 @@ func TestReap_FinishedChargesTheShareToo(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
+// DROP
+// -------------------------------------------------------------------------
+
+// unwritable is a store whose settlements fail.
+type unwritable struct{ *Memory }
+
+// Settle fails with errStoreDown.
+func (unwritable) Settle(context.Context, execution.ID, map[PoolRef]int64) error {
+	return errStoreDown
+}
+
+// A refused submission ran nothing, so dropping it gives back every pool, the
+// execution count included.
+func TestDrop_ChargesNothing(t *testing.T) {
+	l, store := newLedger(t, midSeptember, nil)
+	id := newID(t)
+
+	reserve(t, l, id, "container", quota.Execution{CPU: 1000, Memory: 512, Duration: 15 * time.Minute})
+
+	if err := l.Drop(t.Context(), id); err != nil {
+		t.Fatalf("Drop() = %v", err)
+	}
+
+	if len(store.held) != 0 {
+		t.Errorf("store holds %d reservations after dropping, want none", len(store.held))
+	}
+
+	for pool, used := range total(l, "container") {
+		if used != 0 {
+			t.Errorf("pool %q = %d after dropping, want 0", pool, used)
+		}
+	}
+}
+
+// A drop that could not be written says so, and the reservation is left for
+// the reaper.
+func TestDrop_FailsWhenTheStoreCannotWrite(t *testing.T) {
+	l, err := New(t.Context(), fixtures(), unwritable{NewMemory(nil)})
+	if err != nil {
+		t.Fatalf("New() = %v", err)
+	}
+
+	if err := l.Drop(t.Context(), newID(t)); !errors.Is(err, errStoreDown) {
+		t.Errorf("Drop() = %v, want the write failure", err)
+	}
+}
+
+// -------------------------------------------------------------------------
 // REAP
 // -------------------------------------------------------------------------
 
