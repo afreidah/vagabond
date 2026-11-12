@@ -307,7 +307,9 @@ The second case is infrastructure because the executions listing can lag the
 ### Exit code
 
 Read from `lastAttemptResult.exitCode` on the execution's single task.
-`Result.Duration` is the task's `completionTime` minus its `startTime`.
+`Result.Duration` is the task's `completionTime` minus its `startTime`, and
+zero when either is missing or the completion is not after the start, as for a
+task that ended before it started.
 
 When the task was stopped before its process ran, `exitCode` is absent and
 `Result.ExitCode` is nil rather than 0.

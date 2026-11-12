@@ -23,12 +23,15 @@ import (
 // that the task exited zero. Logs are bounded so CockroachDB stays the only
 // datastore. Billed is what the platform reported it charged, when it says;
 // when nil the ledger prices the declared shape over Duration, and when set it
-// supersedes that estimate even above the reservation.
+// supersedes that estimate even above the reservation. Reason is why the
+// platform ended the workload, in its words, empty when the process exited on
+// its own or the platform gave none.
 type Result struct {
 	ID       ID
 	ExitCode *int
 	Duration time.Duration
 	Billed   *quota.Execution
+	Reason   string
 
 	Logs          []byte
 	LogsTruncated bool

@@ -178,6 +178,7 @@ type Execution struct {
 	Duration      time.Duration
 	Billed        *Billed
 	LogsTruncated bool
+	Reason        string // why the platform ended the workload; empty when it did not say
 }
 
 // Billed is what the platform reported it charged.

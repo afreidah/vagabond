@@ -11,12 +11,12 @@ INSERT INTO executions (
     id, namespace, job, job_version, task, provider, attempt, previous_id,
     state, provider_id, failure, created_at, started_at, ended_at, updated_at,
     exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated,
-    dispatch_id, cpu, memory, released_at
+    dispatch_id, cpu, memory, released_at, reason
 ) VALUES (
     @id, @namespace, @job, @job_version, @task, @provider, @attempt, @previous_id,
     @state, @provider_id, @failure, @created_at, @started_at, @ended_at, @updated_at,
     @exit_code, @duration_ms, @billed_cpu, @billed_memory, @billed_ms, @logs, @logs_truncated,
-    @dispatch_id, @cpu, @memory, @released_at
+    @dispatch_id, @cpu, @memory, @released_at, @reason
 );
 
 -- name: UpdateExecution :execrows
@@ -35,7 +35,8 @@ UPDATE executions SET
     billed_memory  = @billed_memory,
     billed_ms      = @billed_ms,
     logs           = @logs,
-    logs_truncated = @logs_truncated
+    logs_truncated = @logs_truncated,
+    reason         = @reason
 WHERE id = @id AND state = @from_state::text;
 
 -- name: GetExecution :one

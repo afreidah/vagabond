@@ -125,7 +125,8 @@ window.vagabondDiagram = {
         '<tr><td class="fk">dispatch_id</td><td>TEXT</td><td>The <code>dispatches</code> row it belongs to. DEFAULT <code>\'\'</code>, the value on rows from before migration 4</td></tr>' +
         '<tr><td>cpu</td><td>BIGINT</td><td>Declared millicores, so a resumed execution is charged without its job. DEFAULT 0</td></tr>' +
         '<tr><td>memory</td><td>BIGINT</td><td>Declared MiB. DEFAULT 0</td></tr>' +
-        '<tr><td>released_at</td><td>TIMESTAMPTZ</td><td>Nullable; when what the provider left behind was released. Migration 7 backfilled it to <code>updated_at</code> for rows with a result</td></tr></table>' +
+        '<tr><td>released_at</td><td>TIMESTAMPTZ</td><td>Nullable; when what the provider left behind was released. Migration 7 backfilled it to <code>updated_at</code> for rows with a result</td></tr>' +
+        '<tr><td>reason</td><td>TEXT</td><td>Why the platform ended the workload, in its words. DEFAULT <code>\'\'</code>, the value on rows from before migration 8 and when the platform did not say</td></tr></table>' +
         '<div class="dg-idx"><b>Indexes:</b> PK on id &bull; executions_job (namespace, job, created_at) for the job\'s newest executions &bull; executions_unreleased (updated_at) WHERE released_at IS NULL, a partial index holding only the rows the release loop reads</div>' +
         '<p>Used by: the dispatcher (CreateExecution after the quota reservation and before Submit, where a failure means nothing is submitted; UpdateExecution on every state change, best effort with a 10s timeout of its own; MarkExecutionReleased after it reads a result and releases; <a href="../task-path/">task path</a>, <a href="../execution-states/">execution states</a>) &bull; resume (ListDispatchExecutions on a claimed dispatch, following every row not yet terminal) &bull; <a href="../background-services/">provider release</a> (ListUnreleasedExecutions every 5m for rows unchanged for 10m, UpdateExecution from <code>lost</code> when a lost execution is reconciled, then MarkExecutionReleased) &bull; the API (GetExecution for <code>GET /v1/execution/{id}</code>, its stored logs and a cancel; ListJobExecutions, the newest 20, for <code>GET /v1/job/{name}</code>; ListDispatchExecutions for <code>GET /v1/dispatch/{id}</code>) &bull; <a href="../live-output/">live output</a> (GetExecution every second, to see the execution end). See <a href="../../docs/database/#executions">Database</a>.</p>' +
         '<p class="dg-metric">Key queries: CreateExecution, UpdateExecution (WHERE id AND state = from_state; zero rows is ErrStale), GetExecution, ListDispatchExecutions, ListJobExecutions, ListUnreleasedExecutions, MarkExecutionReleased</p>'
@@ -174,7 +175,7 @@ window.vagabondDiagram = {
         '<tr><td>is_applied</td><td>BOOLEAN</td><td>Whether the migration is applied</td></tr>' +
         '<tr><td>tstamp</td><td>TIMESTAMP</td><td>DEFAULT now(); no time zone</td></tr></table>' +
         '<div class="dg-idx"><b>Indexes:</b> PK on id</div>' +
-        '<p>Used by: <code>Store.Migrate</code> (goose applies the embedded migrations not yet recorded, at every server start, over a <code>database/sql</code> connection opened for it) &bull; <code>Store.VerifySchema</code> (reads <code>MAX(version_id)</code> where <code>is_applied</code> and requires it to equal <code>SchemaVersion</code>, 7; lower means a migration failed partway, higher means the binary is older than the database, and either stops the server from starting). See <a href="../../docs/database/#migrations">Migrations</a>.</p>'
+        '<p>Used by: <code>Store.Migrate</code> (goose applies the embedded migrations not yet recorded, at every server start, over a <code>database/sql</code> connection opened for it) &bull; <code>Store.VerifySchema</code> (reads <code>MAX(version_id)</code> where <code>is_applied</code> and requires it to equal <code>SchemaVersion</code>, 8; lower means a migration failed partway, higher means the binary is older than the database, and either stops the server from starting). See <a href="../../docs/database/#migrations">Migrations</a>.</p>'
     }
   }
 };
@@ -214,3 +215,4 @@ An arrow joins two tables on the columns in its label, from the table that holds
 | `00005_dispatches` | `dispatches` |
 | `00006_dispatch_leases` | `dispatches.tasks`, `owner` and `lease_until`, index `dispatches_lease`, and `executions.cpu` and `memory`. Outside a transaction |
 | `00007_execution_release` | `executions.released_at`, backfilled for rows with a result, and partial index `executions_unreleased`. Outside a transaction |
+| `00008_execution_reason` | `executions.reason`, `''` for existing rows. Outside a transaction |

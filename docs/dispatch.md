@@ -67,7 +67,7 @@ configured, in memory with `vagabond server -dev`.
 | `State` | See [Execution states](#execution-states) |
 | `Failure` | `infrastructure` or `internal` when the attempt ended without an answer |
 | `Created`, `Started`, `Ended`, `Updated` | `Created` is read from the UUIDv7. `Started` is set on reaching `running`, `Ended` on a terminal state |
-| `HasResult`, `ExitCode`, `Duration`, `Billed`, `LogsTruncated` | The result, once fetched |
+| `HasResult`, `ExitCode`, `Duration`, `Billed`, `LogsTruncated`, `Reason` | The result, once fetched |
 
 The record also keeps the task's declared CPU and memory, so a result can be
 charged without the job ([Quotas](quotas.md)).

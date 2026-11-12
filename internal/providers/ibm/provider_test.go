@@ -588,7 +588,8 @@ func TestStatus_UnknownStatus(t *testing.T) {
 // RESULT
 // -------------------------------------------------------------------------
 
-// The exit code and output come from the pod, the duration from the instance.
+// The exit code and output come from the pod, the duration from the instance,
+// and the run's reason stands when the pod's says nothing more.
 func TestResult_ReadsThePod(t *testing.T) {
 	t.Parallel()
 
@@ -616,8 +617,48 @@ func TestResult_ReadsThePod(t *testing.T) {
 		t.Errorf("Logs = %q, truncated %t", result.Logs, result.LogsTruncated)
 	}
 
-	if result.Duration != 32*time.Second {
-		t.Errorf("Duration = %s, want 32s", result.Duration)
+	if result.Duration != 32*time.Second || result.Reason != "OOMKilled" {
+		t.Errorf("Duration = %s, Reason = %q; want 32s, OOMKilled", result.Duration, result.Reason)
+	}
+}
+
+// An evicted pod's reason and message are the result's reason, and its
+// instance's 1970 finish gives way to the run's own times.
+func TestResult_Evicted(t *testing.T) {
+	t.Parallel()
+
+	f, p := newFakeIBM(t)
+	id := newID(t)
+	name := runName(id)
+	podName := name + "-0-0"
+
+	const message = "Pod ephemeral local storage usage exceeds the total limit of containers 400M."
+
+	run := jobRunBody(name, "failed", "ContainerExitedCode137")
+	instance := run["status_details"].(map[string]any)["indices_details"].(map[string]any)["0"].(map[string]any)
+	instance["finished_at"] = "1970-01-01T00:00:00Z"
+
+	evicted := podBody(podName, time.Now(), new(137))
+	evicted["status"].(map[string]any)["reason"] = "Evicted"
+	evicted["status"].(map[string]any)["message"] = message
+
+	f.on("GET "+runPath(name), reply(http.StatusOK, run))
+	f.on("GET "+podsPath(), reply(http.StatusOK, podList(evicted)))
+	f.on("GET "+podsPath()+"/"+podName+"/log", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "go: downloading go.uber.org/mock v0.6.0\n")
+	})
+
+	result, err := p.Result(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Result() = %v", err)
+	}
+
+	if result.ExitCode == nil || *result.ExitCode != 137 || result.Reason != "Evicted: "+message {
+		t.Errorf("exit %v, Reason %q; want 137 and the eviction", result.ExitCode, result.Reason)
+	}
+
+	if result.Duration != 35*time.Second {
+		t.Errorf("Duration = %s, want the run's 35s", result.Duration)
 	}
 }
 

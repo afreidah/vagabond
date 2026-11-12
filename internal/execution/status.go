@@ -80,3 +80,14 @@ func (s *Status) LostExpired(now time.Time) bool {
 
 	return now.Sub(s.UpdatedAt) >= LostGracePeriod
 }
+
+// Elapsed is how long a run took between two times a platform reported: zero
+// when either is missing or the end is not after the start, never a negative
+// or centuries-long charge.
+func Elapsed(start, end time.Time) time.Duration {
+	if start.IsZero() || end.IsZero() || !end.After(start) {
+		return 0
+	}
+
+	return end.Sub(start)
+}

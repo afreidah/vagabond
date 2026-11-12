@@ -3,13 +3,14 @@
 //
 // Author: Alex Freidah
 //
-// The namespace lookup, finding a run's pod, and reading its exit code and
-// output, against the fake's Kubernetes routes.
+// The namespace lookup, finding a run's pod, and reading its exit code, reason
+// and output, against the fake's Kubernetes routes.
 // -------------------------------------------------------------------------------
 
 package ibm
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
@@ -168,6 +169,70 @@ func TestPod_Running(t *testing.T) {
 
 	if !found.started() || found.exitCode() != nil {
 		t.Errorf("started %t, exit %v; want started with no exit", found.started(), found.exitCode())
+	}
+}
+
+// The reason is the pod's when the kubelet ended it, else the task container's
+// when it says more than the exit code, with the message either way.
+func TestPod_Reason(t *testing.T) {
+	t.Parallel()
+
+	// container is the pod's one container status, named and in state.
+	container := func(name, state string) string {
+		return `{"name":"` + name + `","state":` + state + `}`
+	}
+
+	cases := []struct {
+		name, status, want string
+	}{
+		{
+			"evicted",
+			`"phase":"Failed","reason":"Evicted","message":"Pod ephemeral local storage usage exceeds the total limit of containers 400M.",` +
+				`"containerStatuses":[` + container(userContainer, `{"terminated":{"exitCode":137,"reason":"Error"}}`) + `]`,
+			"Evicted: Pod ephemeral local storage usage exceeds the total limit of containers 400M.",
+		},
+		{
+			"out of memory",
+			`"containerStatuses":[` + container(userContainer, `{"terminated":{"exitCode":137,"reason":"OOMKilled"}}`) + `]`,
+			"OOMKilled",
+		},
+		{
+			"a container reason with a message",
+			`"containerStatuses":[` + container(userContainer, `{"terminated":{"exitCode":128,"reason":"StartError","message":"exec: sh: not found"}}`) + `]`,
+			"StartError: exec: sh: not found",
+		},
+		{
+			"a non-zero exit",
+			`"containerStatuses":[` + container(userContainer, `{"terminated":{"exitCode":3,"reason":"Error"}}`) + `]`,
+			"",
+		},
+		{
+			"a clean exit",
+			`"containerStatuses":[` + container(userContainer, `{"terminated":{"exitCode":0,"reason":"Completed"}}`) + `]`,
+			"",
+		},
+		{
+			"still running",
+			`"containerStatuses":[` + container(userContainer, `{"running":{}}`) + `]`,
+			"",
+		},
+		{
+			"a sidecar's reason",
+			`"containerStatuses":[` + container("istio-proxy", `{"terminated":{"exitCode":137,"reason":"OOMKilled"}}`) + `,` +
+				container(userContainer, `{"terminated":{"exitCode":0,"reason":"Completed"}}`) + `]`,
+			"",
+		},
+	}
+
+	for _, tc := range cases {
+		var pd pod
+		if err := json.Unmarshal([]byte(`{"status":{`+tc.status+`}}`), &pd); err != nil {
+			t.Fatalf("%s: decoding the pod: %v", tc.name, err)
+		}
+
+		if got := pd.reason(); got != tc.want {
+			t.Errorf("%s: reason() = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

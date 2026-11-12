@@ -85,7 +85,7 @@ server under a supervisor that restarts it.
 | Source | `internal/state/postgres/migrations/*.sql`, embedded in the binary |
 | Applied | At every `vagabond server` start, pending ones only |
 | Version table | `goose_db_version`, created by goose |
-| Expected version | `7` in this release (`SchemaVersion`) |
+| Expected version | `8` in this release (`SchemaVersion`) |
 | Connection | A separate `database/sql` connection opened from the DSN as written and closed after; the 5s `connect_timeout` default does not apply to it |
 
 After migrating, the server reads `MAX(version_id)` from `goose_db_version`
@@ -115,6 +115,7 @@ for:
 | 5 | `00005_dispatches.sql` | `dispatches` |
 | 6 | `00006_dispatch_leases.sql` | `dispatches.tasks`, `owner`, `lease_until`; index `dispatches_lease`; `executions.cpu`, `memory` |
 | 7 | `00007_execution_release.sql` | `executions.released_at`, backfilled for rows with a result; index `executions_unreleased` |
+| 8 | `00008_execution_reason.sql` | `executions.reason`, `''` for existing rows |
 
 ## Schema
 
@@ -176,6 +177,7 @@ holder can end a run. Claiming is one `UPDATE ... RETURNING`. See
 | `exit_code`, `duration_ms` | Null until a result is recorded |
 | `billed_cpu`, `billed_memory`, `billed_ms` | What the provider reported billing, when it reports it |
 | `logs`, `logs_truncated` | Last 64 KiB of output (`BYTEA`), and whether it was cut |
+| `reason` | Why the platform ended the workload, in its words; `''` when it did not say |
 | `released_at` | When what the provider left behind was released; null until then |
 | `created_at`, `started_at`, `ended_at` | From the ID; on reaching `running`; on a terminal state |
 | `updated_at` | Last state change; the release loop takes rows unchanged for 10m |

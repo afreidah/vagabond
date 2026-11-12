@@ -61,6 +61,7 @@ func (s *Store) Update(ctx context.Context, r *execution.Record, from execution.
 		BilledMs:      row.BilledMs,
 		Logs:          row.Logs,
 		LogsTruncated: row.LogsTruncated,
+		Reason:        row.Reason,
 		ID:            row.ID,
 		FromState:     string(from),
 	}
@@ -200,6 +201,7 @@ func rowOf(r *execution.Record) db.Execution {
 	row.DurationMs = new(result.Duration.Milliseconds())
 	row.Logs = result.Logs
 	row.LogsTruncated = result.LogsTruncated
+	row.Reason = result.Reason
 
 	if result.ExitCode != nil {
 		row.ExitCode = new(int64(*result.ExitCode))
@@ -262,6 +264,7 @@ func recordOf(row *db.Execution) (*execution.Record, error) {
 		Duration:      time.Duration(*row.DurationMs) * time.Millisecond,
 		Logs:          row.Logs,
 		LogsTruncated: row.LogsTruncated,
+		Reason:        row.Reason,
 	}
 
 	if row.ExitCode != nil {

@@ -93,6 +93,8 @@ func record(e *api.Execution) string {
 			fields = append(fields, [2]string{"Exit Code", fmt.Sprintf("%d", *e.ExitCode)})
 		}
 
+		fields = append(fields, [2]string{"Reason", e.Reason})
+
 		if b := e.Billed; b != nil {
 			fields = append(fields, [2]string{
 				"Billed", fmt.Sprintf("%d millicores, %d MiB, %s", b.CPU, b.Memory, b.Duration),

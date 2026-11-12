@@ -581,7 +581,8 @@ and `JobStatus`.
   "ExitCode": 0,
   "Duration": 37900000000,
   "Billed": null,
-  "LogsTruncated": false
+  "LogsTruncated": false,
+  "Reason": ""
 }
 ```
 
@@ -604,6 +605,7 @@ and `JobStatus`.
 | `Duration` | Run time in nanoseconds |
 | `Billed` | What the platform reported it charged, `{"CPU": <millicores>, "Memory": <MiB>, "Duration": <ns>}`; `null` when the platform does not report it |
 | `LogsTruncated` | Stored output was cut to its last 64 KiB |
+| `Reason` | Why the platform ended the workload, in its words, such as `OOMKilled`; empty when the process exited on its own or the platform did not say |
 
 | `State` | Terminal | Meaning |
 |---|---|---|

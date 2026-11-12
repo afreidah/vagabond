@@ -25,24 +25,25 @@ import (
 // -------------------------------------------------------------------------
 
 // A task gets the smallest size holding what it declared, with memory compared
-// in bytes since Code Engine's G is decimal.
+// in bytes since Code Engine's G is decimal, and as much disk as the size
+// allows: its memory, or 0.4G below that.
 func TestSizeFor(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name        string
-		resources   *job.Resources
-		cpu, memory string
+		name                 string
+		resources            *job.Resources
+		cpu, memory, storage string
 	}{
-		{"defaults", nil, "1", "4G"},
-		{"smallest", &job.Resources{CPU: new(100), Memory: new(128)}, "0.125", "0.25G"},
-		{"exact decimal fit", &job.Resources{CPU: new(1000), Memory: new(3814)}, "1", "4G"},
-		{"a MiB past 4G", &job.Resources{CPU: new(1000), Memory: new(3815)}, "1", "8G"},
-		{"4096 MiB", &job.Resources{CPU: new(1000), Memory: new(4096)}, "1", "8G"},
-		{"memory forces more CPU", &job.Resources{CPU: new(250), Memory: new(8192)}, "2", "16G"},
-		{"between CPU steps", &job.Resources{CPU: new(1500), Memory: new(1024)}, "2", "4G"},
-		{"largest", &job.Resources{CPU: new(12000), Memory: new(45776)}, "12", "48G"},
-		{"zeroes take the defaults", &job.Resources{CPU: new(0), Memory: new(0)}, "1", "4G"},
+		{"defaults", nil, "1", "4G", "4G"},
+		{"smallest", &job.Resources{CPU: new(100), Memory: new(128)}, "0.125", "0.25G", "0.4G"},
+		{"exact decimal fit", &job.Resources{CPU: new(1000), Memory: new(3814)}, "1", "4G", "4G"},
+		{"a MiB past 4G", &job.Resources{CPU: new(1000), Memory: new(3815)}, "1", "8G", "8G"},
+		{"4096 MiB", &job.Resources{CPU: new(1000), Memory: new(4096)}, "1", "8G", "8G"},
+		{"memory forces more CPU", &job.Resources{CPU: new(250), Memory: new(8192)}, "2", "16G", "16G"},
+		{"between CPU steps", &job.Resources{CPU: new(1500), Memory: new(1024)}, "2", "4G", "4G"},
+		{"largest", &job.Resources{CPU: new(12000), Memory: new(45776)}, "12", "48G", "48G"},
+		{"zeroes take the defaults", &job.Resources{CPU: new(0), Memory: new(0)}, "1", "4G", "4G"},
 	}
 
 	for _, tc := range cases {
@@ -53,8 +54,9 @@ func TestSizeFor(t *testing.T) {
 			continue
 		}
 
-		if got.cpu() != tc.cpu || got.memory() != tc.memory {
-			t.Errorf("%s: sizeFor() = %s / %s, want %s / %s", tc.name, got.cpu(), got.memory(), tc.cpu, tc.memory)
+		if got.cpu() != tc.cpu || got.memory() != tc.memory || got.storage() != tc.storage {
+			t.Errorf("%s: sizeFor() = %s / %s / %s, want %s / %s / %s",
+				tc.name, got.cpu(), got.memory(), got.storage(), tc.cpu, tc.memory, tc.storage)
 		}
 	}
 }
@@ -115,7 +117,7 @@ func TestExecutionSeconds_PastTheMaximum(t *testing.T) {
 // -------------------------------------------------------------------------
 
 // The encoded job run carries the task, retries off and present as zero, one
-// instance, and no identity for the workload.
+// instance, the size's full disk, and no identity for the workload.
 func TestBuildSpec(t *testing.T) {
 	t.Parallel()
 
@@ -138,16 +140,17 @@ func TestBuildSpec(t *testing.T) {
 	}
 
 	want := map[string]any{
-		"name":                     "vagabond-run",
-		"image_reference":          "golang:1.27",
-		"image_secret":             "ghcr",
-		"run_mode":                 "task",
-		"run_service_account":      "none",
-		"scale_cpu_limit":          "1",
-		"scale_memory_limit":       "4G",
-		"scale_max_execution_time": float64(900),
-		"scale_retry_limit":        float64(0),
-		"scale_array_spec":         "0",
+		"name":                          "vagabond-run",
+		"image_reference":               "golang:1.27",
+		"image_secret":                  "ghcr",
+		"run_mode":                      "task",
+		"run_service_account":           "none",
+		"scale_cpu_limit":               "1",
+		"scale_memory_limit":            "4G",
+		"scale_ephemeral_storage_limit": "4G",
+		"scale_max_execution_time":      float64(900),
+		"scale_retry_limit":             float64(0),
+		"scale_array_spec":              "0",
 	}
 
 	for key, value := range want {

@@ -93,7 +93,7 @@ window.vagabondDiagram = {
     VERDICT: {
       title: 'Verdict Line',
       badge: 'success', badgeText: 'job run',
-      body: '<p><code>==&gt; &lt;task&gt; &lt;state&gt; on &lt;provider&gt; in &lt;duration&gt;</code> on stderr, once per execution, with <code>failed (exit &lt;n&gt;)</code> for a non-zero exit.</p><p><code>job run</code> exits 0 when every task succeeded, 1 when a task failed, and 2 when the work never ran or was interrupted. <code>execution logs -f</code> prints no verdict and exits 0.</p>'
+      body: '<p><code>==&gt; &lt;task&gt; &lt;state&gt; on &lt;provider&gt; in &lt;duration&gt;</code> on stderr, once per execution, with <code>failed (exit &lt;n&gt;)</code> for a non-zero exit and <code>: &lt;reason&gt;</code> after the duration when the platform said why it ended the task.</p><p><code>job run</code> exits 0 when every task succeeded, 1 when a task failed, and 2 when the work never ran or was interrupted. <code>execution logs -f</code> prints no verdict and exits 0.</p>'
     },
     ROUTE: {
       title: 'GET /v1/execution/{id}/logs',

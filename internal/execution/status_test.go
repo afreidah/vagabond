@@ -264,3 +264,34 @@ func TestStatus_ConsumedCapacity(t *testing.T) {
 		})
 	}
 }
+
+// -------------------------------------------------------------------------
+// ELAPSED
+// -------------------------------------------------------------------------
+
+// Only an end after its start is a duration; a missing time or a platform's
+// placeholder epoch is zero, not a charge of decades either way.
+func TestElapsed(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 11, 11, 22, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name       string
+		start, end time.Time
+		want       time.Duration
+	}{
+		{"both set", start, start.Add(35 * time.Second), 35 * time.Second},
+		{"no start", time.Time{}, start, 0},
+		{"no end", start, time.Time{}, 0},
+		{"neither", time.Time{}, time.Time{}, 0},
+		{"epoch end", start, time.Unix(0, 0).UTC(), 0},
+		{"end equals start", start, start, 0},
+	}
+
+	for _, tc := range cases {
+		if got := Elapsed(tc.start, tc.end); got != tc.want {
+			t.Errorf("%s: Elapsed() = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}

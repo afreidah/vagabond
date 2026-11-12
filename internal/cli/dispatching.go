@@ -143,7 +143,7 @@ func (f *follower) report(ctx context.Context, d *api.Dispatch) {
 }
 
 // result prints the rest of a finished execution's output, unless -no-logs,
-// and its verdict, once.
+// and its verdict with the platform's reason when it gave one, once.
 func (f *follower) result(ctx context.Context, e *api.Execution) {
 	if f.reported[e.ID] {
 		return
@@ -155,7 +155,12 @@ func (f *follower) result(ctx context.Context, e *api.Execution) {
 		f.rest(ctx, e)
 	}
 
-	f.Ui.Error(fmt.Sprintf("==> %s %s on %s in %s", e.Task, verdict(e), e.Provider, e.Duration))
+	line := fmt.Sprintf("==> %s %s on %s in %s", e.Task, verdict(e), e.Provider, e.Duration)
+	if e.Reason != "" {
+		line += ": " + e.Reason
+	}
+
+	f.Ui.Error(line)
 }
 
 // -------------------------------------------------------------------------

@@ -193,9 +193,9 @@ func (p *Provider) Status(
 // RESULT
 // -------------------------------------------------------------------------
 
-// Result returns the exit code and output from the run's pod. A pod already
-// gone leaves the exit code Code Engine recorded and no output; a log that
-// cannot be read leaves the exit code alone, since it is still an answer.
+// Result returns the exit code, the platform's reason and the output from the
+// run's pod. A pod already gone leaves what Code Engine recorded and no output;
+// a log that cannot be read leaves the rest alone, since it is still an answer.
 func (p *Provider) Result(
 	ctx context.Context, id execution.ID,
 ) (*execution.Result, error) {
@@ -211,22 +211,25 @@ func (p *Provider) Result(
 		return nil, err
 	}
 
-	instance := run.instance()
+	code, reason := run.lastFailure()
 	result := &execution.Result{
 		ID:       id,
-		ExitCode: run.failureExit(),
-	}
-
-	if !instance.started().IsZero() && !instance.finished().IsZero() {
-		result.Duration = instance.finished().Sub(instance.started())
+		ExitCode: code,
+		Duration: run.ran(),
+		Reason:   reason,
 	}
 
 	if found == nil {
 		return result, nil
 	}
 
+	// The pod's detail, where it has some, is better than the run's summary
 	if code := found.exitCode(); code != nil {
 		result.ExitCode = code
+	}
+
+	if reason := found.reason(); reason != "" {
+		result.Reason = reason
 	}
 
 	logs, truncated, err := p.podLogs(ctx, found.Metadata.Name)

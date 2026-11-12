@@ -384,6 +384,7 @@ to finish. The job is not registered. The server makes the same selection
 | `... (<class> failure)` | Appended when the execution failed without a result (`infrastructure`, `internal`) |
 | `==> <task> succeeded on <provider> in <duration>` | The task exited 0 |
 | `==> <task> failed (exit <n>) on <provider> in <duration>` | The task exited non-zero |
+| `...: <reason>` | Appended to either when the platform ended the task and said why: `Evicted: Pod ephemeral local storage usage exceeds ...`, `OOMKilled` |
 | `Output was truncated.` | Nothing streamed and the stored output hit its limit; only the tail is printed |
 | `Live output was interrupted. vagabond execution logs <id> has its stored tail.` | A stream broke and the stored copy is truncated, so where it left off cannot be found in it |
 | `Could not read the output of <id>: <error>` | The stored output could not be fetched after the task finished; the verdict line still follows |
@@ -610,6 +611,7 @@ only the [client flags](#connecting-to-the-server).
 | `Created`, `Started`, `Ended` | Timestamps |
 | `Duration` | Run time, once there is a result |
 | `Exit Code` | Task exit code, once there is a result |
+| `Reason` | Why the platform ended the task, when it said |
 | `Billed` | What the provider reported billing: millicores, MiB and duration |
 
 ```shell
