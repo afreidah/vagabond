@@ -5,7 +5,8 @@
 //
 // The parts of following a run that a real server cannot be made to produce on
 // demand: a stream that cannot resume, a truncated or unreadable stored copy,
-// and an execution that ends with no result. A stub answers the logs route.
+// an execution that ends with no result, and a platform's reason for ending
+// one. A stub answers the logs route.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -172,5 +173,43 @@ func TestFollower_Watch(t *testing.T) {
 
 	if !ended {
 		t.Error("a follow was not told its execution ended")
+	}
+}
+
+// -------------------------------------------------------------------------
+// VERDICT
+// -------------------------------------------------------------------------
+
+// The verdict line ends with the platform's reason when it gave one, and is
+// printed once however often the execution is seen.
+func TestFollower_Result(t *testing.T) {
+	const evicted = "Evicted: Pod ephemeral local storage usage exceeds the total limit of containers 400M."
+
+	tests := []struct {
+		name   string
+		reason string
+		want   string
+	}{
+		{"no reason", "", "==> make failed (exit 137) on ibm-code-engine in 35s\n"},
+		{"with a reason", evicted, "==> make failed (exit 137) on ibm-code-engine in 35s: " + evicted + "\n"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ui := cli.NewMockUi()
+			f := (&Meta{Ui: ui}).newFollower(nil, true)
+
+			e := &api.Execution{
+				ID: "exec-1", Task: "make", Provider: "ibm-code-engine", State: executionFailed,
+				HasResult: true, ExitCode: new(137), Duration: 35 * time.Second, Reason: tc.reason,
+			}
+
+			f.result(t.Context(), e)
+			f.result(t.Context(), e)
+
+			if got := ui.ErrorWriter.String(); got != tc.want {
+				t.Errorf("printed %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

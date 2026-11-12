@@ -400,12 +400,12 @@ func (c *Containerd) Result(ctx context.Context, id string) (*execution.Result, 
 
 	code := int(exit.ExitStatus)
 
-	result := &execution.Result{ExitCode: &code, Logs: logs, LogsTruncated: truncated}
-	if !status.StartedAt.IsZero() {
-		result.Duration = status.EndedAt.Sub(status.StartedAt)
-	}
-
-	return result, nil
+	return &execution.Result{
+		ExitCode:      &code,
+		Duration:      execution.Elapsed(status.StartedAt, status.EndedAt),
+		Logs:          logs,
+		LogsTruncated: truncated,
+	}, nil
 }
 
 // Logs copies a workload's output from byte offset on to w as it is written,

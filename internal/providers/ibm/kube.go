@@ -3,10 +3,11 @@
 //
 // Author: Alex Freidah
 //
-// Where a job run's exit code and output live. The v2 API reports neither, so
-// both come from the run's pod through the project's Kubernetes API, which
-// takes the same IAM token. The one thing that API needs and the v2 API cannot
-// give is the project's namespace, read once from the kubeconfig.
+// Where a job run's exit code, output and reason for ending live. The v2 API
+// reports none of them fully, so they come from the run's pod through the
+// project's Kubernetes API, which takes the same IAM token. The one thing that
+// API needs and the v2 API cannot give is the project's namespace, read once
+// from the kubeconfig.
 // -------------------------------------------------------------------------------
 
 package ibm
@@ -40,33 +41,49 @@ const maxLogBytes = 256 << 10
 // TYPES
 // -------------------------------------------------------------------------
 
-// pod is the part of a Kubernetes pod the plugin reads.
+// pod is the part of a Kubernetes pod the plugin reads. Its Reason and Message
+// are set when the kubelet ended the pod itself, as an eviction does.
 type pod struct {
 	Metadata struct {
 		Name              string    `json:"name"`
 		CreationTimestamp time.Time `json:"creationTimestamp"`
 	} `json:"metadata"`
 	Status struct {
-		Phase             string `json:"phase"`
-		ContainerStatuses []struct {
-			Name  string `json:"name"`
-			State struct {
-				Running    *struct{} `json:"running"`
-				Terminated *struct {
-					ExitCode int    `json:"exitCode"`
-					Reason   string `json:"reason"`
-				} `json:"terminated"`
-			} `json:"state"`
-		} `json:"containerStatuses"`
+		Phase             string            `json:"phase"`
+		Reason            string            `json:"reason"`
+		Message           string            `json:"message"`
+		ContainerStatuses []containerStatus `json:"containerStatuses"`
 	} `json:"status"`
+}
+
+// containerStatus is one container's state within a pod.
+type containerStatus struct {
+	Name  string `json:"name"`
+	State struct {
+		Running    *struct{} `json:"running"`
+		Terminated *struct {
+			ExitCode int    `json:"exitCode"`
+			Reason   string `json:"reason"`
+			Message  string `json:"message"`
+		} `json:"terminated"`
+	} `json:"state"`
+}
+
+// task is the status of the task's own container, nil until the pod lists it.
+func (pd *pod) task() *containerStatus {
+	for i := range pd.Status.ContainerStatuses {
+		if pd.Status.ContainerStatuses[i].Name == userContainer {
+			return &pd.Status.ContainerStatuses[i]
+		}
+	}
+
+	return nil
 }
 
 // exitCode is what the task's container exited with, nil until it has.
 func (pd *pod) exitCode() *int {
-	for _, cs := range pd.Status.ContainerStatuses {
-		if cs.Name == userContainer && cs.State.Terminated != nil {
-			return new(cs.State.Terminated.ExitCode)
-		}
+	if cs := pd.task(); cs != nil && cs.State.Terminated != nil {
+		return new(cs.State.Terminated.ExitCode)
 	}
 
 	return nil
@@ -75,13 +92,39 @@ func (pd *pod) exitCode() *int {
 // started reports whether the task's container has begun, running or already
 // finished, which is when its log can be opened.
 func (pd *pod) started() bool {
-	for _, cs := range pd.Status.ContainerStatuses {
-		if cs.Name == userContainer {
-			return cs.State.Running != nil || cs.State.Terminated != nil
-		}
+	cs := pd.task()
+
+	return cs != nil && (cs.State.Running != nil || cs.State.Terminated != nil)
+}
+
+// reason is why the platform ended the task: the pod's own reason when the
+// kubelet ended it, or else the container's, either with its message.
+func (pd *pod) reason() string {
+	if told(pd.Status.Reason) {
+		return explained(pd.Status.Reason, pd.Status.Message)
 	}
 
-	return false
+	if cs := pd.task(); cs != nil && cs.State.Terminated != nil && told(cs.State.Terminated.Reason) {
+		return explained(cs.State.Terminated.Reason, cs.State.Terminated.Message)
+	}
+
+	return ""
+}
+
+// told reports whether a Kubernetes reason says more than the exit code does.
+// Completed and Error are what every clean or non-zero exit reports.
+func told(reason string) bool {
+	return reason != "" && reason != "Completed" && reason != "Error"
+}
+
+// explained renders a reason with its message, "Evicted: Pod ephemeral ...",
+// or the reason alone when there is no message.
+func explained(reason, message string) string {
+	if message == "" {
+		return reason
+	}
+
+	return reason + ": " + message
 }
 
 // -------------------------------------------------------------------------

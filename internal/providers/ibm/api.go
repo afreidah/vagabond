@@ -74,16 +74,24 @@ func (r *jobRun) state() (execution.State, error) {
 
 // started is when the run began, zero while it has not.
 func (r *jobRun) started() time.Time {
-	t, _ := time.Parse(time.RFC3339, r.StatusDetails.StartTime)
-
-	return t
+	return plugin.ParseTime(r.StatusDetails.StartTime)
 }
 
 // ended is when the run was reported finished, zero until it is.
 func (r *jobRun) ended() time.Time {
-	t, _ := time.Parse(time.RFC3339, r.StatusDetails.CompletionTime)
+	return plugin.ParseTime(r.StatusDetails.CompletionTime)
+}
 
-	return t
+// ran is how long the run's instance took, or the run's when the instance's
+// times do not hold, as an evicted instance's finish in 1970 does not.
+func (r *jobRun) ran() time.Duration {
+	instance := r.instance()
+
+	if d := execution.Elapsed(instance.started(), instance.finished()); d > 0 {
+		return d
+	}
+
+	return execution.Elapsed(r.started(), r.ended())
 }
 
 // instance is the run's single instance, the zero value until Code Engine
@@ -92,39 +100,37 @@ func (r *jobRun) instance() indexDetails {
 	return r.StatusDetails.Indices["0"]
 }
 
-// failureExit is the exit code read from the run's own status, for when the
-// pod holding the real one is gone: 0 for a completed run, N from
-// ContainerExitedCode<N>, and nil for any other reason, OOMKilled among them.
-func (r *jobRun) failureExit() *int {
+// lastFailure reads the run's own status, for when the pod holding the detail
+// is gone: a completed run exited 0, ContainerExitedCode<N> exited N, and any
+// other reason, OOMKilled among them, is the platform's reason with no code.
+func (r *jobRun) lastFailure() (code *int, reason string) {
 	if r.Status == "completed" {
-		return new(0)
+		return new(0), ""
 	}
 
-	code, ok := strings.CutPrefix(r.instance().LastFailureReason, exitReasonPrefix)
-	if !ok {
-		return nil
+	last := r.instance().LastFailureReason
+
+	if digits, ok := strings.CutPrefix(last, exitReasonPrefix); ok {
+		if n, err := strconv.Atoi(digits); err == nil {
+			return new(n), ""
+		}
 	}
 
-	n, err := strconv.Atoi(code)
-	if err != nil {
-		return nil
+	if !told(last) {
+		return nil, ""
 	}
 
-	return new(n)
+	return nil, last
 }
 
 // started is when the instance began, zero while it has not.
 func (d indexDetails) started() time.Time {
-	t, _ := time.Parse(time.RFC3339, d.StartedAt)
-
-	return t
+	return plugin.ParseTime(d.StartedAt)
 }
 
 // finished is when the instance ended, zero while it runs.
 func (d indexDetails) finished() time.Time {
-	t, _ := time.Parse(time.RFC3339, d.FinishedAt)
-
-	return t
+	return plugin.ParseTime(d.FinishedAt)
 }
 
 // -------------------------------------------------------------------------

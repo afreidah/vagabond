@@ -58,8 +58,8 @@ func advance(t *testing.T, r *execution.Record, next execution.State) {
 // EXECUTIONS
 // -------------------------------------------------------------------------
 
-// A finished record, binary output and bill included, reads back as written
-// from a fresh read.
+// A finished record, binary output, bill and reason included, reads back as
+// written from a fresh read.
 func TestExecutions_RoundTrip(t *testing.T) {
 	for _, e := range engines() {
 		t.Run(e.Name, func(t *testing.T) {
@@ -86,9 +86,10 @@ func TestExecutions_RoundTrip(t *testing.T) {
 			r.ProviderID = "vagabond-abc"
 			r.Result = &execution.Result{
 				ID:       r.ID,
-				ExitCode: new(3),
+				ExitCode: new(137),
 				Duration: 12 * time.Second,
 				Billed:   &quota.Execution{Memory: 512, Duration: 13 * time.Second},
+				Reason:   "OOMKilled",
 				Logs:     []byte("ok\x00\xff\xfe done\n"),
 			}
 

@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/plugin"
@@ -88,7 +87,7 @@ func (p *Provider) execution(ctx context.Context, jobName string) (*runExecution
 
 	newest := &out.Executions[0]
 	for i := range out.Executions {
-		if parseTime(out.Executions[i].StartTime).After(parseTime(newest.StartTime)) {
+		if plugin.ParseTime(out.Executions[i].StartTime).After(plugin.ParseTime(newest.StartTime)) {
 			newest = &out.Executions[i]
 		}
 	}
@@ -134,23 +133,4 @@ func (p *Provider) task(ctx context.Context, executionName string) (*runTask, er
 	}
 
 	return &out.Tasks[0], nil
-}
-
-// -------------------------------------------------------------------------
-// TIME
-// -------------------------------------------------------------------------
-
-// parseTime reads one of Google's RFC 3339 timestamps. An absent or unparseable
-// time is the zero value, since these are absent while a run is in progress.
-func parseTime(value string) time.Time {
-	if value == "" {
-		return time.Time{}
-	}
-
-	parsed, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		return time.Time{}
-	}
-
-	return parsed
 }

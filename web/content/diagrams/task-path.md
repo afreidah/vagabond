@@ -149,7 +149,7 @@ window.vagabondDiagram = {
     RESULT: {
       title: 'Fetch Result',
       badge: 'process', badgeText: 'result',
-      body: '<p>Once <code>Status</code> reports a terminal state, <code>Result</code> fetches the exit code, duration, any billed amount and the output, and the terminal state is written with it. The record keeps the last 64 KiB of output, with <code>LogsTruncated</code> set when anything was cut.</p><p>When <code>Result</code> fails, the terminal state is still written, without a result. The attempt ends with that error; nothing is released or settled, and the reservation is left to the reaper.</p>'
+      body: '<p>Once <code>Status</code> reports a terminal state, <code>Result</code> fetches the exit code, duration, any billed amount, the platform&rsquo;s reason for ending it and the output, and the terminal state is written with it. The record keeps the last 64 KiB of output, with <code>LogsTruncated</code> set when anything was cut.</p><p>When <code>Result</code> fails, the terminal state is still written, without a result. The attempt ends with that error; nothing is released or settled, and the reservation is left to the reaper.</p>'
     },
     RELEASE: {
       title: 'Release',

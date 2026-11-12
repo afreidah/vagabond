@@ -175,8 +175,8 @@ func (p *Provider) Status(
 		ID:         id,
 		State:      found.state(),
 		ProviderID: name,
-		StartedAt:  parseTime(found.StartTime),
-		EndedAt:    parseTime(found.CompletionTime),
+		StartedAt:  plugin.ParseTime(found.StartTime),
+		EndedAt:    plugin.ParseTime(found.CompletionTime),
 	}
 
 	status.UpdatedAt = status.EndedAt
@@ -211,7 +211,7 @@ func (p *Provider) Result(
 	result := &execution.Result{
 		ID:       id,
 		ExitCode: task.exitCode(),
-		Duration: parseTime(task.CompletionTime).Sub(parseTime(task.StartTime)),
+		Duration: execution.Elapsed(plugin.ParseTime(task.StartTime), plugin.ParseTime(task.CompletionTime)),
 	}
 
 	logs, truncated, err := p.logs(ctx, name)

@@ -165,6 +165,7 @@ execution it reconciles, which retries a failed call on its next pass.
 | `Billed` | `*quota.Execution` the platform reported charging; nil when it reports nothing |
 | `Logs` | Combined output; the execution record keeps the last 64 KiB |
 | `LogsTruncated` | The plugin cut the output short |
+| `Reason` | Why the platform ended the workload, in its words: an eviction, an OOM kill. Empty when the process exited on its own, or the platform's reason says no more than the exit code |
 
 - A non-zero exit is not an error. Return the result; the state is `failed`.
 - The terminal state is the verdict: dispatch counts a task as succeeded only
@@ -174,6 +175,10 @@ execution it reconciles, which retries a failed call on its next pass.
   logs.
 - Set `Billed` when the platform reports its charge, as Lambda's `REPORT` line
   does. Settlement uses it in full in place of declared shape times `Duration`.
+- Read the platform's timestamps with `plugin.ParseTime` and take `Duration`
+  from `execution.Elapsed`. A missing time, or an end before the start such as
+  the 1970 finish Code Engine reports for an evicted instance, is then zero
+  rather than a negative or centuries-long charge.
 
 ### `Cancel`
 

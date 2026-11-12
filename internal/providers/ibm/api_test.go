@@ -46,38 +46,37 @@ func TestJobRun_State(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
-// EXIT CODE
+// LAST FAILURE
 // -------------------------------------------------------------------------
 
-// The fallback exit code is 0 for a completed run and N for
-// ContainerExitedCode<N>; any other reason has none.
-func TestJobRun_FailureExit(t *testing.T) {
+// The fallback is exit 0 for a completed run and N for ContainerExitedCode<N>;
+// any other reason that says something is the platform's reason, with no code.
+func TestJobRun_LastFailure(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		status, reason string
-		want           *int
+		status, last string
+		code         *int
+		reason       string
 	}{
-		{"completed", "", new(0)},
-		{"failed", "ContainerExitedCode3", new(3)},
-		{"failed", "ContainerExitedCode137", new(137)},
-		{"failed", "OOMKilled", nil},
-		{"failed", "ContainerExitedCodeX", nil},
-		{"failed", "", nil},
-		{"running", "", nil},
+		{"completed", "", new(0), ""},
+		{"failed", "ContainerExitedCode3", new(3), ""},
+		{"failed", "ContainerExitedCode137", new(137), ""},
+		{"failed", "OOMKilled", nil, "OOMKilled"},
+		{"failed", "ContainerExitedCodeX", nil, "ContainerExitedCodeX"},
+		{"failed", "Error", nil, ""},
+		{"failed", "", nil, ""},
+		{"running", "", nil, ""},
 	}
 
 	for _, tc := range cases {
 		run := &jobRun{Status: tc.status}
-		run.StatusDetails.Indices = map[string]indexDetails{"0": {LastFailureReason: tc.reason}}
+		run.StatusDetails.Indices = map[string]indexDetails{"0": {LastFailureReason: tc.last}}
 
-		got := run.failureExit()
+		code, reason := run.lastFailure()
 
-		switch {
-		case tc.want == nil && got != nil:
-			t.Errorf("%s/%q: failureExit() = %d, want none", tc.status, tc.reason, *got)
-		case tc.want != nil && (got == nil || *got != *tc.want):
-			t.Errorf("%s/%q: failureExit() = %v, want %d", tc.status, tc.reason, got, *tc.want)
+		if (code == nil) != (tc.code == nil) || (code != nil && *code != *tc.code) || reason != tc.reason {
+			t.Errorf("%s/%q: lastFailure() = %v, %q; want %v, %q", tc.status, tc.last, code, reason, tc.code, tc.reason)
 		}
 	}
 }
@@ -106,5 +105,33 @@ func TestJobRun_Times(t *testing.T) {
 
 	if !(&jobRun{}).instance().started().IsZero() {
 		t.Error("a run with no instance reports a start")
+	}
+}
+
+// The instance's times give the duration when they hold, the run's when the
+// instance reports finishing before it started, as an evicted one does.
+func TestJobRun_Ran(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name             string
+		started, ended   string
+		instanceFinished string
+		want             time.Duration
+	}{
+		{"the instance's", "2026-11-10T05:57:40Z", "2026-11-10T05:58:21Z", "2026-11-10T05:58:18Z", 32 * time.Second},
+		{"an epoch finish falls back to the run's", "2026-11-10T05:57:40Z", "2026-11-10T05:58:21Z", "1970-01-01T00:00:00Z", 41 * time.Second},
+		{"no times at all", "", "", "", 0},
+	}
+
+	for _, tc := range cases {
+		run := &jobRun{}
+		run.StatusDetails.StartTime = tc.started
+		run.StatusDetails.CompletionTime = tc.ended
+		run.StatusDetails.Indices = map[string]indexDetails{"0": {StartedAt: "2026-11-10T05:57:46Z", FinishedAt: tc.instanceFinished}}
+
+		if got := run.ran(); got != tc.want {
+			t.Errorf("%s: ran() = %s, want %s", tc.name, got, tc.want)
+		}
 	}
 }

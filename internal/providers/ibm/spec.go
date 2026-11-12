@@ -6,9 +6,10 @@
 // Turning a normalized task into what Code Engine wants. Three settings matter
 // most: retries, because Code Engine's default would multiply a failing run
 // behind the ledger's back; the size, because Code Engine runs only fixed vCPU
-// and memory pairs; and the service account, because the default hands the
-// workload an identity inside the project. The command line and environment
-// are escaped and carried so the container receives them as the task wrote them.
+// and memory pairs and gives 400M of disk unless asked for more; and the
+// service account, because the default hands the workload an identity inside
+// the project. The command line and environment are escaped and carried so the
+// container receives them as the task wrote them.
 // -------------------------------------------------------------------------------
 
 package ibm
@@ -43,6 +44,10 @@ const (
 	defaultCPU    = 1000
 	defaultMemory = 2048
 )
+
+// minStorageGB is Code Engine's default ephemeral storage, 400M. A run may have
+// up to its memory instead, which costs nothing, so a size gets whichever is more.
+const minStorageGB = 0.4
 
 // The variables carrying a command or argument that holds a line break.
 // VAGABOND_ARG_<i> counts from zero, as args does.
@@ -90,6 +95,7 @@ type jobRunSpec struct {
 	ServiceAccount   string   `json:"run_service_account"`
 	CPU              string   `json:"scale_cpu_limit"`
 	Memory           string   `json:"scale_memory_limit"`
+	Storage          string   `json:"scale_ephemeral_storage_limit"`
 	MaxExecutionTime int      `json:"scale_max_execution_time"`
 	RetryLimit       int      `json:"scale_retry_limit"`
 	ArraySpec        string   `json:"scale_array_spec"`
@@ -142,6 +148,7 @@ func (p *Provider) buildSpec(name string, task *job.Task) (*jobRunSpec, error) {
 		ServiceAccount:   "none", // the workload gets no identity inside the project
 		CPU:              fit.cpu(),
 		Memory:           fit.memory(),
+		Storage:          fit.storage(),
 		MaxExecutionTime: seconds,
 		RetryLimit:       0, // the default of 3 bills four runs the ledger counts as one
 		ArraySpec:        "0",
@@ -196,7 +203,18 @@ func (s size) cpu() string {
 
 // memory is the size's memory as the API takes it: "0.25G", "4G".
 func (s size) memory() string {
-	return strconv.FormatFloat(s.gb, 'f', -1, 64) + "G"
+	return gigabytes(s.gb)
+}
+
+// storage is the most ephemeral storage the size allows: its memory, or 0.4G
+// for the sizes with less.
+func (s size) storage() string {
+	return gigabytes(max(s.gb, minStorageGB))
+}
+
+// gigabytes renders decimal GB the way the API takes them.
+func gigabytes(gb float64) string {
+	return strconv.FormatFloat(gb, 'f', -1, 64) + "G"
 }
 
 // executionSeconds is the task's timeout in whole seconds, rounded up so the

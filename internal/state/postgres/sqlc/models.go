@@ -49,6 +49,7 @@ type Execution struct {
 	Cpu           int64
 	Memory        int64
 	ReleasedAt    *time.Time
+	Reason        string
 }
 
 type Job struct {

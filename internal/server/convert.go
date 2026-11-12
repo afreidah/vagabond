@@ -114,6 +114,7 @@ func executionOf(r *execution.Record) api.Execution {
 		out.ExitCode = res.ExitCode
 		out.Duration = res.Duration
 		out.LogsTruncated = res.LogsTruncated
+		out.Reason = res.Reason
 
 		if b := res.Billed; b != nil {
 			out.Billed = &api.Billed{CPU: b.CPU, Memory: b.Memory, Duration: b.Duration}

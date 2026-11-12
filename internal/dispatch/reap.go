@@ -15,6 +15,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/ledger"
 	"github.com/afreidah/vagabond/internal/plugin"
 )
@@ -47,6 +48,6 @@ func (d *Dispatcher) resolve(ctx context.Context, h ledger.Held) (ledger.Verdict
 	case status.EndedAt.IsZero():
 		return ledger.Stand, 0
 	default:
-		return ledger.Finished, status.EndedAt.Sub(status.StartedAt)
+		return ledger.Finished, execution.Elapsed(status.StartedAt, status.EndedAt)
 	}
 }

@@ -206,6 +206,7 @@ hold a line break; see [Command line](#command-line).
 | `config.image` | `image_reference` | |
 | `image_secret` | `image_secret` | From provider config; omitted when unset |
 | `resources.cpu` and `resources.memory` | `scale_cpu_limit`, `scale_memory_limit` | Rounded **up** to a valid size; see below |
+| The size | `scale_ephemeral_storage_limit` | The size's memory, at least `0.4G`; see below |
 | `timeout` | `scale_max_execution_time` | Whole seconds, rounded **up**, at least 1 |
 | `env` block and `meta` | `run_env_variables` | Each `type: literal`, escaped, sorted by name, then any carried variables |
 | none | `run_mode` | Always `task` |
@@ -324,13 +325,21 @@ Each G size in MiB, rounded down so a task declaring it lands on that size:
 A task above 12 vCPU or 48G fails as `internal` before any call; admission
 rejects it first through the capabilities.
 
+**Disk:** a run's ephemeral storage is separate from its memory, and Code
+Engine caps it at the larger of `0.4G` and the size's memory. Without
+`scale_ephemeral_storage_limit` a run gets `0.4G`, which a Go build's module and
+build caches fill in seconds. The pod is then evicted and the container killed
+with exit 137. Code Engine bills vCPU and memory, not disk, so every run is
+sent the most its size allows: `4G` at 2 vCPU / 4G, `0.4G` at 0.125 / 0.25G.
+A task needing more disk declares more memory.
+
 ## Operations
 
 | Method | API calls | Returns |
 |---|---|---|
 | `Submit` | `POST .../job_runs` | `ProviderID` = run name, state `accepted` |
 | `Status` | `GET .../job_runs/{run}` | State from the run's `status`; `StartedAt`, `EndedAt` from the run's `start_time`, `completion_time` |
-| `Result` | `GET .../job_runs/{run}`, the pod lookup, the pod's log | Exit code, duration, logs |
+| `Result` | `GET .../job_runs/{run}`, the pod lookup, the pod's log | Exit code, reason, duration, logs |
 | `Cancel` | `DELETE .../job_runs/{run}` | `nil`, also when the run is already gone (404) |
 | `Release` | `DELETE .../job_runs/{run}` | Same call as `Cancel` |
 | `StreamLogs` | the pod lookup until the container starts, then the followed log | Writes output until the container exits |
@@ -378,10 +387,26 @@ When the pod is gone, the exit code comes from the run's own status: 0 for
 `completed`, N from a `last_failure_reason` of `ContainerExitedCode<N>`, and
 nil for any other reason, such as `OOMKilled` or `ExceededEphemeralStorage`.
 
-`Result.Duration` is the instance's `finished_at` minus its `started_at`.
+`Result.Duration` is the instance's `finished_at` minus its `started_at`. An
+evicted instance reports `finished_at` as `1970-01-01T00:00:00Z`, so when the
+instance's times do not give a positive duration, the run's `completion_time`
+minus its `start_time` is used, and zero when those fail too.
 
 A pod lookup that fails fails `Result`, classified, so a transient outage is
 not recorded as a missing exit code.
+
+### Reason
+
+`Result.Reason` is why the platform ended the task, first match wins:
+
+| Source | Example |
+|---|---|
+| The pod's `status.reason` and `status.message`, set when the kubelet ended the pod | `Evicted: Pod ephemeral local storage usage exceeds the total limit of containers 400M.` |
+| The task container's `state.terminated.reason` and `message` | `OOMKilled` |
+| With the pod gone, the instance's `last_failure_reason` | `ExceededEphemeralStorage` |
+
+`Completed`, `Error` and `ContainerExitedCode<N>` say no more than the exit code
+and are not a reason. A run that exited on its own has none.
 
 ### Logs
 
@@ -536,6 +561,10 @@ those figures. Vagabond ships no defaults.
   on every call. The message names the region and project called.
 - **Fixed sizes:** a task runs at the smallest size holding what it declared,
   and is billed at that size.
+- **Disk follows memory:** a run gets as much ephemeral storage as its size's
+  memory, at least `0.4G`. Past that the pod is evicted, exit 137 with reason
+  `Evicted: Pod ephemeral local storage usage exceeds ...`. More disk means
+  declaring more memory; see [Sizes](#sizes).
 - **Sub-second timeouts** are rounded up to whole seconds.
 - **Spec size:** Code Engine refuses a job run spec over 10 KiB with
   `spec_too_large`, classified internal. A task's `env`, `meta` and `args`

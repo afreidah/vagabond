@@ -262,6 +262,7 @@ Output format:
 | task output | While the task runs on a provider that streams, otherwise once it has a result; never with `-no-logs` |
 | `==> <task> succeeded on <provider> in <duration>` | The task exited 0 |
 | `==> <task> failed (exit N) on <provider> in <duration>` | The task exited non-zero |
+| `...: <reason>` | Appended when the platform ended the task and said why |
 | `Job "<job>" did not run: <error>` | The dispatch ended `unanswered` |
 
 Progress lines go to stderr and task output to stdout, so redirecting stdout
@@ -386,7 +387,8 @@ curl -s http://127.0.0.1:4747/v1/dispatch/01a0c3f3-0c5a-7f21-9d84-3e7b1a2c4d5f |
 
 **`execution status`** prints the execution's record. Fields the execution does
 not have yet are left out: `Started` appears once it reached `running`, and
-`Duration`, `Exit Code` and `Billed` once it has a result.
+`Duration`, `Exit Code`, `Reason` and `Billed` once it has a result and the
+platform reported them.
 
 ```bash
 ./vagabond execution status 01a0c3f3-0c61-7b3e-8a27-5f9c0d1e2b3a
