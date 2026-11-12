@@ -134,12 +134,23 @@ func (d *Dispatcher) execute(
 
 	// A function or worker finished inside Submit and has nothing to poll.
 	if submission.Synchronous() {
+		d.conclude(ctx, provider, run, submission.State, submission.Result)
 		d.release(provider, id)
 
 		return answer{state: submission.State, result: submission.Result}, nil
 	}
 
 	return d.follow(ctx, provider, run)
+}
+
+// conclude records how an execution ended: its output captured, then its
+// terminal state with result. In that order, since recording the result is
+// what tells a waiting client the output is there to read.
+func (d *Dispatcher) conclude(
+	ctx context.Context, provider plugin.Provider, run *tracked, state execution.State, result *execution.Result,
+) {
+	d.capture(ctx, provider, &run.rec, result)
+	_ = run.finish(ctx, state, result)
 }
 
 // turnedDown reports whether a Submit error means nothing ran: only one
@@ -170,16 +181,15 @@ func (d *Dispatcher) follow(ctx context.Context, provider plugin.Provider, run *
 		return answer{}, err
 	}
 
-	result, err := authorized(ctx, d, provider, func() (*execution.Result, error) {
-		return provider.Result(ctx, id)
-	})
-	run.finish(ctx, state, result)
+	// The output is captured even when the result cannot be read
+	result, err := d.result(ctx, provider, id)
+	d.conclude(ctx, provider, run, state, result)
 
 	if err != nil {
 		return answer{}, err
 	}
 
-	// After the result, because releasing may destroy what it reads.
+	// After the result and output, because releasing may destroy them
 	d.release(provider, id)
 
 	ended := answer{state: state, result: result}
@@ -200,14 +210,7 @@ func (d *Dispatcher) release(provider plugin.Provider, id execution.ID) {
 		releaseTimeout)
 	defer cancel()
 
-	if releaser, ok := provider.(plugin.Releaser); ok {
-		err := authorizedErr(ctx, d, provider, func() error { return releaser.Release(ctx, id) })
-		if err != nil && !errors.Is(err, plugin.ErrUnknownExecution) {
-			return
-		}
-	}
-
-	_ = d.executions.MarkReleased(ctx, id, d.now())
+	_ = d.releaseOn(ctx, provider, id)
 }
 
 // abandon cancels an execution the caller stopped waiting for, best effort and

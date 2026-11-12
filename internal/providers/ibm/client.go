@@ -194,11 +194,30 @@ func (p *Provider) call(ctx context.Context, method, target string, payload, out
 	return nil
 }
 
-// fetch sends one request and returns the raw answer, up to maxResponse. A
-// token refusal arrives already classified and passes through as it is.
+// fetch sends one request and returns the raw answer, up to maxResponse.
 func (p *Provider) fetch(
 	ctx context.Context, method, target string, header http.Header, payload any,
 ) ([]byte, error) {
+	resp, err := p.open(ctx, method, target, header, payload)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	received, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
+	if err != nil {
+		return nil, plugin.Infrastructure(fmt.Errorf("reading response: %w", err))
+	}
+
+	return received, nil
+}
+
+// open sends one request and returns the response with its body unread, for a
+// caller that streams it. A token refusal arrives already classified and
+// passes through as it is; every non-2xx is classified.
+func (p *Provider) open(
+	ctx context.Context, method, target string, header http.Header, payload any,
+) (*http.Response, error) {
 	var body io.Reader
 
 	if payload != nil {
@@ -233,18 +252,16 @@ func (p *Provider) fetch(
 
 		return nil, plugin.Infrastructure(fmt.Errorf("%s %s: %w", method, req.URL.Path, err))
 	}
-	defer resp.Body.Close()
-
-	received, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
-	if err != nil {
-		return nil, plugin.Infrastructure(fmt.Errorf("reading response: %w", err))
-	}
 
 	if resp.StatusCode >= http.StatusMultipleChoices {
+		defer resp.Body.Close()
+
+		received, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
+
 		return nil, p.classify(resp, method, received)
 	}
 
-	return received, nil
+	return resp, nil
 }
 
 // classify turns a non-2xx into a classified failure. Declining codes are

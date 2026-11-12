@@ -588,8 +588,8 @@ func TestStatus_UnknownStatus(t *testing.T) {
 // RESULT
 // -------------------------------------------------------------------------
 
-// The exit code and output come from the pod, the duration from the instance,
-// and the run's reason stands when the pod's says nothing more.
+// The exit code comes from the pod, the duration from the instance, and the
+// run's reason stands when the pod's says nothing more.
 func TestResult_ReadsThePod(t *testing.T) {
 	t.Parallel()
 
@@ -600,9 +600,6 @@ func TestResult_ReadsThePod(t *testing.T) {
 
 	f.on("GET "+runPath(name), reply(http.StatusOK, jobRunBody(name, "failed", "OOMKilled")))
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList(podBody(podName, time.Now(), new(137)))))
-	f.on("GET "+podsPath()+"/"+podName+"/log", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "out\nerr\n")
-	})
 
 	result, err := p.Result(t.Context(), id)
 	if err != nil {
@@ -611,10 +608,6 @@ func TestResult_ReadsThePod(t *testing.T) {
 
 	if result.ExitCode == nil || *result.ExitCode != 137 {
 		t.Errorf("ExitCode = %v, want 137", result.ExitCode)
-	}
-
-	if string(result.Logs) != "out\nerr\n" || result.LogsTruncated {
-		t.Errorf("Logs = %q, truncated %t", result.Logs, result.LogsTruncated)
 	}
 
 	if result.Duration != 32*time.Second || result.Reason != "OOMKilled" {
@@ -644,9 +637,6 @@ func TestResult_Evicted(t *testing.T) {
 
 	f.on("GET "+runPath(name), reply(http.StatusOK, run))
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList(evicted)))
-	f.on("GET "+podsPath()+"/"+podName+"/log", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "go: downloading go.uber.org/mock v0.6.0\n")
-	})
 
 	result, err := p.Result(t.Context(), id)
 	if err != nil {
@@ -662,8 +652,7 @@ func TestResult_Evicted(t *testing.T) {
 	}
 }
 
-// With the pod gone, the exit code is the one Code Engine recorded and there
-// is no output.
+// With the pod gone, the exit code is the one Code Engine recorded.
 func TestResult_PodGone(t *testing.T) {
 	t.Parallel()
 
@@ -679,8 +668,8 @@ func TestResult_PodGone(t *testing.T) {
 		t.Fatalf("Result() = %v", err)
 	}
 
-	if result.ExitCode == nil || *result.ExitCode != 3 || result.Logs != nil {
-		t.Errorf("Result() = exit %v, logs %q; want 3 and none", result.ExitCode, result.Logs)
+	if result.ExitCode == nil || *result.ExitCode != 3 {
+		t.Errorf("ExitCode = %v, want 3", result.ExitCode)
 	}
 }
 
@@ -697,29 +686,6 @@ func TestResult_PodLookupFails(t *testing.T) {
 
 	if _, err := p.Result(t.Context(), id); err == nil || !plugin.Reroutable(err) {
 		t.Fatalf("Result() = %v, want an infrastructure failure", err)
-	}
-}
-
-// A log that cannot be read leaves the exit code standing.
-func TestResult_SurvivesUnreadableLogs(t *testing.T) {
-	t.Parallel()
-
-	f, p := newFakeIBM(t)
-	id := newID(t)
-	name := runName(id)
-	podName := name + "-0-0"
-
-	f.on("GET "+runPath(name), reply(http.StatusOK, jobRunBody(name, "completed", "")))
-	f.on("GET "+podsPath(), reply(http.StatusOK, podList(podBody(podName, time.Now(), new(0)))))
-	f.on("GET "+podsPath()+"/"+podName+"/log", reply(http.StatusInternalServerError, map[string]any{"message": "boom"}))
-
-	result, err := p.Result(t.Context(), id)
-	if err != nil {
-		t.Fatalf("Result() = %v", err)
-	}
-
-	if result.ExitCode == nil || *result.ExitCode != 0 || result.Logs != nil {
-		t.Errorf("Result() = exit %v, logs %q; want 0 and none", result.ExitCode, result.Logs)
 	}
 }
 

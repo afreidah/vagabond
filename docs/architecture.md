@@ -253,7 +253,8 @@ Intervals, locks and failure handling for every loop are in
 |---|---|---|
 | Registered jobs and versions | Store (`jobs`, `job_versions`) | Yes, except under `-dev` |
 | Dispatches and their leases | Store (`dispatches`) | Yes, except under `-dev` |
-| Executions, results and the last 64 KiB of output | Store (`executions`) | Yes, except under `-dev` |
+| Executions and results | Store (`executions`) | Yes, except under `-dev` |
+| Execution output, up to `max_log_mib` each, for `log_retention` | Store (`execution_logs`) | Yes, except under `-dev` |
 | Quota usage and open reservations | Store (`quota_usage`, `quota_reservations`) | Yes, except under `-dev` |
 | Capability snapshots and health | Server memory (registry) | No; rebuilt by the startup refresh |
 | Quota usage snapshot | Server memory (ledger) | No; re-read from the store at startup |

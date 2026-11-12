@@ -59,9 +59,10 @@ func (s *Store) Update(ctx context.Context, r *execution.Record, from execution.
 		BilledCpu:     row.BilledCpu,
 		BilledMemory:  row.BilledMemory,
 		BilledMs:      row.BilledMs,
-		Logs:          row.Logs,
 		LogsTruncated: row.LogsTruncated,
 		Reason:        row.Reason,
+		LogsStart:     row.LogsStart,
+		LogsAt:        row.LogsAt,
 		ID:            row.ID,
 		FromState:     string(from),
 	}
@@ -162,27 +163,29 @@ func recordsOf(rows []db.Execution) ([]*execution.Record, error) {
 // -------------------------------------------------------------------------
 
 // rowOf flattens a record into columns. Zero times and an absent result are
-// nulls; logs are bounded here as well as by callers, since this is the last
-// place that can.
+// nulls. The output is stored apart, so a result's own copy of it is not.
 func rowOf(r *execution.Record) db.Execution {
 	row := db.Execution{
-		ID:         r.ID.String(),
-		Namespace:  r.Namespace,
-		Job:        r.Job,
-		JobVersion: r.JobVersion,
-		Task:       r.Task,
-		Provider:   r.Provider,
-		Attempt:    int64(r.Attempt),
-		Cpu:        int64(r.CPU),
-		Memory:     int64(r.Memory),
-		State:      string(r.State),
-		ProviderID: r.ProviderID,
-		Failure:    r.Failure,
-		CreatedAt:  r.ID.Created(),
-		StartedAt:  nullTime(r.StartedAt),
-		EndedAt:    nullTime(r.EndedAt),
-		UpdatedAt:  r.UpdatedAt,
-		ReleasedAt: nullTime(r.Released),
+		ID:            r.ID.String(),
+		Namespace:     r.Namespace,
+		Job:           r.Job,
+		JobVersion:    r.JobVersion,
+		Task:          r.Task,
+		Provider:      r.Provider,
+		Attempt:       int64(r.Attempt),
+		Cpu:           int64(r.CPU),
+		Memory:        int64(r.Memory),
+		State:         string(r.State),
+		ProviderID:    r.ProviderID,
+		Failure:       r.Failure,
+		CreatedAt:     r.ID.Created(),
+		StartedAt:     nullTime(r.StartedAt),
+		EndedAt:       nullTime(r.EndedAt),
+		UpdatedAt:     r.UpdatedAt,
+		ReleasedAt:    nullTime(r.Released),
+		LogsAt:        nullTime(r.LogsAt),
+		LogsStart:     r.LogsStart,
+		LogsTruncated: r.LogsTruncated,
 	}
 
 	if !r.Previous.IsZero() {
@@ -193,14 +196,12 @@ func rowOf(r *execution.Record) db.Execution {
 		row.DispatchID = r.Dispatch.String()
 	}
 
-	result := r.Result.Bounded()
+	result := r.Result
 	if result == nil {
 		return row
 	}
 
 	row.DurationMs = new(result.Duration.Milliseconds())
-	row.Logs = result.Logs
-	row.LogsTruncated = result.LogsTruncated
 	row.Reason = result.Reason
 
 	if result.ExitCode != nil {
@@ -241,6 +242,10 @@ func recordOf(row *db.Execution) (*execution.Record, error) {
 		Memory:     int(row.Memory),
 		Failure:    row.Failure,
 		Released:   ptr.Deref(row.ReleasedAt),
+
+		LogsAt:        ptr.Deref(row.LogsAt),
+		LogsStart:     row.LogsStart,
+		LogsTruncated: row.LogsTruncated,
 	}
 
 	if row.PreviousID != "" {
@@ -260,11 +265,9 @@ func recordOf(row *db.Execution) (*execution.Record, error) {
 	}
 
 	r.Result = &execution.Result{
-		ID:            id,
-		Duration:      time.Duration(*row.DurationMs) * time.Millisecond,
-		Logs:          row.Logs,
-		LogsTruncated: row.LogsTruncated,
-		Reason:        row.Reason,
+		ID:       id,
+		Duration: time.Duration(*row.DurationMs) * time.Millisecond,
+		Reason:   row.Reason,
 	}
 
 	if row.ExitCode != nil {

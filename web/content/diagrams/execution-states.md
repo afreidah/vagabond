@@ -95,7 +95,7 @@ window.vagabondDiagram = {
     SUCCEEDED: {
       title: 'succeeded',
       badge: 'success', badgeText: 'terminal',
-      body: '<p>The provider reported success. Written by <code>tracked.finish</code> with the result: from <code>Submit</code> for a synchronous provider, otherwise once a poll sees the terminal state and <code>Result</code> is called. The result keeps the last 64 KiB of output.</p><p>Written even when <code>Result</code> failed, then without a result, and the attempt ends with the <code>Result</code> error. Only <code>succeeded</code> with a result passes the task.</p>'
+      body: '<p>The provider reported success. Written by <code>tracked.finish</code> with the result: from <code>Submit</code> for a synchronous provider, otherwise once a poll sees the terminal state and <code>Result</code> is called. The output is captured into <code>execution_logs</code> just before, so it is there when the state is seen.</p><p>Written even when <code>Result</code> failed, then without a result, and the attempt ends with the <code>Result</code> error. Only <code>succeeded</code> with a result passes the task.</p>'
     },
     FAILED: {
       title: 'failed',

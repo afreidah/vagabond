@@ -4,7 +4,8 @@
 // Author: Alex Freidah
 //
 // Following a run's output: waiting for its container, resuming from an
-// offset, and how each way a stream can stop is reported.
+// offset, and how each way a stream can stop is reported. Reading it whole
+// once the run has ended, and when that read is incomplete.
 // -------------------------------------------------------------------------------
 
 package ibm
@@ -38,24 +39,6 @@ func waitingPod(name string) map[string]any {
 			}},
 		},
 	}
-}
-
-// writerFunc adapts a function to io.Writer.
-type writerFunc func([]byte) (int, error)
-
-// Write calls the function.
-func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
-
-// failingReader returns its data, then an error that is not EOF.
-type failingReader struct{ data *strings.Reader }
-
-// Read serves the data, then fails.
-func (r failingReader) Read(p []byte) (int, error) {
-	if r.data.Len() == 0 {
-		return 0, errors.New("connection reset")
-	}
-
-	return r.data.Read(p)
 }
 
 // -------------------------------------------------------------------------
@@ -170,41 +153,123 @@ func TestStreamLogs_CancelWhileWaiting(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
-// COPYING
+// READING
 // -------------------------------------------------------------------------
 
-// An offset past the end of the output writes nothing and ends quietly.
-func TestCopyFollow_OffsetPastTheEnd(t *testing.T) {
+// A finished run's log is read whole, unfollowed and unbounded, from the
+// task's container.
+func TestReadLogs_ReadsTheWholeLog(t *testing.T) {
 	t.Parallel()
 
+	f, p := newFakeIBM(t)
+	id := newID(t)
+	podName := runName(id) + "-0-0"
+	log := strings.Repeat("x", 5*maxResponse/4)
+
+	f.on("GET "+podsPath(), reply(http.StatusOK, podList(podBody(podName, time.Now(), new(0)))))
+	f.on("GET "+podsPath()+"/"+podName+"/log", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, log)
+	})
+
 	var out bytes.Buffer
-	if err := copyFollow(strings.NewReader("short"), &out, 100); err != nil || out.Len() != 0 {
-		t.Fatalf("copyFollow() = %v, wrote %q", err, out.String())
+	if err := p.ReadLogs(t.Context(), id, &out); err != nil {
+		t.Fatalf("ReadLogs() = %v", err)
+	}
+
+	if out.Len() != len(log) {
+		t.Errorf("read %d bytes, want all %d", out.Len(), len(log))
+	}
+
+	got := f.requestsTo("GET " + podsPath() + "/" + podName + "/log")[0]
+	if got.query.Has("follow") || got.query.Has("limitBytes") || got.query.Get("container") != userContainer {
+		t.Errorf("log query = %v", got.query)
+	}
+
+	if !strings.HasPrefix(got.header.Get("Accept"), "text/plain") {
+		t.Errorf("Accept = %q", got.header.Get("Accept"))
 	}
 }
 
-// A read that fails mid-stream ends the copy quietly, keeping what arrived.
-func TestCopyFollow_ReadFailureIsQuiet(t *testing.T) {
+// A pod already gone took its log with it, which is output lost.
+func TestReadLogs_PodGone(t *testing.T) {
 	t.Parallel()
 
+	f, p := newFakeIBM(t)
+
+	f.on("GET "+podsPath(), reply(http.StatusOK, podList()))
+
+	if err := p.ReadLogs(t.Context(), newID(t), io.Discard); !plugin.Reroutable(err) {
+		t.Fatalf("ReadLogs() = %v, want an infrastructure failure", err)
+	}
+}
+
+// A container that never started printed nothing, so there is no log to ask
+// for and nothing missing.
+func TestReadLogs_NeverStarted(t *testing.T) {
+	t.Parallel()
+
+	f, p := newFakeIBM(t)
+	id := newID(t)
+	podName := runName(id) + "-0-0"
+
+	f.on("GET "+podsPath(), reply(http.StatusOK, podList(waitingPod(podName))))
+
+	if err := p.ReadLogs(t.Context(), id, io.Discard); err != nil {
+		t.Fatalf("ReadLogs() = %v", err)
+	}
+
+	if n := len(f.requestsTo("GET " + podsPath() + "/" + podName + "/log")); n != 0 {
+		t.Errorf("asked for the log %d times, want none", n)
+	}
+}
+
+// A log cut off partway is reported as incomplete, after what arrived.
+func TestReadLogs_CutConnection(t *testing.T) {
+	t.Parallel()
+
+	f, p := newFakeIBM(t)
+	id := newID(t)
+	podName := runName(id) + "-0-0"
+
+	f.on("GET "+podsPath(), reply(http.StatusOK, podList(podBody(podName, time.Now(), new(0)))))
+	f.on("GET "+podsPath()+"/"+podName+"/log", func(w http.ResponseWriter, _ *http.Request) {
+		// Promise more than is sent, so the client sees the body end early
+		w.Header().Set("Content-Length", "100")
+		_, _ = io.WriteString(w, "partial")
+	})
+
 	var out bytes.Buffer
-	if err := copyFollow(failingReader{strings.NewReader("partial")}, &out, 0); err != nil {
-		t.Fatalf("copyFollow() = %v, want a quiet end", err)
+
+	if err := p.ReadLogs(t.Context(), id, &out); !plugin.Reroutable(err) {
+		t.Fatalf("ReadLogs() = %v, want an infrastructure failure", err)
 	}
 
 	if out.String() != "partial" {
-		t.Errorf("wrote %q", out.String())
+		t.Errorf("read %q, want what arrived", out.String())
 	}
 }
 
-// A write that fails is reported, so the caller knows its client is gone.
-func TestCopyFollow_WriteFailureIsInternal(t *testing.T) {
+// A log the platform refuses to open is classified, and a pod lookup that
+// fails is the failure.
+func TestReadLogs_Refusals(t *testing.T) {
 	t.Parallel()
 
-	gone := writerFunc(func([]byte) (int, error) { return 0, errors.New("client gone") })
+	f, p := newFakeIBM(t)
+	id := newID(t)
+	podName := runName(id) + "-0-0"
 
-	err := copyFollow(strings.NewReader("data"), gone, 0)
-	if err == nil || plugin.Reroutable(err) {
-		t.Fatalf("copyFollow() = %v, want an internal failure", err)
+	f.on("GET "+podsPath(), reply(http.StatusOK, podList(podBody(podName, time.Now(), new(0)))))
+	f.on("GET "+podsPath()+"/"+podName+"/log",
+		reply(http.StatusForbidden, map[string]any{"kind": "Status", "message": "forbidden", "reason": "Forbidden", "code": 403}))
+
+	if err := p.ReadLogs(t.Context(), id, io.Discard); !errors.Is(err, plugin.ErrUnauthorized) {
+		t.Errorf("ReadLogs() = %v, want unauthorized", err)
+	}
+
+	g, q := newFakeIBM(t)
+	g.on("GET "+podsPath(), reply(http.StatusServiceUnavailable, map[string]any{"message": "unavailable"}))
+
+	if err := q.ReadLogs(t.Context(), id, io.Discard); !plugin.Reroutable(err) {
+		t.Errorf("ReadLogs() = %v, want an infrastructure failure", err)
 	}
 }

@@ -124,8 +124,10 @@ args    = ["-c", "echo hello-stdout; echo hello-stderr >&2; sleep 10; exit 3"]
 		t.Fatalf("Result failed: %v", err)
 	}
 
+	logs := readLogs(t, p, id)
+
 	t.Logf("exit=%d duration=%s logs=%q streamed=%q",
-		ptr.Deref(result.ExitCode), result.Duration, result.Logs, streamed.String())
+		ptr.Deref(result.ExitCode), result.Duration, logs, streamed.String())
 
 	if ptr.Deref(result.ExitCode) != 3 {
 		t.Errorf("exit code = %v, want 3", result.ExitCode)
@@ -133,8 +135,8 @@ args    = ["-c", "echo hello-stdout; echo hello-stderr >&2; sleep 10; exit 3"]
 
 	// Both streams, since stdout alone looks correct on a passing build
 	for _, want := range []string{"hello-stdout", "hello-stderr"} {
-		if !strings.Contains(string(result.Logs), want) {
-			t.Errorf("logs do not contain %q: %q", want, result.Logs)
+		if !strings.Contains(logs, want) {
+			t.Errorf("logs do not contain %q: %q", want, logs)
 		}
 
 		if !strings.Contains(streamed.String(), want) {
@@ -192,16 +194,67 @@ args    = ["-ec", "if true; then\n  echo line-one\nfi\necho \"$0 / $LIVE_PRICE\"
 		t.Errorf("state = %s, want succeeded", state)
 	}
 
-	result, err := p.Result(t.Context(), id)
-	if err != nil {
-		t.Fatalf("Result failed: %v", err)
+	logs := readLogs(t, p, id)
+
+	t.Logf("logs=%q", logs)
+
+	if want := "line-one\n$(UNSET) $$ / $(UNSET) costs $$5\n"; logs != want {
+		t.Errorf("logs = %q, want %q", logs, want)
+	}
+}
+
+// Output past 64 KiB comes back whole, which no bound on the pod log request
+// may cut.
+func TestLiveLongOutput(t *testing.T) {
+	p := liveProvider(t)
+	id := newID(t)
+
+	task := &job.Task{
+		Name:   "live-long",
+		Driver: job.DriverContainer,
+		Config: rawBlock(t, `
+image   = "alpine:3.20"
+command = "sh"
+args    = ["-c", "seq 1 20000"]
+`),
+		Resources: &job.Resources{CPU: new(125), Memory: new(256)},
+		Timeout:   new(job.Duration("5m")),
 	}
 
-	t.Logf("exit=%d logs=%q", ptr.Deref(result.ExitCode), result.Logs)
-
-	if want := "line-one\n$(UNSET) $$ / $(UNSET) costs $$5\n"; string(result.Logs) != want {
-		t.Errorf("logs = %q, want %q", result.Logs, want)
+	if _, err := p.Submit(t.Context(), id, task); err != nil {
+		t.Fatalf("Submit failed: %v", err)
 	}
+
+	// Its own context: t.Context is cancelled before cleanups run
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		_ = p.Cancel(ctx, id)
+	})
+
+	if state := pollToCompletion(t, p, id); state != execution.StateSucceeded {
+		t.Errorf("state = %s, want succeeded", state)
+	}
+
+	logs := readLogs(t, p, id)
+
+	if !strings.HasPrefix(logs, "1\n2\n") || !strings.HasSuffix(logs, "\n20000\n") || len(logs) <= 64<<10 {
+		t.Errorf("ReadLogs gave %d bytes, want all of the output", len(logs))
+	}
+}
+
+// readLogs reads a finished run's whole output.
+func readLogs(t *testing.T, p *Provider, id execution.ID) string {
+	t.Helper()
+
+	var out strings.Builder
+
+	if err := p.ReadLogs(t.Context(), id, &out); err != nil {
+		t.Fatalf("ReadLogs failed: %v", err)
+	}
+
+	return out.String()
 }
 
 // follow streams the execution's output in the background, returning what it

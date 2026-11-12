@@ -4,7 +4,8 @@
 // Author: Alex Freidah
 //
 // The parts of following a run that a real server cannot be made to produce on
-// demand: a stream that cannot resume, a truncated or unreadable stored copy,
+// demand: a stream that cannot resume, a stored copy missing its front, cut by
+// the provider or unreadable,
 // an execution that ends with no result, and a platform's reason for ending
 // one. A stub answers the logs route.
 // -------------------------------------------------------------------------------
@@ -80,31 +81,33 @@ func TestFollower_StopsWhenTheStreamCannotResume(t *testing.T) {
 		t.Fatal("the follow kept reopening a stream that cannot resume")
 	}
 
-	if stdout.String() != "first\n" || !l.broke {
-		t.Errorf("stdout %q, broke %v; want the first stream's output and a broken follow", stdout.String(), l.broke)
+	if stdout.String() != "first\n" {
+		t.Errorf("stdout %q, want the first stream's output", stdout.String())
 	}
 }
 
 // The stored copy finishes what did not stream, from the bytes printed, and
-// says when the output cannot be shown whole.
+// says when output is not there to print.
 func TestFollower_Rest(t *testing.T) {
 	tests := []struct {
 		name      string
 		streamed  string // what a follow already printed, empty for none
-		broke     bool
+		start     int64  // the first byte the server kept
 		truncated bool
 		status    int
 		stored    string
 		wantOut   string
 		wantWarn  string
 	}{
-		{"nothing streamed", "", false, false, http.StatusOK, "all\n", "all\n", ""},
-		{"output ends mid-line", "", false, false, http.StatusOK, "partial", "partial\n", ""},
-		{"the rest after a stream", "first\n", false, false, http.StatusOK, "rest\n", "first\nrest\n", ""},
-		{"everything streamed", "all\n", false, false, http.StatusOK, "", "all\n", ""},
-		{"truncated, nothing streamed", "", false, true, http.StatusOK, "tail\n", "tail\n", "Output was truncated."},
-		{"truncated after a broken stream", "first\n", true, true, http.StatusOK, "", "first\n", "Live output was interrupted"},
-		{"stored copy unreadable", "", false, false, http.StatusInternalServerError, `{"Error":"boom"}`, "", "Could not read the output"},
+		{"nothing streamed", "", 0, false, http.StatusOK, "all\n", "all\n", ""},
+		{"output ends mid-line", "", 0, false, http.StatusOK, "partial", "partial\n", ""},
+		{"the rest after a stream", "first\n", 0, false, http.StatusOK, "rest\n", "first\nrest\n", ""},
+		{"everything streamed", "all\n", 0, false, http.StatusOK, "", "all\n", ""},
+		{"front dropped, nothing streamed", "", 100, false, http.StatusOK, "tail\n", "tail\n", "100 bytes of output were not kept"},
+		{"front dropped past the stream", "first\n", 100, false, http.StatusOK, "tail\n", "first\ntail\n", "94 bytes of output were not kept"},
+		{"front dropped, all streamed", "first\n", 4, false, http.StatusOK, "", "first\n", ""},
+		{"provider gave part", "", 0, true, http.StatusOK, "part\n", "part\n", "The provider gave only part of the output."},
+		{"stored copy unreadable", "", 0, false, http.StatusInternalServerError, `{"Error":"boom"}`, "", "Could not read the output"},
 	}
 
 	for _, tc := range tests {
@@ -132,12 +135,12 @@ func TestFollower_Rest(t *testing.T) {
 				done := make(chan struct{})
 				close(done)
 
-				l := &live{out: &output{mu: &f.stdout, w: &stdout}, end: func() {}, done: done, broke: tc.broke}
+				l := &live{out: &output{mu: &f.stdout, w: &stdout}, end: func() {}, done: done}
 				_, _ = l.out.Write([]byte(tc.streamed))
 				f.live["exec-1"] = l
 			}
 
-			f.rest(t.Context(), &api.Execution{ID: "exec-1", LogsTruncated: tc.truncated})
+			f.rest(t.Context(), &api.Execution{ID: "exec-1", LogsStart: tc.start, LogsTruncated: tc.truncated})
 
 			warned := ui.ErrorWriter.String()
 

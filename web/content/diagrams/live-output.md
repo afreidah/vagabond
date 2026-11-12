@@ -1,11 +1,11 @@
 ---
 title: "Live Output"
 linkTitle: "Live Output"
-description: "Interactive diagram of a running execution's output from the provider through the server's follow route to the CLI, with resume, the stored copy and 416."
+description: "Interactive diagram of a running execution's output from the provider through the server's follow route to the CLI, with resume, the Cloud Run backfill, the stored copy and 416."
 weight: 6
 ---
 
-How a running execution's output reaches the terminal: the CLI follower, the server's follow route, the pool, Cloud Run and Code Engine streams behind it, and the stored copy that finishes what did not stream. **Hover over any component** for implementation details.
+How a running execution's output reaches the terminal: the CLI follower, the server's follow route, the pool, Cloud Run and Code Engine streams behind it, and the stored copy that finishes what did not stream. Every stream starts at the first byte the task printed, so a byte count is a position in all of them. **Hover over any component** for implementation details.
 
 {{< diagram >}}
 
@@ -27,10 +27,11 @@ window.vagabondDiagram = {
     '    subgraph SRVSIDE [Server]',
     '        ROUTE["GET /v1/execution/{id}/logs"]:::process --> STREAMSEL{"follow=true, not ended,<br>LogStreamer?"}:::decision',
     '        STREAMSEL -->|no| STORED[Stored copy<br>from offset]:::process',
-    '        STORED --> STORE[(Execution record:<br>last 64 KiB)]:::storage',
+    '        STORED --> RECORD[(Execution record:<br>logs_start)]:::storage',
+    '        STORED --> CHUNKS[(execution_logs:<br>256 KiB chunks)]:::storage',
     '        STREAMSEL -->|yes| FOLLOW[Stream and<br>flush each write]:::process',
     '        ENDFOLLOW["End of follow:<br>poll 1 s, linger 5 s"]:::background -->|cancel| FOLLOW',
-    '        ENDFOLLOW -->|re-read| STORE',
+    '        ENDFOLLOW -->|re-read| RECORD',
     '        SHUTDOWN[Shutdown:<br>endStreams]:::background -->|stop at once| ENDFOLLOW',
     '        R416[416 Range Not<br>Satisfiable]:::reject',
     '    end',
@@ -41,9 +42,12 @@ window.vagabondDiagram = {
     '    end',
     '',
     '    subgraph GCPSIDE [Cloud Run provider]',
-    '        CRSL{Offset<br>above 0?}:::decision -->|yes| NORESUME[plugin.ErrNoResume]:::reject',
-    '        CRSL -->|no| TAIL["entries:tail"]:::process',
+    '        TAIL["Open entries:tail,<br>queue what arrives"]:::process --> BACKFILL["entries:list:<br>what was logged before"]:::process',
+    '        BACKFILL --> PLACED{Backfill<br>complete?}:::decision',
+    '        PLACED -->|"failed or<br>page cap"| NORESUME[plugin.ErrNoResume]:::reject',
+    '        PLACED -->|yes| DRAIN["Tail on, dropping<br>entries listed"]:::process',
     '        TAIL --> CLOUDLOG[(Cloud Logging)]:::storage',
+    '        BACKFILL --> CLOUDLOG',
     '    end',
     '',
     '    subgraph IBMSIDE [Code Engine provider]',
@@ -54,7 +58,7 @@ window.vagabondDiagram = {
     '    FOLLOWER -->|"follow=true,<br>offset=N"| ROUTE',
     '    REST -->|"offset=N"| ROUTE',
     '    FOLLOW -->|pool| POOLSL',
-    '    FOLLOW -->|Cloud Run| CRSL',
+    '    FOLLOW -->|Cloud Run| TAIL',
     '    FOLLOW -->|Code Engine| CESL',
     '    NORESUME --> R416',
   ].join('\n'),
@@ -68,7 +72,7 @@ window.vagabondDiagram = {
     POLL: {
       title: 'Poll the Run',
       badge: 'process', badgeText: 'every 1 s',
-      body: '<p><code>job run</code> reads <code>GET /v1/dispatch/{id}</code> every second and goes through its executions: one with a result goes to the rest and the verdict; any other goes to <code>watch</code>, and a state change prints <code>==&gt; &lt;task&gt; &lt;state&gt; on &lt;provider&gt;</code>. The command ends when the dispatch leaves <code>running</code>.</p><p><code>execution logs -f</code> reads <code>GET /v1/execution/{id}</code> every second instead, and once the execution has a result or an end time prints the rest and exits 0.</p>'
+      body: '<p><code>job run</code> reads <code>GET /v1/dispatch/{id}</code> every second and goes through its executions: one with a result goes to the rest and the verdict; any other goes to <code>watch</code>, and a state change prints <code>==&gt; &lt;task&gt; &lt;state&gt; on &lt;provider&gt;</code>. The command ends when the dispatch leaves <code>running</code>.</p><p><code>execution logs -f</code> reads <code>GET /v1/execution/{id}</code> every second instead, and once the execution has a result or an end time prints the rest and exits 0.</p><p>Dispatch stores an execution&rsquo;s output before it records the result, so the output is there by the time the result is seen.</p>'
     },
     WATCH: {
       title: 'Follow This Execution?',
@@ -78,17 +82,17 @@ window.vagabondDiagram = {
     FOLLOWER: {
       title: 'FollowLogs from Bytes Written',
       badge: 'process', badgeText: 'CLI follow',
-      body: '<p><code>follower.start</code> runs a goroutine that calls <code>api.Client.FollowLogs</code> with <code>offset</code> set to the bytes this execution has written to stdout so far, and copies the response body to stdout as it arrives.</p><p>Every execution&rsquo;s output shares one stdout lock, so parallel follows never interleave a write. The byte count is where a reopened stream resumes.</p><p>Any error from <code>FollowLogs</code>, whether no connection, an error status or a body that breaks, marks the follow broken; a body that ends cleanly does not.</p>'
+      body: '<p><code>follower.start</code> runs a goroutine that calls <code>api.Client.FollowLogs</code> with <code>offset</code> set to the bytes this execution has written to stdout so far, and copies the response body to stdout as it arrives.</p><p>Every execution&rsquo;s output shares one stdout lock, so parallel follows never interleave a write. The byte count is where a reopened stream resumes, and where the stored copy is read from at the end.</p>'
     },
     REOPEN: {
       title: 'Reopen the Stream?',
       badge: 'decision', badgeText: 'reconnect',
-      body: '<p>When a response ends: a <code>416</code> stops following at once, since the provider cannot resume, and the stored copy finishes the output. Otherwise the follow waits 1 s and reopens from the bytes written, unless the execution has ended or the command was interrupted.</p><p>The first request starts at offset 0, which every streaming provider accepts. On Cloud Run the <code>416</code> comes on a reopen after output has streamed; a reopen with nothing written yet is still offset 0 and is accepted.</p>'
+      body: '<p>When a response ends: a <code>416</code> stops following at once, since the provider cannot place its stream, and the stored copy finishes the output. Otherwise the follow waits 1 s and reopens from the bytes written, unless the execution has ended or the command was interrupted.</p><p>Every streaming provider starts at the first byte and skips the <code>offset</code> it is given, so a reopened stream picks up where the last one ended. A <code>416</code> comes only from Cloud Run, when its backfill fails or stops at its page cap.</p>'
     },
     REST: {
       title: 'Print the Rest of the Stored Copy',
       badge: 'process', badgeText: 'stored copy',
-      body: '<p><code>follower.rest</code> runs once the execution has a result. It waits for the follow to stop, so the stream&rsquo;s last lines come before the verdict, then calls <code>api.Client.Logs</code> with <code>offset</code> set to the bytes streamed and prints what comes back, ending it with a newline if needed.</p><p>A truncated stored copy cannot place an offset. With nothing streamed it prints the tail and warns <code>Output was truncated.</code>; after a broken stream it warns <code>Live output was interrupted. vagabond execution logs &lt;id&gt; has its stored tail.</code></p><p>A failed read warns <code>Could not read the output of &lt;id&gt;</code>.</p>'
+      body: '<p><code>follower.rest</code> runs once the execution has a result. It waits for the follow to stop, so the stream&rsquo;s last lines come before the verdict, then calls <code>api.Client.Logs</code> with <code>offset</code> set to the bytes streamed and copies what comes back to stdout, ending it with a newline if needed. <code>execution logs</code> without <code>-f</code> does the same from offset 0.</p><p>When <code>LogsStart</code> is past the bytes streamed, output between them was dropped past the server&rsquo;s ceiling, and it warns <code>&lt;n&gt; bytes of output were not kept: the server keeps the end of long output.</code> When <code>LogsTruncated</code> is set it warns <code>The provider gave only part of the output.</code></p><p>A failed read warns <code>Could not read the output of &lt;id&gt;</code>.</p>'
     },
     VERDICT: {
       title: 'Verdict Line',
@@ -108,12 +112,17 @@ window.vagabondDiagram = {
     STORED: {
       title: 'Stored Copy from Offset',
       badge: 'process', badgeText: 'stored output',
-      body: '<p><code>storedFrom</code> slices the result&rsquo;s stored output, always with status 200:</p><p>No result yet: empty.<br><code>offset</code> 0: all of it.<br>Truncated, <code>offset</code> above 0: empty, since the copy no longer starts at byte 0.<br>At or past the end: empty.<br>Otherwise: from <code>offset</code> on.</p>'
+      body: '<p><code>execution.PlaceLogs</code> turns the record&rsquo;s <code>logs_start</code> and the request&rsquo;s <code>offset</code> into the chunk to start at and the bytes of it to skip. An offset in output dropped past the ceiling starts at the first byte kept. The chunks are then written one at a time through <code>plugin.SkipWriter</code>, always with status 200.</p><p>Before the output is captured, and after it is pruned, the body is empty. A read that fails before anything is written is answered with its error; one that fails later ends the body and logs <code>reading stored output ended early</code>.</p>'
     },
-    STORE: {
+    RECORD: {
       title: 'Execution Record',
+      badge: 'storage', badgeText: 'executions',
+      body: '<p>Says where the stored output stands: <code>logs_at</code> when it was captured, <code>logs_start</code> the first byte still stored, <code>logs_truncated</code> when the provider gave less than the task printed. Dispatch writes these with the result, after it has stored the output.</p><p>The output itself is not on the record, so the follow&rsquo;s re-read every second and the CLI&rsquo;s poll never read it.</p><p><a href="../database-schema/">Database schema diagram &rarr;</a></p>'
+    },
+    CHUNKS: {
+      title: 'execution_logs',
       badge: 'storage', badgeText: 'store',
-      body: '<p>The result holds the last 64 KiB (65536 bytes) of output, with <code>LogsTruncated</code> set when earlier output was cut (<code>Result.Bounded</code>). It is written with the result once the execution is terminal; before that there is no stored output.</p><p>Streaming never writes here. The stream is a view; <code>Result</code> stays the record.</p><p><a href="../database-schema/">Database schema diagram &rarr;</a></p>'
+      body: '<p>The whole output in 256 KiB chunks, chunk <code>seq</code> holding bytes <code>seq &times; 256 KiB</code> onward, so an offset names its chunk. Captured by dispatch once the execution ends, from the provider&rsquo;s <code>ReadLogs</code> or the output that came with its answer. Past <code>max_log_mib</code> (16 MiB) the oldest chunks are dropped; after <code>log_retention</code> (7 days) the output is pruned.</p><p>Streaming never writes here. The stream is a view; the stored copy is the record.</p><p><a href="../../docs/dispatch/#output">Dispatch output &rarr;</a></p>'
     },
     FOLLOW: {
       title: 'Stream and Flush Each Write',
@@ -132,13 +141,13 @@ window.vagabondDiagram = {
     },
     R416: {
       title: '416 Range Not Satisfiable',
-      badge: 'reject', badgeText: 'cannot resume',
-      body: '<p><code>this provider&#39;s log stream cannot resume from an offset</code>, as the JSON error body, sent before any output.</p><p>The CLI follow stops streaming that execution and does not reopen it. Once the execution has a result, the rest is read from the stored copy with <code>?offset=</code> set to the bytes streamed. That read is empty when the copy is truncated, and the CLI warns that live output was interrupted.</p>'
+      badge: 'reject', badgeText: 'cannot be placed',
+      body: '<p><code>this provider&#39;s log stream cannot resume from an offset</code>, as the JSON error body, sent only when nothing has been written yet.</p><p>The CLI follow stops streaming that execution and does not reopen it. Once the execution has a result, the rest is read from the stored copy with <code>?offset=</code> set to the bytes streamed, which places it exactly.</p>'
     },
     POOLSL: {
       title: 'Pool StreamLogs',
       badge: 'process', badgeText: 'pool provider',
-      body: '<p><code>pool.Provider.StreamLogs</code> finds the node holding the execution; one that is not connected fails <code>the node holding &lt;id&gt; is not connected</code> within 5 minutes of leaving and <code>node &lt;name&gt; holding &lt;id&gt; is gone</code> after, which ends the response early. Otherwise it opens <code>AgentExecutions.StreamLogs</code> with <code>execution_id</code> and <code>offset</code> down the agent&rsquo;s session and writes each <code>LogChunk</code> to the response until the agent ends the stream.</p><p>The pool honours <code>offset</code>, so a reopened stream resumes exactly where the last one stopped.</p><p><a href="../agents/">Agents and pools diagram &rarr;</a></p>'
+      body: '<p><code>pool.Provider.StreamLogs</code> finds the node holding the execution; one that is not connected fails <code>the node holding &lt;id&gt; is not connected</code> within 5 minutes of leaving and <code>node &lt;name&gt; holding &lt;id&gt; is gone</code> after, which ends the response early. Otherwise it opens <code>AgentExecutions.StreamLogs</code> with <code>execution_id</code> and <code>offset</code> down the agent&rsquo;s session and writes each <code>LogChunk</code> to the response until the agent ends the stream.</p><p>The pool honours <code>offset</code>, so a reopened stream resumes exactly where the last one stopped. Its <code>ReadLogs</code> is the same stream from offset 0, which ends once the workload has.</p><p><a href="../agents/">Agents and pools diagram &rarr;</a></p>'
     },
     AGENTSL: {
       title: 'Agent: Seek Offset, Poll 250 ms',
@@ -148,27 +157,37 @@ window.vagabondDiagram = {
     LOGFILE: {
       title: 'Workload Log File',
       badge: 'storage', badgeText: 'node disk',
-      body: '<p>containerd writes the container&rsquo;s stdout and stderr to the file itself, so output keeps landing while the agent or the server is down, and a reopened stream can read it from any offset.</p><p>The same file is the source of the 64 KiB tail the agent&rsquo;s <code>Result</code> returns. <code>Release</code> deletes it.</p>'
+      body: '<p>containerd writes the container&rsquo;s stdout and stderr to the file itself, so output keeps landing while the agent or the server is down, and a reopened stream can read it from any offset.</p><p>Dispatch reads it whole through the same stream once the workload ends, before <code>Release</code> deletes it.</p>'
     },
-    CRSL: {
-      title: 'Cloud Run: Offset Above 0?',
-      badge: 'decision', badgeText: 'Cloud Run provider',
-      body: '<p><code>gcp.Provider.StreamLogs</code>. A tail starts at what is being logged now, so it cannot be placed at a byte offset.</p><p>Any <code>offset</code> above 0 returns <code>plugin.ErrNoResume</code> before writing anything, rather than start somewhere else and leave the client&rsquo;s count no longer a position. Offset 0 opens the tail.</p>'
+    TAIL: {
+      title: 'Open entries:tail, Queue What Arrives',
+      badge: 'process', badgeText: 'Cloud Run provider',
+      body: '<p><code>gcp.Provider.StreamLogs</code> opens the tail first, so nothing logged while the backfill is listed is missed. <code>openTail</code> POSTs to <code>/v2/entries:tail</code> a one-element JSON array, since a streaming method&rsquo;s body is a stream of requests, filtering on <code>resource.type="cloud_run_job"</code> and the job name, with a 1 s <code>bufferWindow</code> so stderr does not arrive before the stdout that preceded it.</p><p>A goroutine decodes the open response with <code>decodeTail</code> into a queue of up to 10,000 entries from the moment it opens, because Cloud Logging drops entries a client does not read quickly enough. Once open, every way the tail stops ends it without an error.</p>'
+    },
+    BACKFILL: {
+      title: 'entries:list: What Was Logged Before',
+      badge: 'process', badgeText: 'Cloud Logging',
+      body: '<p>With the tail open, <code>listEntries</code> pages <code>entries:list</code> oldest first, 1000 entries a page, the same query <code>ReadLogs</code> uses, and writes each entry&rsquo;s <code>textPayload</code> plus a newline, skipping structural entries. Each entry&rsquo;s <code>timestamp</code> and <code>insertId</code> are kept to recognise its copy on the tail.</p><p>The writer skips the first <code>offset</code> bytes across the backfill and the tail, so the stream starts at the first byte the task printed and a reopened one picks up where the last ended.</p><p>Every page is one of the 60 <code>entries:list</code> requests a minute Cloud Logging allows per project.</p>'
+    },
+    PLACED: {
+      title: 'Backfill Complete?',
+      badge: 'decision', badgeText: 'placed',
+      body: '<p>A backfill that was refused, or that reached 20 pages with more left, cannot say where the tail begins, so the stream would no longer start at the first byte. It returns <code>plugin.ErrNoResume</code> rather than start somewhere else and leave the client&rsquo;s count no longer a position.</p><p>A write that fails during the backfill is the client going away, and is returned as it is.</p>'
+    },
+    DRAIN: {
+      title: 'Tail On, Dropping Entries Listed',
+      badge: 'process', badgeText: 'live',
+      body: '<p>The queue is drained, then the tail read as it arrives. An entry the backfill already wrote, by <code>timestamp</code> and <code>insertId</code>, is dropped; the rest are written, one line each.</p><p>An entry that reached Cloud Logging after the backfill listed later ones, with an earlier timestamp, is streamed after them but stored before them, so a stream reopened across it can repeat or skip its bytes.</p><p><a href="../../docs/providers/cloud-run/#live-output">Cloud Run live output &rarr;</a></p>'
     },
     NORESUME: {
       title: 'plugin.ErrNoResume',
       badge: 'reject', badgeText: 'sentinel',
-      body: '<p>The <code>plugin</code> package&rsquo;s sentinel for a log stream that cannot start at an offset. <code>Server.follow</code> answers it with <code>416</code>, provided nothing has been written yet.</p>'
-    },
-    TAIL: {
-      title: 'entries:tail',
-      badge: 'process', badgeText: 'Cloud Logging',
-      body: '<p><code>openTail</code> POSTs to <code>/v2/entries:tail</code> a one-element JSON array, since a streaming method&rsquo;s body is a stream of requests, filtering on <code>resource.type="cloud_run_job"</code> and the job name, with a 1 s <code>bufferWindow</code> so stderr does not arrive before the stdout that preceded it.</p><p><code>copyTail</code> decodes the open response array one element at a time and writes each entry&rsquo;s <code>textPayload</code> plus a newline, skipping structural entries. Once open, every way the stream stops ends the copy without an error.</p>'
+      body: '<p>The <code>plugin</code> package&rsquo;s sentinel for a log stream that cannot be placed at an offset. <code>Server.follow</code> answers it with <code>416</code>, provided nothing has been written yet; otherwise the response ends and the client reopens, when nothing new is written and the <code>416</code> follows.</p>'
     },
     CLOUDLOG: {
       title: 'Cloud Logging',
       badge: 'storage', badgeText: 'Google Cloud',
-      body: '<p>Where the Cloud Run job&rsquo;s container output lands, seconds behind the container. The tail reads it live; <code>Result</code> reads the stored copy from it with <code>entries:list</code> once the job finishes.</p>'
+      body: '<p>Where the Cloud Run job&rsquo;s container output lands, seconds behind the container. The tail reads it live and the backfill reads what came before; <code>ReadLogs</code> reads it whole with <code>entries:list</code> once the job finishes. The entries outlive the job, so <code>Release</code> destroys nothing these read.</p>'
     },
     CESL: {
       title: 'Code Engine: Wait for the Container',
@@ -178,12 +197,12 @@ window.vagabondDiagram = {
     CEFOLLOW: {
       title: 'pods/log?follow=true',
       badge: 'process', badgeText: 'Kubernetes API',
-      body: '<p><code>openFollow</code> opens <code>GET /api/v1/namespaces/{ns}/pods/{pod}/log?follow=true&amp;container=user-container</code> on the project&rsquo;s Kubernetes API with the same IAM token as every other call. A refusal is classified like any call and ends the response early.</p><p>The followed log starts at the container&rsquo;s first line, so <code>copyFollow</code> discards the first <code>offset</code> bytes and copies the rest as it arrives. Unlike Cloud Run, a reopened stream resumes exactly where the last one stopped and is never answered <code>416</code>. A read that fails ends the copy quietly; the stream ends when the container exits.</p><p><a href="../../docs/providers/code-engine/#live-output">Code Engine live output &rarr;</a></p>'
+      body: '<p><code>openLog</code> opens <code>GET /api/v1/namespaces/{ns}/pods/{pod}/log?container=user-container&amp;follow=true</code> on the project&rsquo;s Kubernetes API with the same IAM token as every other call. A refusal is classified like any call and ends the response early.</p><p>The followed log starts at the container&rsquo;s first line, so <code>plugin.SkipWriter</code> discards the first <code>offset</code> bytes and <code>plugin.CopyLive</code> copies the rest as it arrives. A reopened stream resumes exactly where the last one stopped and is never answered <code>416</code>. A read that fails ends the copy quietly; the stream ends when the container exits.</p><p><a href="../../docs/providers/code-engine/#live-output">Code Engine live output &rarr;</a></p>'
     },
     PODLOG: {
       title: 'Pod Log',
       badge: 'storage', badgeText: 'Code Engine',
-      body: '<p>The task container&rsquo;s stdout and stderr, interleaved, each in order but not always in order with each other, kept with the pod after the container exits. <code>Result</code> reads up to 256 KiB of it from the start; deleting the job run removes it.</p>'
+      body: '<p>The task container&rsquo;s stdout and stderr, interleaved, each in order but not always in order with each other, kept with the pod after the container exits. <code>ReadLogs</code> reads it whole, unfollowed, once the run ends; deleting the job run removes it.</p>'
     }
   }
 };
@@ -199,4 +218,4 @@ window.vagabondDiagram = {
 | <span class="dg-swatch dg-storage"></span> | Where output is kept |
 | <span class="dg-swatch dg-success"></span> | Verdict |
 | <span class="dg-swatch dg-background"></span> | Stream lifetime |
-| <span class="dg-swatch dg-reject"></span> | Cannot resume |
+| <span class="dg-swatch dg-reject"></span> | Cannot be placed |

@@ -5,7 +5,7 @@ description: "Interactive diagram of every loop and long-running goroutine the s
 weight: 8
 ---
 
-Every loop the server and the agent run, with its interval and what it touches. The server runs five upkeep tickers plus one goroutine per dispatch, lease, agent session and followed log; the agent holds one connection to the server and reports its workloads on a timer. **Hover over any component** for implementation details.
+Every loop the server and the agent run, with its interval and what it touches. The server runs six upkeep tickers plus one goroutine per dispatch, lease, agent session and followed log; the agent holds one connection to the server and reports its workloads on a timer. **Hover over any component** for implementation details.
 
 {{< diagram >}}
 
@@ -19,6 +19,7 @@ window.vagabondDiagram = {
     '    REAP[Reservation<br>reaper 5m]:::background',
     '    RELEASE[Provider<br>release 5m]:::background',
     '    CLAIM[Dispatch<br>claim 30s]:::background',
+    '    PRUNE[Output<br>retention 1h]:::background',
     '    API([HTTP<br>requests]):::entry',
     '    HEALTH[Store<br>health]:::filter',
     '    FOLLOW[Live output<br>follow]:::process',
@@ -42,6 +43,7 @@ window.vagabondDiagram = {
     '    SRV --> REAP',
     '    SRV --> RELEASE',
     '    SRV --> CLAIM',
+    '    SRV --> PRUNE',
     '    SRV --> LISTENER',
     '',
     '    API --> RUNNER',
@@ -60,6 +62,7 @@ window.vagabondDiagram = {
     '    RELEASE --> STORE',
     '    RELEASE --> PROVIDERS',
     '    CLAIM --> STORE',
+    '    PRUNE --> STORE',
     '    RUNNER --> STORE',
     '    RUNNER --> PROVIDERS',
     '    LEASE --> STORE',
@@ -82,7 +85,7 @@ window.vagabondDiagram = {
     SRV: {
       title: 'vagabond server',
       badge: 'entry', badgeText: 'process',
-      body: '<p><code>internal/cli/server.go</code> builds the registry and refreshes every provider, opens, migrates and verifies the store (or builds memory stores under <code>-dev</code>), and reads quota usage. A server that cannot read usage does not start.</p><p>It then starts the agent listener and listens on the API address. <code>Server.ServeListener</code> claims lapsed dispatches and reaps stale reservations once, starts the five upkeep tickers in <code>internal/server/upkeep.go</code>, and serves HTTP.</p><p>Each tick runs synchronously; a tick longer than its interval is followed at once by the next, and ticks do not pile up. A failure is logged and waits for the next tick, and one loop failing never stops another. No loop applies jitter or takes a lock across servers: where two servers could collide, the store statement decides.</p><p><a href="../../docs/background-services/">Background services reference &rarr;</a></p>'
+      body: '<p><code>internal/cli/server.go</code> builds the registry and refreshes every provider, opens, migrates and verifies the store (or builds memory stores under <code>-dev</code>), and reads quota usage. A server that cannot read usage does not start.</p><p>It then starts the agent listener and listens on the API address. <code>Server.ServeListener</code> claims lapsed dispatches and reaps stale reservations once, starts the six upkeep tickers in <code>internal/server/upkeep.go</code>, and serves HTTP.</p><p>Each tick runs synchronously; a tick longer than its interval is followed at once by the next, and ticks do not pile up. A failure is logged and waits for the next tick, and one loop failing never stops another. No loop applies jitter or takes a lock across servers: where two servers could collide, the store statement decides.</p><p><a href="../../docs/background-services/">Background services reference &rarr;</a></p>'
     },
     API: {
       title: 'HTTP API',
@@ -107,7 +110,12 @@ window.vagabondDiagram = {
     RELEASE: {
       title: 'Provider release',
       badge: 'background', badgeText: 'every 5 min',
-      body: '<p><code>Dispatcher.ReleaseLeftovers</code> releases what providers still hold for executions that are over: a Cloud Run Job, a Code Engine job run, a stopped container on a pool node. Dispatch releases after it reads a result; a cancelled run, a provider that stopped answering, a failed <code>Result</code>, a server that died mid-run or a failed release leaves it to this loop.</p><p><b>At startup:</b> no; the first pass is one interval in.<br><b>Selects:</b> executions with no <code>released_at</code>, unchanged for more than 10m (<code>dispatch.ReleaseAfter</code>), every one each pass with no batch limit.</p><p><b>Per execution:</b> a <code>lost</code> one is reconciled first, its result recorded if the provider reports it over and <code>failed</code> if the provider no longer knows it or 24h passed; one still unresolved is skipped. One still holding a reservation is skipped until the reaper settles it. A provider no longer configured, or with no <code>Release</code>, is marked released. Without a recorded result, the provider&rsquo;s <code>Status</code> must be terminal first. Then <code>Release</code>, and the record is marked released.</p><p>Releases and marks are idempotent, so several servers running the loop is harmless. A pool node that is offline fails <code>Release</code> and is retried every pass.</p><p class="dg-metric">Logs: info <code>released provider leftovers</code> with <code>count</code>; warn <code>releasing provider leftovers</code> with the joined errors</p><p><a href="../execution-states/">Execution states diagram &rarr;</a></p>'
+      body: '<p><code>Dispatcher.ReleaseLeftovers</code> releases what providers still hold for executions that are over: a Cloud Run Job, a Code Engine job run, a stopped container on a pool node. Dispatch releases after it reads a result and captures the output; a cancelled run, a provider that stopped answering, a failed <code>Result</code>, a server that died mid-run or a failed release leaves it to this loop.</p><p><b>At startup:</b> no; the first pass is one interval in.<br><b>Selects:</b> executions with no <code>released_at</code>, unchanged for more than 10m (<code>dispatch.ReleaseAfter</code>), every one each pass with no batch limit.</p><p><b>Per execution:</b> a <code>lost</code> one is reconciled first, its result recorded if the provider reports it over and <code>failed</code> if the provider no longer knows it or 24h passed; one still unresolved is skipped. One still holding a reservation is skipped until the reaper settles it (<code>Dispatcher.settled</code>). A provider no longer configured, or with no <code>Release</code> and nothing to capture, is marked released. Without a recorded result, the provider&rsquo;s <code>Status</code> must be terminal first. Output never captured (<code>logs_at</code> null) on a provider with <code>ReadLogs</code> is captured and the record written, since releasing may destroy it. Then <code>Release</code>, and the record is marked released.</p><p>Releases and marks are idempotent, so several servers running the loop is harmless. A pool node that is offline fails <code>Release</code> and is retried every pass.</p><p class="dg-metric">Logs: info <code>released provider leftovers</code> with <code>count</code>; warn <code>releasing provider leftovers</code> with the joined errors</p><p><a href="../execution-states/">Execution states diagram &rarr;</a></p>'
+    },
+    PRUNE: {
+      title: 'Output retention',
+      badge: 'background', badgeText: 'every 1h',
+      body: '<p><code>Server.prune</code> deletes the stored output of executions that ended longer ago than the server&rsquo;s <code>log_retention</code> (default <code>168h</code>), through <code>PruneLogs</code>. The execution records stay; once pruned, <code>GET /v1/execution/{id}/logs</code> answers 200 with an empty body.</p><p><b>At startup:</b> no; the first pass is one interval in.</p><p>One statement per pass, driven from the <code>execution_logs</code> chunks retention keeps, joined to each chunk&rsquo;s execution for its <code>ended_at</code>. Deleting what another server already deleted deletes nothing, so several servers running it is harmless.</p><p class="dg-metric">Logs: info <code>pruned stored output</code> with <code>executions</code>; warn <code>pruning stored output</code></p><p><a href="../../docs/background-services/#output-retention">Output retention &rarr;</a></p>'
     },
     CLAIM: {
       title: 'Dispatch claim',
@@ -167,12 +175,12 @@ window.vagabondDiagram = {
     STORE: {
       title: 'Store (Postgres or CockroachDB)',
       badge: 'storage', badgeText: 'shared state',
-      body: '<p><code>state/postgres</code>, or memory stores under <code>-dev</code>. The loops read and write <code>dispatches</code> (owner and lease), <code>executions</code> (<code>released_at</code>), <code>quota_usage</code> and <code>quota_reservations</code>.</p><p>Several servers can share one store. Every loop runs on every server, and the store keeps them apart: the claim is one <code>UPDATE ... RETURNING</code>, so a lapsed dispatch goes to exactly one server; the reaper resolves each stale reservation under a <code>SKIP LOCKED</code> row lock; releases are idempotent; the refreshes are per-server reads.</p><p><a href="../database-schema/">Database schema diagram &rarr;</a></p>'
+      body: '<p><code>state/postgres</code>, or memory stores under <code>-dev</code>. The loops read and write <code>dispatches</code> (owner and lease), <code>executions</code> (<code>released_at</code>, <code>logs_at</code>), <code>execution_logs</code>, <code>quota_usage</code> and <code>quota_reservations</code>.</p><p>Several servers can share one store. Every loop runs on every server, and the store keeps them apart: the claim is one <code>UPDATE ... RETURNING</code>, so a lapsed dispatch goes to exactly one server; the reaper resolves each stale reservation under a <code>SKIP LOCKED</code> row lock; releases are idempotent; the refreshes are per-server reads.</p><p><a href="../database-schema/">Database schema diagram &rarr;</a></p>'
     },
     PROVIDERS: {
       title: 'Providers',
       badge: 'data', badgeText: 'external',
-      body: '<p>The configured plugins and the platforms behind them: <code>cloud-run</code>, <code>code-engine</code>, <code>lambda</code> and <code>pool</code>. The loops call <code>Capabilities</code> (capability refresh, pools excepted), <code>Status</code> (reaper, release), <code>Result</code> and <code>Release</code> (release), and <code>StreamLogs</code> (live output).</p><p>A call made through dispatch that the platform rejects as unauthorized has the provider&rsquo;s credential resolved again from its source, at most once a minute, and is made once more.</p>'
+      body: '<p>The configured plugins and the platforms behind them: <code>cloud-run</code>, <code>code-engine</code>, <code>lambda</code> and <code>pool</code>. The loops call <code>Capabilities</code> (capability refresh, pools excepted), <code>Status</code> (reaper, release), <code>Result</code>, <code>ReadLogs</code> and <code>Release</code> (release), and <code>StreamLogs</code> (live output).</p><p>A call made through dispatch that the platform rejects as unauthorized has the provider&rsquo;s credential resolved again from its source, at most once a minute, and is made once more.</p>'
     },
     REGSNAP: {
       title: 'Capability snapshots',
@@ -218,6 +226,7 @@ window.vagabondDiagram = {
 | Reservation reaper | Server | 5m | Yes, before serving | `Dispatcher.Reap` |
 | Provider release | Server | 5m | No | `Dispatcher.ReleaseLeftovers` |
 | Dispatch claim | Server | 30s | Yes, before serving | `Server.claim` |
+| Output retention | Server | 1h | No | `Server.prune` |
 | Dispatch runner | Server | Per dispatch | | `Dispatcher.Run`, `Dispatcher.Resume` |
 | Lease renewal | Server | 20s per dispatch | | `Dispatcher.hold` |
 | Agent listener | Server | Long-running | Yes | `Server.ServeAgents` |

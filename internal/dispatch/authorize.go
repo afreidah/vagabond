@@ -47,6 +47,11 @@ func (d *Dispatcher) status(ctx context.Context, provider plugin.Provider, id ex
 	return authorized(ctx, d, provider, func() (execution.Status, error) { return provider.Status(ctx, id) })
 }
 
+// result fetches what id produced from provider, through authorized.
+func (d *Dispatcher) result(ctx context.Context, provider plugin.Provider, id execution.ID) (*execution.Result, error) {
+	return authorized(ctx, d, provider, func() (*execution.Result, error) { return provider.Result(ctx, id) })
+}
+
 // authorizedErr is authorized for a call that returns only an error.
 func authorizedErr(ctx context.Context, d *Dispatcher, provider plugin.Provider, call func() error) error {
 	_, err := authorized(ctx, d, provider, func() (struct{}, error) { return struct{}{}, call() })

@@ -31,8 +31,8 @@ import (
 //
 // Plugins translate and classify, nothing more: no retrying, no backoff, no
 // choosing another provider. Errors should be *Error. The id is the
-// idempotency key; the task is read-only. Cancel may destroy what Result reads,
-// so callers fetch the result first.
+// idempotency key; the task is read-only. Cancel may destroy what Result and
+// ReadLogs read, so callers fetch the result and output first.
 type Provider interface {
 	Name() string
 	Capabilities(ctx context.Context) (Capabilities, error)
@@ -100,14 +100,22 @@ var submittableStates = []execution.State{
 // -------------------------------------------------------------------------
 
 // LogStreamer is implemented by providers that can show a running execution's
-// output before it finishes. A live view, never the record: Result stays
-// authoritative, and a broken stream is not a failed execution.
+// output before it finishes. A live view, never the record: the stored copy
+// stays authoritative, and a broken stream is not a failed execution.
 //
-// offset is how many bytes the caller already has. A stream that can only
-// start at the present returns ErrNoResume for any offset above zero, before
-// writing anything.
+// A stream starts at the first byte the task printed, whenever it opens, and
+// offset is how many bytes the caller already has. One that cannot be placed
+// there returns ErrNoResume, before writing anything when it can.
 type LogStreamer interface {
 	StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error
+}
+
+// LogReader is implemented by providers that hold a finished execution's
+// output, read once it has ended and before Release, which may destroy it.
+// ReadLogs writes the whole output to w; an error means what was written is
+// incomplete.
+type LogReader interface {
+	ReadLogs(ctx context.Context, id execution.ID, w io.Writer) error
 }
 
 // Live is implemented by providers whose capabilities change between
@@ -156,8 +164,8 @@ var ErrInvalidSubmission = errors.New("invalid submission")
 // it only when the platform says so, never for a lookup that merely failed.
 var ErrUnknownExecution = errors.New("unknown execution")
 
-// ErrNoResume reports a log stream that cannot start at an offset, so a caller
-// resuming one finishes from the stored output instead.
+// ErrNoResume reports a log stream that cannot be placed at an offset, so a
+// caller resuming one finishes from the stored output instead.
 var ErrNoResume = errors.New("this provider's log stream cannot resume from an offset")
 
 // StatusNotSupported is embedded by providers whose work finishes inside

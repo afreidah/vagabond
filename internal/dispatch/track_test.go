@@ -226,6 +226,11 @@ func (failingStore) MarkReleased(context.Context, execution.ID, time.Time) error
 	return errors.New("store down")
 }
 
+// AppendLog fails, as every write to a store that is down does.
+func (failingStore) AppendLog(context.Context, execution.ID, int64, []byte, int64) error {
+	return errors.New("store down")
+}
+
 // The record must exist before Submit, so one that cannot be written stops the
 // dispatch.
 func TestRecord_UnrecordableAttemptIsNotSubmitted(t *testing.T) {

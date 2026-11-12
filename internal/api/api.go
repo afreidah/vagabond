@@ -153,7 +153,10 @@ type Rejection struct {
 // -------------------------------------------------------------------------
 
 // Execution is one attempt of one task. The result fields are zero until the
-// execution ends with one; its output is read from /logs.
+// execution ends with one; its output is read from /logs. LogsStart is the
+// first byte of output still stored, above zero once the front was dropped
+// past the server's ceiling; LogsTruncated means the provider gave less than
+// the task printed.
 type Execution struct {
 	ID         string
 	Namespace  string
@@ -177,8 +180,9 @@ type Execution struct {
 	ExitCode      *int
 	Duration      time.Duration
 	Billed        *Billed
-	LogsTruncated bool
 	Reason        string // why the platform ended the workload; empty when it did not say
+	LogsStart     int64
+	LogsTruncated bool
 }
 
 // Billed is what the platform reported it charged.

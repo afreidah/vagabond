@@ -15,10 +15,6 @@ import (
 	"time"
 )
 
-// MaxStoredLogs is how much output a record keeps. The tail, because the end of
-// a build is where it failed.
-const MaxStoredLogs = 64 << 10
-
 // ErrNotFound reports an execution no store has a record of.
 var ErrNotFound = errors.New("execution not found")
 
@@ -35,6 +31,11 @@ var ErrStale = errors.New("execution changed since it was read")
 // CPU and Memory are the task's declared shape, which a result without a bill
 // is charged at. Released is when what the provider left behind for this
 // execution was cleaned up, zero until then.
+//
+// The output is stored apart from the record. LogsAt is when it was captured,
+// zero until then. LogsStart is the first byte of it still stored, above zero
+// once output past the ceiling was dropped from the front. LogsTruncated means
+// the provider gave less than the task printed.
 type Record struct {
 	Status
 
@@ -52,23 +53,8 @@ type Record struct {
 	Result   *Result
 	Failure  string
 	Released time.Time
-}
 
-// Bounded returns a copy of r holding at most MaxStoredLogs of output, the tail
-// kept, marked truncated when anything was cut. Nil for nil.
-func (r *Result) Bounded() *Result {
-	if r == nil {
-		return nil
-	}
-
-	out := *r
-
-	if len(out.Logs) > MaxStoredLogs {
-		out.Logs = out.Logs[len(out.Logs)-MaxStoredLogs:]
-		out.LogsTruncated = true
-	}
-
-	out.Logs = append([]byte(nil), out.Logs...)
-
-	return &out
+	LogsAt        time.Time
+	LogsStart     int64
+	LogsTruncated bool
 }

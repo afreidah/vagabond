@@ -385,8 +385,8 @@ to finish. The job is not registered. The server makes the same selection
 | `==> <task> succeeded on <provider> in <duration>` | The task exited 0 |
 | `==> <task> failed (exit <n>) on <provider> in <duration>` | The task exited non-zero |
 | `...: <reason>` | Appended to either when the platform ended the task and said why: `Evicted: Pod ephemeral local storage usage exceeds ...`, `OOMKilled` |
-| `Output was truncated.` | Nothing streamed and the stored output hit its limit; only the tail is printed |
-| `Live output was interrupted. vagabond execution logs <id> has its stored tail.` | A stream broke and the stored copy is truncated, so where it left off cannot be found in it |
+| `<n> bytes of output were not kept: the server keeps the end of long output.` | Output past the server's `max_log_mib` was dropped from the front before it could stream; what follows starts after the gap |
+| `The provider gave only part of the output.` | The provider's output could not all be read, or arrived cut, as a function's tail does |
 | `Could not read the output of <id>: <error>` | The stored output could not be fetched after the task finished; the verdict line still follows |
 | `Could not stop <id>: <error>` | After an interrupt, the cancel request failed; the interrupted line still follows |
 | `Job "<job>" did not run: <error>` | The run ended with no answer; followed by `Run vagabond job plan to see where it can run.` |
@@ -643,21 +643,19 @@ Exit Code   = 0
 vagabond execution logs [options] <id>
 ```
 
-Prints the output stored for an execution once it has a result: the last
-64 KiB. Nothing is printed for an execution with no stored output.
+Prints the output stored for an execution, captured once it ends: up to the
+server's `max_log_mib` (16 MiB by default), the end of it, kept for
+`log_retention` (7 days by default). Nothing is printed for an execution with
+no stored output. The warnings are those of [`job run`](#job-run): output
+dropped past the ceiling, and output the provider did not give.
 
 With `-f`, follows the output while the execution runs, the same way
-[`job run`](#job-run) does: streamed once the execution leaves `pending`,
-reopened from the bytes already printed when a stream ends early, and finished
-from the stored copy once the execution ends, when the command exits. An
-execution that has already ended prints its stored output. On Cloud Run, a
-follow started after the task has begun printing starts at what is being
-logged now. The stored copy printed at the end is read from the number of bytes
-that streamed, not from where the tail began, so it can skip the opening lines
-and repeat later ones. `vagabond execution logs <id>` without `-f` prints the
-stored copy whole once the execution has a result. An
-interrupt stops following and leaves the execution running;
-[`DELETE /v1/execution/{id}`](api.md#cancel-an-execution) stops it.
+[`job run`](#job-run) does: streamed once the execution leaves `pending`, from
+the first line wherever the task has got to, reopened from the bytes already
+printed when a stream ends early, and finished from the stored copy once the
+execution ends, when the command exits. An execution that has already ended
+prints its stored output. An interrupt stops following and leaves the execution
+running; [`DELETE /v1/execution/{id}`](api.md#cancel-an-execution) stops it.
 
 | Flag | Default | Description |
 |---|---|---|

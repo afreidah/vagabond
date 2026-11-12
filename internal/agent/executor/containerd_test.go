@@ -132,8 +132,10 @@ func TestContainerd_RunsAWorkload(t *testing.T) {
 		t.Fatalf("Result() = %+v, %v; want exit 3", res, err)
 	}
 
-	if !strings.Contains(string(res.Logs), "hello from vagabond") {
-		t.Errorf("logs = %q", res.Logs)
+	var logs strings.Builder
+
+	if err := c.Logs(t.Context(), id, 0, &logs); err != nil || !strings.Contains(logs.String(), "hello from vagabond") {
+		t.Errorf("Logs() = %q, %v", logs.String(), err)
 	}
 
 	held, err := c.Held(t.Context())
@@ -253,8 +255,14 @@ func TestContainerd_SurvivesARestart(t *testing.T) {
 	finished(t, second, id)
 
 	res, err := second.Result(t.Context(), id)
-	if err != nil || res.ExitCode == nil || *res.ExitCode != 5 || !strings.Contains(string(res.Logs), "after the restart") {
-		t.Errorf("Result() = %+v, %v; want exit 5 with the output", res, err)
+	if err != nil || res.ExitCode == nil || *res.ExitCode != 5 {
+		t.Errorf("Result() = %+v, %v; want exit 5", res, err)
+	}
+
+	var logs strings.Builder
+
+	if err := second.Logs(t.Context(), id, 0, &logs); err != nil || !strings.Contains(logs.String(), "after the restart") {
+		t.Errorf("Logs() = %q, %v; want the output from before the restart", logs.String(), err)
 	}
 }
 

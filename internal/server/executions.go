@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/afreidah/vagabond/internal/execution"
+	"github.com/afreidah/vagabond/internal/plugin"
 )
 
 // -------------------------------------------------------------------------
@@ -54,7 +55,8 @@ func (s *Server) executionStatus(_ http.ResponseWriter, r *http.Request) (any, e
 
 // executionLogs writes an execution's output as plain text, from the requested
 // byte offset on: streamed live while it runs when the request follows and its
-// provider can, and otherwise what is stored, empty until it has a result. Not
+// provider can, and otherwise what is stored, empty until it is captured. An
+// offset in output dropped past the ceiling starts at the first byte kept. Not
 // wrapped, since the body is not JSON.
 func (s *Server) executionLogs(w http.ResponseWriter, r *http.Request) {
 	rec, offset, err := s.logsRequest(r)
@@ -74,7 +76,19 @@ func (s *Server) executionLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = w.Write(storedFrom(rec.Result, offset)) //nolint:gosec // plain text, never rendered as HTML
+	// Headers wait for the first write, so a read that fails at once can still set a status
+	out := &flushing{w: w, rc: http.NewResponseController(w)}
+	seq, skip := execution.PlaceLogs(rec.LogsStart, offset)
+
+	err = s.executions.ReadLog(r.Context(), rec.ID, seq, plugin.SkipWriter(out, skip))
+
+	switch {
+	case err != nil && !out.wrote:
+		status, body := s.failure(r, err)
+		write(w, status, body)
+	case err != nil && r.Context().Err() == nil:
+		s.logger.WarnContext(r.Context(), "reading stored output ended early", "execution", rec.ID, "error", err)
+	}
 }
 
 // logsRequest reads which execution's output a request asks for, and from
@@ -96,21 +110,6 @@ func (s *Server) logsRequest(r *http.Request) (*execution.Record, int64, error) 
 	rec, err := s.executions.Get(r.Context(), id)
 
 	return rec, offset, err
-}
-
-// storedFrom is a result's stored output from byte offset on. A truncated copy
-// holds only the end of the output, so no offset past zero can be placed in it.
-func storedFrom(result *execution.Result, offset int64) []byte {
-	switch {
-	case result == nil:
-		return nil
-	case offset == 0:
-		return result.Logs
-	case result.LogsTruncated || offset >= int64(len(result.Logs)):
-		return nil
-	default:
-		return result.Logs[offset:]
-	}
 }
 
 // -------------------------------------------------------------------------

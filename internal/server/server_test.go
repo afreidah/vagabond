@@ -93,12 +93,13 @@ job "sleepy" {
 }
 `
 
-// harness is a server under test, the mocked job store behind it, and its
-// container provider, which a test moves runs along on.
+// harness is a server under test, the stores behind it, and its container
+// provider, which a test moves runs along on.
 type harness struct {
-	url  string
-	jobs *MockserverJobs
-	box  *plugin.FakeContainerProvider
+	url        string
+	jobs       *MockserverJobs
+	executions *memory.Executions
+	box        *plugin.FakeContainerProvider
 }
 
 // fixtures builds the registry from testConfig, refreshed, and an empty
@@ -148,14 +149,15 @@ func newHarness(t *testing.T) *harness {
 
 	reg, led := fixtures(t)
 	jobStore := NewMockserverJobs(gomock.NewController(t))
+	executions := memory.NewExecutions()
 	logger := slog.New(slog.DiscardHandler)
 
-	srv := httptest.NewServer(New(reg, led, memory.NewExecutions(), jobStore, logger).Handler())
+	srv := httptest.NewServer(New(reg, led, executions, jobStore, logger).Handler())
 	t.Cleanup(srv.Close)
 
 	box, _ := reg.Provider("box")
 
-	return &harness{url: srv.URL, jobs: jobStore, box: box.(*plugin.FakeContainerProvider)}
+	return &harness{url: srv.URL, jobs: jobStore, executions: executions, box: box.(*plugin.FakeContainerProvider)}
 }
 
 // openLogs requests an execution's output with query and returns the status

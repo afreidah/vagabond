@@ -427,8 +427,9 @@ func TestPool_NodeLeavingMidRun(t *testing.T) {
 	}
 }
 
-// Output streams from the node holding the execution and ends with it. A node
-// that no longer holds it answers unknown, and a writer that fails is internal.
+// Output streams from the node holding the execution and ends with it, and
+// reading it whole is the stream from the start. A node that no longer holds
+// it answers unknown, and a writer that fails is internal.
 func TestPool_StreamLogs(t *testing.T) {
 	h := newHarness(t)
 	exec := newFakeExecutor()
@@ -450,6 +451,12 @@ func TestPool_StreamLogs(t *testing.T) {
 
 	if err := h.pool.StreamLogs(t.Context(), id, int64(len("output of ")), &rest); err != nil || rest.String() != id.String()+"\n" {
 		t.Errorf("StreamLogs() from an offset = %q, %v; want the rest of the line", rest.String(), err)
+	}
+
+	var whole strings.Builder
+
+	if err := h.pool.ReadLogs(t.Context(), id, &whole); err != nil || whole.String() != out.String() {
+		t.Errorf("ReadLogs() = %q, %v; want the node's whole output", whole.String(), err)
 	}
 
 	err := h.pool.StreamLogs(t.Context(), id, 0, failingWriter{})

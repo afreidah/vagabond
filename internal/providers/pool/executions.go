@@ -76,7 +76,8 @@ func (p *Provider) Status(ctx context.Context, id execution.ID) (execution.Statu
 	return out, nil
 }
 
-// Result returns what a finished execution produced on its node.
+// Result returns a finished execution's exit code and run time from its node.
+// The output is read apart, by ReadLogs.
 func (p *Provider) Result(ctx context.Context, id execution.ID) (*execution.Result, error) {
 	conn, err := p.connected(id)
 	if err != nil {
@@ -89,10 +90,8 @@ func (p *Provider) Result(ctx context.Context, id execution.ID) (*execution.Resu
 	}
 
 	out := &execution.Result{
-		ID:            id,
-		Duration:      res.GetDuration().AsDuration(),
-		Logs:          res.GetLogs(),
-		LogsTruncated: res.GetLogsTruncated(),
+		ID:       id,
+		Duration: res.GetDuration().AsDuration(),
 	}
 
 	// Unset means the workload never exited, which is not the same as zero.
@@ -153,6 +152,8 @@ func (p *Provider) StreamLogs(ctx context.Context, id execution.ID, offset int64
 		return p.failure(id, err)
 	}
 
+	out := plugin.LogOutput(w)
+
 	for {
 		chunk, err := stream.Recv()
 
@@ -163,10 +164,17 @@ func (p *Provider) StreamLogs(ctx context.Context, id execution.ID, offset int64
 			return p.failure(id, err)
 		}
 
-		if _, err := w.Write(chunk.GetData()); err != nil {
-			return plugin.Internal(fmt.Errorf("writing log output: %w", err))
+		if _, err := out.Write(chunk.GetData()); err != nil {
+			return err
 		}
 	}
+}
+
+// ReadLogs copies a finished execution's whole output from its node. The
+// node's stream ends once the workload has, so this is the stream from the
+// start. Release deletes the log, so this precedes it.
+func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w io.Writer) error {
+	return p.StreamLogs(ctx, id, 0, w)
 }
 
 // -------------------------------------------------------------------------

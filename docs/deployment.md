@@ -233,17 +233,20 @@ configured providers, not with registered jobs.
 | Usage refresh | Server | One read of current-period quota rows every 15s |
 | Lease claim | Server | One `UPDATE ... RETURNING` every 30s |
 | Reaper | Server | One locking read of reservations older than 1 hour every 5 minutes, plus a provider `Status` call per stale reservation |
-| Record writes | Execution | A few `INSERT`/`UPDATE`s per state change; the final one carries up to 64 KiB of output |
-| Provider release | Server | Every 5 minutes: one read of every unreleased execution unchanged for 10 minutes; per candidate a reservation lookup, a provider `Status` when it has no result, then `Release` and an `UPDATE` |
+| Record writes | Execution | A few `INSERT`/`UPDATE`s per state change |
+| Output capture | Ended execution | One provider `ReadLogs`, and one transaction per 256 KiB of output, up to `max_log_mib`. On Cloud Run, one `entries:list` request per page, against a quota of 60 a minute per project |
+| Provider release | Server | Every 5 minutes: one read of every unreleased execution unchanged for 10 minutes; per candidate a reservation lookup, a provider `Status` when it has no result, a capture when its output was never captured, then `Release` and an `UPDATE` |
+| Output retention | Server | One `DELETE` of output past `log_retention` every hour |
 | Live output | Followed request | One execution read per second, plus the provider's stream |
 | Dispatch follow | `job run` / `job dispatch` | One `GET /v1/dispatch/{id}` per second: the dispatch and all of its executions |
 
 - Database connections: pgxpool, at most `pool_max_conns` (default the
   greater of 4 and the CPU count). Every write is a serializable transaction;
   contention shows as `40001` retries, not errors, up to 10 attempts.
-- Database growth: nothing is pruned. `executions` grows by one row per
-  attempt, up to 64 KiB of output each. See
-  [database](database.md#retention).
+- Database growth: `executions` grows by one row per attempt, a few hundred
+  bytes each, and nothing prunes it. Output is kept apart, up to `max_log_mib`
+  (16 MiB) per attempt, and deleted `log_retention` (7 days) after the
+  execution ends. See [database](database.md#retention).
 - Request bodies are capped at 1 MiB. Request headers must arrive within 10
   seconds.
 - A `pool` provider holds a reservation on a node for up to 2 minutes after

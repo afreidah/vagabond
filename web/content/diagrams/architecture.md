@@ -121,7 +121,7 @@ window.vagabondDiagram = {
     FOLLOW: {
       title: 'Live output streams',
       badge: 'process', badgeText: 'per request',
-      body: '<p><code>GET /v1/execution/{id}/logs?follow=true</code> on an execution that has not ended, whose provider implements <code>plugin.LogStreamer</code> (<code>cloud-run</code>, <code>code-engine</code>, <code>pool</code>), copies the provider&rsquo;s stream to the client from <code>offset</code>, flushing every write.</p><p>The record is re-read every second, and the response ends 5s after the execution does, when the client goes, or at once when shutdown begins. A provider that cannot resume from an offset is answered 416 before any output. Any other request gets the stored output, the last 64 KiB.</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
+      body: '<p><code>GET /v1/execution/{id}/logs?follow=true</code> on an execution that has not ended, whose provider implements <code>plugin.LogStreamer</code> (<code>cloud-run</code>, <code>code-engine</code>, <code>pool</code>), copies the provider&rsquo;s stream to the client from <code>offset</code>, flushing every write.</p><p>The record is re-read every second, and the response ends 5s after the execution does, when the client goes, or at once when shutdown begins. Every stream starts at the first byte the task printed; one that cannot be placed at <code>offset</code> is answered 416 before any output. Any other request gets the stored output from <code>execution_logs</code>, up to <code>max_log_mib</code>, the end of it.</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
     },
     PLUGIN: {
       title: 'plugin.Provider',
@@ -146,7 +146,7 @@ window.vagabondDiagram = {
     STORE: {
       title: 'Store (Postgres or CockroachDB)',
       badge: 'storage', badgeText: 'store',
-      body: '<p><code>state/postgres</code>: one implementation for Postgres and CockroachDB over <code>pgxpool</code>. Opened, migrated and schema-checked at startup. Connections time out after 5s unless the DSN sets one, and writes run in serializable transactions.</p><p>Tables: <code>jobs</code>, <code>job_versions</code>, <code>dispatches</code> (with leases), <code>executions</code> (results and the last 64 KiB of output), <code>quota_usage</code>, <code>quota_reservations</code>.</p><p>Under <code>-dev</code>, <code>state/memory</code> and an in-memory ledger store replace it, empty at every start. An unreachable store is answered 503.</p><p><a href="../database-schema/">Database schema diagram &rarr;</a></p>'
+      body: '<p><code>state/postgres</code>: one implementation for Postgres and CockroachDB over <code>pgxpool</code>. Opened, migrated and schema-checked at startup. Connections time out after 5s unless the DSN sets one, and writes run in serializable transactions.</p><p>Tables: <code>jobs</code>, <code>job_versions</code>, <code>dispatches</code> (with leases), <code>executions</code> (results), <code>execution_logs</code> (each execution&rsquo;s output in 256 KiB chunks, pruned after <code>log_retention</code>), <code>quota_usage</code>, <code>quota_reservations</code>.</p><p>Under <code>-dev</code>, <code>state/memory</code> and an in-memory ledger store replace it, empty at every start. An unreachable store is answered 503.</p><p><a href="../database-schema/">Database schema diagram &rarr;</a></p>'
     },
     CLOUDRUN: {
       title: 'cloud-run: Cloud Run Jobs',
@@ -156,7 +156,7 @@ window.vagabondDiagram = {
     CLOG: {
       title: 'Cloud Logging',
       badge: 'data', badgeText: 'output',
-      body: '<p>Where a Cloud Run execution&rsquo;s output comes from. <code>Result</code> pages <code>entries:list</code> filtered on the Job name, up to 1000 entries, 256 KiB or 20 pages, and sets <code>LogsTruncated</code> at a bound. A failed read returns the exit code with no logs.</p><p><code>StreamLogs</code> opens <code>entries:tail</code> with a 1s buffer window, so live output arrives in order. A tail starts at what is being logged now and cannot resume from an offset.</p><p><a href="../../docs/providers/cloud-run/#logs">Cloud Run logs &rarr;</a></p>'
+      body: '<p>Where a Cloud Run execution&rsquo;s output comes from. <code>ReadLogs</code> pages <code>entries:list</code> filtered on the Job name, oldest first, up to 20 pages, and reports one stopped at the cap as incomplete, which dispatch stores marked truncated.</p><p><code>StreamLogs</code> opens <code>entries:tail</code> with a 1s buffer window, so live output arrives in order, then lists what was logged before it and drops the tail&rsquo;s copies of it, so a stream starts at the first byte and resumes from an offset.</p><p><a href="../../docs/providers/cloud-run/#logs">Cloud Run logs &rarr;</a></p>'
     },
     CODEENGINE: {
       title: 'code-engine: Code Engine Jobs',
@@ -166,7 +166,7 @@ window.vagabondDiagram = {
     CEKUBE: {
       title: 'Code Engine Kubernetes API',
       badge: 'data', badgeText: 'exit code, output',
-      body: '<p>Where a job run&rsquo;s exit code and output come from, since the v2 API reports neither. The run&rsquo;s pod is found by its <code>codeengine.cloud.ibm.com/job-run</code> label in the project&rsquo;s namespace, read once from the kubeconfig.</p><p><code>Result</code> reads the container&rsquo;s exit code and up to 256 KiB of its log while the pod exists; deleting the run removes it. <code>StreamLogs</code> waits for the container to start, then follows its log from the first line, so it can resume from an offset.</p><p><a href="../../docs/providers/code-engine/#logs">Code Engine logs &rarr;</a></p>'
+      body: '<p>Where a job run&rsquo;s exit code and output come from, since the v2 API reports neither. The run&rsquo;s pod is found by its <code>codeengine.cloud.ibm.com/job-run</code> label in the project&rsquo;s namespace, read once from the kubeconfig.</p><p><code>Result</code> reads the container&rsquo;s exit code and <code>ReadLogs</code> its whole log while the pod exists; deleting the run removes both. <code>StreamLogs</code> waits for the container to start, then follows its log from the first line, so it can resume from an offset.</p><p><a href="../../docs/providers/code-engine/#logs">Code Engine logs &rarr;</a></p>'
     },
     LAMBDA: {
       title: 'lambda: AWS Lambda',
@@ -181,7 +181,7 @@ window.vagabondDiagram = {
     CONTAINERD: {
       title: 'containerd',
       badge: 'data', badgeText: 'runtime',
-      body: '<p><code>agent/executor</code> runs each execution as one container in the <code>vagabond</code> namespace with the <code>io.containerd.runc.v2</code> runtime, in cgroup <code>&lt;parent&gt;/&lt;execution id&gt;</code> with its declared CPU and memory as limits, on the host network.</p><p>Start time, timeout and size are container labels, so a restarted agent finds its workloads and re-arms their timeouts. A timeout stops the workload with SIGTERM, then SIGKILL 10s later. Output goes to a log file, and the result carries its last 64 KiB.</p><p>Workloads belong to containerd and keep running while the agent is disconnected.</p>'
+      body: '<p><code>agent/executor</code> runs each execution as one container in the <code>vagabond</code> namespace with the <code>io.containerd.runc.v2</code> runtime, in cgroup <code>&lt;parent&gt;/&lt;execution id&gt;</code> with its declared CPU and memory as limits, on the host network.</p><p>Start time, timeout and size are container labels, so a restarted agent finds its workloads and re-arms their timeouts. A timeout stops the workload with SIGTERM, then SIGKILL 10s later. Output goes to a log file, which the server reads whole once the workload ends.</p><p>Workloads belong to containerd and keep running while the agent is disconnected.</p>'
     }
   }
 };

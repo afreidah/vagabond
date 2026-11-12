@@ -11,12 +11,12 @@
 package memory
 
 import (
-	"bytes"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/afreidah/vagabond/internal/execution"
+	"github.com/afreidah/vagabond/internal/state/statetest"
 )
 
 // -------------------------------------------------------------------------
@@ -219,13 +219,12 @@ func TestExecutions_GetUnknown(t *testing.T) {
 	}
 }
 
-// Stored output is bounded to its tail, and the caller's copy is not touched.
-func TestExecutions_LogsAreBounded(t *testing.T) {
+// A result's own copy of the output is not kept, as in Postgres, and the
+// caller's copy is not touched.
+func TestExecutions_ResultOutputIsNotKept(t *testing.T) {
 	s := NewExecutions()
 	r := pending(t)
-
-	logs := append(bytes.Repeat([]byte("x"), execution.MaxStoredLogs), []byte("the end")...)
-	r.Result = &execution.Result{ID: r.ID, Logs: logs}
+	r.Result = &execution.Result{ID: r.ID, ExitCode: new(0), Logs: []byte("output"), LogsTruncated: true}
 
 	if err := s.Create(t.Context(), r); err != nil {
 		t.Fatalf("Create() = %v", err)
@@ -236,11 +235,20 @@ func TestExecutions_LogsAreBounded(t *testing.T) {
 		t.Fatalf("Get() = %v", err)
 	}
 
-	if len(got.Result.Logs) != execution.MaxStoredLogs || !bytes.HasSuffix(got.Result.Logs, []byte("the end")) {
-		t.Errorf("stored %d bytes, want the last %d", len(got.Result.Logs), execution.MaxStoredLogs)
+	if got.Result.Logs != nil || got.Result.LogsTruncated || got.Result.ExitCode == nil {
+		t.Errorf("read back %+v, want the result without its output", got.Result)
 	}
 
-	if !got.Result.LogsTruncated || r.Result.LogsTruncated || len(r.Result.Logs) != len(logs) {
-		t.Error("the stored copy is not marked truncated, or the caller's was changed")
+	if string(r.Result.Logs) != "output" || !r.Result.LogsTruncated {
+		t.Error("the caller's copy was changed")
 	}
+}
+
+// -------------------------------------------------------------------------
+// OUTPUT
+// -------------------------------------------------------------------------
+
+// The memory store keeps the output rules every store keeps.
+func TestExecutions_LogContract(t *testing.T) {
+	statetest.LogContract(t, func(*testing.T) statetest.LogStore { return NewExecutions() })
 }

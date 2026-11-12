@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/afreidah/vagabond/internal/plugin"
@@ -33,9 +32,6 @@ const (
 	jobRunLabel   = "codeengine.cloud.ibm.com/job-run"
 	userContainer = "user-container"
 )
-
-// maxLogBytes bounds the output Result returns, the same bound Cloud Run uses.
-const maxLogBytes = 256 << 10
 
 // -------------------------------------------------------------------------
 // TYPES
@@ -225,31 +221,4 @@ func (p *Provider) runPod(ctx context.Context, run string) (*pod, error) {
 	}
 
 	return newest, nil
-}
-
-// podLogs reads the task container's output from the start, up to maxLogBytes,
-// reporting whether there was more.
-func (p *Provider) podLogs(ctx context.Context, name string) ([]byte, bool, error) {
-	ns, err := p.namespace(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-
-	// One byte past the bound, so a log of exactly maxLogBytes is not called truncated
-	query := url.Values{
-		"container":  {userContainer},
-		"limitBytes": {strconv.Itoa(maxLogBytes + 1)},
-	}
-
-	body, err := p.fetch(ctx, http.MethodGet, p.podsURL(ns)+"/"+name+"/log?"+query.Encode(),
-		http.Header{"Accept": {"text/plain, */*"}}, nil)
-	if err != nil {
-		return nil, false, err
-	}
-
-	if len(body) > maxLogBytes {
-		return body[:maxLogBytes], true, nil
-	}
-
-	return body, false, nil
 }

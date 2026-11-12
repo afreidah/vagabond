@@ -11,8 +11,13 @@
 package gcp
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"strings"
 	"testing"
+
+	"github.com/afreidah/vagabond/internal/plugin"
 )
 
 // -------------------------------------------------------------------------
@@ -37,12 +42,21 @@ func page(token string, entries ...any) map[string]any {
 	return out
 }
 
+// classOf returns the class err carries, empty when it carries none.
+func classOf(err error) plugin.Class {
+	if classified, ok := errors.AsType[*plugin.Error](err); ok {
+		return classified.Class
+	}
+
+	return ""
+}
+
 // -------------------------------------------------------------------------
 // READING
 // -------------------------------------------------------------------------
 
 // An empty page is not the end of the scan.
-func TestLogsFollowsEmptyPages(t *testing.T) {
+func TestReadLogs_FollowsEmptyPages(t *testing.T) {
 	t.Parallel()
 
 	g, p := newFakeGoogle(t)
@@ -52,23 +66,20 @@ func TestLogsFollowsEmptyPages(t *testing.T) {
 		page("", entry("hello-stdout"), entry("hello-stderr")),
 	)
 
-	logs, truncated, err := p.logs(t.Context(), "vagabond-abc")
-	if err != nil {
-		t.Fatalf("logs failed: %v", err)
+	var out bytes.Buffer
+
+	if err := p.ReadLogs(t.Context(), newID(t), &out); err != nil {
+		t.Fatalf("ReadLogs failed: %v", err)
 	}
 
-	if truncated {
-		t.Error("a complete log was reported as truncated")
-	}
-
-	if want := "hello-stdout\nhello-stderr\n"; string(logs) != want {
-		t.Errorf("logs = %q, want %q", logs, want)
+	if want := "hello-stdout\nhello-stderr\n"; out.String() != want {
+		t.Errorf("logs = %q, want %q", out.String(), want)
 	}
 }
 
 // The token is carried forward, or the second page is the first page again and
-// the scan never ends.
-func TestLogsSendsThePageToken(t *testing.T) {
+// the scan never ends. Every page is asked for oldest first.
+func TestReadLogs_SendsThePageToken(t *testing.T) {
 	t.Parallel()
 
 	g, p := newFakeGoogle(t)
@@ -77,8 +88,8 @@ func TestLogsSendsThePageToken(t *testing.T) {
 		page("", entry("second")),
 	)
 
-	if _, _, err := p.logs(t.Context(), "vagabond-abc"); err != nil {
-		t.Fatalf("logs failed: %v", err)
+	if err := p.ReadLogs(t.Context(), newID(t), io.Discard); err != nil {
+		t.Fatalf("ReadLogs failed: %v", err)
 	}
 
 	if got := g.request(0).body["pageToken"]; got != nil {
@@ -88,89 +99,101 @@ func TestLogsSendsThePageToken(t *testing.T) {
 	if got := g.request(1).body["pageToken"]; got != "shard-2" {
 		t.Errorf("second request pageToken = %v, want shard-2", got)
 	}
+
+	for i := range 2 {
+		if got := g.request(i).body["orderBy"]; got != "timestamp asc" {
+			t.Errorf("request %d orderBy = %v, want timestamp asc", i, got)
+		}
+	}
 }
 
 // A filter matching nothing anywhere would otherwise walk every shard in the
-// project to say so.
-func TestLogsStopsAtThePageCap(t *testing.T) {
+// project to say so. Stopping there is reported, after what was read.
+func TestReadLogs_StopsAtThePageCap(t *testing.T) {
 	t.Parallel()
 
 	g, p := newFakeGoogle(t)
-	// Always another page, never any content.
-	g.respond(logsRoute, page("forever"))
+	// Always another page.
+	g.respond(logsRoute, page("forever", entry("more")))
 
-	_, truncated, err := p.logs(t.Context(), "vagabond-abc")
-	if err != nil {
-		t.Fatalf("logs failed: %v", err)
-	}
+	var out bytes.Buffer
 
-	if !truncated {
-		t.Error("giving up early was not reported as truncated")
+	err := p.ReadLogs(t.Context(), newID(t), &out)
+	if !errors.Is(err, errPageCap) || classOf(err) != plugin.ClassInfrastructure {
+		t.Errorf("ReadLogs() = %v, want an Infrastructure error wrapping errPageCap", err)
 	}
 
 	if len(g.requests) != maxLogPages {
 		t.Errorf("made %d requests, want the cap of %d", len(g.requests), maxLogPages)
 	}
+
+	if out.String() != strings.Repeat("more\n", maxLogPages) {
+		t.Errorf("wrote %q, want every page read before the cap", out.String())
+	}
 }
 
 // Cloud Logging emits structural records with no text alongside the
 // container's output, and a blank line each would pad a short log with noise.
-func TestLogsSkipsEmptyPayloads(t *testing.T) {
+func TestReadLogs_SkipsEmptyPayloads(t *testing.T) {
 	t.Parallel()
 
 	g, p := newFakeGoogle(t)
 	g.respond(logsRoute, page("", entry(""), entry("real output"), entry("")))
 
-	logs, _, err := p.logs(t.Context(), "vagabond-abc")
-	if err != nil {
-		t.Fatalf("logs failed: %v", err)
+	var out bytes.Buffer
+
+	if err := p.ReadLogs(t.Context(), newID(t), &out); err != nil {
+		t.Fatalf("ReadLogs failed: %v", err)
 	}
 
-	if want := "real output\n"; string(logs) != want {
-		t.Errorf("logs = %q, want %q", logs, want)
-	}
-}
-
-// Output past maxLogBytes is cut and reported as truncated, so a test suite
-// printing megabytes cannot exhaust memory.
-func TestLogsTruncatesAtTheByteLimit(t *testing.T) {
-	t.Parallel()
-
-	line := strings.Repeat("x", 64*1024)
-
-	g, p := newFakeGoogle(t)
-	g.respond(logsRoute, page("", entry(line), entry(line), entry(line),
-		entry(line), entry(line), entry(line)))
-
-	logs, truncated, err := p.logs(t.Context(), "vagabond-abc")
-	if err != nil {
-		t.Fatalf("logs failed: %v", err)
-	}
-
-	if !truncated {
-		t.Error("an oversized log was not reported as truncated")
-	}
-
-	if len(logs) > maxLogBytes {
-		t.Errorf("kept %d bytes, over the %d limit", len(logs), maxLogBytes)
+	if want := "real output\n"; out.String() != want {
+		t.Errorf("logs = %q, want %q", out.String(), want)
 	}
 }
 
-// The filter has to name the job, or one execution's result carries another's
-// output.
-func TestLogsFiltersToTheJob(t *testing.T) {
+// The filter has to name the job, or one execution's output is stored as
+// another's.
+func TestReadLogs_FiltersToTheJob(t *testing.T) {
 	t.Parallel()
 
 	g, p := newFakeGoogle(t)
 	g.respond(logsRoute, page(""))
 
-	if _, _, err := p.logs(t.Context(), "vagabond-abc"); err != nil {
-		t.Fatalf("logs failed: %v", err)
+	id := newID(t)
+
+	if err := p.ReadLogs(t.Context(), id, io.Discard); err != nil {
+		t.Fatalf("ReadLogs failed: %v", err)
 	}
 
 	filter, _ := g.request(0).body["filter"].(string)
-	if !strings.Contains(filter, `job_name="vagabond-abc"`) ||
+	if !strings.Contains(filter, `job_name="`+jobName(id)+`"`) ||
 		!strings.Contains(filter, `resource.type="cloud_run_job"`) {
 		t.Errorf("filter = %q", filter)
+	}
+}
+
+// A page Google refuses ends the read with the refusal.
+func TestReadLogs_ReportsARefusedPage(t *testing.T) {
+	t.Parallel()
+
+	// Nothing registered for entries:list, so it 404s.
+	_, p := newFakeGoogle(t)
+
+	if err := p.ReadLogs(t.Context(), newID(t), io.Discard); err == nil {
+		t.Fatal("a refused page was reported as success")
+	}
+}
+
+// A write that fails is the caller's sink, so it is Internal.
+func TestReadLogs_ReportsAFailedWrite(t *testing.T) {
+	t.Parallel()
+
+	g, p := newFakeGoogle(t)
+	g.respond(logsRoute, page("", entry("line")))
+
+	gone := writerFunc(func([]byte) (int, error) { return 0, errors.New("client gone") })
+
+	if err := p.ReadLogs(t.Context(), newID(t), gone); classOf(err) != plugin.ClassInternal {
+		t.Errorf("ReadLogs() = %v, want an Internal error", err)
 	}
 }

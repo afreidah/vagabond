@@ -31,43 +31,47 @@ type tracked struct {
 	now   func() time.Time
 }
 
-// to moves the record to next and writes it. A move the state machine refuses,
-// or to the state it is already in, writes nothing.
+// to moves the record to next and writes it, best effort.
 func (t *tracked) to(ctx context.Context, next execution.State) {
+	_ = t.move(ctx, next)
+}
+
+// move moves the record to next and writes it, reporting a move the state
+// machine refuses or a write that failed. A move to the state it is already in
+// writes nothing.
+func (t *tracked) move(ctx context.Context, next execution.State) error {
 	from := t.rec.State
 	if from == next {
-		return
+		return nil
 	}
 
 	if err := t.rec.To(next, t.now()); err != nil {
-		return
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
 
-	_ = t.store.Update(ctx, &t.rec, from)
+	return t.store.Update(ctx, &t.rec, from)
 }
 
-// submitted records the provider's acceptance and the state it reported.
+// submitted records the provider's acceptance, and the state it reported
+// unless the work already finished, which the caller records with its result.
 func (t *tracked) submitted(ctx context.Context, sub *plugin.Submission) {
 	t.rec.ProviderID = sub.ProviderID
 	t.to(ctx, execution.StateSubmitted)
 
-	if sub.Result != nil {
-		t.finish(ctx, sub.State, sub.Result)
-
-		return
+	if !sub.Synchronous() {
+		t.to(ctx, sub.State)
 	}
-
-	t.to(ctx, sub.State)
 }
 
 // finish records a terminal state and what the execution produced, which may
 // be nothing when the result could not be fetched.
-func (t *tracked) finish(ctx context.Context, state execution.State, result *execution.Result) {
-	t.rec.Result = result.Bounded()
-	t.to(ctx, state)
+func (t *tracked) finish(ctx context.Context, state execution.State, result *execution.Result) error {
+	t.rec.Result = result
+
+	return t.move(ctx, state)
 }
 
 // failed records an attempt that ended without an answer. Before submission it

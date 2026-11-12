@@ -42,6 +42,7 @@ const namePrefix = "vagabond-"
 var (
 	_ plugin.Provider       = (*Provider)(nil)
 	_ plugin.LogStreamer    = (*Provider)(nil)
+	_ plugin.LogReader      = (*Provider)(nil)
 	_ plugin.Releaser       = (*Provider)(nil)
 	_ plugin.Recredentialer = (*Provider)(nil)
 )
@@ -191,8 +192,8 @@ func (p *Provider) Status(
 // RESULT
 // -------------------------------------------------------------------------
 
-// Result returns the exit code from the task and the output from Cloud Logging.
-// Output is best effort: an exit code with no readable logs is still an answer.
+// Result returns the exit code and run time from the task. The output is read
+// apart, by ReadLogs.
 func (p *Provider) Result(
 	ctx context.Context, id execution.ID,
 ) (*execution.Result, error) {
@@ -208,19 +209,11 @@ func (p *Provider) Result(
 		return nil, err
 	}
 
-	result := &execution.Result{
+	return &execution.Result{
 		ID:       id,
 		ExitCode: task.exitCode(),
 		Duration: execution.Elapsed(plugin.ParseTime(task.StartTime), plugin.ParseTime(task.CompletionTime)),
-	}
-
-	logs, truncated, err := p.logs(ctx, name)
-	if err == nil {
-		result.Logs = logs
-		result.LogsTruncated = truncated
-	}
-
-	return result, nil
+	}, nil
 }
 
 // -------------------------------------------------------------------------

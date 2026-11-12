@@ -414,9 +414,9 @@ Execution states are `pending`, `submitted`, `accepted`, `running`,
 `succeeded`, `failed`, `cancelled` and `lost`; see
 [Dispatch](dispatch.md) for the transitions.
 
-**`execution logs`** prints the stored output: the last 64 KiB, available once
-the execution has a result. A `fake-function` execution produces no output, so
-this prints nothing:
+**`execution logs`** prints the stored output, available once the execution
+has ended: up to 16 MiB, the end of it, by default. A `fake-function`
+execution produces no output, so this prints nothing:
 
 ```bash
 ./vagabond execution logs 01a0c3f3-0c61-7b3e-8a27-5f9c0d1e2b3a

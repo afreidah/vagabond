@@ -134,9 +134,9 @@ The calls the plugin makes:
 | `GET /v2/projects/{p}/job_runs/{run}` | `Status`, `Result` |
 | `DELETE /v2/projects/{p}/job_runs/{run}` | `Cancel`, `Release` |
 | `GET /api/v1/project/{p}/config` | the first pod lookup, for the namespace |
-| `GET /api/v1/namespaces/{ns}/pods?labelSelector=codeengine.cloud.ibm.com/job-run={run}` | `Result`, `StreamLogs` |
-| `GET .../pods/{pod}/log?container=user-container&limitBytes=262145` | `Result` |
-| `GET .../pods/{pod}/log?follow=true&container=user-container` | `StreamLogs` |
+| `GET /api/v1/namespaces/{ns}/pods?labelSelector=codeengine.cloud.ibm.com/job-run={run}` | `Result`, `ReadLogs`, `StreamLogs` |
+| `GET .../pods/{pod}/log?container=user-container` | `ReadLogs` |
+| `GET .../pods/{pod}/log?container=user-container&follow=true` | `StreamLogs` |
 
 Every v2 call carries `version=2026-09-04`.
 
@@ -339,10 +339,11 @@ A task needing more disk declares more memory.
 |---|---|---|
 | `Submit` | `POST .../job_runs` | `ProviderID` = run name, state `accepted` |
 | `Status` | `GET .../job_runs/{run}` | State from the run's `status`; `StartedAt`, `EndedAt` from the run's `start_time`, `completion_time` |
-| `Result` | `GET .../job_runs/{run}`, the pod lookup, the pod's log | Exit code, reason, duration, logs |
+| `Result` | `GET .../job_runs/{run}`, then the pod lookup | Exit code, reason, duration |
+| `ReadLogs` | the pod lookup, then the pod's log | Writes the whole output; an error when the pod is gone or the read is cut |
 | `Cancel` | `DELETE .../job_runs/{run}` | `nil`, also when the run is already gone (404) |
 | `Release` | `DELETE .../job_runs/{run}` | Same call as `Cancel` |
-| `StreamLogs` | the pod lookup until the container starts, then the followed log | Writes output until the container exits |
+| `StreamLogs` | the pod lookup until the container starts, then the followed log | Writes output from `offset` until the container exits |
 
 **Stateless:** every call derives the run name from the execution ID. The
 plugin keeps nothing between calls but the project's namespace, so a server
@@ -410,22 +411,28 @@ and are not a reason. A run that exited on its own has none.
 
 ### Logs
 
-`Result` reads the pod's log:
+`ReadLogs` looks the pod up once and reads its whole log, streamed rather
+than read into memory:
 
 ```text
-GET /api/v1/namespaces/{ns}/pods/{pod}/log?container=user-container&limitBytes=262145
+GET /api/v1/namespaces/{ns}/pods/{pod}/log?container=user-container
 ```
 
 stdout and stderr arrive interleaved in one log. Lines keep their order within
 each stream, but not always across the two: a stderr line written just after a
-stdout line can come first. The bound is 256 KiB
-from the start of the output; a log longer than that is cut there with
-`LogsTruncated = true`. The execution record keeps the last 64 KiB of what
-`Result` returns.
+stdout line can come first. Dispatch calls it once the execution ends, before
+`Release`, and stores what it writes; see [Dispatch](../dispatch.md#output).
+
+| Case | `ReadLogs` |
+|---|---|
+| Container ran | Writes the log, nil |
+| Container never started, as when its image cannot be pulled | Writes nothing, nil |
+| Pod gone, so the log went with it | Infrastructure error; dispatch marks the output truncated |
+| Body cut before its end | Infrastructure error after writing what arrived |
+| Pod lookup or log refused | Classified as for any call |
 
 The pod and its log stay readable after the container exits, for at least five
-minutes in testing, until the run is deleted. A failed log read does not fail
-`Result`: the exit code is returned with no logs.
+minutes in testing, until the run is deleted.
 
 ### Live output
 
@@ -433,7 +440,7 @@ minutes in testing, until the run is deleted. A failed log read does not fail
 
 - Polls the pod lookup every 2 seconds until `user-container` is running or
   has exited. The log cannot be opened before; asking answers 400.
-- Opens `GET .../pods/{pod}/log?follow=true&container=user-container` and
+- Opens `GET .../pods/{pod}/log?container=user-container&follow=true` and
   copies bytes to the caller as they arrive, until the container exits.
 - **Resumes from an offset.** The followed log starts at the container's first
   line, so an `offset` above zero is skipped from the stream rather than
@@ -446,21 +453,21 @@ minutes in testing, until the run is deleted. A failed log read does not fail
   is unaffected.
 
 `StreamLogs` is called for `GET /v1/execution/{id}/logs?follow=true`
-([API](../api.md#read-execution-logs)); the stored output is still read from
-`Result` once the execution ends. See [Dispatch](../dispatch.md#output).
+([API](../api.md#read-execution-logs)).
 
 ## Cleanup
 
 | Mechanism | When | Effect |
 |---|---|---|
-| `Release` | After every `Result`, by dispatch, 30s timeout | Deletes the run and its pod |
+| `Release` | After every `Result` and `ReadLogs`, by dispatch, 30s timeout | Deletes the run and its pod |
 | `Release` | Every other ending, by the [provider release](../background-services.md#provider-release) loop | Deletes the run and its pod |
 | `Cancel` | When the dispatching caller gives up, or `DELETE /v1/execution/{id}` for an execution no local dispatch is running | Deletes the run, stopping it |
 
 **Cancel destroys the result.** Code Engine has no way to stop a run except
 deleting it, and deleting it removes its pod, with the exit code and output.
-`Result` after `Cancel` fails with `ErrUnknownExecution`. Dispatch always reads
-`Result` before `Release`.
+`Result` after `Cancel` fails with `ErrUnknownExecution`, and `ReadLogs` with
+the pod gone. Dispatch always reads both before `Release`; a run cancelled
+before it ended has no output to capture.
 
 A project holds 100 job runs before old ones must be removed, so leftover runs
 eventually stop new submissions. The release loop deletes a run dispatch never
@@ -493,7 +500,7 @@ within the task's retry budget and stops on `internal` ones; see
 | Kubeconfig names no namespace | internal | no | |
 | Task names no `image`, `timeout` does not parse or is over 24h, resources above the largest size | internal | no | Raised before any call |
 | Container exits non-zero | none | | An answer: state `failed`, `Result.ExitCode` set, not rerouted |
-| Log read fails | none | | `Result` returns without logs |
+| `ReadLogs` with the pod gone, or a log body cut short | infrastructure | yes | Dispatch stores what was read and marks it truncated; the execution is unaffected |
 | Followed log cannot be opened | as for any call | | The server logs it and ends the response |
 
 Error messages are lifted from whichever shape the answer takes: the v2 API's

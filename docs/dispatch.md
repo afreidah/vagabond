@@ -67,7 +67,8 @@ configured, in memory with `vagabond server -dev`.
 | `State` | See [Execution states](#execution-states) |
 | `Failure` | `infrastructure` or `internal` when the attempt ended without an answer |
 | `Created`, `Started`, `Ended`, `Updated` | `Created` is read from the UUIDv7. `Started` is set on reaching `running`, `Ended` on a terminal state |
-| `HasResult`, `ExitCode`, `Duration`, `Billed`, `LogsTruncated`, `Reason` | The result, once fetched |
+| `HasResult`, `ExitCode`, `Duration`, `Billed`, `Reason` | The result, once fetched |
+| `LogsStart`, `LogsTruncated` | Where the stored output begins, and whether the provider gave all of it. See [Output](#output) |
 
 The record also keeps the task's declared CPU and memory, so a result can be
 charged without the job ([Quotas](quotas.md)).
@@ -254,22 +255,44 @@ every 15s.
 
 ## Output
 
-- A record keeps the last 64 KiB (65536 bytes) of output. `LogsTruncated` is
-  `true` when anything before that was cut.
-- Output is stored with the result, once the execution is terminal. Read it
-  from `GET /v1/execution/{id}/logs` (plain text, empty until there is a
-  result) or with `vagabond execution logs` ([CLI](cli.md)).
+Once an execution ends, dispatch captures its output into the store, then
+records the result, then releases. In that order: recording the result is what
+tells a waiting client to read the output, and releasing may destroy it.
+
+| Provider | Where the output comes from |
+|---|---|
+| Implements `plugin.LogReader` (Cloud Run, Code Engine, `pool`) | `ReadLogs`, which writes the whole output |
+| Any other (Lambda) | `Result.Logs`, the output that came with the answer |
+
+- The output is written in 256 KiB chunks as it is read, so a capture holds one
+  chunk whatever the task printed ([Database](database.md#execution_logs)).
+- Past the server's `max_log_mib` (16 MiB by default) the oldest chunks are
+  dropped, so the end is kept. `LogsStart` is then the first byte still stored.
+  Offsets count from the first byte the task printed either way.
+- A capture runs on its own context with a 5 minute timeout, through the same
+  credential retry as every provider call. A retry starts the output over at
+  chunk 0, so nothing is stored twice.
+- A capture never fails the execution. A `ReadLogs` error keeps what arrived
+  and sets `LogsTruncated`, as does `Result.LogsTruncated` on an answer that
+  carried only part of the output. A store that refuses the chunks also sets
+  it.
+- An execution dispatch did not capture (cancelled by Vagabond, its result
+  unreadable, or its server gone) is captured by the
+  [provider release](background-services.md#provider-release) loop before it
+  is released.
+- The server deletes stored output `log_retention` (7 days by default) after
+  the execution ends ([Background services](background-services.md#output-retention)).
+- Read it from `GET /v1/execution/{id}/logs` (plain text, empty until it is
+  captured) or with `vagabond execution logs` ([CLI](cli.md)).
 - Dispatch itself never streams. While an execution runs, a client streams its
   output with `GET /v1/execution/{id}/logs?follow=true`, which the server
   serves from the provider's `LogStreamer` ([API](api.md#read-execution-logs)).
   `vagabond job run` and `vagabond execution logs -f` follow it that way.
-- Agent nodes cap a workload's output at the same 64 KiB tail
-  ([agent](agent.md)).
 
 ## Release
 
-After the result is fetched, dispatch calls `Release` on providers that
-implement `plugin.Releaser`:
+After the result is fetched and the output captured, dispatch calls `Release`
+on providers that implement `plugin.Releaser`:
 
 | Provider | Release |
 |---|---|
@@ -277,8 +300,9 @@ implement `plugin.Releaser`:
 | Code Engine | Deletes the execution's job run, and its pod with it |
 | `pool` | Deletes the workload's task, container, snapshot and log file from the node |
 
-- Called after `Result`, because releasing may delete what the result reads.
-  A synchronous submission is released as soon as `Submit` returns.
+- Called after `Result` and the capture, because releasing may delete what
+  they read. A synchronous submission is released as soon as its output is
+  stored.
 - Own context, 30s timeout. A release that succeeds, or finds nothing left,
   sets the record's `released_at`. A failed release does not fail the
   execution.

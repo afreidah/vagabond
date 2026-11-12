@@ -468,10 +468,6 @@ func TestResultReadsTheExitCode(t *testing.T) {
 			"completionTime":    "2026-09-20T22:55:26Z",
 			"lastAttemptResult": map[string]any{"exitCode": 3},
 		}}})
-	g.respond("POST /v2/entries:list", map[string]any{"entries": []any{
-		map[string]any{"textPayload": "hello-stdout"},
-		map[string]any{"textPayload": "hello-stderr"},
-	}})
 
 	result, err := p.Result(t.Context(), newID(t))
 	if err != nil {
@@ -484,44 +480,6 @@ func TestResultReadsTheExitCode(t *testing.T) {
 
 	if got := result.Duration; got != 3*time.Second {
 		t.Errorf("duration = %s, want 3s", got)
-	}
-
-	// Both streams, interleaved in timestamp order
-	if got := string(result.Logs); !strings.Contains(got, "hello-stdout") ||
-		!strings.Contains(got, "hello-stderr") {
-		t.Errorf("logs = %q, want both streams", got)
-	}
-}
-
-// A run that produced an exit code and no readable output is still a usable
-// answer, so a log failure must not discard the part that matters.
-func TestResultSurvivesUnreadableLogs(t *testing.T) {
-	t.Parallel()
-
-	g, p := newFakeGoogle(t)
-	g.respond("GET /v2/projects/test-project/locations/us-central1/jobs/*",
-		map[string]any{"executions": []any{map[string]any{
-			"name":           "projects/p/locations/l/jobs/j/executions/j-nhrzk",
-			"completionTime": "2026-09-20T22:55:31Z",
-			"succeededCount": 1,
-		}}})
-	g.respond("GET /v2/projects/p/locations/l/jobs/j/executions/j-nhrzk/tasks",
-		map[string]any{"tasks": []any{map[string]any{
-			"lastAttemptResult": map[string]any{"exitCode": 0},
-		}}})
-	// No handler for the logs endpoint, so it 404s.
-
-	result, err := p.Result(t.Context(), newID(t))
-	if err != nil {
-		t.Fatalf("a log failure lost the whole result: %v", err)
-	}
-
-	if result.ExitCode == nil || *result.ExitCode != 0 {
-		t.Errorf("exit code = %v, want 0: the exit code was lost", result.ExitCode)
-	}
-
-	if len(result.Logs) != 0 {
-		t.Errorf("logs = %q, want none", result.Logs)
 	}
 }
 
