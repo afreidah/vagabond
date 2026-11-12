@@ -109,7 +109,7 @@ Every non-2xx response from a route in the table below has this body:
 | 401 | No verified client certificate, on a server whose `tls` block names a `ca`. Body `this server requires a client certificate`. Never on `/v1/health` |
 | 404 | Job not registered in the namespace; no such dispatch or execution |
 | 409 | Dispatching or planning (by `Name`) a stopped job |
-| 416 | `GET /v1/execution/{id}/logs?follow=true` with `offset` above 0 on a running execution whose provider cannot resume its stream (Cloud Run). Sent before any output |
+| 416 | `GET /v1/execution/{id}/logs?follow=true` on a running execution whose provider cannot place its stream at `offset`: on Cloud Run, a backfill that failed or stopped at its page cap. Sent before any output |
 | 500 | Anything else: a provider refusing a cancel, a provider no longer configured, an internal error. Logged by the server |
 | 503 | The store is unreachable: connection refused, broken or timed out. Nothing was written; the same request can be retried once the store is back. Other store errors are 500 |
 
@@ -581,8 +581,9 @@ and `JobStatus`.
   "ExitCode": 0,
   "Duration": 37900000000,
   "Billed": null,
-  "LogsTruncated": false,
-  "Reason": ""
+  "Reason": "",
+  "LogsStart": 0,
+  "LogsTruncated": false
 }
 ```
 
@@ -604,8 +605,9 @@ and `JobStatus`.
 | `ExitCode` | Process exit code; `null` without a result or for a driver with no process |
 | `Duration` | Run time in nanoseconds |
 | `Billed` | What the platform reported it charged, `{"CPU": <millicores>, "Memory": <MiB>, "Duration": <ns>}`; `null` when the platform does not report it |
-| `LogsTruncated` | Stored output was cut to its last 64 KiB |
 | `Reason` | Why the platform ended the workload, in its words, such as `OOMKilled`; empty when the process exited on its own or the platform did not say |
+| `LogsStart` | First byte of output still stored; above 0 once output past the server's `max_log_mib` was dropped from the front |
+| `LogsTruncated` | The provider gave less output than the task printed, as when a read of it failed or a function returned only the tail |
 
 | `State` | Terminal | Meaning |
 |---|---|---|
@@ -647,16 +649,24 @@ JSON error body.
 | `follow` | query | `false` | `true` streams the output while the execution runs |
 
 **Stored output.** Without `follow`, or once the execution has ended, the body
-is the stored copy: the last 64 KiB, kept once the execution has a result.
-Before then the body is empty with status 200.
+is the stored copy, captured once the execution ends: up to the server's
+`max_log_mib` (16 MiB by default), the end of it, kept for `log_retention`
+(7 days by default). Before it is captured, and after it is pruned, the body
+is empty with status 200.
 
-| Stored copy | `offset` | Body |
-|---|---|---|
-| Complete | `0` | All of it |
-| Complete | Inside it | From `offset` on |
-| Complete | At or past its end | Empty |
-| Truncated (`LogsTruncated`) | `0` | The last 64 KiB |
-| Truncated | Above `0` | Empty. The copy no longer starts at byte 0, so `offset` cannot be placed in it |
+Offsets count from the first byte the task printed, whether or not the front
+was dropped.
+
+| `offset` | Body |
+|---|---|
+| `0` | All that is stored |
+| At or after `LogsStart` | From `offset` on |
+| Before `LogsStart`, in output dropped past the ceiling | From `LogsStart` on |
+| At or past the end | Empty |
+
+The body is read from the store one 256 KiB chunk at a time. A read that fails
+before anything is written is answered with its error; one that fails later
+ends the body early, and the server logs `reading stored output ended early`.
 
 **Following.** With `follow=true` on an execution that has not ended, on a
 provider that can stream ([`LogStreamer`](writing-a-provider.md#logstreamer)),
@@ -672,10 +682,11 @@ arrives, flushing each write. Headers go out with the first output.
 - A provider stream that breaks ends the response early, still with status
   200, and the server logs `log stream ended early`. Reconnect with `offset`
   set to the bytes received.
-- The pool and Code Engine honour `offset`. A Cloud Run tail can only start at what is being
-  logged now, so a follow from an `offset` above zero there is answered `416`
-  with the JSON error body, before any output. Read the rest from the stored
-  copy with `?offset=` once the execution ends.
+- Every streaming provider starts at the first byte the task printed and
+  honours `offset`. Cloud Run lists what was logged before its tail opened to
+  do so; when that list fails or stops at its page cap, the follow is answered
+  `416` with the JSON error body, before any output. Read the rest from the
+  stored copy with `?offset=` once the execution ends.
 - A provider that cannot stream, or an execution that has ended, gets the
   stored output as above, so a client can always ask to follow.
 
@@ -983,7 +994,7 @@ the `-tls-*` flags, defaulting to `$VAGABOND_ADDR` and `$VAGABOND_TLS_*`; see
 | `Plan(ctx, namespace, PlanRequest)` | `POST /v1/jobs/plan` |
 | `DispatchStatus(ctx, id)` | `GET /v1/dispatch/{id}` |
 | `Execution(ctx, id)` | `GET /v1/execution/{id}` |
-| `Logs(ctx, id, offset)` | `GET /v1/execution/{id}/logs?offset=`, as `[]byte` |
+| `Logs(ctx, id, offset, w)` | `GET /v1/execution/{id}/logs?offset=`, copied to `w` |
 | `FollowLogs(ctx, id, offset, w)` | `GET /v1/execution/{id}/logs?follow=true&offset=`, copied to `w` until the server ends the stream. An error means it broke |
 | `Cancel(ctx, id)` | `DELETE /v1/execution/{id}` |
 | `Nodes(ctx)` | `GET /v1/nodes` |

@@ -21,6 +21,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/quota"
+	"github.com/afreidah/vagabond/internal/state/statetest"
 )
 
 // -------------------------------------------------------------------------
@@ -58,8 +59,8 @@ func advance(t *testing.T, r *execution.Record, next execution.State) {
 // EXECUTIONS
 // -------------------------------------------------------------------------
 
-// A finished record, binary output, bill and reason included, reads back as
-// written from a fresh read.
+// A finished record, bill, reason and where its output stands included, reads
+// back as written from a fresh read.
 func TestExecutions_RoundTrip(t *testing.T) {
 	for _, e := range engines() {
 		t.Run(e.Name, func(t *testing.T) {
@@ -90,10 +91,13 @@ func TestExecutions_RoundTrip(t *testing.T) {
 				Duration: 12 * time.Second,
 				Billed:   &quota.Execution{Memory: 512, Duration: 13 * time.Second},
 				Reason:   "OOMKilled",
-				Logs:     []byte("ok\x00\xff\xfe done\n"),
 			}
 
 			advance(t, r, execution.StateFailed)
+
+			r.LogsAt = r.EndedAt
+			r.LogsStart = 2 * execution.LogChunk
+			r.LogsTruncated = true
 
 			if err := store.Update(ctx, r, execution.StateRunning); err != nil {
 				t.Fatalf("Update(failed) = %v", err)
@@ -386,6 +390,21 @@ func TestExecutions_GetUnknown(t *testing.T) {
 			if _, err := store.Get(ctx, newID(t)); !errors.Is(err, execution.ErrNotFound) {
 				t.Errorf("Get() = %v, want ErrNotFound", err)
 			}
+		})
+	}
+}
+
+// -------------------------------------------------------------------------
+// OUTPUT
+// -------------------------------------------------------------------------
+
+// Both engines keep the output rules every store keeps.
+func TestExecutions_LogContract(t *testing.T) {
+	for _, e := range engines() {
+		t.Run(e.Name, func(t *testing.T) {
+			statetest.LogContract(t, func(t *testing.T) statetest.LogStore {
+				return open(t.Context(), t, e)
+			})
 		})
 	}
 }

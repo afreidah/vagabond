@@ -474,12 +474,16 @@ scheduling {
 
 ## `server` block
 
-Where `vagabond server` listens. Omitting the block uses every default.
+Where `vagabond server` listens, and how much execution output it keeps.
+Omitting the block uses every default.
 
 ```hcl
 server {
   bind       = "0.0.0.0:4747"   # HTTP API
   agent_bind = "0.0.0.0:4748"   # agent connections
+
+  max_log_mib   = 16            # output kept per execution, the end of it
+  log_retention = "168h"        # how long after an execution ends
 
   tls {                         # the API
     cert = "/etc/vagabond/tls/server.crt"
@@ -499,8 +503,14 @@ server {
 |---|---|---|---|---|
 | `bind` | string | no | `127.0.0.1:4747` | `host:port` for the HTTP API |
 | `agent_bind` | string | no | `127.0.0.1:4748` | `host:port` [agents](agent.md) dial |
+| `max_log_mib` | number | no | `16` | MiB of each execution's output kept, at least 1. Past it the oldest output is dropped, 256 KiB at a time, so the end is kept |
+| `log_retention` | duration | no | `"168h"` | How long output is kept after its execution ends, above zero. Records stay; only the output is deleted ([Output retention](background-services.md#output-retention)) |
 | `tls` | block | no | plain HTTP | Certificate for the API, and the CA client certificates must chain to |
 | `agent_tls` | block | when `agent_bind` is not loopback | plain TCP | Mutual TLS for agents |
+
+The store's output grows to at most executions ended per day, times
+`max_log_mib`, times the days in `log_retention`; most tasks print far less
+than the ceiling.
 
 Both blocks take the same attributes. A `ca` is a PEM file of one or more CA
 certificates, or a directory of them. Both listeners require TLS 1.3. Use a
@@ -630,8 +640,9 @@ budget.
 Configuration is decoded with the same HCL machinery job files use.
 
 - Problems are reported in two passes. Decoding and validation (syntax,
-  unknown blocks, duplicates, tiers, pools, credential sources, namespace
-  quotas) report every problem at once; any error exits before a provider is
+  unknown blocks, duplicates, server settings, tiers, pools, credential
+  sources, namespace quotas) report every problem at once; any error exits
+  before a provider is
   built. Building then reports every provider's problems at once: `meta`
   values, credential resolution, its `config` block, unknown types.
 - A provider with an invalid `meta` is not built further; its credential and

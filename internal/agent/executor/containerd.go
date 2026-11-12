@@ -47,12 +47,11 @@ const (
 	labelMemory    = "vagabond.memory"
 )
 
-// Timings for stopping a workload, polling a log that is still being written,
-// and reading a finished workload's output.
+// Timings for stopping a workload and polling a log that is still being
+// written.
 const (
-	stopGrace    = 10 * time.Second
-	logPoll      = 250 * time.Millisecond
-	maxTailBytes = execution.MaxStoredLogs
+	stopGrace = 10 * time.Second
+	logPoll   = 250 * time.Millisecond
 )
 
 // DefaultRuntime is containerd's runc shim.
@@ -371,8 +370,8 @@ func terminal(exit uint32, cancelled bool) execution.State {
 	}
 }
 
-// Result returns what a finished workload produced: its exit code, how long it
-// ran, and the tail of its output.
+// Result returns what a finished workload produced: its exit code and how long
+// it ran. Its output is read through Logs.
 func (c *Containerd) Result(ctx context.Context, id string) (*execution.Result, error) {
 	status, err := c.Status(ctx, id)
 	if err != nil {
@@ -393,18 +392,11 @@ func (c *Containerd) Result(ctx context.Context, id string) (*execution.Result, 
 		return nil, fmt.Errorf("reading the task: %w", err)
 	}
 
-	logs, truncated, err := c.tail(id)
-	if err != nil {
-		return nil, err
-	}
-
 	code := int(exit.ExitStatus)
 
 	return &execution.Result{
-		ExitCode:      &code,
-		Duration:      execution.Elapsed(status.StartedAt, status.EndedAt),
-		Logs:          logs,
-		LogsTruncated: truncated,
+		ExitCode: &code,
+		Duration: execution.Elapsed(status.StartedAt, status.EndedAt),
 	}, nil
 }
 
@@ -578,23 +570,4 @@ func (c *Containerd) watch(id string, timeout time.Duration, started time.Time) 
 // logPath is where a workload's output is written.
 func (c *Containerd) logPath(id string) string {
 	return filepath.Join(c.cfg.DataDir, "logs", id+".log")
-}
-
-// tail reads the last maxTailBytes of a workload's output, reporting whether
-// anything before them was cut.
-func (c *Containerd) tail(id string) ([]byte, bool, error) {
-	data, err := os.ReadFile(c.logPath(id))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, false, nil
-	}
-
-	if err != nil {
-		return nil, false, fmt.Errorf("reading the log of %s: %w", id, err)
-	}
-
-	if len(data) <= maxTailBytes {
-		return data, false, nil
-	}
-
-	return data[len(data)-maxTailBytes:], true, nil
 }

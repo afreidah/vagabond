@@ -171,44 +171,21 @@ func (c *Client) Execution(ctx context.Context, id string) (*Execution, error) {
 	return &out, c.do(ctx, http.MethodGet, "/v1/execution/"+url.PathEscape(id), "", nil, &out)
 }
 
-// Logs reads an execution's stored output from byte offset on.
-func (c *Client) Logs(ctx context.Context, id string, offset int64) ([]byte, error) {
-	resp, err := c.openLogs(ctx, id, offset, false)
-	if err != nil {
-		return nil, err
-	}
-
-	defer func() { _ = resp.Body.Close() }()
-
-	logs, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading logs of %s: %w", id, err)
-	}
-
-	return logs, nil
+// Logs copies an execution's stored output from byte offset on to w.
+func (c *Client) Logs(ctx context.Context, id string, offset int64, w io.Writer) error {
+	return c.copyLogs(ctx, id, offset, false, w)
 }
 
 // FollowLogs copies a running execution's output from byte offset on to w as
 // it is written, until the server ends the stream. An error means the stream
 // broke rather than ended.
 func (c *Client) FollowLogs(ctx context.Context, id string, offset int64, w io.Writer) error {
-	resp, err := c.openLogs(ctx, id, offset, true)
-	if err != nil {
-		return err
-	}
-
-	defer func() { _ = resp.Body.Close() }()
-
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		return fmt.Errorf("following the output of %s: %w", id, err)
-	}
-
-	return nil
+	return c.copyLogs(ctx, id, offset, true, w)
 }
 
-// openLogs requests an execution's output from byte offset on, followed live
-// when follow is set.
-func (c *Client) openLogs(ctx context.Context, id string, offset int64, follow bool) (*http.Response, error) {
+// copyLogs copies an execution's output from byte offset on to w, followed
+// live when follow is set.
+func (c *Client) copyLogs(ctx context.Context, id string, offset int64, follow bool, w io.Writer) error {
 	query := url.Values{}
 
 	if offset > 0 {
@@ -219,7 +196,18 @@ func (c *Client) openLogs(ctx context.Context, id string, offset int64, follow b
 		query.Set("follow", "true")
 	}
 
-	return c.send(ctx, http.MethodGet, "/v1/execution/"+url.PathEscape(id)+"/logs", query, nil)
+	resp, err := c.send(ctx, http.MethodGet, "/v1/execution/"+url.PathEscape(id)+"/logs", query, nil)
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		return fmt.Errorf("reading the output of %s: %w", id, err)
+	}
+
+	return nil
 }
 
 // Cancel stops an execution, and the whole run when the server is running it.

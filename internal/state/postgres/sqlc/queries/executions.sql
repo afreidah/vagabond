@@ -10,13 +10,13 @@
 INSERT INTO executions (
     id, namespace, job, job_version, task, provider, attempt, previous_id,
     state, provider_id, failure, created_at, started_at, ended_at, updated_at,
-    exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs, logs_truncated,
-    dispatch_id, cpu, memory, released_at, reason
+    exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated,
+    dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at
 ) VALUES (
     @id, @namespace, @job, @job_version, @task, @provider, @attempt, @previous_id,
     @state, @provider_id, @failure, @created_at, @started_at, @ended_at, @updated_at,
-    @exit_code, @duration_ms, @billed_cpu, @billed_memory, @billed_ms, @logs, @logs_truncated,
-    @dispatch_id, @cpu, @memory, @released_at, @reason
+    @exit_code, @duration_ms, @billed_cpu, @billed_memory, @billed_ms, @logs_truncated,
+    @dispatch_id, @cpu, @memory, @released_at, @reason, @logs_start, @logs_at
 );
 
 -- name: UpdateExecution :execrows
@@ -34,9 +34,10 @@ UPDATE executions SET
     billed_cpu     = @billed_cpu,
     billed_memory  = @billed_memory,
     billed_ms      = @billed_ms,
-    logs           = @logs,
     logs_truncated = @logs_truncated,
-    reason         = @reason
+    reason         = @reason,
+    logs_start     = @logs_start,
+    logs_at        = @logs_at
 WHERE id = @id AND state = @from_state::text;
 
 -- name: GetExecution :one

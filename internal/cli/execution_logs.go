@@ -3,9 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// Prints an execution's stored output, the last 64 KiB, which is where a build
-// fails; or with -f follows it live until the execution ends, as job run does
-// for its own tasks.
+// Prints an execution's stored output, or with -f follows it live until the
+// execution ends, as job run does for its own tasks. Either way the warnings
+// are a run's: output dropped past the server's ceiling, and output the
+// provider did not give.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -15,7 +16,6 @@ import (
 	"errors"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -37,10 +37,12 @@ func (c *ExecutionLogsCommand) Help() string {
 	text := `
 Usage: vagabond execution logs [options] <id>
 
-  Prints the output stored for an execution, once it has a result. The last
-  64 KiB is kept. With -f, streams the output while the execution runs, on
-  providers that can stream it (Cloud Run and agent pools), prints what did
-  not stream once it ends, and exits.
+  Prints the output stored for an execution, once it has ended. The server
+  keeps up to max_log_mib of it (16 MiB by default), the end of it, for
+  log_retention after the execution ends (7 days by default). With -f,
+  streams the output while the execution runs, on providers that can stream
+  it (Cloud Run, Code Engine and agent pools), prints what did not stream once
+  it ends, and exits.
 
 Logs Options:
 
@@ -69,14 +71,14 @@ func (c *ExecutionLogsCommand) Run(args []string) int {
 		return c.follow(client, ids[0])
 	}
 
-	logs, err := client.Logs(context.Background(), ids[0], 0)
+	ctx := context.Background()
+
+	e, err := client.Execution(ctx, ids[0])
 	if err != nil {
 		return c.apiFailure(err)
 	}
 
-	if len(logs) > 0 {
-		c.Ui.Output(strings.TrimRight(string(logs), "\n"))
-	}
+	c.newFollower(client, false).rest(ctx, e)
 
 	return ExitSuccess
 }

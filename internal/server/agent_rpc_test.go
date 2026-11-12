@@ -83,13 +83,13 @@ func (f *fakeExecutor) Status(_ context.Context, id string) (execution.Status, e
 	return execution.Status{State: state, ProviderID: id}, nil
 }
 
-// Result returns a held workload's exit code and output.
+// Result returns a held workload's exit code.
 func (f *fakeExecutor) Result(ctx context.Context, id string) (*execution.Result, error) {
 	if _, err := f.Status(ctx, id); err != nil {
 		return nil, err
 	}
 
-	return &execution.Result{ExitCode: new(f.exitCode), Duration: time.Second, Logs: []byte(f.output)}, nil
+	return &execution.Result{ExitCode: new(f.exitCode), Duration: time.Second}, nil
 }
 
 // Cancel marks the workload cancelled.
@@ -303,8 +303,8 @@ func TestAgent_ExecutionsAreCalledBack(t *testing.T) {
 	}
 
 	res, err := calls.Result(ctx, &agentrpc.ExecutionRequest{ExecutionId: "run-1"})
-	if err != nil || res.GetExitCode() != 3 || string(res.GetLogs()) != "hello\n" {
-		t.Errorf("Result() = %+v, %v; want exit 3 with output", res, err)
+	if err != nil || res.GetExitCode() != 3 {
+		t.Errorf("Result() = %+v, %v; want exit 3", res, err)
 	}
 
 	stream, err := calls.StreamLogs(ctx, &agentrpc.LogsRequest{ExecutionId: "run-1", Offset: 2})

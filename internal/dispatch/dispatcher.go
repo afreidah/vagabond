@@ -58,6 +58,8 @@ type Ledger interface {
 // from, failing with execution.ErrStale otherwise; FinishDispatch and
 // RenewDispatch change only a dispatch still running under the named owner.
 // Unreleased lists records not yet released and unchanged since before.
+// AppendLog stores chunk seq of an execution's output, dropping the chunks
+// before keepFrom and from seq on.
 type Executions interface {
 	CreateDispatch(ctx context.Context, d *execution.Dispatch) error
 	FinishDispatch(ctx context.Context, d *execution.Dispatch) error
@@ -67,6 +69,7 @@ type Executions interface {
 	Update(ctx context.Context, r *execution.Record, from execution.State) error
 	Unreleased(ctx context.Context, before time.Time) ([]*execution.Record, error)
 	MarkReleased(ctx context.Context, id execution.ID, at time.Time) error
+	AppendLog(ctx context.Context, id execution.ID, seq int64, data []byte, keepFrom int64) error
 }
 
 // Origin is what a task runs for: the job, the namespace it runs in, and the
@@ -94,6 +97,8 @@ type Dispatcher struct {
 	poll       Poll
 	sleep      func(ctx context.Context, d time.Duration) error
 	tiers      job.TierMode // the deployment's tier mode; empty is the default
+
+	maxLogBytes int64 // how much of an execution's output is kept, the end of it
 }
 
 // -------------------------------------------------------------------------
@@ -132,6 +137,12 @@ func WithTierMode(mode job.TierMode) Option {
 	return func(d *Dispatcher) { d.tiers = mode }
 }
 
+// WithMaxLogBytes sets how much of an execution's output is kept, in place of
+// execution.DefaultMaxLogBytes. Past it the front is dropped.
+func WithMaxLogBytes(n int64) Option {
+	return func(d *Dispatcher) { d.maxLogBytes = n }
+}
+
 // New builds a dispatcher over a registry, charging ledger for what it runs and
 // recording every attempt in executions. Both are arguments rather than
 // options, since a dispatcher that charges or records nothing is the failure
@@ -147,6 +158,8 @@ func New(registry Registry, ledger Ledger, executions Executions, opts ...Option
 		now:        time.Now,
 		poll:       DefaultPoll,
 		sleep:      sleepContext,
+
+		maxLogBytes: execution.DefaultMaxLogBytes,
 	}
 
 	for _, opt := range opts {

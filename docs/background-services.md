@@ -5,8 +5,9 @@ description: "Every periodic and long-running goroutine the server and agent run
 weight: 440
 ---
 
-The server keeps its view of providers, quota and dispatches current with five
-upkeep loops, and runs each dispatch, lease, agent session and followed log
+The server keeps its view of providers, quota and dispatches current, and its
+stored output within its retention, with six upkeep loops, and runs each
+dispatch, lease, agent session and followed log
 stream in its own goroutine. The agent holds one connection to the server and reports its
 workloads on a timer. None of the loops apply jitter, and none take a lock
 across servers: where two servers could collide, the store statement itself
@@ -24,8 +25,9 @@ Interactive version, with notes on each loop:
 | [Capability refresh](#capability-refresh) | 1m | Yes, before serving | Every non-pool provider's `Capabilities` | Provider marked unhealthy, warn |
 | [Usage snapshot refresh](#usage-snapshot-refresh) | 15s | Yes, required | Store: quota usage and reservations | Last snapshot kept, warn |
 | [Reservation reaper](#reservation-reaper) | 5m | Yes, before serving | Store: reservations over 1h old; provider `Status` | Reservation kept, warn |
-| [Provider release](#provider-release) | 5m | No | Store: unreleased executions; provider `Status` and `Release` | Left unreleased, warn, retried next tick |
+| [Provider release](#provider-release) | 5m | No | Store: unreleased executions and their output; provider `Status`, `ReadLogs` and `Release` | Left unreleased, warn, retried next tick |
 | [Dispatch claim](#dispatch-claim) | 30s | Yes, before serving | Store: dispatches with a lapsed lease | Warn, retried next tick |
+| [Output retention](#output-retention) | 1h | No | Store: stored output of executions that ended over `log_retention` ago | Warn, retried next tick |
 | [Dispatch runner](#dispatch-runner) | Per dispatch | | Providers, store, ledger | Dispatch ends `unanswered` |
 | [Lease renewal](#lease-renewal) | 20s per running dispatch | | Store: the dispatch's lease | Ignored; stale lease stops the run |
 | [Live output follow](#live-output-follow) | 1s record re-read, per followed request | | Store: one execution; provider `StreamLogs` | Response ends, warn |
@@ -46,12 +48,12 @@ checked when read, not swept ([Pool reservations](#pool-reservations)).
 
 ## Server
 
-The five upkeep loops start when the server begins serving and stop when it
+The six upkeep loops start when the server begins serving and stop when it
 shuts down. Each tick runs synchronously; a run longer than its interval is
 followed immediately by the next, and ticks do not pile up. The first tick is
 one interval after startup. Capability refresh, usage refresh, the reaper and
-the claim each ran once before serving; provider release has no startup pass,
-so its first pass is 5m in.
+the claim each ran once before serving; provider release and output retention
+have no startup pass, so their first passes are 5m and 1h in.
 A failure is logged and waits for the next tick; one loop failing never stops
 another.
 
@@ -136,16 +138,18 @@ were settled; warn `resolving abandoned quota reservations` on error.
 
 Releases what providers still hold for executions that are over: a Cloud Run
 Job, a Code Engine job run, a stopped container on a pool node. Dispatch releases after it reads a
-result; every other ending leaves the release to this service: a cancelled
-run, a provider that stopped answering, a `Result` that failed, a server that
-died mid-run, a release that failed.
+result and captures the output; every other ending leaves the release to this
+service: a cancelled run, a provider that stopped answering, a `Result` that
+failed, a server that died mid-run, a release that failed. An execution whose
+output was never captured has it captured here first, since releasing may
+destroy it.
 
 | | |
 |---|---|
 | Interval | 5m |
 | At startup | No; the first pass is one interval in |
 | Selects | Executions with no `released_at`, unchanged for more than 10m |
-| Touches | Store: executions and reservations; each execution's provider `Status`, `Result` and `Release` |
+| Touches | Store: executions, their output and reservations; each execution's provider `Status`, `Result`, `ReadLogs` and `Release` |
 
 For each execution, in order:
 
@@ -153,9 +157,11 @@ For each execution, in order:
 |---|---|
 | It is `lost` | Reconciled first ([Lost executions](dispatch.md#lost-executions)): its result recorded if the provider reports it over, `failed` if its provider forgot it or is no longer configured, or 24 hours after it was marked lost. One still unresolved is skipped |
 | It still holds a quota reservation | Skipped: the reaper settles it first by asking the provider, which a released execution can no longer answer |
-| Its provider is no longer configured, or implements no `Release` | Marked released; nothing to do |
+| Its provider is no longer configured | Marked released; nothing to do |
+| Its provider implements no `Release`, and its output is captured or it implements no `ReadLogs` | Marked released; nothing to do |
 | No recorded result, provider reports it unknown | Marked released |
 | No recorded result, `Status` errors or is not terminal | Skipped, asked again next tick |
+| Output never captured (`logs_at` null), provider implements `ReadLogs` | Output captured as dispatch would ([Output](dispatch.md#output)) and the record written. A record that cannot be written leaves it for the next tick, unreleased |
 | Otherwise | `Release`, then marked released. An unknown execution counts as released; any other error leaves it for the next tick |
 
 - Every candidate is read each pass, with no batch limit, so executions that
@@ -172,6 +178,29 @@ For each execution, in order:
 **Logs:** info `released provider leftovers` with `count` when any were
 released; warn `releasing provider leftovers` with the joined errors when any
 failed.
+
+### Output retention
+
+Deletes the stored output of executions that ended longer ago than the
+server's `log_retention` (default `168h`,
+[Configuration](configuration.md#server-block)). The execution records stay.
+
+| | |
+|---|---|
+| Interval | 1h |
+| At startup | No; the first pass is one interval in |
+| Selects | Output of executions whose `ended_at` is before now minus `log_retention` |
+| Touches | Store: `execution_logs` ([Database](database.md#execution_logs)) |
+
+- One statement per pass, driven from the stored chunks, so its cost follows
+  the output retention keeps rather than every execution ever recorded.
+- An execution still running, or ended within the retention, keeps its
+  output.
+- Once pruned, `GET /v1/execution/{id}/logs` answers 200 with an empty body.
+- Idempotent, so several servers running it at once is harmless.
+
+**Logs:** info `pruned stored output` with `executions` when any were pruned;
+warn `pruning stored output` with the error.
 
 ### Dispatch claim
 
@@ -251,8 +280,8 @@ the other re-reads the record to end the stream.
 | Touches | Store: the execution record; provider `StreamLogs` |
 
 - A record that cannot be read is retried the next second.
-- A provider that cannot resume from `offset` is answered 416, if no output was
-  written yet.
+- A provider that cannot place its stream at `offset` is answered 416, if no
+  output was written yet.
 - The stream never writes the record.
 
 **Logs:** warn `log stream ended early` with `execution` and `error`.
@@ -382,6 +411,7 @@ store keeps them apart:
 |---|---|
 | Dispatch claim | One `UPDATE ... RETURNING` statement: a lapsed dispatch goes to exactly one server |
 | Reservation reaper | Row locks with `SKIP LOCKED`: each stale reservation is resolved by one server |
-| Provider release | Releases and marks are idempotent; two servers releasing one execution is harmless |
+| Provider release | Releases and marks are idempotent; two servers releasing one execution is harmless, and a capture both make is stored once, since each starts the output over |
+| Output retention | Deleting what another server already deleted deletes nothing |
 | Usage refresh, capability refresh | Per-server reads; nothing to coordinate |
 | Agent sessions | Per server. An agent connects to one server, and its pools exist only there |

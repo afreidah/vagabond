@@ -5,9 +5,10 @@
 //
 // What the CLI does once per call, the server does on timers: refreshing
 // provider capabilities and quota usage, reaping stale reservations, releasing
-// what providers still hold for finished executions, and claiming dispatches
-// whose owner died. Each task logs its own failures and waits for its next
-// tick, so one failing never stops another.
+// what providers still hold for finished executions, claiming dispatches whose
+// owner died, and pruning stored output past its retention. Each task logs its
+// own failures and waits for its next tick, so one failing never stops
+// another.
 // -------------------------------------------------------------------------------
 
 package server
@@ -28,6 +29,7 @@ const (
 	reapInterval         = 5 * time.Minute
 	releaseInterval      = 5 * time.Minute
 	claimInterval        = 30 * time.Second
+	pruneInterval        = time.Hour
 )
 
 // -------------------------------------------------------------------------
@@ -44,6 +46,7 @@ func (s *Server) startUpkeep(ctx context.Context) *sync.WaitGroup {
 	wg.Go(func() { every(ctx, reapInterval, s.reap) })
 	wg.Go(func() { every(ctx, releaseInterval, s.release) })
 	wg.Go(func() { every(ctx, s.claimEvery, s.claim) })
+	wg.Go(func() { every(ctx, pruneInterval, s.prune) })
 
 	return &wg
 }
@@ -104,5 +107,18 @@ func (s *Server) release(ctx context.Context) {
 
 	if err != nil {
 		s.logger.WarnContext(ctx, "releasing provider leftovers", "error", err)
+	}
+}
+
+// prune deletes the stored output of executions that ended longer ago than the
+// retention.
+func (s *Server) prune(ctx context.Context) {
+	pruned, err := s.executions.PruneLogs(ctx, s.now().Add(-s.retainLogs))
+
+	switch {
+	case err != nil:
+		s.logger.WarnContext(ctx, "pruning stored output", "error", err)
+	case pruned > 0:
+		s.logger.InfoContext(ctx, "pruned stored output", "executions", pruned)
 	}
 }

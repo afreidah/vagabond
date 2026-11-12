@@ -51,6 +51,7 @@ var (
 	_ plugin.Live            = (*Provider)(nil)
 	_ plugin.MemberSubmitter = (*Provider)(nil)
 	_ plugin.LogStreamer     = (*Provider)(nil)
+	_ plugin.LogReader       = (*Provider)(nil)
 	_ plugin.Releaser        = (*Provider)(nil)
 )
 

@@ -16,12 +16,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/gohcl"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 
+	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/quota"
 )
@@ -64,12 +66,16 @@ const (
 )
 
 // ServerBlock configures vagabond server. Absent means the defaults. TLS
-// covers the API; AgentTLS covers the agent listener at AgentBind.
+// covers the API; AgentTLS covers the agent listener at AgentBind. MaxLogMiB
+// is how much of an execution's output is kept, the end of it, and
+// LogRetention how long it is kept after the execution ends.
 type ServerBlock struct {
-	Bind      *string   `hcl:"bind,optional"`
-	AgentBind *string   `hcl:"agent_bind,optional"`
-	TLS       *TLSBlock `hcl:"tls,block"`
-	AgentTLS  *TLSBlock `hcl:"agent_tls,block"`
+	Bind         *string       `hcl:"bind,optional"`
+	AgentBind    *string       `hcl:"agent_bind,optional"`
+	MaxLogMiB    *int          `hcl:"max_log_mib,optional"`
+	LogRetention *job.Duration `hcl:"log_retention,optional"`
+	TLS          *TLSBlock     `hcl:"tls,block"`
+	AgentTLS     *TLSBlock     `hcl:"agent_tls,block"`
 }
 
 // TLSBlock is one listener's TLS: the certificate and key the server presents,
@@ -98,6 +104,29 @@ func (s *ServerBlock) AgentAddress() string {
 	}
 
 	return *s.AgentBind
+}
+
+// MaxLogBytes returns how much of an execution's output is kept. A nil block or
+// an unset one is the default.
+func (s *ServerBlock) MaxLogBytes() int64 {
+	if s == nil || s.MaxLogMiB == nil {
+		return execution.DefaultMaxLogBytes
+	}
+
+	return int64(*s.MaxLogMiB) << 20
+}
+
+// RetainLogs returns how long an execution's output is kept after it ends. A
+// nil block or an unset one is the default; validation has proved a set one
+// parses.
+func (s *ServerBlock) RetainLogs() time.Duration {
+	if s == nil || s.LogRetention == nil {
+		return execution.DefaultLogRetention
+	}
+
+	retain, _ := s.LogRetention.Std()
+
+	return retain
 }
 
 // Namespace is an owner of jobs and, optionally, of its own share of each
@@ -333,15 +362,7 @@ func (f *File) validate() hcl.Diagnostics {
 		})
 	}
 
-	if f.Server != nil && f.Server.AgentTLS != nil && f.Server.AgentTLS.CA == "" {
-		diags = append(diags, &hcl.Diagnostic{
-			Severity: hcl.DiagError,
-			Summary:  "Missing agent CA",
-			Detail: "The agent_tls block names no ca. An agent registers under its " +
-				"certificate's common name, so every agent certificate must be " +
-				"verified against a CA.",
-		})
-	}
+	diags = append(diags, f.Server.validate()...)
 
 	if mode := f.Scheduling.TierMode(); !mode.Valid() {
 		diags = append(diags, &hcl.Diagnostic{
@@ -372,6 +393,50 @@ func (f *File) validate() hcl.Diagnostics {
 	}
 
 	return append(diags, f.validateNamespaces(seen)...)
+}
+
+// validate reports server settings that cannot be applied: an agent listener
+// that could not verify agents, a ceiling that keeps no output, and a
+// retention that does not parse or keeps nothing.
+func (s *ServerBlock) validate() hcl.Diagnostics {
+	var diags hcl.Diagnostics
+
+	if s == nil {
+		return nil
+	}
+
+	if s.AgentTLS != nil && s.AgentTLS.CA == "" {
+		diags = append(diags, &hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Missing agent CA",
+			Detail: "The agent_tls block names no ca. An agent registers under its " +
+				"certificate's common name, so every agent certificate must be " +
+				"verified against a CA.",
+		})
+	}
+
+	if s.MaxLogMiB != nil && *s.MaxLogMiB < 1 {
+		diags = append(diags, &hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Invalid max_log_mib",
+			Detail: fmt.Sprintf("The server block sets max_log_mib to %d. It is how many "+
+				"MiB of each execution's output are kept, so it must be at least 1.", *s.MaxLogMiB),
+		})
+	}
+
+	if s.LogRetention != nil {
+		if retain, err := s.LogRetention.Std(); err != nil || retain <= 0 {
+			diags = append(diags, &hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Invalid log_retention",
+				Detail: fmt.Sprintf("The server block sets log_retention to %q. It is how long "+
+					"output is kept after its execution ends, a duration above zero such as "+
+					"\"168h\".", *s.LogRetention),
+			})
+		}
+	}
+
+	return diags
 }
 
 // validateNamespaces reports namespaces declared twice, and shares of

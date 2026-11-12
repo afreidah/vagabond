@@ -202,18 +202,15 @@ func (e *executions) Status(ctx context.Context, req *agentrpc.ExecutionRequest)
 	}, nil
 }
 
-// Result answers with what a finished workload produced.
+// Result answers with a finished workload's exit code and run time. Its output
+// is read through StreamLogs.
 func (e *executions) Result(ctx context.Context, req *agentrpc.ExecutionRequest) (*agentrpc.ExecutionResult, error) {
 	res, err := e.exec.Result(ctx, req.GetExecutionId())
 	if err != nil {
 		return nil, failure(err)
 	}
 
-	out := &agentrpc.ExecutionResult{
-		Duration:      durationpb.New(res.Duration),
-		Logs:          res.Logs,
-		LogsTruncated: res.LogsTruncated,
-	}
+	out := &agentrpc.ExecutionResult{Duration: durationpb.New(res.Duration)}
 
 	if res.ExitCode != nil {
 		out.ExitCode = new(int32(*res.ExitCode)) //nolint:gosec // exit codes fit

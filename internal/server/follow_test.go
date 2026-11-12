@@ -19,6 +19,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,32 +154,84 @@ func TestExecutionLogs_StoredFromAnOffset(t *testing.T) {
 	}
 }
 
-// A truncated copy holds only the end of the output, so only offset zero can
-// be placed in it.
-func TestStoredFrom(t *testing.T) {
-	logs := []byte("0123456789")
+// Output whose front was dropped past the ceiling is still read by position in
+// the whole output, and an offset in what was dropped starts at the first byte
+// kept.
+func TestExecutionLogs_StoredPastTheCeiling(t *testing.T) {
+	h := newHarness(t)
+	id := ended(t, h.executions, time.Now(), execution.LogChunk)
 
-	tests := []struct {
-		name   string
-		result *execution.Result
-		offset int64
-		want   string
-	}{
-		{"no result", nil, 0, ""},
-		{"whole", &execution.Result{Logs: logs}, 0, "0123456789"},
-		{"from an offset", &execution.Result{Logs: logs}, 4, "456789"},
-		{"past the end", &execution.Result{Logs: logs}, 10, ""},
-		{"truncated, whole", &execution.Result{Logs: logs, LogsTruncated: true}, 0, "0123456789"},
-		{"truncated, from an offset", &execution.Result{Logs: logs, LogsTruncated: true}, 4, ""},
+	if err := h.executions.AppendLog(t.Context(), id, 1, []byte("the end\n"), 1); err != nil {
+		t.Fatalf("AppendLog() = %v", err)
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := string(storedFrom(tc.result, tc.offset)); got != tc.want {
-				t.Errorf("storedFrom() = %q, want %q", got, tc.want)
-			}
-		})
+	for query, want := range map[string]string{
+		"":         "the end\n",
+		"offset=5": "the end\n",
+		"offset=" + strconv.Itoa(execution.LogChunk+4): "end\n",
+	} {
+		status, body := h.openLogs(t, id.String(), query)
+		if got := readLogs(t, body); status != http.StatusOK || got != want {
+			t.Errorf("logs?%s = %d %q, want %q", query, status, got, want)
+		}
 	}
+}
+
+// Pruning takes the output of executions that ended longer ago than the
+// retention, and leaves the rest.
+func TestPrune_TakesOutputPastTheRetention(t *testing.T) {
+	reg, led := fixtures(t)
+	executions := memory.NewExecutions()
+	s := New(reg, led, executions, NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler),
+		WithLogs(execution.DefaultMaxLogBytes, time.Hour))
+
+	old := ended(t, executions, time.Now().Add(-2*time.Hour), 0)
+	recent := ended(t, executions, time.Now(), 0)
+
+	for _, id := range []execution.ID{old, recent} {
+		if err := executions.AppendLog(t.Context(), id, 0, []byte("output"), 0); err != nil {
+			t.Fatalf("AppendLog() = %v", err)
+		}
+	}
+
+	s.prune(t.Context())
+
+	for id, want := range map[execution.ID]string{old: "", recent: "output"} {
+		var out strings.Builder
+
+		if err := executions.ReadLog(t.Context(), id, 0, &out); err != nil || out.String() != want {
+			t.Errorf("ReadLog(%s) = %q, %v; want %q", id, out.String(), err, want)
+		}
+	}
+}
+
+// ended records an execution that succeeded at at, its output stored from
+// byte start.
+func ended(t *testing.T, s *memory.Executions, at time.Time, start int64) execution.ID {
+	t.Helper()
+
+	id, err := execution.NewID()
+	if err != nil {
+		t.Fatalf("NewID() = %v", err)
+	}
+
+	r := &execution.Record{
+		ID:        id,
+		State:     execution.StateSucceeded,
+		StartedAt: at.Add(-time.Second),
+		EndedAt:   at,
+		UpdatedAt: at,
+		Provider:  "box",
+		Result:    &execution.Result{ID: id, ExitCode: new(0), Duration: time.Second},
+		LogsAt:    at,
+		LogsStart: start,
+	}
+
+	if err := s.Create(t.Context(), r); err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+
+	return id
 }
 
 // streamerFunc is a LogStreamer from a function.

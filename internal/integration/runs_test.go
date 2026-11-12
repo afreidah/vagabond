@@ -16,6 +16,7 @@ package integration
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -109,7 +110,7 @@ func TestRun_EndToEnd(t *testing.T) {
 		t.Errorf("execution = %+v, %v", e, err)
 	}
 
-	if _, err := client.Logs(context.Background(), e.ID, 0); err != nil {
+	if err := client.Logs(context.Background(), e.ID, 0, io.Discard); err != nil {
 		t.Errorf("Logs() = %v", err)
 	}
 

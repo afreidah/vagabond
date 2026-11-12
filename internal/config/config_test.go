@@ -16,10 +16,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/hashicorp/hcl/v2"
 
+	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/quota"
 )
@@ -317,6 +319,51 @@ func TestServerAddress(t *testing.T) {
 
 	if got := load(t, `server { agent_bind = "0.0.0.0:9001" }`).Server.AgentAddress(); got != "0.0.0.0:9001" {
 		t.Errorf("AgentAddress() = %q, want 0.0.0.0:9001", got)
+	}
+}
+
+// With no setting the output ceiling and retention are the defaults, and set
+// ones are read in MiB and as a duration.
+func TestServerOutput(t *testing.T) {
+	t.Parallel()
+
+	unset := load(t, `server {}`).Server
+	if unset.MaxLogBytes() != execution.DefaultMaxLogBytes || unset.RetainLogs() != execution.DefaultLogRetention {
+		t.Errorf("empty block: %d bytes for %s, want the defaults", unset.MaxLogBytes(), unset.RetainLogs())
+	}
+
+	var none *ServerBlock
+	if none.MaxLogBytes() != execution.DefaultMaxLogBytes || none.RetainLogs() != execution.DefaultLogRetention {
+		t.Errorf("no block: %d bytes for %s, want the defaults", none.MaxLogBytes(), none.RetainLogs())
+	}
+
+	set := load(t, `server {
+  max_log_mib   = 4
+  log_retention = "36h"
+}`).Server
+	if set.MaxLogBytes() != 4<<20 || set.RetainLogs() != 36*time.Hour {
+		t.Errorf("set: %d bytes for %s, want 4 MiB for 36h", set.MaxLogBytes(), set.RetainLogs())
+	}
+}
+
+// A ceiling that keeps nothing, and a retention that does not parse or keeps
+// nothing, are refused by name.
+func TestServerOutputRefusals(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		src  string
+		want string
+	}{
+		{src: `server { max_log_mib = 0 }`, want: "Invalid max_log_mib"},
+		{src: `server { log_retention = "a week" }`, want: "Invalid log_retention"},
+		{src: `server { log_retention = "0s" }`, want: "Invalid log_retention"},
+	}
+
+	for _, tc := range tests {
+		if got := loadErr(t, tc.src); !strings.Contains(got, tc.want) {
+			t.Errorf("%s: diagnostics = %s, want %q", tc.src, got, tc.want)
+		}
 	}
 }
 

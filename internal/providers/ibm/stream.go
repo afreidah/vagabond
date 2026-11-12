@@ -1,18 +1,18 @@
 // -------------------------------------------------------------------------------
-// Log Streaming
+// Container Logs
 //
 // Author: Alex Freidah
 //
-// Follows the task container's log through the Kubernetes API. The stream
-// starts at the container's first line rather than at the present, so unlike a
-// tail it can resume from an offset by skipping what the caller already has.
+// The task container's log through the Kubernetes API, followed while the task
+// runs and read whole once it has ended. The log starts at the container's
+// first line rather than at the present, so unlike a tail a follow can resume
+// from an offset by skipping what the caller already has.
 // -------------------------------------------------------------------------------
 
 package ibm
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,13 +44,13 @@ func (p *Provider) StreamLogs(ctx context.Context, id execution.ID, offset int64
 		return err
 	}
 
-	resp, err := p.openFollow(ctx, name)
+	resp, err := p.openLog(ctx, name, true)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	return copyFollow(resp.Body, w, offset)
+	return plugin.CopyLive(plugin.SkipWriter(w, offset), resp.Body)
 }
 
 // awaitStart polls for the run's pod until its task container has started,
@@ -78,70 +78,55 @@ func (p *Provider) awaitStart(ctx context.Context, run string) (string, error) {
 	}
 }
 
-// openFollow opens the container's log as a stream. Not routed through fetch,
-// which reads the whole body, because this one stays open while the task runs.
-func (p *Provider) openFollow(ctx context.Context, podName string) (*http.Response, error) {
+// -------------------------------------------------------------------------
+// READING
+// -------------------------------------------------------------------------
+
+// ReadLogs writes a finished run's output, the task container's whole log. The
+// pod goes with the run, so a pod already gone is output lost.
+func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w io.Writer) error {
+	run := runName(id)
+
+	found, err := p.runPod(ctx, run)
+	if err != nil {
+		return err
+	}
+
+	if found == nil {
+		return plugin.Infrastructure(fmt.Errorf("the pod of job run %s is gone, and its log with it", run))
+	}
+
+	// A container that never started printed nothing
+	if !found.started() {
+		return nil
+	}
+
+	resp, err := p.openLog(ctx, found.Metadata.Name, false)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	return plugin.CopyAll(w, resp.Body)
+}
+
+// -------------------------------------------------------------------------
+// OPENING
+// -------------------------------------------------------------------------
+
+// openLog opens the task container's log as a stream from its first line. A
+// followed log stays open while the task runs.
+func (p *Provider) openLog(ctx context.Context, podName string, follow bool) (*http.Response, error) {
 	ns, err := p.namespace(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	query := url.Values{"follow": {"true"}, "container": {userContainer}}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		p.podsURL(ns)+"/"+podName+"/log?"+query.Encode(), nil)
-	if err != nil {
-		return nil, plugin.Internal(fmt.Errorf("building the log request: %w", err))
+	query := url.Values{"container": {userContainer}}
+	if follow {
+		query.Set("follow", "true")
 	}
 
-	req.Header.Set("Accept", "text/plain, */*")
-
-	resp, err := p.auth.Load().http.Do(req)
-	if err != nil {
-		if classified, ok := errors.AsType[*plugin.Error](err); ok {
-			return nil, classified
-		}
-
-		return nil, plugin.Infrastructure(fmt.Errorf("opening the log stream: %w", err))
-	}
-
-	if resp.StatusCode >= http.StatusMultipleChoices {
-		defer resp.Body.Close()
-
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
-
-		return nil, p.classify(resp, http.MethodGet, body)
-	}
-
-	return resp, nil
-}
-
-// -------------------------------------------------------------------------
-// COPYING
-// -------------------------------------------------------------------------
-
-// copyFollow skips the offset bytes the caller already has, then copies the
-// rest as it arrives. A read failure ends the copy quietly: no way a stream
-// stops fails the work. A failed write is the caller's to know about.
-func copyFollow(body io.Reader, w io.Writer, offset int64) error {
-	if offset > 0 {
-		if _, err := io.CopyN(io.Discard, body, offset); err != nil {
-			return nil
-		}
-	}
-
-	buf := make([]byte, 32<<10)
-
-	for {
-		n, readErr := body.Read(buf)
-		if n > 0 {
-			if _, err := w.Write(buf[:n]); err != nil {
-				return plugin.Internal(fmt.Errorf("writing log output: %w", err))
-			}
-		}
-
-		if readErr != nil {
-			return nil
-		}
-	}
+	return p.open(ctx, http.MethodGet, p.podsURL(ns)+"/"+podName+"/log?"+query.Encode(),
+		http.Header{"Accept": {"text/plain, */*"}}, nil)
 }

@@ -43,13 +43,20 @@ type Execution struct {
 	BilledCpu     *int64
 	BilledMemory  *int64
 	BilledMs      *int64
-	Logs          []byte
 	LogsTruncated bool
 	DispatchID    string
 	Cpu           int64
 	Memory        int64
 	ReleasedAt    *time.Time
 	Reason        string
+	LogsStart     int64
+	LogsAt        *time.Time
+}
+
+type ExecutionLog struct {
+	ExecutionID string
+	Seq         int64
+	Data        []byte
 }
 
 type Job struct {

@@ -169,10 +169,9 @@ func (f *follower) result(ctx context.Context, e *api.Execution) {
 
 // live is one execution's output, followed to stdout while it runs.
 type live struct {
-	out   *output
-	end   func()        // tells the follow its execution is over; safe to repeat
-	done  chan struct{} // closed once the follow has stopped
-	broke bool          // a stream failed rather than ended; read after done
+	out  *output
+	end  func()        // tells the follow its execution is over; safe to repeat
+	done chan struct{} // closed once the follow has stopped
 }
 
 // watch follows a submitted execution's output, once, unless -no-logs, and
@@ -207,9 +206,6 @@ func (f *follower) start(ctx context.Context, id string) *live {
 
 		for {
 			err := f.client.FollowLogs(ctx, id, l.out.written(), l.out)
-			if err != nil {
-				l.broke = true
-			}
 
 			if failure, ok := errors.AsType[*api.ResponseError](err); ok &&
 				failure.Status == http.StatusRequestedRangeNotSatisfiable {
@@ -230,40 +226,35 @@ func (f *follower) start(ctx context.Context, id string) *live {
 }
 
 // rest prints what of a finished execution's stored output did not stream, and
-// warns when truncation hides where a broken stream left off.
+// warns of output that is not there to print: dropped past the server's
+// ceiling before it could stream, or never given by the provider.
 func (f *follower) rest(ctx context.Context, e *api.Execution) {
 	out := &output{mu: &f.stdout, w: f.Stdout}
-	broke := false
 
 	if l, ok := f.live[e.ID]; ok {
 		// The stream ends with the execution, so its tail precedes the verdict
 		l.end()
 		<-l.done
 
-		out, broke = l.out, l.broke
+		out = l.out
 	}
 
 	streamed := out.written()
 
-	logs, err := f.client.Logs(ctx, e.ID, streamed)
-	if err != nil {
-		f.Ui.Warn(fmt.Sprintf("Could not read the output of %s: %s", e.ID, err))
-
-		return
+	if dropped := e.LogsStart - streamed; dropped > 0 {
+		f.Ui.Warn(fmt.Sprintf("%d bytes of output were not kept: the server keeps the end of long output.", dropped))
 	}
 
-	_, _ = out.Write(logs)
+	if err := f.client.Logs(ctx, e.ID, streamed, out); err != nil {
+		f.Ui.Warn(fmt.Sprintf("Could not read the output of %s: %s", e.ID, err))
+	}
 
 	if out.written() > 0 && !out.endsLine() {
 		_, _ = out.Write([]byte("\n"))
 	}
 
-	switch {
-	case !e.LogsTruncated:
-	case streamed == 0:
-		f.Ui.Warn("Output was truncated.")
-	case broke:
-		f.Ui.Warn(fmt.Sprintf("Live output was interrupted. vagabond execution logs %s has its stored tail.", e.ID))
+	if e.LogsTruncated {
+		f.Ui.Warn("The provider gave only part of the output.")
 	}
 }
 

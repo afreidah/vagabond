@@ -85,7 +85,7 @@ server under a supervisor that restarts it.
 | Source | `internal/state/postgres/migrations/*.sql`, embedded in the binary |
 | Applied | At every `vagabond server` start, pending ones only |
 | Version table | `goose_db_version`, created by goose |
-| Expected version | `8` in this release (`SchemaVersion`) |
+| Expected version | `9` in this release (`SchemaVersion`) |
 | Connection | A separate `database/sql` connection opened from the DSN as written and closed after; the 5s `connect_timeout` default does not apply to it |
 
 After migrating, the server reads `MAX(version_id)` from `goose_db_version`
@@ -95,8 +95,8 @@ for:
 | Database version | Result |
 |---|---|
 | Equal | Starts |
-| Lower | Refuses: `older than the 7 this binary expects; a migration may have failed partway` |
-| Higher | Refuses: `newer than the 7 this binary expects; upgrade vagabond` |
+| Lower | Refuses: `older than the 9 this binary expects; a migration may have failed partway` |
+| Higher | Refuses: `newer than the 9 this binary expects; upgrade vagabond` |
 
 - There is no command to migrate down. The files carry `Down` sections, but
   the binary never runs them. Rolling back a release means restoring a backup
@@ -116,6 +116,7 @@ for:
 | 6 | `00006_dispatch_leases.sql` | `dispatches.tasks`, `owner`, `lease_until`; index `dispatches_lease`; `executions.cpu`, `memory` |
 | 7 | `00007_execution_release.sql` | `executions.released_at`, backfilled for rows with a result; index `executions_unreleased` |
 | 8 | `00008_execution_reason.sql` | `executions.reason`, `''` for existing rows |
+| 9 | `00009_execution_logs.sql` | `execution_logs`, holding each existing row's output as chunk 0; `executions.logs_start` and `logs_at`, backfilled for rows with a result; `executions.logs` dropped |
 
 ## Schema
 
@@ -176,7 +177,9 @@ holder can end a run. Claiming is one `UPDATE ... RETURNING`. See
 | `cpu`, `memory` | Declared millicores and MiB, for charging without the job |
 | `exit_code`, `duration_ms` | Null until a result is recorded |
 | `billed_cpu`, `billed_memory`, `billed_ms` | What the provider reported billing, when it reports it |
-| `logs`, `logs_truncated` | Last 64 KiB of output (`BYTEA`), and whether it was cut |
+| `logs_at` | When the output was captured into `execution_logs`; null until then |
+| `logs_start` | First byte of output still stored; above 0 once the front was dropped past the ceiling |
+| `logs_truncated` | The provider gave less output than the task printed |
 | `reason` | Why the platform ended the workload, in its words; `''` when it did not say |
 | `released_at` | When what the provider left behind was released; null until then |
 | `created_at`, `started_at`, `ended_at` | From the ID; on reaching `running`; on a terminal state |
@@ -188,6 +191,25 @@ after reading a result, or the release loop.
 Index `executions_job (namespace, job, created_at)` serves job status; the
 partial index `executions_unreleased (updated_at) WHERE released_at IS NULL`
 serves the [release loop](background-services.md#provider-release).
+
+### `execution_logs`
+
+| Column | Meaning |
+|---|---|
+| `execution_id` | The `executions.id` the output belongs to |
+| `seq` | Chunk number; chunk `seq` holds bytes `seq * 256 KiB` onward of the output |
+| `data` | Up to 256 KiB of output (`BYTEA`, since output need not be valid UTF-8) |
+
+Primary key `(execution_id, seq)`. Output is kept apart from `executions` so
+that reading a record, which the CLI does every second while a job runs, never
+reads its output. A byte offset names its chunk, so a read from any offset
+needs no index beyond the key.
+
+- A write of chunk `seq` deletes the chunks from `seq` on in the same
+  transaction, so a capture that starts again at chunk 0 replaces the last one.
+- Past the server's output ceiling the oldest chunks are deleted in the same
+  transaction, and `executions.logs_start` records the first byte kept.
+- A read takes one chunk per query, so serving 16 MiB holds 256 KiB.
 
 ### `quota_usage` and `quota_reservations`
 
@@ -212,13 +234,16 @@ Semantics: [Quotas](quotas.md).
 
 ### Retention
 
-Nothing is deleted except settled reservations. `jobs`, `job_versions`,
-`dispatches`, `executions` and past periods of `quota_usage` grow without
-bound. `executions` dominates: up to 64 KiB of output per attempt. Pruning old
-rows by hand is safe for:
+Two things are deleted: settled reservations, and `execution_logs` rows of
+executions that ended more than the server's `log_retention` ago (7 days by
+default, [Output retention](background-services.md#output-retention)).
+`execution_logs` dominates while it is kept: up to `max_log_mib` (16 MiB by
+default) per attempt. `jobs`, `job_versions`, `dispatches`, `executions` and
+past periods of `quota_usage` grow without bound, a few hundred bytes a row.
+Pruning old rows by hand is safe for:
 
 - `executions` and `dispatches` that are not `running`, older than any history
-  you want from `vagabond job status`
+  you want from `vagabond job status`, with their `execution_logs` rows
 - `quota_usage` rows for periods that have ended
 
 Never delete `quota_reservations` rows by hand; the reaper resolves them.
@@ -327,9 +352,9 @@ Restoring an older backup:
 
 Supported with the same code and migrations. Differences the code accounts for:
 
-- Migrations 2, 4, 6 and 7 run outside a transaction (`-- +goose NO
+- Migrations 2, 4 and 6 to 9 run outside a transaction (`-- +goose NO
   TRANSACTION`). CockroachDB refuses a primary key change in the same
-  transaction as the column it adds (2); 4, 6 and 7 follow suit so each schema
+  transaction as the column it adds (2); the others follow suit so each schema
   change applies on its own.
 - The schema uses no sequences, triggers or foreign keys.
 - CockroachDB raises `40001` for any contended transaction, not only under

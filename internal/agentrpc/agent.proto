@@ -109,13 +109,14 @@ message ExecutionStatus {
   google.protobuf.Timestamp ended_at = 4;
 }
 
-// ExecutionResult's exit_code is unset when the workload never exited, and
-// logs are the stored tail.
+// ExecutionResult's exit_code is unset when the workload never exited. The
+// output is read through StreamLogs; fields 3 and 4 carried a tail of it.
 message ExecutionResult {
+  reserved 3, 4;
+  reserved "logs", "logs_truncated";
+
   optional int32 exit_code = 1;
   google.protobuf.Duration duration = 2;
-  bytes logs = 3;
-  bool logs_truncated = 4;
 }
 
 // LogsRequest's offset is how many bytes of output the caller already has.

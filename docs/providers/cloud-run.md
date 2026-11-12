@@ -141,7 +141,7 @@ The permissions the plugin exercises, by call:
 | `GET .../jobs/{job}/executions` | `Status`, `Result` | `run.executions.list` |
 | `GET /v2/{execution}/tasks` | `Result` | `run.tasks.list` |
 | `DELETE .../jobs/{job}` | `Cancel`, `Release`, failed `Submit` | `run.jobs.delete` |
-| `POST /v2/entries:list` | `Result` | `logging.logEntries.list` |
+| `POST /v2/entries:list` | `ReadLogs`, `StreamLogs` | `logging.logEntries.list` |
 | `POST /v2/entries:tail` | `StreamLogs` | `logging.logEntries.list` |
 
 `roles/run.developer` covers every `run.*` permission above;
@@ -259,10 +259,11 @@ limit).
 |---|---|---|
 | `Submit` | `POST .../jobs?jobId=vagabond-<id>`, then `POST .../jobs/vagabond-<id>:run` | `ProviderID` = job name, state `accepted` |
 | `Status` | `GET .../jobs/vagabond-<id>/executions` | State from the execution's counters; `StartedAt`, `EndedAt` from `startTime`, `completionTime` |
-| `Result` | `GET .../executions` again, `GET /v2/<execution>/tasks`, then `POST /v2/entries:list` (paged) | Exit code, duration, logs |
+| `Result` | `GET .../executions` again, then `GET /v2/<execution>/tasks` | Exit code, duration |
+| `ReadLogs` | `POST /v2/entries:list` (paged) | Writes the whole output; an error after the page cap |
 | `Cancel` | `DELETE .../jobs/vagabond-<id>` | `nil`, also when the job is already gone (404) |
 | `Release` | `DELETE .../jobs/vagabond-<id>` | Same call as `Cancel` |
-| `StreamLogs` | `POST /v2/entries:tail` | Writes output until the stream ends; `plugin.ErrNoResume`, with no call made, for an offset above zero |
+| `StreamLogs` | `POST /v2/entries:tail`, then `POST /v2/entries:list` (paged) | Writes output from `offset` until the stream ends; `plugin.ErrNoResume` when the backfill fails |
 
 If the `:run` call fails, `Submit` deletes the job it just created, ignoring
 the delete's own error, and returns the `:run` error.
@@ -316,7 +317,7 @@ When the task was stopped before its process ran, `exitCode` is absent and
 
 ### Logs
 
-`Result` reads Cloud Logging `entries:list` with:
+`ReadLogs` reads Cloud Logging `entries:list` with:
 
 ```text
 resourceNames = ["projects/<project>"]
@@ -327,53 +328,65 @@ pageSize      = 1000
 
 stdout and stderr arrive interleaved in timestamp order, one `textPayload` per
 line. Entries with an empty `textPayload` (structured platform entries) are
-skipped.
+skipped. Dispatch calls it once the execution ends and stores what it writes;
+see [Dispatch](../dispatch.md#output). The entries outlive the job, so
+`Release` and `Cancel` destroy nothing it reads.
 
 `entries:list` returns one page per storage shard, so an empty page with a
 `nextPageToken` is not the end. The reader follows tokens until the token is
-empty or a bound is hit.
+empty or it has read 20 pages. Stopping at 20 pages returns an infrastructure
+error after writing what was read, and dispatch marks the stored output
+truncated.
 
-| Bound | Value | On reaching it |
-|---|---|---|
-| Entries | 1000 | Stop, `LogsTruncated = true` |
-| Bytes | 256 KiB | Stop before the entry that would exceed it, `LogsTruncated = true` |
-| Pages | 20 | Stop, `LogsTruncated = true` |
-
-The execution record keeps the last 64 KiB of what `Result` returns.
-
-A failed log read does not fail `Result`: the exit code is returned with no
-logs.
+Each page is one request against Cloud Logging's quota of 60 `entries:list`
+requests a minute per project, which cannot be raised. A capture reads the
+whole output, and every live stream that opens lists what was logged before it
+(below), so many executions ending or followed in the same minute can be
+refused with `429`. A refused capture leaves the output truncated; a refused
+backfill leaves the stream unplaced.
 
 ### Live output
 
-`StreamLogs` calls `entries:tail`, a streaming method, over HTTP through gRPC
-transcoding:
+`StreamLogs` opens `entries:tail`, a streaming method, over HTTP through gRPC
+transcoding, then lists what was logged before it opened:
 
 - The request body is a JSON array holding one request, with the same resource
   name and filter as `entries:list` and `bufferWindow = "1s"`. A bare object is
   rejected with `400 Invalid value (Object)`.
 - The response is one JSON array that stays open; each element is decoded as it
-  arrives and its entries' `textPayload` values are written, one per line.
+  arrives. It is read into a queue of up to 10,000 entries from the moment it
+  opens, since Cloud Logging drops entries a client does not read quickly
+  enough (`suppressionInfo` reason `NOT_CONSUMED`).
+- With the tail open, `entries:list` writes the entries logged so far, oldest
+  first, under the same 20-page cap as `ReadLogs`. The tail's copies of those
+  entries, matched by `timestamp` and `insertId`, are dropped, and the rest are
+  written as they arrive.
+- The stream therefore starts at the first byte the task printed, the same
+  bytes the stored copy holds. The first `offset` bytes are skipped, across the
+  backfill and the tail, so a reopened stream picks up where the last ended.
+- A backfill that fails or stops at the page cap returns `plugin.ErrNoResume`,
+  which the server answers `416` when nothing was written yet; the client then
+  finishes from the stored copy.
 - The 1s buffer window lets Cloud Logging order entries by timestamp. Shorter
   windows deliver stderr ahead of the stdout that preceded it.
 - Once the stream is open, a read or decode error ends it without an error.
 - Platform lines such as `Container called exit(0).` arrive on the same stream
   and are not filtered.
-- A tail starts at what is being logged now, so it cannot resume. An `offset`
-  above zero returns `plugin.ErrNoResume` before anything is opened, which the
-  server answers `416`, and the client finishes from the stored copy.
+
+An entry that reaches Cloud Logging after the backfill listed later ones, with
+an earlier timestamp, is streamed after them but stored before them. A stream
+reopened across such an entry can then repeat or skip its bytes.
 
 Output runs several seconds behind the container, so the server holds a
 followed stream open for 5 s after the execution ends. `StreamLogs` is called
 for `GET /v1/execution/{id}/logs?follow=true`
-([API](../api.md#read-execution-logs)); the stored output is still read from
-`Result` once the execution ends. See [Dispatch](../dispatch.md#output).
+([API](../api.md#read-execution-logs)).
 
 ## Cleanup
 
 | Mechanism | When | Effect |
 |---|---|---|
-| `Release` | After every `Result`, by dispatch, 30s timeout | Deletes the job |
+| `Release` | After every `Result` and `ReadLogs`, by dispatch, 30s timeout | Deletes the job |
 | `Release` | Every other ending, by the [provider release](../background-services.md#provider-release) loop | Deletes the job |
 | `Cancel` | When the dispatching caller gives up, or `DELETE /v1/execution/{id}` for an execution no local dispatch is running | Deletes the job, stopping its execution |
 | Failed `:run` | Inside `Submit` | Deletes the job |
@@ -413,8 +426,8 @@ within the task's retry budget and stops on `internal` ones; see
 | Execution has no task | infrastructure | yes | |
 | Execution reports `cancelled` | infrastructure | yes | Raised by dispatch after `Result`: no verdict was produced |
 | Container exits non-zero | none | | An answer: state `failed`, `Result.ExitCode` set, not rerouted |
-| Log read fails | none | | `Result` returns without logs |
-| `StreamLogs` with an offset above zero | none | | Returns `plugin.ErrNoResume`; the server answers 416 |
+| `ReadLogs` fails or stops at 20 pages | as for any call; infrastructure at the cap | | Dispatch stores what was read and marks it truncated; the execution is unaffected |
+| `StreamLogs` backfill fails or stops at 20 pages | none | | Returns `plugin.ErrNoResume`; the server answers 416 when nothing was written |
 | `entries:tail` cannot be opened | as for any call | | The server logs it and ends the response; the execution is unaffected |
 
 Google's error message is lifted out of the JSON error body; if the body is not

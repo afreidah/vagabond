@@ -578,8 +578,10 @@ with its result.
 
 - containerd writes stdout and stderr to `<data-dir>/logs/<execution-id>.log`.
   The file is neither rotated nor capped; it grows until `Release` deletes it.
-- `Result` carries the last 64 KiB, with a truncated flag when earlier output
-  was cut.
+- `Result` carries the exit code and run time only. Once the workload ends the
+  server reads its whole output through `AgentExecutions.StreamLogs` from
+  offset 0, before `Release` deletes the file, and stores it
+  ([Dispatch](dispatch.md#output)).
 - While the workload runs, the pool streams its output through
   `AgentExecutions.StreamLogs`, from the byte offset the client asks for, so a
   `?follow=true` request ([API](api.md#read-execution-logs)) shows it live and
@@ -699,7 +701,7 @@ regenerate with `make generate`.
 | `Node.Register` | `name`, `pool`, `labels`, `architecture`, `capacity` (cpu, memory), `runtimes`, `version`, `held[]` (execution ID, declared resources, running) | empty |
 | `AgentExecutions.Submit` | `execution_id`, `workload`: `image`, `command`, `args`, `env`, `working_dir`, `resources`, `timeout`, `runtime` | `state`, `provider_id` |
 | `AgentExecutions.Status` | `execution_id` | `state`, `provider_id`, `started_at`, `ended_at` |
-| `AgentExecutions.Result` | `execution_id` | `exit_code` (unset if never exited), `duration`, `logs` (last 64 KiB), `logs_truncated` |
+| `AgentExecutions.Result` | `execution_id` | `exit_code` (unset if never exited), `duration`. Fields 3 and 4, which carried a tail of the output, are reserved |
 | `AgentExecutions.Cancel` | `execution_id` | empty |
 | `AgentExecutions.Release` | `execution_id` | empty |
 | `AgentExecutions.StreamLogs` | `execution_id`, `offset` (bytes the server already has) | stream of `data` chunks from `offset`, polled every 250 ms until the workload ends or is released |
@@ -708,7 +710,9 @@ States travel as their names (`accepted`, `running`, `succeeded`, ...).
 `runtime` is left empty by the server and defaults to `io.containerd.runc.v2`.
 An agent that predates `offset` reads the request as an `execution_id` alone
 and streams from the start; a reopened stream from such an agent repeats output
-the client already has. `provider_id` from the agent is the container ID, which
+the client already has. Upgrade the server before its agents: an agent from
+this release no longer sends output in `Result`, which an older server reads
+it from, while a newer server reads any agent's output through `StreamLogs`. `provider_id` from the agent is the container ID, which
 is the execution ID; the pool ignores it and uses the node name.
 
 ### Status codes

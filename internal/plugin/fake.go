@@ -38,7 +38,7 @@ const fakeOutput = "fake execution output\n"
 //
 // The exported fields let a test make the provider fail or advertise something
 // unusual without a constructor per scenario. NoResume makes its log stream
-// refuse an offset, as a live tail does.
+// refuse an offset, as a Cloud Run stream does when its backfill fails.
 type FakeContainerProvider struct {
 	ProviderName string
 	Caps         Capabilities
@@ -137,7 +137,7 @@ func (p *FakeContainerProvider) Cancel(_ context.Context, id execution.ID) error
 }
 
 // Result reports what a recorded run produced, derived rather than stored:
-// ExitCode is the one knob a test needs.
+// ExitCode is the one knob a test needs. The output is read by ReadLogs.
 func (p *FakeContainerProvider) Result(
 	_ context.Context, id execution.ID,
 ) (*execution.Result, error) {
@@ -152,7 +152,6 @@ func (p *FakeContainerProvider) Result(
 		ID:       id,
 		ExitCode: new(p.ExitCode),
 		Duration: time.Second,
-		Logs:     []byte(fakeOutput),
 	}, nil
 }
 
@@ -167,7 +166,7 @@ func (p *FakeContainerProvider) StreamLogs(ctx context.Context, id execution.ID,
 		return ErrNoResume
 	}
 
-	if _, err := io.WriteString(w, fakeOutput[min(offset, int64(len(fakeOutput))):]); err != nil {
+	if _, err := io.WriteString(SkipWriter(w, offset), fakeOutput); err != nil {
 		return err
 	}
 
@@ -183,6 +182,17 @@ func (p *FakeContainerProvider) StreamLogs(ctx context.Context, id execution.ID,
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+}
+
+// ReadLogs writes a recorded run's whole output.
+func (p *FakeContainerProvider) ReadLogs(ctx context.Context, id execution.ID, w io.Writer) error {
+	if _, err := p.Status(ctx, id); err != nil {
+		return err
+	}
+
+	_, err := io.WriteString(w, fakeOutput)
+
+	return err
 }
 
 // Advance moves a recorded run into the given state, standing in for whatever

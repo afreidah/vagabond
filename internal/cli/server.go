@@ -129,7 +129,11 @@ func (c *ServerCommand) Run(args []string) int {
 		err error
 	)
 
-	opts := []server.Option{server.WithNodes(conns), server.WithTierMode(cfg.Scheduling.TierMode())}
+	opts := []server.Option{
+		server.WithNodes(conns),
+		server.WithTierMode(cfg.Scheduling.TierMode()),
+		server.WithLogs(cfg.Server.MaxLogBytes(), cfg.Server.RetainLogs()),
+	}
 
 	switch {
 	case dev:

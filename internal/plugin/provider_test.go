@@ -14,6 +14,7 @@ package plugin
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/afreidah/vagabond/internal/execution"
@@ -25,6 +26,12 @@ import (
 var (
 	_ Provider = (*FakeContainerProvider)(nil)
 	_ Provider = (*FakeSyncProvider)(nil)
+)
+
+// The asynchronous fake offers its output live and whole, as Cloud Run does.
+var (
+	_ LogStreamer = (*FakeContainerProvider)(nil)
+	_ LogReader   = (*FakeContainerProvider)(nil)
 )
 
 // newID returns a fresh execution id, failing the test if one cannot be made.
@@ -169,18 +176,14 @@ func TestProvider_NonZeroExitFailsTheSubmission(t *testing.T) {
 	p := NewFakeFunctionProvider("fake-function")
 	p.ExitCode = new(1)
 
+	// A failing build is still a successful submission, so err stays nil
 	sub, err := p.Submit(t.Context(), newID(t), &job.Task{})
 	if err != nil {
-		t.Fatalf("Submit returned unexpected error: %v", err)
+		t.Fatalf("a non-zero exit produced a Go error: %v", err)
 	}
 
 	if sub.State != execution.StateFailed {
 		t.Errorf("State = %q, want %q", sub.State, execution.StateFailed)
-	}
-
-	// A failing build is still a successful submission, so err stays nil
-	if err != nil {
-		t.Error("a non-zero exit produced a Go error")
 	}
 }
 
@@ -214,7 +217,8 @@ func TestProvider_SyncProviderRejectsStatusResultAndCancel(t *testing.T) {
 // -------------------------------------------------------------------------
 
 // A container provider's result has to be asked for, which is the whole reason
-// the method exists: the platform holds it and the submission did not.
+// the method exists: the platform holds it and the submission did not. Its
+// output is read apart, whole.
 func TestProvider_ContainerResultIsFetched(t *testing.T) {
 	p := NewFakeContainerProvider("fake-container")
 	id := newID(t)
@@ -236,8 +240,14 @@ func TestProvider_ContainerResultIsFetched(t *testing.T) {
 		t.Errorf("exit code = %v, want 0", result.ExitCode)
 	}
 
-	if len(result.Logs) == 0 {
-		t.Error("the result carries no output")
+	var logs strings.Builder
+
+	if err := p.ReadLogs(t.Context(), id, &logs); err != nil || logs.String() != fakeOutput {
+		t.Errorf("ReadLogs() = %q, %v; want the run's output", logs.String(), err)
+	}
+
+	if err := p.ReadLogs(t.Context(), newID(t), &logs); err == nil {
+		t.Error("ReadLogs() of an unknown run succeeded")
 	}
 }
 

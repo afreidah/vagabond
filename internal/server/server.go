@@ -14,6 +14,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -59,8 +60,8 @@ type serverLedger interface {
 }
 
 // serverExecutions is where runs and attempts are recorded and read back,
-// where dispatches a dead owner left are claimed, and whose reachability
-// health reports.
+// where dispatches a dead owner left are claimed, where stored output is read
+// and pruned, and whose reachability health reports.
 type serverExecutions interface {
 	dispatch.Executions
 	GetDispatch(ctx context.Context, id execution.ID) (*execution.Dispatch, error)
@@ -68,6 +69,8 @@ type serverExecutions interface {
 	ClaimDispatches(
 		ctx context.Context, owner string, now, until time.Time, skip []execution.ID,
 	) ([]*execution.Dispatch, error)
+	ReadLog(ctx context.Context, id execution.ID, fromSeq int64, w io.Writer) error
+	PruneLogs(ctx context.Context, before time.Time) (int, error)
 	Ping(ctx context.Context) error
 }
 
@@ -102,6 +105,9 @@ type Server struct {
 	logger     *slog.Logger
 	now        func() time.Time
 	tiers      job.TierMode // the deployment's tier mode; empty is the default
+
+	maxLogBytes int64         // how much of an execution's output is kept
+	retainLogs  time.Duration // how long output is kept after its execution ends
 
 	followPoll   time.Duration
 	followLinger time.Duration
@@ -147,6 +153,13 @@ func WithTierMode(mode job.TierMode) Option {
 	return func(s *Server) { s.tiers = mode }
 }
 
+// WithLogs sets how much of each execution's output is kept and for how long
+// after it ends, in place of execution.DefaultMaxLogBytes and
+// execution.DefaultLogRetention.
+func WithLogs(maxBytes int64, retain time.Duration) Option {
+	return func(s *Server) { s.maxLogBytes, s.retainLogs = maxBytes, retain }
+}
+
 // New builds a server over its stores, with a dispatcher that records to
 // executions and charges ledger.
 func New(
@@ -164,6 +177,8 @@ func New(
 		claimEvery:   claimInterval,
 		logger:       logger,
 		now:          time.Now,
+		maxLogBytes:  execution.DefaultMaxLogBytes,
+		retainLogs:   execution.DefaultLogRetention,
 		followPoll:   defaultFollowPoll,
 		followLinger: defaultFollowLinger,
 		stopping:     make(chan struct{}),
@@ -176,7 +191,8 @@ func New(
 	}
 
 	s.dispatcher = dispatch.New(reg, ledger, executions,
-		dispatch.WithOwner(s.owner), dispatch.WithLease(s.leaseTTL, s.leaseRenew), dispatch.WithTierMode(s.tiers))
+		dispatch.WithOwner(s.owner), dispatch.WithLease(s.leaseTTL, s.leaseRenew), dispatch.WithTierMode(s.tiers),
+		dispatch.WithMaxLogBytes(s.maxLogBytes))
 
 	return s
 }

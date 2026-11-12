@@ -5,7 +5,7 @@ description: "Interactive map of the Postgres store's tables and how they relate
 weight: 9
 ---
 
-The tables of the Postgres store. CockroachDB runs the same migrations against the same schema; four of them run outside a transaction so CockroachDB applies each schema change on its own, and `logs` reads back as `BYTES` there. Under `-dev` in-memory stores replace the database and none of these tables exist. **Hover over any table** for column details and usage context.
+The tables of the Postgres store. CockroachDB runs the same migrations against the same schema; six of them run outside a transaction so CockroachDB applies each schema change on its own, and `execution_logs.data` reads back as `BYTES` there. Under `-dev` in-memory stores replace the database and none of these tables exist. **Hover over any table** for column details and usage context.
 
 {{< diagram >}}
 
@@ -26,6 +26,7 @@ window.vagabondDiagram = {
     '    subgraph RUNS [Runs]',
     '        dispatches[dispatches]:::runs',
     '        executions[executions]:::runs',
+    '        execution_logs[execution_logs]:::runs',
     '    end',
     '    subgraph LEDGER [Quota ledger]',
     '        quota_reservations[quota_reservations]:::ledger',
@@ -39,6 +40,7 @@ window.vagabondDiagram = {
     '    job_versions -->|namespace, job, job_version| dispatches',
     '    dispatches -->|dispatch_id| executions',
     '    executions -->|previous_id| executions',
+    '    executions -->|execution_id| execution_logs',
     '    jobs -.->|namespace, job| executions',
     '    executions -->|execution_id| quota_reservations',
     '    quota_reservations -->|namespace, provider, pool, period| quota_usage'
@@ -120,16 +122,29 @@ window.vagabondDiagram = {
         '<tr><td>billed_cpu</td><td>BIGINT</td><td>Nullable; billed millicores, 0 when the provider bills no CPU</td></tr>' +
         '<tr><td>billed_memory</td><td>BIGINT</td><td>Nullable; billed MiB</td></tr>' +
         '<tr><td>billed_ms</td><td>BIGINT</td><td>Nullable; billed duration. All three are null unless the provider reported a billed amount</td></tr>' +
-        '<tr><td>logs</td><td>BYTEA</td><td>Nullable; last 64 KiB of output, stored with the result. BYTEA because output need not be valid UTF-8</td></tr>' +
-        '<tr><td>logs_truncated</td><td>BOOLEAN</td><td>Whether output before those 64 KiB was cut</td></tr>' +
+        '<tr><td>logs_truncated</td><td>BOOLEAN</td><td>The provider gave less output than the task printed</td></tr>' +
         '<tr><td class="fk">dispatch_id</td><td>TEXT</td><td>The <code>dispatches</code> row it belongs to. DEFAULT <code>\'\'</code>, the value on rows from before migration 4</td></tr>' +
         '<tr><td>cpu</td><td>BIGINT</td><td>Declared millicores, so a resumed execution is charged without its job. DEFAULT 0</td></tr>' +
         '<tr><td>memory</td><td>BIGINT</td><td>Declared MiB. DEFAULT 0</td></tr>' +
         '<tr><td>released_at</td><td>TIMESTAMPTZ</td><td>Nullable; when what the provider left behind was released. Migration 7 backfilled it to <code>updated_at</code> for rows with a result</td></tr>' +
-        '<tr><td>reason</td><td>TEXT</td><td>Why the platform ended the workload, in its words. DEFAULT <code>\'\'</code>, the value on rows from before migration 8 and when the platform did not say</td></tr></table>' +
+        '<tr><td>reason</td><td>TEXT</td><td>Why the platform ended the workload, in its words. DEFAULT <code>\'\'</code>, the value on rows from before migration 8 and when the platform did not say</td></tr>' +
+        '<tr><td>logs_start</td><td>BIGINT</td><td>First byte of output still in <code>execution_logs</code>; above 0 once the front was dropped past <code>max_log_mib</code>. DEFAULT 0</td></tr>' +
+        '<tr><td>logs_at</td><td>TIMESTAMPTZ</td><td>Nullable; when the output was captured. Null tells the release loop to capture it before releasing. Migration 9 backfilled it for rows with a result</td></tr></table>' +
         '<div class="dg-idx"><b>Indexes:</b> PK on id &bull; executions_job (namespace, job, created_at) for the job\'s newest executions &bull; executions_unreleased (updated_at) WHERE released_at IS NULL, a partial index holding only the rows the release loop reads</div>' +
-        '<p>Used by: the dispatcher (CreateExecution after the quota reservation and before Submit, where a failure means nothing is submitted; UpdateExecution on every state change, best effort with a 10s timeout of its own; MarkExecutionReleased after it reads a result and releases; <a href="../task-path/">task path</a>, <a href="../execution-states/">execution states</a>) &bull; resume (ListDispatchExecutions on a claimed dispatch, following every row not yet terminal) &bull; <a href="../background-services/">provider release</a> (ListUnreleasedExecutions every 5m for rows unchanged for 10m, UpdateExecution from <code>lost</code> when a lost execution is reconciled, then MarkExecutionReleased) &bull; the API (GetExecution for <code>GET /v1/execution/{id}</code>, its stored logs and a cancel; ListJobExecutions, the newest 20, for <code>GET /v1/job/{name}</code>; ListDispatchExecutions for <code>GET /v1/dispatch/{id}</code>) &bull; <a href="../live-output/">live output</a> (GetExecution every second, to see the execution end). See <a href="../../docs/database/#executions">Database</a>.</p>' +
+        '<p>Used by: the dispatcher (CreateExecution after the quota reservation and before Submit, where a failure means nothing is submitted; UpdateExecution on every state change, best effort with a 10s timeout of its own, the terminal one after the output is stored; MarkExecutionReleased after it reads a result and releases; <a href="../task-path/">task path</a>, <a href="../execution-states/">execution states</a>) &bull; resume (ListDispatchExecutions on a claimed dispatch, following every row not yet terminal) &bull; <a href="../background-services/">provider release</a> (ListUnreleasedExecutions every 5m for rows unchanged for 10m, UpdateExecution from <code>lost</code> when a lost execution is reconciled and again after capturing output nobody captured, then MarkExecutionReleased) &bull; the API (GetExecution for <code>GET /v1/execution/{id}</code>, where its stored logs begin, and a cancel; ListJobExecutions, the newest 20, for <code>GET /v1/job/{name}</code>; ListDispatchExecutions for <code>GET /v1/dispatch/{id}</code>) &bull; <a href="../live-output/">live output</a> (GetExecution every second, to see the execution end). See <a href="../../docs/database/#executions">Database</a>.</p>' +
         '<p class="dg-metric">Key queries: CreateExecution, UpdateExecution (WHERE id AND state = from_state; zero rows is ErrStale), GetExecution, ListDispatchExecutions, ListJobExecutions, ListUnreleasedExecutions, MarkExecutionReleased</p>'
+    },
+    execution_logs: {
+      title: 'execution_logs',
+      badge: 'runs', badgeText: 'run output',
+      body: '<p>An execution\'s output in 256 KiB chunks, kept off its <code>executions</code> row so the reads of a record every second never carry it. Chunk <code>seq</code> holds bytes <code>seq &times; 256 KiB</code> onward of the output, so a byte offset names its chunk and a read from any offset needs no index beyond the key. Migration 9 moved each older row\'s output, at most 64 KiB, into chunk 0.</p>' +
+        '<table class="dg-cols"><tr><th>Column</th><th>Type</th><th>Notes</th></tr>' +
+        '<tr><td class="pk fk">execution_id</td><td>TEXT</td><td>PRIMARY KEY (composite); the <code>executions.id</code> the output belongs to</td></tr>' +
+        '<tr><td class="pk">seq</td><td>BIGINT</td><td>PRIMARY KEY (composite); chunk number from the start of the output</td></tr>' +
+        '<tr><td>data</td><td>BYTEA</td><td>Up to 256 KiB. BYTEA because output need not be valid UTF-8</td></tr></table>' +
+        '<div class="dg-idx"><b>Indexes:</b> PK (execution_id, seq), which serves the chunk-at-a-time read and both deletes</div>' +
+        '<p>Used by: the dispatcher\'s capture once an execution ends, and the <a href="../background-services/">provider release</a> loop\'s for one never captured (DropExecutionLogs then InsertExecutionLog in one transaction per chunk: the chunks from <code>seq</code> on go, so a capture that starts again at 0 replaces the last, and those before <code>keep_from</code> go past <code>max_log_mib</code>) &bull; the API (NextExecutionLog, one chunk per query, for <code>GET /v1/execution/{id}/logs</code>; <a href="../live-output/">live output</a>) &bull; <a href="../background-services/">output retention</a> (PruneExecutionLogs every hour, for executions that ended over <code>log_retention</code> ago). See <a href="../../docs/database/#execution_logs">Database</a>.</p>' +
+        '<p class="dg-metric">Key queries: DropExecutionLogs, InsertExecutionLog, NextExecutionLog, PruneExecutionLogs</p>'
     },
     quota_reservations: {
       title: 'quota_reservations',
@@ -199,7 +214,8 @@ An arrow joins two tables on the columns in its label, from the table that holds
 | **jobs** | Each registered job's current version and whether it is stopped | `(namespace, name)` |
 | **job_versions** | Every registered version's source and fingerprint | `(namespace, name, version)` |
 | **dispatches** | One row per run of a job, with its lease | `dispatch_id` |
-| **executions** | One row per attempt of one task on one provider, with its result and output | `id` |
+| **executions** | One row per attempt of one task on one provider, with its result and where its output stands | `id` |
+| **execution_logs** | Each execution's output in 256 KiB chunks, up to `max_log_mib`, for `log_retention` | `(execution_id, seq)` |
 | **quota_reservations** | Declared charges held by executions not yet settled | `(execution_id, namespace, pool)` |
 | **quota_usage** | Settled usage per pool per period | `(namespace, provider, pool, period)` |
 | **goose_db_version** | Applied migrations, written by goose | `id` |
@@ -216,3 +232,4 @@ An arrow joins two tables on the columns in its label, from the table that holds
 | `00006_dispatch_leases` | `dispatches.tasks`, `owner` and `lease_until`, index `dispatches_lease`, and `executions.cpu` and `memory`. Outside a transaction |
 | `00007_execution_release` | `executions.released_at`, backfilled for rows with a result, and partial index `executions_unreleased`. Outside a transaction |
 | `00008_execution_reason` | `executions.reason`, `''` for existing rows. Outside a transaction |
+| `00009_execution_logs` | `execution_logs`, holding each existing row's output as chunk 0; `executions.logs_start` and `logs_at`, backfilled for rows with a result; `executions.logs` dropped. Outside a transaction |

@@ -47,6 +47,7 @@ type scriptedProvider struct {
 	noExitCode    bool             // no exit code, as a worker has none
 	synchronous   bool             // finishes inside Submit, like a function
 	billed        *quota.Execution // what the platform charged; usually nil
+	logsTruncated bool             // the result's output is not all of it
 
 	submits int
 	polls   int
@@ -124,11 +125,12 @@ func (p *scriptedProvider) Result(
 	}
 
 	return &execution.Result{
-		ID:       id,
-		ExitCode: p.exit(),
-		Duration: time.Second,
-		Billed:   p.billed,
-		Logs:     []byte("scripted output\n"),
+		ID:            id,
+		ExitCode:      p.exit(),
+		Duration:      time.Second,
+		Billed:        p.billed,
+		Logs:          []byte("scripted output\n"),
+		LogsTruncated: p.logsTruncated,
 	}, nil
 }
 

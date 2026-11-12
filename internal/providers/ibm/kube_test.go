@@ -3,8 +3,8 @@
 //
 // Author: Alex Freidah
 //
-// The namespace lookup, finding a run's pod, and reading its exit code, reason
-// and output, against the fake's Kubernetes routes.
+// The namespace lookup, finding a run's pod, and reading its exit code and
+// reason, against the fake's Kubernetes routes.
 // -------------------------------------------------------------------------------
 
 package ibm
@@ -13,8 +13,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 )
@@ -232,52 +230,6 @@ func TestPod_Reason(t *testing.T) {
 
 		if got := pd.reason(); got != tc.want {
 			t.Errorf("%s: reason() = %q, want %q", tc.name, got, tc.want)
-		}
-	}
-}
-
-// -------------------------------------------------------------------------
-// LOGS
-// -------------------------------------------------------------------------
-
-// The log is read from the task's container, bounded one byte past the limit
-// so a log of exactly the limit is not called truncated.
-func TestPodLogs_Bounds(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		size      int
-		truncated bool
-	}{
-		{100, false},
-		{maxLogBytes, false},
-		{maxLogBytes + 1, true},
-	}
-
-	for _, tc := range cases {
-		f, p := newFakeIBM(t)
-
-		f.on("GET "+podsPath()+"/run1-0-0/log", func(w http.ResponseWriter, r *http.Request) {
-			limit, _ := strconv.Atoi(r.URL.Query().Get("limitBytes"))
-			_, _ = io.WriteString(w, strings.Repeat("x", min(tc.size, limit)))
-		})
-
-		logs, truncated, err := p.podLogs(t.Context(), "run1-0-0")
-		if err != nil {
-			t.Fatalf("podLogs() = %v", err)
-		}
-
-		if len(logs) != min(tc.size, maxLogBytes) || truncated != tc.truncated {
-			t.Errorf("size %d: read %d bytes, truncated %t", tc.size, len(logs), truncated)
-		}
-
-		got := f.requestsTo("GET " + podsPath() + "/run1-0-0/log")[0]
-		if got.query.Get("container") != userContainer || got.query.Get("limitBytes") != strconv.Itoa(maxLogBytes+1) {
-			t.Errorf("query = %v", got.query)
-		}
-
-		if !strings.HasPrefix(got.header.Get("Accept"), "text/plain") {
-			t.Errorf("Accept = %q", got.header.Get("Accept"))
 		}
 	}
 }

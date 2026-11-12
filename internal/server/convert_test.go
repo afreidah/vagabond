@@ -18,7 +18,8 @@ import (
 	"github.com/afreidah/vagabond/internal/quota"
 )
 
-// A recorded result reaches the API view whole, the platform's reason included.
+// A recorded result reaches the API view whole, the platform's reason and
+// where its output stands included.
 func TestExecutionOf_CarriesTheResult(t *testing.T) {
 	t.Parallel()
 
@@ -33,13 +34,14 @@ func TestExecutionOf_CarriesTheResult(t *testing.T) {
 		ID:    id,
 		State: execution.StateFailed,
 		Result: &execution.Result{
-			ID:            id,
-			ExitCode:      new(137),
-			Duration:      35 * time.Second,
-			Billed:        &quota.Execution{CPU: 2000, Memory: 3814, Duration: 36 * time.Second},
-			LogsTruncated: true,
-			Reason:        reason,
+			ID:       id,
+			ExitCode: new(137),
+			Duration: 35 * time.Second,
+			Billed:   &quota.Execution{CPU: 2000, Memory: 3814, Duration: 36 * time.Second},
+			Reason:   reason,
 		},
+		LogsStart:     execution.LogChunk,
+		LogsTruncated: true,
 	})
 
 	if !got.HasResult || got.ExitCode == nil || *got.ExitCode != 137 || got.Duration != 35*time.Second {
@@ -50,7 +52,8 @@ func TestExecutionOf_CarriesTheResult(t *testing.T) {
 		t.Errorf("Billed = %+v", got.Billed)
 	}
 
-	if !got.LogsTruncated || got.Reason != reason {
-		t.Errorf("LogsTruncated %t, Reason %q; want true, %q", got.LogsTruncated, got.Reason, reason)
+	if !got.LogsTruncated || got.LogsStart != execution.LogChunk || got.Reason != reason {
+		t.Errorf("LogsTruncated %t, LogsStart %d, Reason %q; want true, %d, %q",
+			got.LogsTruncated, got.LogsStart, got.Reason, execution.LogChunk, reason)
 	}
 }

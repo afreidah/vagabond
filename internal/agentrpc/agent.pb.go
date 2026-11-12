@@ -610,14 +610,12 @@ func (x *ExecutionStatus) GetEndedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-// ExecutionResult's exit_code is unset when the workload never exited, and
-// logs are the stored tail.
+// ExecutionResult's exit_code is unset when the workload never exited. The
+// output is read through StreamLogs; fields 3 and 4 carried a tail of it.
 type ExecutionResult struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ExitCode      *int32                 `protobuf:"varint,1,opt,name=exit_code,json=exitCode,proto3,oneof" json:"exit_code,omitempty"`
 	Duration      *durationpb.Duration   `protobuf:"bytes,2,opt,name=duration,proto3" json:"duration,omitempty"`
-	Logs          []byte                 `protobuf:"bytes,3,opt,name=logs,proto3" json:"logs,omitempty"`
-	LogsTruncated bool                   `protobuf:"varint,4,opt,name=logs_truncated,json=logsTruncated,proto3" json:"logs_truncated,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -664,20 +662,6 @@ func (x *ExecutionResult) GetDuration() *durationpb.Duration {
 		return x.Duration
 	}
 	return nil
-}
-
-func (x *ExecutionResult) GetLogs() []byte {
-	if x != nil {
-		return x.Logs
-	}
-	return nil
-}
-
-func (x *ExecutionResult) GetLogsTruncated() bool {
-	if x != nil {
-		return x.LogsTruncated
-	}
-	return false
 }
 
 // LogsRequest's offset is how many bytes of output the caller already has.
@@ -869,14 +853,12 @@ const file_internal_agentrpc_agent_proto_rawDesc = "" +
 	"providerId\x129\n" +
 	"\n" +
 	"started_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x125\n" +
-	"\bended_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\aendedAt\"\xb3\x01\n" +
+	"\bended_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\aendedAt\"\x9a\x01\n" +
 	"\x0fExecutionResult\x12 \n" +
 	"\texit_code\x18\x01 \x01(\x05H\x00R\bexitCode\x88\x01\x01\x125\n" +
-	"\bduration\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\bduration\x12\x12\n" +
-	"\x04logs\x18\x03 \x01(\fR\x04logs\x12%\n" +
-	"\x0elogs_truncated\x18\x04 \x01(\bR\rlogsTruncatedB\f\n" +
+	"\bduration\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\bdurationB\f\n" +
 	"\n" +
-	"_exit_code\"H\n" +
+	"_exit_codeJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x04logsR\x0elogs_truncated\"H\n" +
 	"\vLogsRequest\x12!\n" +
 	"\fexecution_id\x18\x01 \x01(\tR\vexecutionId\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\x03R\x06offset\"\x1e\n" +

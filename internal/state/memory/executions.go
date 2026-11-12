@@ -5,14 +5,18 @@
 //
 // Execution records in a map, for local mode without a database and for tests.
 // The same rules as the Postgres store: an update names the state it was read
-// in and is refused if the record has moved on. Lost with the process.
+// in and is refused if the record has moved on. Output is kept apart from the
+// records, so reading a record never copies it. Lost with the process.
 // -------------------------------------------------------------------------------
 
 package memory
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -25,11 +29,13 @@ import (
 // TYPES
 // -------------------------------------------------------------------------
 
-// Executions holds dispatches and execution records by ID.
+// Executions holds dispatches, execution records and their output by ID, the
+// output as chunks by number.
 type Executions struct {
 	mu         sync.Mutex
 	dispatches map[execution.ID]execution.Dispatch
 	records    map[execution.ID]execution.Record
+	logs       map[execution.ID]map[int64][]byte
 }
 
 // NewExecutions returns an empty store.
@@ -37,6 +43,7 @@ func NewExecutions() *Executions {
 	return &Executions{
 		dispatches: make(map[execution.ID]execution.Dispatch),
 		records:    make(map[execution.ID]execution.Record),
+		logs:       make(map[execution.ID]map[int64][]byte),
 	}
 }
 
@@ -274,13 +281,83 @@ func (s *Executions) jobExecutions(namespace, job string, limit int) []*executio
 }
 
 // -------------------------------------------------------------------------
+// OUTPUT
+// -------------------------------------------------------------------------
+
+// AppendLog stores chunk seq of id's output, dropping every chunk before
+// keepFrom and every one from seq on, so a write at seq 0 starts the output
+// over.
+func (s *Executions) AppendLog(_ context.Context, id execution.ID, seq int64, data []byte, keepFrom int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	chunks, ok := s.logs[id]
+	if !ok {
+		chunks = make(map[int64][]byte)
+		s.logs[id] = chunks
+	}
+
+	maps.DeleteFunc(chunks, func(k int64, _ []byte) bool { return k < keepFrom || k >= seq })
+	chunks[seq] = bytes.Clone(data)
+
+	return nil
+}
+
+// ReadLog writes id's stored output from chunk fromSeq on to w, in order. An
+// execution with none writes nothing.
+func (s *Executions) ReadLog(_ context.Context, id execution.ID, fromSeq int64, w io.Writer) error {
+	// A chunk is never changed once stored, so it is written outside the lock.
+	s.mu.Lock()
+	chunks := maps.Clone(s.logs[id])
+	s.mu.Unlock()
+
+	for _, seq := range slices.Sorted(maps.Keys(chunks)) {
+		if seq < fromSeq {
+			continue
+		}
+
+		if _, err := w.Write(chunks[seq]); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// PruneLogs deletes the output of every execution that ended before before,
+// returning how many lost theirs.
+func (s *Executions) PruneLogs(_ context.Context, before time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	pruned := 0
+
+	for id := range s.logs {
+		if ended := s.records[id].EndedAt; !ended.IsZero() && ended.Before(before) {
+			delete(s.logs, id)
+
+			pruned++
+		}
+	}
+
+	return pruned, nil
+}
+
+// -------------------------------------------------------------------------
 // HELPERS
 // -------------------------------------------------------------------------
 
 // clone copies r so neither the caller nor the store can change the other's.
+// A result's own copy of the output is not kept, as in Postgres: output is
+// stored apart.
 func clone(r *execution.Record) execution.Record {
 	out := *r
-	out.Result = r.Result.Bounded()
+
+	if r.Result != nil {
+		result := *r.Result
+		result.Logs, result.LogsTruncated = nil, false
+		out.Result = &result
+	}
 
 	return out
 }

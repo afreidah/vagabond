@@ -54,10 +54,11 @@ does not use or require Nomad.
 - Registered jobs: versioned on change, dispatched by name, parameterized with
   `meta_required` and `meta_optional`. Tasks receive `VAGABOND_META_<KEY>`.
 - Namespaces, declared in configuration.
-- Execution history: every dispatch and attempt, with output.
+- Execution history: every dispatch and attempt, with its whole output up to a
+  16 MiB ceiling that keeps the end, for 7 days by default.
 - Live output: `job run`, `job dispatch` and `execution logs -f` stream output
-  from Cloud Run and agent nodes while the task runs, then finish from the
-  stored copy (last 64 KiB).
+  from Cloud Run, Code Engine and agent nodes while the task runs, from the
+  first line however late they attach, then finish from the stored copy.
 - Server: HTTP API over the same operations, optionally over TLS with client
   certificates. Dispatches are leased; a server resumes ones a dead process
   left running.

@@ -149,7 +149,7 @@ window.vagabondDiagram = {
     RESULT: {
       title: 'Fetch Result',
       badge: 'process', badgeText: 'result',
-      body: '<p>Once <code>Status</code> reports a terminal state, <code>Result</code> fetches the exit code, duration, any billed amount, the platform&rsquo;s reason for ending it and the output, and the terminal state is written with it. The record keeps the last 64 KiB of output, with <code>LogsTruncated</code> set when anything was cut.</p><p>When <code>Result</code> fails, the terminal state is still written, without a result. The attempt ends with that error; nothing is released or settled, and the reservation is left to the reaper.</p>'
+      body: '<p>Once <code>Status</code> reports a terminal state, <code>Result</code> fetches the exit code, duration, any billed amount and the platform&rsquo;s reason for ending it. The output is then captured into <code>execution_logs</code>, from <code>ReadLogs</code> or the output the answer carried, in 256 KiB chunks up to <code>max_log_mib</code>, the end kept, and only then is the terminal state written with the result, so a client that sees the result finds the output there.</p><p>A capture never fails the attempt: what could not be read leaves <code>LogsTruncated</code> set. When <code>Result</code> fails, the output is still captured and the terminal state written, without a result. The attempt ends with that error; nothing is released or settled, and the reservation is left to the reaper.</p><p><a href="../../docs/dispatch/#output">Dispatch output &rarr;</a></p>'
     },
     RELEASE: {
       title: 'Release',
