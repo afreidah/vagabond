@@ -43,8 +43,8 @@ standing AS (
         ), 0) AS charged
     FROM wanted
 )
-INSERT INTO quota_reservations (execution_id, namespace, provider, pool, period, amount, cpu, memory, created_at)
-SELECT @execution_id::text, s.namespace, @provider::text, s.pool, s.period, s.amount, @cpu::bigint, @memory::bigint, @created_at::timestamptz
+INSERT INTO quota_reservations (execution_id, namespace, provider, pool, period, amount, created_at)
+SELECT @execution_id::text, s.namespace, @provider::text, s.pool, s.period, s.amount, @created_at::timestamptz
 FROM standing s
 WHERE NOT EXISTS (
     SELECT 1 FROM standing x
@@ -93,14 +93,15 @@ FROM (
 GROUP BY charged.namespace, charged.provider, charged.pool, charged.period;
 
 -- name: ExecutionReserved :one
--- Whether an execution still holds a reservation the reaper has not settled.
+-- Whether an execution still holds a reservation that has not been settled.
 SELECT EXISTS (SELECT 1 FROM quota_reservations WHERE execution_id = @execution_id);
 
 -- name: ClaimStaleReservations :many
 -- Locks reservation rows older than the cutoff, skipping any another process
--- holds, so two reapers never resolve the same execution.
-SELECT execution_id, namespace, provider, pool, period, amount, cpu, memory, created_at
+-- holds, so two reapers never resolve the same execution. One row per pool,
+-- so an execution's ID repeats.
+SELECT execution_id
 FROM quota_reservations
 WHERE created_at < @before::timestamptz
-ORDER BY execution_id, namespace, pool
+ORDER BY execution_id
 FOR UPDATE SKIP LOCKED;

@@ -34,8 +34,6 @@ func (s *Store) Reserve(ctx context.Context, r *ledger.Reservation) (bool, ledge
 	params := db.ReserveQuotaParams{
 		ExecutionID: r.ID.String(),
 		Provider:    r.Provider,
-		Cpu:         int64(r.CPU),
-		Memory:      int64(r.Memory),
 		CreatedAt:   r.Created,
 	}
 
@@ -111,15 +109,13 @@ func (s *Store) ReadUsage(ctx context.Context, periods []string) (ledger.Usage, 
 	return usageFromRows(rows), nil
 }
 
-// Reap claims reservations created before the cutoff and settles those that
-// settle returns true for.
+// Reap claims reservations created before the cutoff and drops those orphaned
+// accepts, charging nothing.
 //
-// The claim holds its row locks while settle asks providers, keeping two
-// reapers off one execution. A retry asks again; the questions are reads.
-func (s *Store) Reap(
-	ctx context.Context, before time.Time,
-	settle func(context.Context, ledger.Held) (map[ledger.PoolRef]int64, bool),
-) (int, error) {
+// The claim holds its row locks while orphaned reads the execution record,
+// keeping two reapers off one execution. A retry asks again; the questions
+// are reads.
+func (s *Store) Reap(ctx context.Context, before time.Time, orphaned ledger.Orphaned) (int, error) {
 	var reaped int
 
 	err := s.serializable(ctx, func(q *db.Queries) error {
@@ -130,18 +126,17 @@ func (s *Store) Reap(
 			return fmt.Errorf("claim: %w", err)
 		}
 
-		held, err := heldFromRows(rows)
+		ids, err := distinctIDs(rows)
 		if err != nil {
 			return err
 		}
 
-		for _, h := range held {
-			actual, ok := settle(ctx, h)
-			if !ok {
+		for _, id := range ids {
+			if !orphaned(ctx, id) {
 				continue
 			}
 
-			if err := settleOne(ctx, q, h.ID, actual); err != nil {
+			if err := settleOne(ctx, q, id, nil); err != nil {
 				return err
 			}
 
@@ -152,6 +147,27 @@ func (s *Store) Reap(
 	})
 
 	return reaped, err
+}
+
+// distinctIDs parses claimed reservation rows into execution IDs, once each.
+// Rows arrive ordered by execution, one per pool, so repeats are adjacent.
+func distinctIDs(rows []string) ([]execution.ID, error) {
+	var ids []execution.ID
+
+	for i, row := range rows {
+		if i > 0 && rows[i-1] == row {
+			continue
+		}
+
+		id, err := execution.ParseID(row)
+		if err != nil {
+			return nil, fmt.Errorf("reservation row: %w", err)
+		}
+
+		ids = append(ids, id)
+	}
+
+	return ids, nil
 }
 
 // -------------------------------------------------------------------------
@@ -186,33 +202,4 @@ func usageFromRows(rows []db.ReadQuotaUsageRow) ledger.Usage {
 	}
 
 	return usage
-}
-
-// heldFromRows groups claimed rows by execution. Rows arrive ordered by
-// execution, so each group is contiguous.
-func heldFromRows(rows []db.ClaimStaleReservationsRow) ([]ledger.Held, error) {
-	var held []ledger.Held
-
-	for i := range rows {
-		row := &rows[i]
-
-		id, err := execution.ParseID(row.ExecutionID)
-		if err != nil {
-			return nil, fmt.Errorf("reservation row: %w", err)
-		}
-
-		if len(held) == 0 || held[len(held)-1].ID != id {
-			held = append(held, ledger.Held{
-				ID:       id,
-				Provider: row.Provider,
-				CPU:      int(row.Cpu),
-				Memory:   int(row.Memory),
-				Amounts:  make(map[ledger.PoolRef]int64),
-			})
-		}
-
-		held[len(held)-1].Amounts[ledger.PoolRef{Namespace: row.Namespace, Pool: row.Pool}] = row.Amount
-	}
-
-	return held, nil
 }

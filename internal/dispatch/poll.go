@@ -1,11 +1,13 @@
 // -------------------------------------------------------------------------------
-// Submit, Watch, Collect
+// Polling and Backoff
 //
 // Author: Alex Freidah
 //
-// One attempt against one provider, from submission to result. Status is
-// polled on a backoff because a container can spend minutes provisioning, and
-// a fixed short interval spends API calls learning nothing.
+// How often a running execution is asked about, how long one provider call
+// may take, how long a failed store write waits before it is tried again, and
+// the submission call itself. Status is polled on a backoff because a
+// container can spend minutes provisioning, and a fixed short interval spends
+// API calls learning nothing.
 // -------------------------------------------------------------------------------
 
 package dispatch
@@ -13,7 +15,6 @@ package dispatch
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/afreidah/vagabond/internal/execution"
@@ -32,11 +33,17 @@ type Poll struct {
 	Max     time.Duration
 }
 
-// Bounds on the two cleanup calls, both made on their own context because the
-// caller's may already be cancelled.
+// callTimeout bounds one call about an execution already submitted, so a
+// platform that stops responding fails the call rather than holding the
+// dispatch open. Submit is not bounded: a synchronous provider answers it
+// only once the task is done.
+const callTimeout = 30 * time.Second
+
+// How long a store write that failed waits before it is made again, doubling
+// up to the maximum while the store stays unreachable.
 const (
-	abandonTimeout = 30 * time.Second
-	releaseTimeout = 30 * time.Second
+	persistRetry    = 250 * time.Millisecond
+	persistRetryMax = 10 * time.Second
 )
 
 // DefaultPoll starts at two seconds, for an invocation that finishes almost at
@@ -48,16 +55,43 @@ var DefaultPoll = Poll{
 
 // interval returns how long to wait before the nth status call.
 func (p Poll) interval(n int) time.Duration {
-	wait := p.Initial
+	return doubling(p.Initial, p.Max, n)
+}
+
+// doubling is initial doubled n times, never more than ceiling.
+func doubling(initial, ceiling time.Duration, n int) time.Duration {
+	wait := initial
 	for range n {
 		wait *= 2
 
-		if wait >= p.Max {
-			return p.Max
+		if wait >= ceiling {
+			return ceiling
 		}
 	}
 
 	return wait
+}
+
+// bounded makes call on a context that ends after callTimeout. A call that
+// ran out of time is a provider that failed to answer, so it is classified
+// infrastructure; one whose caller gave up keeps the caller's error.
+func bounded[T any](ctx context.Context, call func(ctx context.Context) (T, error)) (T, error) {
+	bctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	out, err := call(bctx)
+	if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+		err = plugin.Infrastructure(err)
+	}
+
+	return out, err
+}
+
+// boundedErr is bounded for a call that returns only an error.
+func boundedErr(ctx context.Context, call func(ctx context.Context) error) error {
+	_, err := bounded(ctx, func(ctx context.Context) (struct{}, error) { return struct{}{}, call(ctx) })
+
+	return err
 }
 
 // sleepContext waits, or gives up when the caller does.
@@ -79,7 +113,7 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 }
 
 // -------------------------------------------------------------------------
-// ONE ATTEMPT
+// SUBMISSION
 // -------------------------------------------------------------------------
 
 // submit hands the task to provider: to the members admission passed, for a
@@ -96,152 +130,4 @@ func (d *Dispatcher) submit(
 
 		return provider.Submit(ctx, id, task)
 	})
-}
-
-// answer is how an execution ended: the provider's terminal state, which is
-// the verdict, and what the task produced. refused is a submission the
-// provider turned down, so nothing ran and nothing is owed.
-type answer struct {
-	state   execution.State
-	result  *execution.Result
-	refused bool
-}
-
-// execute runs a task on one provider under an id the caller reserved quota
-// for, and returns how it ended. members are the provider's members admission
-// passed, empty for a provider without any.
-func (d *Dispatcher) execute(
-	ctx context.Context, provider plugin.Provider, task *job.Task, run *tracked, members []string,
-) (answer, error) {
-	id := run.rec.ID
-
-	submission, err := d.submit(ctx, provider, id, task, members)
-	if err != nil {
-		run.failed(ctx, err)
-
-		return answer{refused: turnedDown(err)}, err
-	}
-
-	// An incoherent submission is a plugin bug, not an outage, so no reroute
-	if invalid := submission.Validate(); invalid != nil {
-		err = plugin.Internal(invalid)
-		run.failed(ctx, err)
-
-		return answer{}, err
-	}
-
-	run.submitted(ctx, &submission)
-
-	// A function or worker finished inside Submit and has nothing to poll.
-	if submission.Synchronous() {
-		d.conclude(ctx, provider, run, submission.State, submission.Result)
-		d.release(provider, id)
-
-		return answer{state: submission.State, result: submission.Result}, nil
-	}
-
-	return d.follow(ctx, provider, run)
-}
-
-// conclude records how an execution ended: its output captured, then its
-// terminal state with result. In that order, since recording the result is
-// what tells a waiting client the output is there to read.
-func (d *Dispatcher) conclude(
-	ctx context.Context, provider plugin.Provider, run *tracked, state execution.State, result *execution.Result,
-) {
-	d.capture(ctx, provider, &run.rec, result)
-	_ = run.finish(ctx, state, result)
-}
-
-// turnedDown reports whether a Submit error means nothing ran: only one
-// classified internal, Vagabond's request refused or never sent, says so. An
-// outage, or an error nobody classified, may have left a run behind.
-func turnedDown(err error) bool {
-	classified, ok := errors.AsType[*plugin.Error](err)
-
-	return ok && classified.Class == plugin.ClassInternal
-}
-
-// follow watches a submitted execution to its end and collects its result.
-// Shared by a fresh submission and one resumed after a restart, which differ
-// only in how they got here.
-func (d *Dispatcher) follow(ctx context.Context, provider plugin.Provider, run *tracked) (answer, error) {
-	id := run.rec.ID
-
-	state, err := d.watch(ctx, provider, run)
-	if err != nil {
-		// The caller gave up, so stop the work before it keeps billing
-		if ctx.Err() != nil {
-			d.abandon(provider, id)
-			run.to(ctx, execution.StateCancelled)
-		} else {
-			run.failed(ctx, err)
-		}
-
-		return answer{}, err
-	}
-
-	// The output is captured even when the result cannot be read
-	result, err := d.result(ctx, provider, id)
-	d.conclude(ctx, provider, run, state, result)
-
-	if err != nil {
-		return answer{}, err
-	}
-
-	// After the result and output, because releasing may destroy them
-	d.release(provider, id)
-
-	ended := answer{state: state, result: result}
-
-	// Cancelled by the provider is no verdict, even with a result
-	if state == execution.StateCancelled {
-		return ended, plugin.Infrastructure(fmt.Errorf("execution %s was cancelled by the provider", id))
-	}
-
-	return ended, nil
-}
-
-// release frees what the provider left behind, if anything, and records that
-// it was done. Best effort on its own context; a failure leaves the record
-// unreleased for the release loop to retry.
-func (d *Dispatcher) release(provider plugin.Provider, id execution.ID) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()),
-		releaseTimeout)
-	defer cancel()
-
-	_ = d.releaseOn(ctx, provider, id)
-}
-
-// abandon cancels an execution the caller stopped waiting for, best effort and
-// on its own context since the caller's is cancelled.
-func (d *Dispatcher) abandon(provider plugin.Provider, id execution.ID) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()),
-		abandonTimeout)
-	defer cancel()
-
-	_ = authorizedErr(ctx, d, provider, func() error { return provider.Cancel(ctx, id) })
-}
-
-// watch polls until the execution reaches a terminal state, recording each
-// state on the way. The terminal one is left for the caller to record with its
-// result.
-func (d *Dispatcher) watch(ctx context.Context, provider plugin.Provider, run *tracked) (execution.State, error) {
-	for n := 0; ; n++ {
-		if err := d.sleep(ctx, d.poll.interval(n)); err != nil {
-			return "", err
-		}
-
-		status, err := d.status(ctx, provider, run.rec.ID)
-		if err != nil {
-			return "", err
-		}
-
-		if status.State.Terminal() {
-			return status.State, nil
-		}
-
-		// Writes only on a change, not on every poll
-		run.to(ctx, status.State)
-	}
 }

@@ -3,9 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// The memory store has to keep the Postgres store's rules, so these pin the
-// same refusals: a stale update, a second finish, a lease held by another
-// owner, and a release mark an update must not clear.
+// The memory store keeps the Postgres store's rules: the shared contracts run
+// against it, and these cover what is particular to memory, such as copies
+// kept apart from the caller's.
 // -------------------------------------------------------------------------------
 
 package memory
@@ -23,23 +23,40 @@ import (
 // HELPERS
 // -------------------------------------------------------------------------
 
-// pending returns a fresh pending record for job ci, task test.
-func pending(t *testing.T) *execution.Record {
+// pending records a dispatch and returns a fresh pending record of it, with
+// the lease to write it under.
+func pending(t *testing.T, s *Executions) (*execution.Record, execution.Lease) {
 	t.Helper()
+
+	dispatch, err := execution.NewID()
+	if err != nil {
+		t.Fatalf("NewID() = %v", err)
+	}
+
+	d := &execution.Dispatch{
+		ID: dispatch, State: execution.DispatchRunning, Owner: "test", Epoch: 1, LeaseUntil: time.Now().Add(time.Hour),
+	}
+
+	if err := s.CreateDispatch(t.Context(), d); err != nil {
+		t.Fatalf("CreateDispatch() = %v", err)
+	}
 
 	id, err := execution.NewID()
 	if err != nil {
 		t.Fatalf("NewID() = %v", err)
 	}
 
-	return &execution.Record{
+	r := &execution.Record{
 		ID:        id,
 		State:     execution.StatePending,
 		UpdatedAt: time.Now(),
 		Job:       "ci",
+		Dispatch:  dispatch,
 		Task:      "test",
 		Attempt:   1,
 	}
+
+	return r, d.Lease()
 }
 
 // -------------------------------------------------------------------------
@@ -49,9 +66,9 @@ func pending(t *testing.T) *execution.Record {
 // A created record reads back, and the same ID is refused a second time.
 func TestExecutions_CreateThenGet(t *testing.T) {
 	s := NewExecutions()
-	r := pending(t)
+	r, lease := pending(t, s)
 
-	if err := s.Create(t.Context(), r); err != nil {
+	if err := s.Create(t.Context(), r, lease); err != nil {
 		t.Fatalf("Create() = %v", err)
 	}
 
@@ -64,155 +81,17 @@ func TestExecutions_CreateThenGet(t *testing.T) {
 		t.Errorf("Get() = %+v", got)
 	}
 
-	if err := s.Create(t.Context(), r); err == nil {
+	if err := s.Create(t.Context(), r, lease); err == nil {
 		t.Error("Create() recorded the same ID twice")
-	}
-}
-
-// An update written against a state the record has left is refused.
-func TestExecutions_UpdateIsConditional(t *testing.T) {
-	s := NewExecutions()
-	r := pending(t)
-
-	if err := s.Create(t.Context(), r); err != nil {
-		t.Fatalf("Create() = %v", err)
-	}
-
-	if err := r.To(execution.StateSubmitted, time.Now()); err != nil {
-		t.Fatalf("To() = %v", err)
-	}
-
-	if err := s.Update(t.Context(), r, execution.StatePending); err != nil {
-		t.Fatalf("Update() = %v", err)
-	}
-
-	if err := s.Update(t.Context(), r, execution.StatePending); !errors.Is(err, execution.ErrStale) {
-		t.Errorf("stale Update() = %v, want ErrStale", err)
-	}
-}
-
-// -------------------------------------------------------------------------
-// DISPATCHES
-// -------------------------------------------------------------------------
-
-// A run finishes once: a second finish, or one for a run never recorded, is
-// refused as stale.
-func TestExecutions_DispatchFinishesOnce(t *testing.T) {
-	s := NewExecutions()
-	id, _ := execution.NewID()
-
-	d := &execution.Dispatch{ID: id, Job: "ci", State: execution.DispatchRunning, Created: time.Now()}
-	if err := s.CreateDispatch(t.Context(), d); err != nil {
-		t.Fatalf("CreateDispatch() = %v", err)
-	}
-
-	finished := &execution.Dispatch{ID: id, State: execution.DispatchSucceeded, Ended: time.Now()}
-	if err := s.FinishDispatch(t.Context(), finished); err != nil {
-		t.Fatalf("FinishDispatch() = %v", err)
-	}
-
-	again := &execution.Dispatch{ID: id, State: execution.DispatchFailed, Ended: time.Now()}
-	if err := s.FinishDispatch(t.Context(), again); !errors.Is(err, execution.ErrStale) {
-		t.Errorf("second FinishDispatch() = %v, want ErrStale", err)
-	}
-
-	got, err := s.GetDispatch(t.Context(), id)
-	if err != nil || got.State != execution.DispatchSucceeded || got.Job != "ci" {
-		t.Errorf("GetDispatch() = %+v, %v; want the first finish, keeping the job", got, err)
-	}
-}
-
-// Only the owner renews or finishes a dispatch, and a claim takes only lapsed
-// leases, after which the old owner holds nothing.
-func TestExecutions_DispatchLeases(t *testing.T) {
-	s := NewExecutions()
-	now := time.Now()
-
-	lapsed := &execution.Dispatch{State: execution.DispatchRunning, Owner: "cli", LeaseUntil: now.Add(-time.Second)}
-	held := &execution.Dispatch{State: execution.DispatchRunning, Owner: "cli", LeaseUntil: now.Add(time.Minute)}
-
-	for _, d := range []*execution.Dispatch{lapsed, held} {
-		d.ID, _ = execution.NewID()
-		if err := s.CreateDispatch(t.Context(), d); err != nil {
-			t.Fatalf("CreateDispatch() = %v", err)
-		}
-	}
-
-	if err := s.RenewDispatch(t.Context(), held.ID, "other", now); !errors.Is(err, execution.ErrStale) {
-		t.Errorf("RenewDispatch() by another owner = %v, want ErrStale", err)
-	}
-
-	if skipped, _ := s.ClaimDispatches(t.Context(), "server", now, now.Add(time.Minute), []execution.ID{lapsed.ID}); len(skipped) != 0 {
-		t.Errorf("ClaimDispatches() took %d dispatches it was told to skip", len(skipped))
-	}
-
-	claimed, err := s.ClaimDispatches(t.Context(), "server", now, now.Add(time.Minute), nil)
-	if err != nil || len(claimed) != 1 || claimed[0].ID != lapsed.ID || claimed[0].Owner != "server" {
-		t.Fatalf("ClaimDispatches() = %+v, %v; want only the lapsed one, now the server's", claimed, err)
-	}
-
-	if err := s.RenewDispatch(t.Context(), lapsed.ID, "cli", now); !errors.Is(err, execution.ErrStale) {
-		t.Errorf("RenewDispatch() by the old owner = %v, want ErrStale", err)
-	}
-
-	lapsed.State, lapsed.Ended = execution.DispatchSucceeded, now
-	if err := s.FinishDispatch(t.Context(), lapsed); !errors.Is(err, execution.ErrStale) {
-		t.Errorf("FinishDispatch() by the old owner = %v, want ErrStale", err)
-	}
-
-	lapsed.Owner = "server"
-	if err := s.FinishDispatch(t.Context(), lapsed); err != nil {
-		t.Errorf("FinishDispatch() by the new owner = %v", err)
-	}
-}
-
-// -------------------------------------------------------------------------
-// RELEASE AND READS
-// -------------------------------------------------------------------------
-
-// A record is unreleased until marked, only past the cutoff, and an update
-// after marking keeps the mark, as the Postgres store does.
-func TestExecutions_Release(t *testing.T) {
-	s := NewExecutions()
-	r := pending(t)
-
-	if err := s.Create(t.Context(), r); err != nil {
-		t.Fatalf("Create() = %v", err)
-	}
-
-	if got, _ := s.Unreleased(t.Context(), r.UpdatedAt); len(got) != 0 {
-		t.Errorf("Unreleased() before the cutoff = %d records, want 0", len(got))
-	}
-
-	if got, _ := s.Unreleased(t.Context(), r.UpdatedAt.Add(time.Second)); len(got) != 1 {
-		t.Fatalf("Unreleased() past the cutoff = %d records, want 1", len(got))
-	}
-
-	at := time.Now()
-	if err := s.MarkReleased(t.Context(), r.ID, at); err != nil {
-		t.Fatalf("MarkReleased() = %v", err)
-	}
-
-	if err := r.To(execution.StateSubmitted, time.Now()); err != nil {
-		t.Fatalf("To() = %v", err)
-	}
-
-	if err := s.Update(t.Context(), r, execution.StatePending); err != nil {
-		t.Fatalf("Update() = %v", err)
-	}
-
-	if got, _ := s.Get(t.Context(), r.ID); !got.Released.Equal(at) {
-		t.Errorf("Released = %v after an update, want %v", got.Released, at)
-	}
-
-	if got, _ := s.Unreleased(t.Context(), time.Now().Add(time.Hour)); len(got) != 0 {
-		t.Errorf("Unreleased() after marking = %d records, want 0", len(got))
 	}
 }
 
 // Reading an ID nothing recorded is ErrNotFound.
 func TestExecutions_GetUnknown(t *testing.T) {
-	id, _ := execution.NewID()
+	id, err := execution.NewID()
+	if err != nil {
+		t.Fatalf("NewID() = %v", err)
+	}
 
 	if _, err := NewExecutions().Get(t.Context(), id); !errors.Is(err, execution.ErrNotFound) {
 		t.Errorf("Get() = %v, want ErrNotFound", err)
@@ -223,10 +102,10 @@ func TestExecutions_GetUnknown(t *testing.T) {
 // caller's copy is not touched.
 func TestExecutions_ResultOutputIsNotKept(t *testing.T) {
 	s := NewExecutions()
-	r := pending(t)
+	r, lease := pending(t, s)
 	r.Result = &execution.Result{ID: r.ID, ExitCode: new(0), Logs: []byte("output"), LogsTruncated: true}
 
-	if err := s.Create(t.Context(), r); err != nil {
+	if err := s.Create(t.Context(), r, lease); err != nil {
 		t.Fatalf("Create() = %v", err)
 	}
 
@@ -245,10 +124,15 @@ func TestExecutions_ResultOutputIsNotKept(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
-// OUTPUT
+// CONTRACTS
 // -------------------------------------------------------------------------
+
+// The memory store keeps the lease rules every store keeps.
+func TestExecutions_LeaseContract(t *testing.T) {
+	statetest.LeaseContract(t, func(*testing.T) statetest.Store { return NewExecutions() })
+}
 
 // The memory store keeps the output rules every store keeps.
 func TestExecutions_LogContract(t *testing.T) {
-	statetest.LogContract(t, func(*testing.T) statetest.LogStore { return NewExecutions() })
+	statetest.LogContract(t, func(*testing.T) statetest.Store { return NewExecutions() })
 }

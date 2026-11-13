@@ -2,7 +2,7 @@
 //
 // The identity is Vagabond's, not the provider's. An ID is minted and recorded
 // durably before Submit is called, so a crash between dispatching and recording
-// leaves a row to reconcile against rather than an orphaned run on someone
+// leaves a row to resume from rather than an orphaned run on someone
 // else's free tier. The same ID is the submission idempotency key and the
 // subject of the token the bootstrap presents when it reports a result.
 //

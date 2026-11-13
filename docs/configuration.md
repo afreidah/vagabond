@@ -308,10 +308,10 @@ its client from the result, and the call is made once more. A source is
 re-resolved at most once a minute per provider, so a credential that is wrong
 does not rerun its command on every call. A renewed session token or a rotated
 secret therefore takes effect without a restart. This covers
-every call dispatch, the reaper and the release loop make.
-`DELETE /v1/execution/{id}` for an execution no dispatch on this server is
-running, and live output streams, call the provider directly: a rejected
-credential fails them until a dispatch call has re-resolved it.
+every call an execution runner makes: `Submit`, `Status`, `Result`,
+`ReadLogs`, `Cancel` and `Release`. Live output streams call the provider
+directly: a rejected credential fails them until a runner's call has
+re-resolved it.
 
 | Source | Behaviour |
 |---|---|

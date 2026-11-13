@@ -10,18 +10,24 @@ import (
 	"time"
 )
 
-const createExecution = `-- name: CreateExecution :exec
+const createExecution = `-- name: CreateExecution :execrows
 
 INSERT INTO executions (
     id, namespace, job, job_version, task, provider, attempt, previous_id,
     state, provider_id, failure, created_at, started_at, ended_at, updated_at,
     exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated,
-    dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at
-) VALUES (
+    dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms
+)
+SELECT
     $1, $2, $3, $4, $5, $6, $7, $8,
     $9, $10, $11, $12, $13, $14, $15,
     $16, $17, $18, $19, $20, $21,
-    $22, $23, $24, $25, $26, $27, $28
+    $22::text, $23, $24, $25, $26, $27, $28, $29
+WHERE EXISTS (
+    SELECT 1 FROM dispatches
+    WHERE dispatches.dispatch_id = $22::text
+      AND dispatches.owner = $30::text AND dispatches.epoch = $31::bigint
+      AND dispatches.done_at IS NULL
 )
 `
 
@@ -54,17 +60,19 @@ type CreateExecutionParams struct {
 	Reason        string
 	LogsStart     int64
 	LogsAt        *time.Time
+	TimeoutMs     int64
+	Owner         string
+	Epoch         int64
 }
 
 // -----------------------------------------------------------------------------
 // Execution records.
 //
-// An update names the state the caller read the record in and changes nothing
-// if it has moved since, so two writers cannot silently overwrite each other.
+// Every write is conditional on the dispatch's lease, owner and epoch, and
+// carries the whole record, so repeating one changes nothing.
 // -----------------------------------------------------------------------------
-// Columns in table order, so the parameters convert from the row type.
-func (q *Queries) CreateExecution(ctx context.Context, arg CreateExecutionParams) error {
-	_, err := q.db.Exec(ctx, createExecution,
+func (q *Queries) CreateExecution(ctx context.Context, arg CreateExecutionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createExecution,
 		arg.ID,
 		arg.Namespace,
 		arg.Job,
@@ -93,12 +101,18 @@ func (q *Queries) CreateExecution(ctx context.Context, arg CreateExecutionParams
 		arg.Reason,
 		arg.LogsStart,
 		arg.LogsAt,
+		arg.TimeoutMs,
+		arg.Owner,
+		arg.Epoch,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getExecution = `-- name: GetExecution :one
-SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated, dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at FROM executions WHERE id = $1
+SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated, dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms FROM executions WHERE id = $1
 `
 
 func (q *Queries) GetExecution(ctx context.Context, id string) (Execution, error) {
@@ -133,12 +147,37 @@ func (q *Queries) GetExecution(ctx context.Context, id string) (Execution, error
 		&i.Reason,
 		&i.LogsStart,
 		&i.LogsAt,
+		&i.TimeoutMs,
 	)
 	return i, err
 }
 
+const holdsExecution = `-- name: HoldsExecution :one
+SELECT EXISTS (
+    SELECT 1 FROM executions
+    JOIN dispatches ON dispatches.dispatch_id = executions.dispatch_id
+    WHERE executions.id = $1
+      AND dispatches.owner = $2::text AND dispatches.epoch = $3::bigint
+      AND dispatches.done_at IS NULL
+)
+`
+
+type HoldsExecutionParams struct {
+	ID    string
+	Owner string
+	Epoch int64
+}
+
+// Whether the caller holds the lease of the execution's dispatch.
+func (q *Queries) HoldsExecution(ctx context.Context, arg HoldsExecutionParams) (bool, error) {
+	row := q.db.QueryRow(ctx, holdsExecution, arg.ID, arg.Owner, arg.Epoch)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listDispatchExecutions = `-- name: ListDispatchExecutions :many
-SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated, dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at FROM executions
+SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated, dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms FROM executions
 WHERE dispatch_id = $1
 ORDER BY created_at
 `
@@ -182,6 +221,7 @@ func (q *Queries) ListDispatchExecutions(ctx context.Context, dispatchID string)
 			&i.Reason,
 			&i.LogsStart,
 			&i.LogsAt,
+			&i.TimeoutMs,
 		); err != nil {
 			return nil, err
 		}
@@ -194,7 +234,7 @@ func (q *Queries) ListDispatchExecutions(ctx context.Context, dispatchID string)
 }
 
 const listJobExecutions = `-- name: ListJobExecutions :many
-SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated, dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at FROM executions
+SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated, dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms FROM executions
 WHERE namespace = $1 AND job = $2
 ORDER BY created_at DESC
 LIMIT $3
@@ -245,6 +285,7 @@ func (q *Queries) ListJobExecutions(ctx context.Context, arg ListJobExecutionsPa
 			&i.Reason,
 			&i.LogsStart,
 			&i.LogsAt,
+			&i.TimeoutMs,
 		); err != nil {
 			return nil, err
 		}
@@ -256,79 +297,7 @@ func (q *Queries) ListJobExecutions(ctx context.Context, arg ListJobExecutionsPa
 	return items, nil
 }
 
-const listUnreleasedExecutions = `-- name: ListUnreleasedExecutions :many
-SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated, dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at FROM executions
-WHERE released_at IS NULL AND updated_at < $1
-ORDER BY updated_at
-`
-
-// Executions whose leftovers are not yet released and that have not changed
-// since before, oldest first. Unlimited, so executions that cannot be released
-// yet never crowd out ones that can.
-func (q *Queries) ListUnreleasedExecutions(ctx context.Context, before time.Time) ([]Execution, error) {
-	rows, err := q.db.Query(ctx, listUnreleasedExecutions, before)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Execution{}
-	for rows.Next() {
-		var i Execution
-		if err := rows.Scan(
-			&i.ID,
-			&i.Namespace,
-			&i.Job,
-			&i.JobVersion,
-			&i.Task,
-			&i.Provider,
-			&i.Attempt,
-			&i.PreviousID,
-			&i.State,
-			&i.ProviderID,
-			&i.Failure,
-			&i.CreatedAt,
-			&i.StartedAt,
-			&i.EndedAt,
-			&i.UpdatedAt,
-			&i.ExitCode,
-			&i.DurationMs,
-			&i.BilledCpu,
-			&i.BilledMemory,
-			&i.BilledMs,
-			&i.LogsTruncated,
-			&i.DispatchID,
-			&i.Cpu,
-			&i.Memory,
-			&i.ReleasedAt,
-			&i.Reason,
-			&i.LogsStart,
-			&i.LogsAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const markExecutionReleased = `-- name: MarkExecutionReleased :exec
-UPDATE executions SET released_at = $1 WHERE id = $2
-`
-
-type MarkExecutionReleasedParams struct {
-	ReleasedAt *time.Time
-	ID         string
-}
-
-func (q *Queries) MarkExecutionReleased(ctx context.Context, arg MarkExecutionReleasedParams) error {
-	_, err := q.db.Exec(ctx, markExecutionReleased, arg.ReleasedAt, arg.ID)
-	return err
-}
-
-const updateExecution = `-- name: UpdateExecution :execrows
+const saveExecution = `-- name: SaveExecution :execrows
 UPDATE executions SET
     state          = $1,
     provider_id    = $2,
@@ -344,11 +313,17 @@ UPDATE executions SET
     logs_truncated = $12,
     reason         = $13,
     logs_start     = $14,
-    logs_at        = $15
-WHERE id = $16 AND state = $17::text
+    logs_at        = $15,
+    released_at    = $16
+WHERE id = $17 AND EXISTS (
+    SELECT 1 FROM dispatches
+    WHERE dispatches.dispatch_id = executions.dispatch_id
+      AND dispatches.owner = $18::text AND dispatches.epoch = $19::bigint
+      AND dispatches.done_at IS NULL
+)
 `
 
-type UpdateExecutionParams struct {
+type SaveExecutionParams struct {
 	State         string
 	ProviderID    string
 	Failure       string
@@ -364,14 +339,15 @@ type UpdateExecutionParams struct {
 	Reason        string
 	LogsStart     int64
 	LogsAt        *time.Time
+	ReleasedAt    *time.Time
 	ID            string
-	FromState     string
+	Owner         string
+	Epoch         int64
 }
 
-// Writes everything that changes after creation, only if the record is still
-// in from_state.
-func (q *Queries) UpdateExecution(ctx context.Context, arg UpdateExecutionParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updateExecution,
+// Writes everything that changes after creation.
+func (q *Queries) SaveExecution(ctx context.Context, arg SaveExecutionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, saveExecution,
 		arg.State,
 		arg.ProviderID,
 		arg.Failure,
@@ -387,8 +363,10 @@ func (q *Queries) UpdateExecution(ctx context.Context, arg UpdateExecutionParams
 		arg.Reason,
 		arg.LogsStart,
 		arg.LogsAt,
+		arg.ReleasedAt,
 		arg.ID,
-		arg.FromState,
+		arg.Owner,
+		arg.Epoch,
 	)
 	if err != nil {
 		return 0, err

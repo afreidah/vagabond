@@ -56,33 +56,42 @@ const reserved = 3600 * second
 func (h *harness) abandon() execution.ID {
 	h.t.Helper()
 
+	dispatchID, _ := h.leave(time.Now().Add(-time.Hour), execution.StateRunning, execution.StateSucceeded)
+
+	return dispatchID
+}
+
+// leave seeds a dispatch a dead CLI left mid-execution, its lease good until
+// until, with one execution the provider has taken through states. Returns
+// the dispatch and the execution.
+func (h *harness) leave(until time.Time, states ...execution.State) (execution.ID, execution.ID) {
+	h.t.Helper()
+
 	ctx := context.Background()
 	lapsed := time.Now().Add(-time.Hour)
 	dispatchID, id := newID(h.t), newID(h.t)
 
-	p, _ := h.registry.Provider("box")
-	box := p.(*plugin.FakeContainerProvider)
-
-	if _, err := box.Submit(ctx, id, &job.Task{Name: "wait"}); err != nil {
+	if _, err := h.box().Submit(ctx, id, &job.Task{Name: "wait"}); err != nil {
 		h.t.Fatalf("Submit() = %v", err)
 	}
 
-	for _, next := range []execution.State{execution.StateRunning, execution.StateSucceeded} {
-		if err := box.Advance(id, next); err != nil {
+	for _, next := range states {
+		if err := h.box().Advance(id, next); err != nil {
 			h.t.Fatalf("Advance(%s) = %v", next, err)
 		}
 	}
 
-	err := h.store.CreateDispatch(ctx, &execution.Dispatch{
+	d := &execution.Dispatch{
 		ID: dispatchID, Namespace: job.DefaultNamespace, Job: "sleepy", Tasks: 1,
-		State: execution.DispatchRunning, Owner: "cli:dead:1", LeaseUntil: lapsed, Created: lapsed,
-	})
-	if err != nil {
+		State: execution.DispatchRunning, Owner: "cli:dead:1", Epoch: 1, LeaseUntil: until, Created: lapsed,
+	}
+
+	if err := h.store.CreateDispatch(ctx, d); err != nil {
 		h.t.Fatalf("CreateDispatch() = %v", err)
 	}
 
 	fits, _, err := h.store.Reserve(ctx, &ledger.Reservation{
-		ID: id, Provider: "box", CPU: 1000, Memory: 512, Created: time.Now(),
+		ID: id, Provider: "box", Created: time.Now(),
 		Charges: []ledger.Charge{{
 			Pool: "runtime", Period: quota.PeriodMonthly.Key(time.Now()), Amount: reserved, Limit: 100000 * second,
 		}},
@@ -95,12 +104,21 @@ func (h *harness) abandon() execution.ID {
 		ID: id, State: execution.StateRunning, UpdatedAt: lapsed,
 		Namespace: job.DefaultNamespace, Job: "sleepy", Dispatch: dispatchID, Task: "wait",
 		Provider: "box", Attempt: 1, CPU: 1000, Memory: 512,
-	})
+	}, d.Lease())
 	if err != nil {
 		h.t.Fatalf("Create() = %v", err)
 	}
 
-	return dispatchID
+	return dispatchID, id
+}
+
+// box is the harness's fake container provider.
+func (h *harness) box() *plugin.FakeContainerProvider {
+	h.t.Helper()
+
+	p, _ := h.registry.Provider("box")
+
+	return p.(*plugin.FakeContainerProvider)
 }
 
 // -------------------------------------------------------------------------

@@ -5,7 +5,7 @@ description: "Interactive state machine of an execution record and its dispatch:
 weight: 7
 ---
 
-The execution state machine as `execution.State` allows it, and the four states of the dispatch record above it. The machine is acyclic: a retry is a new execution record starting at `pending`, never a transition back, and a transition the table refuses is not written. **Hover over any state** for what moves a record into it and which component writes it.
+The execution state machine as `execution.State` allows it, and the four states of the dispatch record above it. The machine is acyclic: a retry is a new execution record starting at `pending`, never a transition back, and a transition the table refuses is not written. After `prepare` creates a record, every write to it is its execution runner's, checked against the dispatch's lease. **Hover over any state** for what moves a record into it and which component writes it.
 
 {{< diagram >}}
 
@@ -25,7 +25,7 @@ window.vagabondDiagram = {
     '    end',
     '    PENDING -->|Submit returned| SUBMITTED',
     '    PENDING -->|Submit failed| FAILED',
-    '    PENDING -->|cancel request| CANCELLED',
+    '    PENDING --> CANCELLED',
     '    SUBMITTED -->|queued| ACCEPTED',
     '    SUBMITTED -->|started| RUNNING',
     '    SUBMITTED --> SUCCEEDED',
@@ -41,8 +41,8 @@ window.vagabondDiagram = {
     '    RUNNING --> FAILED',
     '    RUNNING --> CANCELLED',
     '    RUNNING --> LOST',
-    '    LOST -->|reconciled| SUCCEEDED',
-    '    LOST --> FAILED',
+    '    LOST -->|terminal Status| SUCCEEDED',
+    '    LOST -->|or 24h| FAILED',
     '    LOST --> CANCELLED',
     '    FAILED -.->|infrastructure| REROUTE',
     '    LOST -.->|infrastructure| REROUTE',
@@ -51,10 +51,11 @@ window.vagabondDiagram = {
     '',
     '    subgraph DISP [Dispatch record]',
     '        DRUN([running]):::entry',
-    '        CLAIM[Claimed and resumed<br>lease lapsed]:::storage',
+    '        CLAIM[Claimed and resumed<br>lease lapsed, not done]:::storage',
     '        DSUCC([succeeded]):::success',
     '        DFAIL([failed]):::reject',
     '        DUNANS([unanswered]):::background',
+    '        DONE[Done<br>every execution released]:::storage',
     '    end',
     '    DRUN -->|every task succeeded| DSUCC',
     '    DRUN -->|a task failed| DFAIL',
@@ -63,6 +64,9 @@ window.vagabondDiagram = {
     '    CLAIM -->|by its last execution| DSUCC',
     '    CLAIM --> DFAIL',
     '    CLAIM --> DUNANS',
+    '    DSUCC --> DONE',
+    '    DFAIL --> DONE',
+    '    DUNANS --> DONE',
     '    REROUTE ~~~ DRUN',
   ].join('\n'),
 
@@ -70,17 +74,17 @@ window.vagabondDiagram = {
     PENDING: {
       title: 'pending',
       badge: 'entry', badgeText: 'initial state',
-      body: '<p>Written by <code>prepare</code> when the record is created: after the quota reservation, before <code>Submit</code>. This write must land, and a failure stops the task: the execution ID is the submission&rsquo;s idempotency key, so it has to exist durably first.</p><p>Leaves on <code>Submit</code>: to <code>submitted</code> when it returns, to <code>failed</code> with the failure class when it fails. A <code>Submit</code> refused as <code>internal</code> ran nothing, so its quota reservation is dropped; any other failure leaves it to the reaper. A dispatch cancelled during the retry backoff leaves the record <code>pending</code> and its reservation to the reaper. A resumed dispatch moves a <code>pending</code> record to <code>submitted</code> once its provider answers <code>Status</code>, and to <code>failed</code> when it does not or is no longer configured.</p><p>To <code>cancelled</code> only from <code>DELETE /v1/execution/{id}</code> when this server is not running the execution&rsquo;s dispatch: the provider is asked to cancel it (30s timeout), then the record is written <code>cancelled</code>.</p>'
+      body: '<p>Written by <code>prepare</code> when the record is created: after the quota reservation, before <code>Submit</code>, under the dispatch&rsquo;s lease. A failure stops the task: the execution ID is the submission&rsquo;s idempotency key, so it has to exist durably first.</p><p>Leaves when the runner submits: to the state <code>Submit</code> reported when it returns, by way of <code>submitted</code> in the same write, a terminal one written later with the output, and to <code>failed</code> with the failure class when it fails. The retry backoff comes before the reservation and the record, so a dispatch cancelled during it leaves neither. A runner restored after a claim has no task to submit: it asks <code>Status</code>, and moves the record to <code>submitted</code> when the provider answers, to <code>failed</code> when it does not or is no longer configured.</p><p>The move to <code>cancelled</code> is legal, but no component writes it: a cancel acts on executions their runners are watching.</p>'
     },
     SUBMITTED: {
       title: 'submitted',
       badge: 'process', badgeText: 'Submit returned',
-      body: '<p>Written by <code>tracked.submitted</code> as soon as <code>Submit</code> returns, with the provider&rsquo;s own ID. The state <code>Submit</code> reported is written right after: <code>accepted</code> or <code>running</code>, or <code>succeeded</code> or <code>failed</code> with the result for a synchronous provider such as AWS Lambda, which skips both middle states.</p><p>A resumed dispatch also writes it for a <code>pending</code> record whose provider answers <code>Status</code>, since the submission may have gone out before the previous owner died.</p>'
+      body: '<p>Reached when <code>Submit</code> returns, with the provider&rsquo;s own ID. The runner moves on to the state <code>Submit</code> reported in the same write: <code>accepted</code> or <code>running</code>, or <code>succeeded</code> or <code>failed</code> for a synchronous provider such as AWS Lambda, which skips both middle states. The stored record therefore holds <code>submitted</code> only in the case below.</p><p>A restored runner writes it for a <code>pending</code> record whose provider answers <code>Status</code>, since the submission may have gone out before the previous owner died, then polls as usual.</p>'
     },
     ACCEPTED: {
       title: 'accepted',
       badge: 'process', badgeText: 'queued',
-      body: '<p>The provider queued the work but has not started it; a Cloud Run Job and a Code Engine job run report it from <code>Submit</code>. Optional: a provider may go straight to <code>running</code> or a terminal state.</p><p>Written on change by the status poll, 2s doubling to 15s. Capacity is consumed from <code>running</code> on, so work a provider accepted and dropped before starting cost nothing.</p>'
+      body: '<p>The provider queued the work but has not started it; a Cloud Run Job and a Code Engine job run report it from <code>Submit</code>. Optional: a provider may go straight to <code>running</code> or a terminal state.</p><p>Written on change by the runner&rsquo;s status poll, 2s doubling to 15s. Capacity is consumed from <code>running</code> on, so work a provider accepted and dropped before starting cost nothing.</p>'
     },
     RUNNING: {
       title: 'running',
@@ -90,37 +94,37 @@ window.vagabondDiagram = {
     LOST: {
       title: 'lost',
       badge: 'filter', badgeText: 'not terminal',
-      body: '<p>Written when a <code>Status</code> call fails after submission, ending the attempt with <code>Failure</code> set to the error&rsquo;s class, or on change when the provider&rsquo;s <code>Status</code> reports it, as a pool does for a node gone less than 5 minutes, and polling continues. The work may still be running, so it is not cancelled, and its reservation stands until the reaper resolves it.</p><p>A poll that later sees <code>running</code> is refused by the state machine, so the record stays <code>lost</code> until it reaches a terminal state.</p><p>The provider release loop reconciles it once it has gone 10 minutes unchanged, then every 5 minutes. A terminal state, <code>cancelled</code> included, whose <code>Result</code> answers is written with the result. An unknown execution, or a provider no longer configured, is <code>failed</code> at once. Anything else stays <code>lost</code>, and is <code>failed</code> after 24 hours (<code>LostGracePeriod</code>). <code>Failure</code> keeps the class that made it <code>lost</code>.</p><p><a href="../background-services/">Background services diagram &rarr;</a><br><a href="../../docs/dispatch/#lost-executions">Dispatch: lost executions &rarr;</a></p>'
+      body: '<p>Written by the runner when a <code>Status</code> call fails after submission, with <code>Failure</code> set to the error&rsquo;s class, and the attempt is answered at once so the task can reroute. Also written on change when the provider&rsquo;s <code>Status</code> reports it, as a pool does for a node gone less than 5 minutes; that does not answer the attempt, the first <code>Status</code> failure after it does. The work may still be running, so it is not cancelled, and its reservation stands.</p><p>The runner keeps polling. A poll that sees a state short of terminal leaves the record <code>lost</code>; a terminal one clears <code>Failure</code> and is collected with its result. One the provider no longer knows, an unknown not classified <code>infrastructure</code>, is <code>failed</code> at once and charged for the time it was seen running. One whose <code>Status</code> still fails after 24 hours lost (<code>LostGracePeriod</code>) is <code>failed</code> and charged as reserved.</p><p>Once it ends, its output is captured, its quota settled and the execution released, and its dispatch is done only after that.</p><p><a href="../background-services/">Background services diagram &rarr;</a><br><a href="../../docs/dispatch/#lost-executions">Dispatch: lost executions &rarr;</a></p>'
     },
     SUCCEEDED: {
       title: 'succeeded',
       badge: 'success', badgeText: 'terminal',
-      body: '<p>The provider reported success. Written by <code>tracked.finish</code> with the result: from <code>Submit</code> for a synchronous provider, otherwise once a poll sees the terminal state and <code>Result</code> is called. The output is captured into <code>execution_logs</code> just before, so it is there when the state is seen.</p><p>Written even when <code>Result</code> failed, then without a result, and the attempt ends with the <code>Result</code> error. Only <code>succeeded</code> with a result passes the task.</p>'
+      body: '<p>The provider reported success. Written by the runner as <code>Submit</code> returns for a synchronous provider, otherwise once a poll sees it. The runner then reads the result, captures the output into <code>execution_logs</code>, and writes both in one write, so the output is there when the result is seen.</p><p>When <code>Result</code> fails the record keeps no result, and the attempt ends with the <code>Result</code> error. Only <code>succeeded</code> with a result passes the task.</p>'
     },
     FAILED: {
       title: 'failed',
       badge: 'reject', badgeText: 'terminal',
-      body: '<p><b>The provider reported failure</b>, written with the result: a non-zero exit, a function error, a timeout. This is the task&rsquo;s answer; the job ends and nothing is retried.</p><p><b>Before submission</b>, written from <code>pending</code> with <code>Failure</code> set: <code>Submit</code> failed, or returned a submission that breaks its rules (<code>internal</code>). A resumed dispatch does the same when the provider is no longer configured or <code>Status</code> fails.</p><p><b>Reconciliation</b> of a <code>lost</code> execution: the provider has no record of it, the provider is no longer configured, or it stayed <code>lost</code> for 24 hours.</p>'
+      body: '<p><b>The provider reported failure</b>, written with the result: a non-zero exit, a function error, a timeout. This is the task&rsquo;s answer; the job ends and nothing is retried.</p><p><b>Before submission</b>, written from <code>pending</code> with <code>Failure</code> set: <code>Submit</code> failed, or returned a submission that breaks its rules (<code>internal</code>). A restored runner does the same for a <code>pending</code> record whose provider does not answer <code>Status</code>, and for any record not yet terminal whose provider is no longer configured (<code>internal</code>).</p><p><b>Unknown to the provider</b>: a <code>Status</code> saying the provider has no record of a watched execution, unless classified <code>infrastructure</code>, fails it at once, charged for the time it was seen running.</p><p><b>Lost for 24 hours</b>: a <code>lost</code> execution whose <code>Status</code> still fails is recorded <code>failed</code> by its runner and charged as reserved.</p>'
     },
     CANCELLED: {
       title: 'cancelled',
       badge: 'background', badgeText: 'terminal, no verdict',
-      body: '<p><b>By Vagabond</b>: <code>DELETE /v1/execution/{id}</code> cancels the whole dispatch when this server is running it; the execution being watched is cancelled at the provider (30s timeout, error ignored) and written <code>cancelled</code>. When this server is not running the dispatch, the provider is asked to cancel the execution, then the record is written <code>cancelled</code> unless another writer got there first.</p><p><b>By the provider</b>: a poll sees <code>cancelled</code>, written with the result. The provider gave no verdict, so it is an <code>infrastructure</code> failure and the task may be rerouted.</p>'
+      body: '<p><b>By Vagabond</b>: <code>DELETE /v1/execution/{id}</code> cancels the whole dispatch. The server running it stops its runners at once. Any other server records a cancel request on the dispatch and returns the execution as it stands; the owner acts on it at its next lease renewal (within 20s), and a server that claims the dispatch acts on it right after the claim. The runner then confirms the lease with a write, asks the provider to <code>Cancel</code> (30s timeout, error ignored), and writes <code>cancelled</code> with the start and end times one <code>Status</code> call gives, so the run is charged for what it ran. Its output is still captured and the execution released.</p><p><b>By the provider</b>: a poll sees <code>cancelled</code>, written with the result. The provider gave no verdict, so it is an <code>infrastructure</code> failure and the task may be rerouted.</p>'
     },
     REROUTE: {
       title: 'Next Attempt',
       badge: 'storage', badgeText: 'new record',
-      body: '<p>Not a state. An attempt that ended on an <code>infrastructure</code> failure (<code>Submit</code> failed, <code>Status</code> failed, the provider cancelled it, or <code>Result</code> failed) sends the task to the next ranked provider within its retry budget, as a new record that starts at <code>pending</code> with a fresh execution ID and <code>PreviousID</code> pointing at this one.</p><p>An <code>internal</code> failure is not rerouted, and each provider is tried at most once per task.</p><p><a href="../task-path/">Task path diagram &rarr;</a></p>'
+      body: '<p>Not a state. An attempt answered with an <code>infrastructure</code> failure (<code>Submit</code> failed, <code>Status</code> failed and it went <code>lost</code>, the provider cancelled it, or <code>Result</code> failed) sends the task to the next ranked provider within its retry budget, as a new record that starts at <code>pending</code> with a fresh execution ID and <code>PreviousID</code> pointing at this one. The runner of the attempt left behind carries on to its end.</p><p>An <code>internal</code> failure is not rerouted, and each provider is tried at most once per task.</p><p><a href="../task-path/">Task path diagram &rarr;</a></p>'
     },
     DRUN: {
       title: 'running (dispatch)',
       badge: 'entry', badgeText: 'dispatch state',
-      body: '<p>Written by <code>Begin</code> before anything is reserved, owned by <code>server:&lt;hostname&gt;:&lt;pid&gt;</code> with a 60s lease. The owner renews it every 20s on its own context; any failure but a stale lease is ignored, so two renewals can fail before the lease lapses.</p><p>The ending is written by <code>FinishDispatch</code>, which applies only while the dispatch is <code>running</code> and held by the caller. An owner whose renewal found the lease taken starts no further task and writes nothing. While the store is unreachable the ending is not written, and the dispatch stays <code>running</code> until a claim takes it.</p><p><a href="../../docs/dispatch/#leases">Dispatch: leases &rarr;</a></p>'
+      body: '<p>Written by <code>Begin</code> before anything is reserved, owned by <code>server:&lt;hostname&gt;:&lt;pid&gt;</code> under epoch 1 with a 60s lease. The owner renews it every 20s on its own context until the dispatch is done; any failure but a refused renewal is ignored, so two renewals can fail before the lease lapses.</p><p>The ending is written by <code>FinishDispatch</code>, which applies only while the dispatch is <code>running</code> and held under the caller&rsquo;s owner and epoch. An owner whose lease was taken starts no further task and writes nothing. While the store is unreachable the write is retried; if the lease lapses meanwhile, a claim takes the dispatch and the old owner&rsquo;s writes are refused.</p><p><a href="../../docs/dispatch/#leases">Dispatch: leases &rarr;</a></p>'
     },
     CLAIM: {
       title: 'Claimed and Resumed',
       badge: 'storage', badgeText: 'takeover',
-      body: '<p>Not a state: the dispatch stays <code>running</code> under a new owner. At startup and every 30s, each server claims every <code>running</code> dispatch whose lease expired, except those it is running itself, in one statement, and leases each for 60s.</p><p>The resume follows each execution that is not terminal. A provider no longer configured makes it <code>failed</code> if <code>pending</code>, else <code>lost</code>, as <code>internal</code>; a failed <code>Status</code> does the same as <code>infrastructure</code>. Otherwise it is moved from <code>pending</code> to <code>submitted</code> if needed, polled to its end, released and settled. Tasks not yet reached are not run: the job file is not stored.</p><p>It then ends by its last execution: <code>succeeded</code> when that passed and every task has a record, <code>failed</code> when it failed with a result, otherwise <code>unanswered</code>. If the executions cannot be read, it stays <code>running</code> for the next claim.</p><p><a href="../background-services/">Background services diagram &rarr;</a><br><a href="../task-path/">Task path diagram &rarr;</a></p>'
+      body: '<p>Not a state: the dispatch keeps its state under a new owner. At startup and every 30s, each server claims every dispatch not yet done whose lease expired, except those it is running itself, in one statement, under the next epoch, and leases each for 60s. That takes running dispatches and ended ones whose executions are still settling or releasing; the previous owner&rsquo;s writes are refused from then on.</p><p>A cancel requested before the claim is acted on at once. A runner is restored for every execution not yet terminal, collected and released, and starts at the first step its record says is left. A <code>pending</code> record is not submitted again: the provider is asked about it, an answer moves it to <code>submitted</code>, and no answer makes it <code>failed</code>, charged nothing when the provider never heard of it. A provider no longer configured makes the execution <code>failed</code> as <code>internal</code>. Tasks not yet reached are not run: the job file is not stored.</p><p>A running dispatch then ends by its last execution: <code>succeeded</code> when that passed and every task has a record, <code>failed</code> when it failed with a result, otherwise <code>unanswered</code>. An ended one keeps its ending. Either is done once every runner has finished. If the executions cannot be read, the dispatch stays open for the next claim.</p><p><a href="../background-services/">Background services diagram &rarr;</a><br><a href="../task-path/">Task path diagram &rarr;</a></p>'
     },
     DSUCC: {
       title: 'succeeded (dispatch)',
@@ -135,7 +139,12 @@ window.vagabondDiagram = {
     DUNANS: {
       title: 'unanswered (dispatch)',
       badge: 'background', badgeText: 'dispatch state',
-      body: '<p>No verdict. <code>Finish</code> writes it when <code>Run</code> returned an error: no candidates, every attempt failed, an <code>internal</code> failure, a cancellation, or a store write refused. <code>Error</code> carries it, prefixed with the task: <code>task "build": every attempt failed: &lt;last failure&gt;</code>.</p><p>A resume writes it with <code>interrupted before any task was submitted</code>, <code>interrupted after &lt;n&gt; of &lt;m&gt; tasks</code>, or <code>interrupted; execution &lt;id&gt; ended &lt;state&gt;</code>. Reconciling a <code>lost</code> execution later does not change it.</p>'
+      body: '<p>No verdict. <code>Finish</code> writes it when <code>Run</code> returned an error: no candidates, every attempt failed, an <code>internal</code> failure, a cancellation, or a store write refused. <code>Error</code> carries it, prefixed with the task: <code>task "build": every attempt failed: &lt;last failure&gt;</code>.</p><p>A resume writes it with <code>interrupted before any task was submitted</code>, <code>interrupted after &lt;n&gt; of &lt;m&gt; tasks</code>, or <code>interrupted; execution &lt;id&gt; ended &lt;state&gt;</code>. A <code>lost</code> execution that ends later does not change it.</p>'
+    },
+    DONE: {
+      title: 'Done (dispatch)',
+      badge: 'storage', badgeText: 'done_at',
+      body: '<p>Not a state: <code>done_at</code> on the dispatch record. Once the ending is written, the owner waits for every execution runner of the dispatch to finish through release, then <code>CloseDispatch</code> sets it and lease renewal stops. A claim takes only dispatches without it.</p><p>A dispatch with an execution still <code>lost</code> is not done until that execution ends, its provider no longer knows it, or it fails 24 hours later.</p>'
     }
   }
 };
@@ -151,4 +160,4 @@ window.vagabondDiagram = {
 | <span class="dg-swatch dg-success"></span> | Succeeded |
 | <span class="dg-swatch dg-reject"></span> | Failed |
 | <span class="dg-swatch dg-background"></span> | No verdict: cancelled, unanswered |
-| <span class="dg-swatch dg-storage"></span> | Not a state: a new record or a takeover |
+| <span class="dg-swatch dg-storage"></span> | Not a state: a new record, a takeover, or a dispatch done |

@@ -9,17 +9,20 @@ import (
 )
 
 type Dispatch struct {
-	DispatchID string
-	Namespace  string
-	Job        string
-	JobVersion int64
-	State      string
-	Error      string
-	CreatedAt  time.Time
-	EndedAt    *time.Time
-	Tasks      int64
-	Owner      string
-	LeaseUntil time.Time
+	DispatchID        string
+	Namespace         string
+	Job               string
+	JobVersion        int64
+	State             string
+	Error             string
+	CreatedAt         time.Time
+	EndedAt           *time.Time
+	Tasks             int64
+	Owner             string
+	LeaseUntil        time.Time
+	Epoch             int64
+	CancelRequestedAt *time.Time
+	DoneAt            *time.Time
 }
 
 type Execution struct {
@@ -51,6 +54,7 @@ type Execution struct {
 	Reason        string
 	LogsStart     int64
 	LogsAt        *time.Time
+	TimeoutMs     int64
 }
 
 type ExecutionLog struct {
@@ -82,8 +86,6 @@ type QuotaReservation struct {
 	Pool        string
 	Period      string
 	Amount      int64
-	Cpu         int64
-	Memory      int64
 	CreatedAt   time.Time
 	Namespace   string
 }

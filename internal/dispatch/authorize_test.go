@@ -62,7 +62,7 @@ func TestAuthorized_RefreshesAndRetries(t *testing.T) {
 	reg := newRegistry(&p.scriptedProvider)
 	reg.providers["a"] = p
 
-	outcome, err := newDispatcher(t, reg).RunTask(t.Context(), origin, containerTask(t, nil), nil, nil)
+	outcome, err := newDispatcher(t, reg).runTaskIn(t, containerTask(t, nil), nil, nil)
 	if err != nil || !outcome.Succeeded() {
 		t.Fatalf("RunTask() = %+v, %v; want a success after the refresh", outcome, err)
 	}
@@ -86,7 +86,7 @@ func TestAuthorized_RefreshFails(t *testing.T) {
 	reg := newRegistry(&p.scriptedProvider)
 	reg.providers["a"] = p
 
-	_, err := newDispatcher(t, reg).RunTask(t.Context(), origin, containerTask(t, nil), nil, nil)
+	_, err := newDispatcher(t, reg).runTaskIn(t, containerTask(t, nil), nil, nil)
 	if !errors.Is(err, plugin.ErrUnauthorized) || !errors.Is(err, unusable) {
 		t.Errorf("RunTask() = %v, want the rejection and the refresh failure", err)
 	}
@@ -108,7 +108,7 @@ func TestAuthorized_NothingToRefresh(t *testing.T) {
 
 	reg := newRegistry(p)
 
-	if _, err := newDispatcher(t, reg).RunTask(t.Context(), origin, containerTask(t, nil), nil, nil); !errors.Is(err, plugin.ErrUnauthorized) {
+	if _, err := newDispatcher(t, reg).runTaskIn(t, containerTask(t, nil), nil, nil); !errors.Is(err, plugin.ErrUnauthorized) {
 		t.Errorf("RunTask() = %v, want the rejection", err)
 	}
 

@@ -1,27 +1,31 @@
 -- -----------------------------------------------------------------------------
 -- Execution records.
 --
--- An update names the state the caller read the record in and changes nothing
--- if it has moved since, so two writers cannot silently overwrite each other.
+-- Every write is conditional on the dispatch's lease, owner and epoch, and
+-- carries the whole record, so repeating one changes nothing.
 -- -----------------------------------------------------------------------------
 
--- name: CreateExecution :exec
--- Columns in table order, so the parameters convert from the row type.
+-- name: CreateExecution :execrows
 INSERT INTO executions (
     id, namespace, job, job_version, task, provider, attempt, previous_id,
     state, provider_id, failure, created_at, started_at, ended_at, updated_at,
     exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated,
-    dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at
-) VALUES (
+    dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms
+)
+SELECT
     @id, @namespace, @job, @job_version, @task, @provider, @attempt, @previous_id,
     @state, @provider_id, @failure, @created_at, @started_at, @ended_at, @updated_at,
     @exit_code, @duration_ms, @billed_cpu, @billed_memory, @billed_ms, @logs_truncated,
-    @dispatch_id, @cpu, @memory, @released_at, @reason, @logs_start, @logs_at
+    @dispatch_id::text, @cpu, @memory, @released_at, @reason, @logs_start, @logs_at, @timeout_ms
+WHERE EXISTS (
+    SELECT 1 FROM dispatches
+    WHERE dispatches.dispatch_id = @dispatch_id::text
+      AND dispatches.owner = @owner::text AND dispatches.epoch = @epoch::bigint
+      AND dispatches.done_at IS NULL
 );
 
--- name: UpdateExecution :execrows
--- Writes everything that changes after creation, only if the record is still
--- in from_state.
+-- name: SaveExecution :execrows
+-- Writes everything that changes after creation.
 UPDATE executions SET
     state          = @state,
     provider_id    = @provider_id,
@@ -37,8 +41,24 @@ UPDATE executions SET
     logs_truncated = @logs_truncated,
     reason         = @reason,
     logs_start     = @logs_start,
-    logs_at        = @logs_at
-WHERE id = @id AND state = @from_state::text;
+    logs_at        = @logs_at,
+    released_at    = @released_at
+WHERE id = @id AND EXISTS (
+    SELECT 1 FROM dispatches
+    WHERE dispatches.dispatch_id = executions.dispatch_id
+      AND dispatches.owner = @owner::text AND dispatches.epoch = @epoch::bigint
+      AND dispatches.done_at IS NULL
+);
+
+-- name: HoldsExecution :one
+-- Whether the caller holds the lease of the execution's dispatch.
+SELECT EXISTS (
+    SELECT 1 FROM executions
+    JOIN dispatches ON dispatches.dispatch_id = executions.dispatch_id
+    WHERE executions.id = @id
+      AND dispatches.owner = @owner::text AND dispatches.epoch = @epoch::bigint
+      AND dispatches.done_at IS NULL
+);
 
 -- name: GetExecution :one
 SELECT * FROM executions WHERE id = @id;
@@ -48,17 +68,6 @@ SELECT * FROM executions WHERE id = @id;
 SELECT * FROM executions
 WHERE dispatch_id = @dispatch_id
 ORDER BY created_at;
-
--- name: ListUnreleasedExecutions :many
--- Executions whose leftovers are not yet released and that have not changed
--- since before, oldest first. Unlimited, so executions that cannot be released
--- yet never crowd out ones that can.
-SELECT * FROM executions
-WHERE released_at IS NULL AND updated_at < @before
-ORDER BY updated_at;
-
--- name: MarkExecutionReleased :exec
-UPDATE executions SET released_at = @released_at WHERE id = @id;
 
 -- name: ListJobExecutions :many
 -- A job's most recent executions, newest first.

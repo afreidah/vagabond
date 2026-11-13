@@ -4,8 +4,8 @@
 // Author: Alex Freidah
 //
 // Run against the memory store, which applies the same rules as Postgres. A
-// refused reservation charges nothing, and a run that never settles stays
-// charged until the reaper learns what it did.
+// refused reservation charges nothing, and one never settled stays charged at
+// its estimate unless the reaper finds no execution recorded for it.
 // -------------------------------------------------------------------------------
 
 package ledger
@@ -328,7 +328,7 @@ func TestSettle_ChargesThePeriodItWasReservedIn(t *testing.T) {
 	}
 }
 
-// Settling twice, or settling what the reaper already settled, charges once.
+// Settling twice, as a runner restored after its settle may, charges once.
 func TestSettle_IsIdempotent(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, nil)
 	id := newID(t)
@@ -449,30 +449,6 @@ func TestSettle_CorrectsTheShareToo(t *testing.T) {
 	}
 }
 
-// The reaper prices a finished run in both layers, from the namespace the
-// reservation recorded.
-func TestReap_FinishedChargesTheShareToo(t *testing.T) {
-	l, _ := newLedger(t, midSeptember.Add(-StaleAfter-time.Minute), nil)
-
-	if err := l.Reserve(t.Context(), newID(t), "ci", "fn", quota.Execution{Memory: 1024, Duration: 15 * time.Minute}, false); err != nil {
-		t.Fatalf("Reserve() = %v", err)
-	}
-
-	l.now = func() time.Time { return midSeptember }
-
-	if _, err := l.Reap(t.Context(), func(context.Context, Held) (Verdict, time.Duration) {
-		return Finished, 10 * time.Second
-	}); err != nil {
-		t.Fatalf("Reap() = %v", err)
-	}
-
-	totalUsage, share := usage(l, "ci", "fn")
-
-	if totalUsage["compute"] != 10*gbSeconds || share["compute"] != 10*gbSeconds {
-		t.Errorf("total = %v, share = %v; want 10 GB-seconds in both", totalUsage, share)
-	}
-}
-
 // -------------------------------------------------------------------------
 // DROP
 // -------------------------------------------------------------------------
@@ -508,8 +484,8 @@ func TestDrop_ChargesNothing(t *testing.T) {
 	}
 }
 
-// A drop that could not be written says so, and the reservation is left for
-// the reaper.
+// A drop that could not be written says so, and the reservation stays for the
+// runner to drop again.
 func TestDrop_FailsWhenTheStoreCannotWrite(t *testing.T) {
 	l, err := New(t.Context(), fixtures(), unwritable{NewMemory(nil)})
 	if err != nil {
@@ -525,9 +501,9 @@ func TestDrop_FailsWhenTheStoreCannotWrite(t *testing.T) {
 // REAP
 // -------------------------------------------------------------------------
 
-// reaped reserves one execution an hour and a minute ago, then reaps with the
-// given verdict.
-func reaped(t *testing.T, verdict Verdict, ran time.Duration) (*Ledger, *Memory, int) {
+// reaped reserves one execution an hour and a minute ago, then reaps with
+// orphaned answering as given.
+func reaped(t *testing.T, orphaned bool) (*Ledger, *Memory, int) {
 	t.Helper()
 
 	l, store := newLedger(t, midSeptember.Add(-StaleAfter-time.Minute), nil)
@@ -536,9 +512,7 @@ func reaped(t *testing.T, verdict Verdict, ran time.Duration) (*Ledger, *Memory,
 
 	l.now = func() time.Time { return midSeptember }
 
-	n, err := l.Reap(t.Context(), func(context.Context, Held) (Verdict, time.Duration) {
-		return verdict, ran
-	})
+	n, err := l.Reap(t.Context(), func(context.Context, execution.ID) bool { return orphaned })
 	if err != nil {
 		t.Fatalf("Reap() = %v", err)
 	}
@@ -546,12 +520,13 @@ func reaped(t *testing.T, verdict Verdict, ran time.Duration) (*Ledger, *Memory,
 	return l, store, n
 }
 
-// Keep leaves the reservation held and charged at its estimate.
-func TestReap_KeepLeavesTheReservation(t *testing.T) {
-	l, store, n := reaped(t, Keep, 0)
+// A recorded execution's reservation is its runner's to settle, so it stays
+// held and charged at its estimate.
+func TestReap_KeepsARecordedExecution(t *testing.T) {
+	l, store, n := reaped(t, false)
 
 	if n != 0 || len(store.held) != 1 {
-		t.Errorf("Reap() settled %d, held %d; want 0 settled and the reservation kept", n, len(store.held))
+		t.Errorf("Reap() dropped %d, held %d; want none dropped and the reservation kept", n, len(store.held))
 	}
 
 	if got := total(l, "container")["cpu"]; got != 900*cpuSeconds {
@@ -559,12 +534,13 @@ func TestReap_KeepLeavesTheReservation(t *testing.T) {
 	}
 }
 
-// Never ran, so nothing was spent, the execution count included.
-func TestReap_DropChargesNothing(t *testing.T) {
-	l, store, n := reaped(t, Drop, 0)
+// An execution never recorded was never submitted, so nothing was spent, the
+// execution count included.
+func TestReap_DropsAnOrphanAtNothing(t *testing.T) {
+	l, store, n := reaped(t, true)
 
 	if n != 1 || len(store.held) != 0 {
-		t.Errorf("Reap() settled %d, held %d; want 1 and none", n, len(store.held))
+		t.Errorf("Reap() dropped %d, held %d; want 1 and none", n, len(store.held))
 	}
 
 	for pool, used := range total(l, "container") {
@@ -574,34 +550,8 @@ func TestReap_DropChargesNothing(t *testing.T) {
 	}
 }
 
-// Priced from the stored shape and how long the provider says it ran.
-func TestReap_FinishedChargesWhatItRan(t *testing.T) {
-	l, _, n := reaped(t, Finished, 10*time.Second)
-
-	if n != 1 {
-		t.Fatalf("Reap() settled %d, want 1", n)
-	}
-
-	if got := total(l, "container")["cpu"]; got != 10*cpuSeconds {
-		t.Errorf("cpu = %d, want %d", got, 10*cpuSeconds)
-	}
-}
-
-// Ran for an unknown time, so the estimate becomes the charge.
-func TestReap_StandChargesTheReservation(t *testing.T) {
-	l, store, n := reaped(t, Stand, 0)
-
-	if n != 1 || len(store.held) != 0 {
-		t.Errorf("Reap() settled %d, held %d; want 1 and none", n, len(store.held))
-	}
-
-	if got := total(l, "container")["cpu"]; got != 900*cpuSeconds {
-		t.Errorf("cpu = %d, want the reserved %d", got, 900*cpuSeconds)
-	}
-}
-
-// A reservation younger than StaleAfter may belong to a run about to be
-// submitted, so the provider is not asked about it.
+// A reservation younger than StaleAfter may belong to an execution about to
+// be recorded, so it is not looked at.
 func TestReap_SkipsRecentReservations(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, nil)
 
@@ -609,17 +559,17 @@ func TestReap_SkipsRecentReservations(t *testing.T) {
 
 	asked := false
 
-	n, err := l.Reap(t.Context(), func(context.Context, Held) (Verdict, time.Duration) {
+	n, err := l.Reap(t.Context(), func(context.Context, execution.ID) bool {
 		asked = true
 
-		return Drop, 0
+		return true
 	})
 	if err != nil {
 		t.Fatalf("Reap() = %v", err)
 	}
 
 	if asked || n != 0 {
-		t.Errorf("Reap() asked about a fresh reservation (settled %d)", n)
+		t.Errorf("Reap() asked about a fresh reservation (dropped %d)", n)
 	}
 }
 

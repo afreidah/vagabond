@@ -496,23 +496,26 @@ executions it holds:
 | Status | `lost` | Infrastructure failure `node <name> holding <id> is gone` |
 | Result, Cancel, Release, StreamLogs | Infrastructure failure `the node holding <id> is not connected` | Infrastructure failure `node <name> holding <id> is gone` |
 
-`lost` is not terminal: dispatch keeps polling. A node that reconnects within
-the grace period reports its workloads, and they finish normally. After it,
-the status failure ends the attempt and dispatch records it `lost`. A node
-that comes back later still reports it, and the server records its real
-outcome ([Lost executions](dispatch.md#lost-executions)); one that never does
-is `failed` after 24 hours.
+`lost` is not terminal: the execution's runner keeps polling. A node that
+reconnects within the grace period reports its workloads, and they finish
+normally. After it, Status fails: the attempt ends, so the task can reroute,
+and the execution stays `lost`. A node that
+comes back later still reports it, and the server records its real outcome
+and releases it ([Lost executions](dispatch.md#lost-executions)); one that
+never does is `failed` 24 hours after it became `lost`, charged as reserved,
+and its release is retried until the node returns.
 
 **After a server restart**, the server has no record of which node holds an
 execution until a node reports it. For the first 5 minutes after the pool
 provider is built, Status answers `lost` for an execution no connected node
 reports, and Result, Cancel, Release and StreamLogs fail
 `the node holding <id> is not connected`. After that it is an unknown
-execution: dispatch ends the attempt, and the release loop records a `lost`
-execution `failed` at once, not after 24 hours, and marks it released without
-reaching the node. A node that reconnects later keeps that container, its
-snapshot and `<data-dir>/logs/<id>.log`; remove them on the node with
-`ctr -n vagabond tasks rm -f <id>` and `ctr -n vagabond containers rm <id>`.
+execution: the next Status records it `failed` at once, charged for the time
+it was seen running, and Release counts it released without reaching the
+node. A node that reconnects after that keeps the
+container, its snapshot and `<data-dir>/logs/<id>.log`; remove them on the
+node with `ctr -n vagabond tasks rm -f <id>` and
+`ctr -n vagabond containers rm <id>`.
 
 ## Workloads
 
@@ -612,10 +615,9 @@ also sets the label, so its state becomes `cancelled` whatever it exited with.
 
 `Release` deletes the task (killing it if still running), the container, its
 snapshot, and its log file. Releasing an execution the node does not hold
-succeeds. Dispatch releases after reading the result; a workload that ended
-any other way, cancelled or with its result unread, is released by the
-server's [release loop](background-services.md#provider-release) once it has
-stopped. While the node is offline the release fails and is retried until the
+succeeds. The execution's runner releases it last, after its output is
+captured, however it ended ([Release](dispatch.md#release)). While the node is
+offline the release fails and is retried, 250ms doubling to 10s, until the
 node reconnects. After a server restart this holds only for the pool's first 5
 minutes; see [Node leaving mid-run](#node-leaving-mid-run).
 
@@ -825,7 +827,7 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab \
 | `the agent's cgroup is the root` at startup | Container without `--cgroupns=host` | Add it, or pass `-cgroup-parent`. |
 | Workloads die when the agent restarts under systemd | `KillMode=control-group` kills the unit's subtree | `KillMode=process`. |
 | Result has no output from a containerised agent | `-data-dir` path differs inside and outside the container | Mount it at the same path. |
-| Executions `lost` after a node went away, attempt ended after 5 minutes | Node did not reconnect within the grace period | Check the agent starts on boot and can reach the server. |
+| Executions still `lost` more than 5 minutes after a node went away | Node did not reconnect within the grace period | Check the agent starts on boot and can reach the server. |
 | `Internal ... pulling <image>` | Image unreachable or private | The agent pulls from the registry on every new submission, without credentials; use an image the node can pull anonymously. |
 
 Server-side log lines: `serving agents address=...` at start,

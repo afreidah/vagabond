@@ -12,8 +12,6 @@
 package statetest
 
 import (
-	"context"
-	"io"
 	"strings"
 	"testing"
 	"time"
@@ -22,23 +20,11 @@ import (
 )
 
 // -------------------------------------------------------------------------
-// INTERFACE
-// -------------------------------------------------------------------------
-
-// LogStore is the part of an execution store the output rules cover.
-type LogStore interface {
-	Create(ctx context.Context, r *execution.Record) error
-	AppendLog(ctx context.Context, id execution.ID, seq int64, data []byte, keepFrom int64) error
-	ReadLog(ctx context.Context, id execution.ID, fromSeq int64, w io.Writer) error
-	PruneLogs(ctx context.Context, before time.Time) (int, error)
-}
-
-// -------------------------------------------------------------------------
 // CONTRACT
 // -------------------------------------------------------------------------
 
 // LogContract runs every output rule against a fresh store from newStore.
-func LogContract(t *testing.T, newStore func(t *testing.T) LogStore) {
+func LogContract(t *testing.T, newStore func(t *testing.T) Store) {
 	for _, r := range logRules {
 		t.Run(r.name, func(t *testing.T) { r.check(t, newStore(t)) })
 	}
@@ -47,7 +33,7 @@ func LogContract(t *testing.T, newStore func(t *testing.T) LogStore) {
 // logRule is one promise about output, checked against a fresh store.
 type logRule struct {
 	name  string
-	check func(t *testing.T, s LogStore)
+	check func(t *testing.T, s Store)
 }
 
 // logRules are the promises LogContract checks.
@@ -67,50 +53,50 @@ var logRules = []logRule{
 
 // readsInOrder: chunks read back in the order written, bytes that are not
 // UTF-8 included, since output need not be text.
-func readsInOrder(t *testing.T, s LogStore) {
-	id := created(t, s, time.Time{})
-	appendAll(t, s, id, 0, "one,", "ok\x00\xff\xfe,", "three")
+func readsInOrder(t *testing.T, s Store) {
+	o := logged(t, s, time.Time{})
+	appendAll(t, s, o, 0, "one,", "ok\x00\xff\xfe,", "three")
 
-	if got := read(t, s, id, 0); got != "one,ok\x00\xff\xfe,three" {
+	if got := read(t, s, o, 0); got != "one,ok\x00\xff\xfe,three" {
 		t.Errorf("read %q, want every chunk in order", got)
 	}
 }
 
 // startsOver: a write at chunk 0 replaces everything stored before it.
-func startsOver(t *testing.T, s LogStore) {
-	id := created(t, s, time.Time{})
-	appendAll(t, s, id, 0, "first try,", "cut short")
-	appendAll(t, s, id, 0, "second try")
+func startsOver(t *testing.T, s Store) {
+	o := logged(t, s, time.Time{})
+	appendAll(t, s, o, 0, "first try,", "cut short")
+	appendAll(t, s, o, 0, "second try")
 
-	if got := read(t, s, id, 0); got != "second try" {
+	if got := read(t, s, o, 0); got != "second try" {
 		t.Errorf("read %q, want only the second capture", got)
 	}
 }
 
 // dropsTheFront: a write's keepFrom deletes the chunks before it.
-func dropsTheFront(t *testing.T, s LogStore) {
-	id := created(t, s, time.Time{})
-	appendAll(t, s, id, 0, "a,", "b,")
-	appendChunk(t, s, id, 2, "c", 2)
+func dropsTheFront(t *testing.T, s Store) {
+	o := logged(t, s, time.Time{})
+	appendAll(t, s, o, 0, "a,", "b,")
+	appendChunk(t, s, o, 2, "c", 2)
 
-	if got := read(t, s, id, 0); got != "c" {
+	if got := read(t, s, o, 0); got != "c" {
 		t.Errorf("read %q, want only the chunks kept", got)
 	}
 }
 
 // readsFromAChunk: a read from a chunk skips the ones before it.
-func readsFromAChunk(t *testing.T, s LogStore) {
-	id := created(t, s, time.Time{})
-	appendAll(t, s, id, 0, "a,", "b,", "c")
+func readsFromAChunk(t *testing.T, s Store) {
+	o := logged(t, s, time.Time{})
+	appendAll(t, s, o, 0, "a,", "b,", "c")
 
-	if got := read(t, s, id, 1); got != "b,c" {
+	if got := read(t, s, o, 1); got != "b,c" {
 		t.Errorf("read %q from chunk 1, want b,c", got)
 	}
 }
 
 // keepsExecutionsApart: one execution's chunks never read as another's.
-func keepsExecutionsApart(t *testing.T, s LogStore) {
-	first, second := created(t, s, time.Time{}), created(t, s, time.Time{})
+func keepsExecutionsApart(t *testing.T, s Store) {
+	first, second := logged(t, s, time.Time{}), logged(t, s, time.Time{})
 	appendAll(t, s, first, 0, "first")
 	appendAll(t, s, second, 0, "second")
 
@@ -120,8 +106,8 @@ func keepsExecutionsApart(t *testing.T, s LogStore) {
 }
 
 // readsEmpty: an execution with no output stored reads as nothing.
-func readsEmpty(t *testing.T, s LogStore) {
-	if got := read(t, s, created(t, s, time.Time{}), 0); got != "" {
+func readsEmpty(t *testing.T, s Store) {
+	if got := read(t, s, logged(t, s, time.Time{}), 0); got != "" {
 		t.Errorf("read %q, want nothing", got)
 	}
 }
@@ -129,15 +115,15 @@ func readsEmpty(t *testing.T, s LogStore) {
 // prunesBeforeTheCutoff: pruning takes the output of executions that ended
 // before the cutoff, leaves recent and running ones, and finds nothing the
 // second time.
-func prunesBeforeTheCutoff(t *testing.T, s LogStore) {
+func prunesBeforeTheCutoff(t *testing.T, s Store) {
 	now := time.Now().UTC().Truncate(time.Second)
 
-	old := created(t, s, now.Add(-48*time.Hour))
-	recent := created(t, s, now.Add(-time.Minute))
-	running := created(t, s, time.Time{})
+	old := logged(t, s, now.Add(-48*time.Hour))
+	recent := logged(t, s, now.Add(-time.Minute))
+	running := logged(t, s, time.Time{})
 
-	for _, id := range []execution.ID{old, recent, running} {
-		appendAll(t, s, id, 0, "output")
+	for _, o := range []output{old, recent, running} {
+		appendAll(t, s, o, 0, "output")
 	}
 
 	pruned, err := s.PruneLogs(t.Context(), now.Add(-24*time.Hour))
@@ -149,9 +135,9 @@ func prunesBeforeTheCutoff(t *testing.T, s LogStore) {
 		t.Errorf("read %q of the pruned execution, want nothing", got)
 	}
 
-	for _, id := range []execution.ID{recent, running} {
-		if got := read(t, s, id, 0); got != "output" {
-			t.Errorf("read %q of %s, want its output kept", got, id)
+	for _, o := range []output{recent, running} {
+		if got := read(t, s, o, 0); got != "output" {
+			t.Errorf("read %q of %s, want its output kept", got, o.id)
 		}
 	}
 
@@ -164,60 +150,48 @@ func prunesBeforeTheCutoff(t *testing.T, s LogStore) {
 // HELPERS
 // -------------------------------------------------------------------------
 
-// created records an execution, ended at ended when that is set and running
-// otherwise, returning its ID.
-func created(t *testing.T, s LogStore, ended time.Time) execution.ID {
+// output is an execution whose output a rule writes, and the lease the
+// writes are made under.
+type output struct {
+	id    execution.ID
+	lease execution.Lease
+}
+
+// logged records an execution in a dispatch of its own, ended at ended when
+// that is set and running otherwise.
+func logged(t *testing.T, s Store, ended time.Time) output {
 	t.Helper()
 
-	id, err := execution.NewID()
-	if err != nil {
-		t.Fatalf("NewID() = %v", err)
-	}
+	d := dispatched(t, s, held())
 
-	r := &execution.Record{
-		ID:        id,
-		State:     execution.StateRunning,
-		UpdatedAt: time.Now().UTC(),
-		Job:       "ci",
-		Task:      "test",
-	}
-
-	if !ended.IsZero() {
-		r.State, r.StartedAt, r.EndedAt = execution.StateSucceeded, ended.Add(-time.Second), ended
-	}
-
-	if err := s.Create(t.Context(), r); err != nil {
-		t.Fatalf("Create() = %v", err)
-	}
-
-	return id
+	return output{id: recorded(t, s, d, ended).ID, lease: d.Lease()}
 }
 
 // appendAll stores chunks from seq on, one after another, keeping everything.
-func appendAll(t *testing.T, s LogStore, id execution.ID, seq int64, chunks ...string) {
+func appendAll(t *testing.T, s Store, o output, seq int64, chunks ...string) {
 	t.Helper()
 
 	for i, chunk := range chunks {
-		appendChunk(t, s, id, seq+int64(i), chunk, 0)
+		appendChunk(t, s, o, seq+int64(i), chunk, 0)
 	}
 }
 
-// appendChunk stores one chunk.
-func appendChunk(t *testing.T, s LogStore, id execution.ID, seq int64, chunk string, keepFrom int64) {
+// appendChunk stores one chunk, failing the test if it is refused.
+func appendChunk(t *testing.T, s Store, o output, seq int64, chunk string, keepFrom int64) {
 	t.Helper()
 
-	if err := s.AppendLog(t.Context(), id, seq, []byte(chunk), keepFrom); err != nil {
+	if err := s.AppendLog(t.Context(), o.id, seq, []byte(chunk), keepFrom, o.lease); err != nil {
 		t.Fatalf("AppendLog(%d) = %v", seq, err)
 	}
 }
 
-// read returns id's stored output from chunk fromSeq on.
-func read(t *testing.T, s LogStore, id execution.ID, fromSeq int64) string {
+// read returns o's stored output from chunk fromSeq on.
+func read(t *testing.T, s Store, o output, fromSeq int64) string {
 	t.Helper()
 
 	var out strings.Builder
 
-	if err := s.ReadLog(t.Context(), id, fromSeq, &out); err != nil {
+	if err := s.ReadLog(t.Context(), o.id, fromSeq, &out); err != nil {
 		t.Fatalf("ReadLog() = %v", err)
 	}
 

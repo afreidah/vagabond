@@ -58,7 +58,8 @@ window.vagabondDiagram = {
     '    REG -->|Capabilities| PLUGIN',
     '    UPKEEP -->|refresh| REG',
     '    UPKEEP -->|refresh| LEDGER',
-    '    UPKEEP -->|reap, release, claim| DISP',
+    '    UPKEEP -->|reap, claim| DISP',
+    '    UPKEEP -->|prune output| STORE',
     '',
     '    PLUGIN --> CLOUDRUN',
     '    PLUGIN --> CODEENGINE',
@@ -101,12 +102,12 @@ window.vagabondDiagram = {
     DISP: {
       title: 'Dispatcher',
       badge: 'process', badgeText: 'dispatch',
-      body: '<p><code>dispatch.Dispatcher</code>. <code>Begin</code> records the dispatch <code>running</code>, leased to this server, and the request returns its ID; the run continues in its own goroutine on a context detached from the request.</p><p>Per task, in declaration order: re-read usage, admit and rank, then for each candidate reserve quota, record the attempt <code>pending</code>, submit, poll <code>Status</code> from 2s backing off to 15s, fetch the <code>Result</code>, release, then settle. An <code>infrastructure</code> failure moves to the next ranked provider within the task&rsquo;s <code>retry</code> budget. An exit code is an answer and is never rerouted.</p><p>The lease runs 60s and is renewed every 20s. A dispatch whose lease lapses is claimed by a server and resumed from its recorded executions.</p><p><a href="../task-path/">Task path diagram &rarr;</a></p>'
+      body: '<p><code>dispatch.Dispatcher</code>. <code>Begin</code> records the dispatch <code>running</code>, leased to this server, and the request returns its ID; the run continues in its own goroutine on a context detached from the request.</p><p>Per task, in declaration order: re-read usage, admit and rank, then for each candidate reserve quota, record the attempt <code>pending</code> and start an execution runner, which submits, polls <code>Status</code> from 2s backing off to 15s, collects the result and output, settles and releases. The task takes the runner&rsquo;s first answer, and the runner settles and releases after. An <code>infrastructure</code> failure moves to the next ranked provider within the task&rsquo;s <code>retry</code> budget. An exit code is an answer and is never rerouted.</p><p>The lease runs 60s and is renewed every 20s until every execution is released, and every write to an execution is checked against it. A dispatch whose lease lapses is claimed by a server, which restores a runner for each execution not yet done.</p><p><a href="../task-path/">Task path diagram &rarr;</a></p>'
     },
     LEDGER: {
       title: 'Quota ledger',
       badge: 'process', badgeText: 'ledger',
-      body: '<p><code>ledger.Ledger</code> charges each attempt&rsquo;s declared worst case against every pool it meters, in the provider total and the namespace share, before it is submitted. The store decides each reservation in one statement, so two dispatches cannot both take the last room. A refusal skips the provider without spending a retry.</p><p>A result replaces the reservation with what the run used: what the platform billed when it says, otherwise the declared shape over the time it ran. A reservation still open after 1h is resolved by the reaper. Only providers with quota pools reserve anything.</p><p>Holds the usage snapshot admission reads, refreshed every 15s and before each task a dispatch runs.</p><p><a href="../quotas/">Quotas diagram &rarr;</a></p>'
+      body: '<p><code>ledger.Ledger</code> charges each attempt&rsquo;s declared worst case against every pool it meters, in the provider total and the namespace share, before it is submitted. The store decides each reservation in one statement, so two dispatches cannot both take the last room. A refusal skips the provider without spending a retry.</p><p>Each execution&rsquo;s runner replaces the reservation with what the run cost: nothing when nothing ran, what the platform billed when it says, otherwise the declared shape over the time it ran, or over its timeout when it never answered. The reaper drops a reservation over 1h old whose execution was never recorded. Only providers with quota pools reserve anything.</p><p>Holds the usage snapshot admission reads, refreshed every 15s and before each task a dispatch runs.</p><p><a href="../quotas/">Quotas diagram &rarr;</a></p>'
     },
     REG: {
       title: 'Provider registry',
@@ -116,7 +117,7 @@ window.vagabondDiagram = {
     UPKEEP: {
       title: 'Upkeep loops',
       badge: 'background', badgeText: 'timers',
-      body: '<p>Five tickers in <code>internal/server/upkeep.go</code>, started when the server begins serving and stopped at shutdown: capability refresh (1m), usage snapshot refresh (15s), reservation reaper (5m), provider release (5m) and dispatch claim (30s).</p><p>Capabilities and usage are read while the server is built, and the claim and the reaper run once before HTTP is served, so their first tick is one interval in. Provider release has no startup pass. A failure is logged and waits for the next tick.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
+      body: '<p>Five tickers in <code>internal/server/upkeep.go</code>, started when the server begins serving and stopped at shutdown: capability refresh (1m), usage snapshot refresh (15s), reservation reaper (5m), dispatch claim (30s) and output retention (1h).</p><p>Capabilities and usage are read while the server is built, and the claim and the reaper run once before HTTP is served, so their first tick is one interval in. Output retention has no startup pass. A failure is logged and waits for the next tick.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
     },
     FOLLOW: {
       title: 'Live output streams',
@@ -171,7 +172,7 @@ window.vagabondDiagram = {
     LAMBDA: {
       title: 'lambda: AWS Lambda',
       badge: 'data', badgeText: 'provider',
-      body: '<p><code>providers/aws</code>, for <code>function</code> tasks. Invokes a function the operator deployed; Vagabond creates none.</p><p>The invocation is synchronous: the answer, the last 4 KB of the log and the billed duration come back from <code>Submit</code>, so nothing is polled. The charge settles at the billed duration when the log tail reports it, otherwise at the declared shape over the measured invocation.</p><p><code>Status</code>, <code>Result</code> and <code>Cancel</code> are unsupported, so the reaper settles a stale reservation at the reserved amount.</p><p><a href="../../docs/providers/lambda/">Lambda provider &rarr;</a></p>'
+      body: '<p><code>providers/aws</code>, for <code>function</code> tasks. Invokes a function the operator deployed; Vagabond creates none.</p><p>The invocation is synchronous: the answer, the last 4 KB of the log and the billed duration come back from <code>Submit</code>, so nothing is polled. The charge settles at the billed duration when the log tail reports it, otherwise at the declared shape over the measured invocation.</p><p><code>Status</code>, <code>Result</code> and <code>Cancel</code> are unsupported, so a <code>Submit</code> that fails other than as <code>internal</code> cannot be asked about and is charged as reserved.</p><p><a href="../../docs/providers/lambda/">Lambda provider &rarr;</a></p>'
     },
     AGENT: {
       title: 'vagabond agent',

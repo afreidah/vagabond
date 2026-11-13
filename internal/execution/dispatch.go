@@ -25,9 +25,10 @@ const (
 // Dispatch is one run of a job. Error says why an unanswered run got no
 // answer; Ended is zero while it runs. Tasks is how many the job declares.
 //
-// A running dispatch is leased: Owner names the process running it and renews
-// LeaseUntil while it does. A lease that lapses means the owner died, and a
-// server takes the dispatch over.
+// The owner renews LeaseUntil until the dispatch is done; a lapsed lease is
+// claimed by another server. Epoch counts claims. Ended is the verdict, Done
+// when every execution finished through release. CancelRequested is a cancel
+// for the owner to act on.
 type Dispatch struct {
 	ID         ID
 	Namespace  string
@@ -37,7 +38,23 @@ type Dispatch struct {
 	State      DispatchState
 	Error      string
 	Owner      string
+	Epoch      int64
 	LeaseUntil time.Time
 	Created    time.Time
 	Ended      time.Time
+
+	CancelRequested time.Time
+	Done            time.Time
+}
+
+// Lease is the process holding a dispatch and the claim it holds it under.
+type Lease struct {
+	Owner string
+	Epoch int64
+}
+
+// Lease returns the lease d is held under: its owner and the claim it holds
+// it by.
+func (d *Dispatch) Lease() Lease {
+	return Lease{Owner: d.Owner, Epoch: d.Epoch}
 }

@@ -159,9 +159,9 @@ func TestExecutionLogs_StoredFromAnOffset(t *testing.T) {
 // kept.
 func TestExecutionLogs_StoredPastTheCeiling(t *testing.T) {
 	h := newHarness(t)
-	id := ended(t, h.executions, time.Now(), execution.LogChunk)
+	id, lease := ended(t, h.executions, time.Now(), execution.LogChunk)
 
-	if err := h.executions.AppendLog(t.Context(), id, 1, []byte("the end\n"), 1); err != nil {
+	if err := h.executions.AppendLog(t.Context(), id, 1, []byte("the end\n"), 1, lease); err != nil {
 		t.Fatalf("AppendLog() = %v", err)
 	}
 
@@ -185,11 +185,11 @@ func TestPrune_TakesOutputPastTheRetention(t *testing.T) {
 	s := New(reg, led, executions, NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler),
 		WithLogs(execution.DefaultMaxLogBytes, time.Hour))
 
-	old := ended(t, executions, time.Now().Add(-2*time.Hour), 0)
-	recent := ended(t, executions, time.Now(), 0)
+	old, oldLease := ended(t, executions, time.Now().Add(-2*time.Hour), 0)
+	recent, recentLease := ended(t, executions, time.Now(), 0)
 
-	for _, id := range []execution.ID{old, recent} {
-		if err := executions.AppendLog(t.Context(), id, 0, []byte("output"), 0); err != nil {
+	for id, lease := range map[execution.ID]execution.Lease{old: oldLease, recent: recentLease} {
+		if err := executions.AppendLog(t.Context(), id, 0, []byte("output"), 0, lease); err != nil {
 			t.Fatalf("AppendLog() = %v", err)
 		}
 	}
@@ -205,9 +205,26 @@ func TestPrune_TakesOutputPastTheRetention(t *testing.T) {
 	}
 }
 
+// dispatched records a running dispatch leased to this test for an hour, for
+// executions to be recorded under.
+func dispatched(t *testing.T, s *memory.Executions) *execution.Dispatch {
+	t.Helper()
+
+	d := &execution.Dispatch{
+		ID: newExecutionID(t), Namespace: "default", Job: "sleepy", Tasks: 1, State: execution.DispatchRunning,
+		Owner: "server:test:1", Epoch: 1, LeaseUntil: time.Now().Add(time.Hour), Created: time.Now(),
+	}
+
+	if err := s.CreateDispatch(t.Context(), d); err != nil {
+		t.Fatalf("CreateDispatch() = %v", err)
+	}
+
+	return d
+}
+
 // ended records an execution that succeeded at at, its output stored from
-// byte start.
-func ended(t *testing.T, s *memory.Executions, at time.Time, start int64) execution.ID {
+// byte start, in a dispatch of its own; returns it and the dispatch's lease.
+func ended(t *testing.T, s *memory.Executions, at time.Time, start int64) (execution.ID, execution.Lease) {
 	t.Helper()
 
 	id, err := execution.NewID()
@@ -215,23 +232,26 @@ func ended(t *testing.T, s *memory.Executions, at time.Time, start int64) execut
 		t.Fatalf("NewID() = %v", err)
 	}
 
+	d := dispatched(t, s)
+
 	r := &execution.Record{
 		ID:        id,
 		State:     execution.StateSucceeded,
 		StartedAt: at.Add(-time.Second),
 		EndedAt:   at,
 		UpdatedAt: at,
+		Dispatch:  d.ID,
 		Provider:  "box",
 		Result:    &execution.Result{ID: id, ExitCode: new(0), Duration: time.Second},
 		LogsAt:    at,
 		LogsStart: start,
 	}
 
-	if err := s.Create(t.Context(), r); err != nil {
+	if err := s.Create(t.Context(), r, d.Lease()); err != nil {
 		t.Fatalf("Create() = %v", err)
 	}
 
-	return id
+	return id, d.Lease()
 }
 
 // streamerFunc is a LogStreamer from a function.
@@ -328,8 +348,10 @@ func TestEndFollow(t *testing.T) {
 	s := New(reg, led, store, NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler))
 	s.followPoll, s.followLinger = time.Millisecond, 100*time.Millisecond
 
-	rec := &execution.Record{ID: newExecutionID(t), State: execution.StateRunning}
-	if err := store.Create(t.Context(), rec); err != nil {
+	d := dispatched(t, store)
+
+	rec := &execution.Record{ID: newExecutionID(t), State: execution.StateRunning, Dispatch: d.ID}
+	if err := store.Create(t.Context(), rec, d.Lease()); err != nil {
 		t.Fatalf("Create() = %v", err)
 	}
 
@@ -349,8 +371,8 @@ func TestEndFollow(t *testing.T) {
 		t.Fatalf("To() = %v", err)
 	}
 
-	if err := store.Update(t.Context(), rec, execution.StateRunning); err != nil {
-		t.Fatalf("Update() = %v", err)
+	if err := store.Save(t.Context(), rec, d.Lease()); err != nil {
+		t.Fatalf("Save() = %v", err)
 	}
 
 	select {

@@ -41,7 +41,7 @@ func abandon(
 
 	d := &execution.Dispatch{
 		ID: newTestID(t), Namespace: ns, Job: "ci", Tasks: tasks,
-		State: execution.DispatchRunning, Owner: "cli:dead:1", LeaseUntil: lapsed, Created: lapsed,
+		State: execution.DispatchRunning, Owner: "cli:dead:1", Epoch: 1, LeaseUntil: lapsed, Created: lapsed,
 	}
 
 	if err := reg.executions.CreateDispatch(ctx, d); err != nil {
@@ -68,7 +68,7 @@ func abandon(
 			rec.Result = &execution.Result{ID: id, ExitCode: new(0), Duration: time.Second}
 		}
 
-		if err := reg.executions.Create(ctx, rec); err != nil {
+		if err := reg.executions.Create(ctx, rec, d.Lease()); err != nil {
 			t.Fatalf("Create() = %v", err)
 		}
 	}
@@ -151,7 +151,7 @@ func TestResume_EarlierTaskLeavesTheRestUnrun(t *testing.T) {
 }
 
 // An execution recorded but never submitted is unknown to the provider, so it
-// failed, and its reservation is left for the reaper.
+// failed, ran nothing, and is charged nothing.
 func TestResume_UnsubmittedExecutionFails(t *testing.T) {
 	t.Parallel()
 
@@ -164,8 +164,124 @@ func TestResume_UnsubmittedExecutionFails(t *testing.T) {
 		t.Errorf("Resume() = %s, %v; want unanswered", state, err)
 	}
 
-	if r := record(t, reg, ids[0]); r.State != execution.StateFailed {
-		t.Errorf("execution = %s, want failed", r.State)
+	if r := record(t, reg, ids[0]); r.State != execution.StateFailed || r.Released.IsZero() {
+		t.Errorf("execution = %+v, want failed and released", r)
+	}
+
+	if got := usageOf(reg, "a")["cpu"]; got != 0 {
+		t.Errorf("cpu = %d, want nothing charged", got)
+	}
+}
+
+// An execution whose provider is no longer configured can never answer: it
+// fails as internal, is charged for the time it was seen running, none here,
+// and is released with no provider to call.
+func TestResume_UnconfiguredProviderFails(t *testing.T) {
+	t.Parallel()
+
+	reg := newRegistry(&scriptedProvider{name: "a"})
+	claimed, ids := abandon(t, reg, 1, execution.StateRunning)
+	delete(reg.providers, "a")
+
+	state, reason, err := resumer(reg).Resume(t.Context(), claimed)
+	if err != nil || state != execution.DispatchUnanswered {
+		t.Errorf("Resume() = %s, %q, %v; want unanswered", state, reason, err)
+	}
+
+	r := record(t, reg, ids[0])
+	if r.State != execution.StateFailed || r.Failure != string(plugin.ClassInternal) || r.LogsAt.IsZero() || r.Released.IsZero() {
+		t.Errorf("execution = %+v, want failed as internal, collected and released", r)
+	}
+
+	if got := usageOf(reg, "a")["cpu"]; got != 0 {
+		t.Errorf("cpu = %d, want the reservation settled at the nothing seen running", got)
+	}
+}
+
+// A pending execution the provider did receive is watched to its end like
+// any other, without being submitted again.
+func TestResume_PendingExecutionTheProviderHas(t *testing.T) {
+	t.Parallel()
+
+	p := &scriptedProvider{name: "a", pollsToFinish: 2, finalState: execution.StateSucceeded}
+	reg := newRegistry(p)
+	claimed, ids := abandon(t, reg, 1, execution.StatePending)
+
+	state, reason, err := resumer(reg).Resume(t.Context(), claimed)
+	if err != nil || state != execution.DispatchSucceeded {
+		t.Errorf("Resume() = %s, %q, %v; want succeeded", state, reason, err)
+	}
+
+	if r := record(t, reg, ids[0]); r.State != execution.StateSucceeded || r.Result == nil || p.submits != 0 {
+		t.Errorf("execution = %+v after %d submissions, want succeeded with its result and none", r, p.submits)
+	}
+}
+
+// A lost execution answers for the verdict as it stands, and is still
+// followed to its end before the dispatch is done.
+func TestResume_LostExecutionAnswersAtOnce(t *testing.T) {
+	t.Parallel()
+
+	p := &scriptedProvider{name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded}
+	reg := newRegistry(p)
+	claimed, ids := abandon(t, reg, 1, execution.StateLost)
+
+	state, reason, err := resumer(reg).Resume(t.Context(), claimed)
+	if err != nil || state != execution.DispatchUnanswered || !strings.Contains(reason, "lost") {
+		t.Errorf("Resume() = %s, %q, %v; want unanswered, ended lost", state, reason, err)
+	}
+
+	if r := record(t, reg, ids[0]); r.State != execution.StateSucceeded || r.Released.IsZero() {
+		t.Errorf("execution = %+v, want followed to its end and released", r)
+	}
+}
+
+// A dispatch that had its verdict before its owner died keeps it: the claim
+// finishes its executions and closes it.
+func TestResume_EndedDispatchKeepsItsVerdict(t *testing.T) {
+	t.Parallel()
+
+	reg := newRegistry(&scriptedProvider{name: "a"})
+	claimed, ids := abandon(t, reg, 1, execution.StateSucceeded)
+
+	verdict := *claimed
+	verdict.State, verdict.Ended = execution.DispatchSucceeded, time.Now()
+
+	if err := reg.executions.FinishDispatch(t.Context(), &verdict); err != nil {
+		t.Fatalf("FinishDispatch() = %v", err)
+	}
+
+	state, _, err := resumer(reg).Resume(t.Context(), &verdict)
+	if err != nil || state != execution.DispatchSucceeded {
+		t.Errorf("Resume() = %s, %v; want the succeeded it had", state, err)
+	}
+
+	if r := record(t, reg, ids[0]); r.LogsAt.IsZero() || r.Released.IsZero() {
+		t.Errorf("execution = %+v, want collected and released", r)
+	}
+
+	if d := dispatchRecord(t, reg, claimed.ID); d.Done.IsZero() || d.State != execution.DispatchSucceeded {
+		t.Errorf("dispatch = %+v, want succeeded and done", d)
+	}
+}
+
+// A dispatch whose executions cannot be read is left open, so a later claim
+// tries again.
+func TestResume_UnreadableExecutionsLeaveItOpen(t *testing.T) {
+	t.Parallel()
+
+	reg := newRegistry(&scriptedProvider{name: "a"})
+	claimed, _ := abandon(t, reg, 1, execution.StateRunning)
+
+	d, store := flaky(reg, WithOwner("server"))
+	store.failReads = true
+
+	if _, _, err := d.Resume(t.Context(), claimed); err == nil {
+		t.Error("Resume() over unreadable executions reported no error")
+	}
+
+	if got := dispatchRecord(t, reg, claimed.ID); !got.Done.IsZero() || got.State != execution.DispatchRunning {
+		t.Errorf("dispatch = %+v, want left running and open", got)
 	}
 }
 
@@ -184,6 +300,26 @@ func TestResume_LeavesFinishedExecutionsAlone(t *testing.T) {
 
 	if p.results != 1 {
 		t.Errorf("fetched %d results, want only the one in flight", p.results)
+	}
+}
+
+// A cancel requested while no process held the dispatch is acted on as soon
+// as it is resumed: the execution in flight is cancelled and still released.
+func TestResume_ActsOnARequestedCancel(t *testing.T) {
+	t.Parallel()
+
+	p := &scriptedProvider{name: "a", pollsToFinish: 100, finalState: execution.StateSucceeded}
+	reg := newRegistry(p)
+	claimed, ids := abandon(t, reg, 1, execution.StateRunning)
+	claimed.CancelRequested = time.Now()
+
+	state, _, err := resumer(reg).Resume(t.Context(), claimed)
+	if err != nil || state != execution.DispatchUnanswered {
+		t.Errorf("Resume() = %s, %v; want unanswered", state, err)
+	}
+
+	if r := record(t, reg, ids[0]); r.State != execution.StateCancelled || r.Released.IsZero() || p.cancels != 1 {
+		t.Errorf("execution = %+v after %d cancels, want cancelled once and released", r, p.cancels)
 	}
 }
 
@@ -267,11 +403,11 @@ func TestLease_TakenOverRunStops(t *testing.T) {
 		t.Fatalf("ClaimDispatches() = %v", err)
 	}
 
-	if err := d.renew(t.Context(), o.Dispatch); !errors.Is(err, execution.ErrStale) {
+	if _, err := d.renew(t.Context(), o.lease); !errors.Is(err, execution.ErrStale) {
 		t.Fatalf("renew() = %v, want ErrStale once taken over", err)
 	}
 
-	o.lease.lost.Store(true)
+	o.lease.lose()
 
 	outcome, err := d.Run(t.Context(), o, j, nil)
 	d.Finish(t.Context(), o, outcome, err)

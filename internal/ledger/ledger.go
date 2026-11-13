@@ -32,9 +32,9 @@ import (
 // CONSTANTS
 // -------------------------------------------------------------------------
 
-// StaleAfter is how old a reservation must be before the reaper asks about it.
-// It covers the gap between reserving and submitting, retry backoff included,
-// so the reaper never asks a provider about a run that is about to exist.
+// StaleAfter is how old a reservation must be before the reaper looks for its
+// execution record. It covers the gap between reserving and recording, so the
+// reaper never drops a reservation whose record is about to be written.
 const StaleAfter = time.Hour
 
 // Total is the namespace a provider's own pools are counted under. No declared
@@ -78,61 +78,25 @@ type Charge struct {
 type Reservation struct {
 	ID       execution.ID
 	Provider string
-	CPU      int
-	Memory   int
 	Created  time.Time
 	Charges  []Charge
 }
 
-// Held is an outstanding reservation as the reaper finds it.
-type Held struct {
-	ID       execution.ID
-	Provider string
-	CPU      int
-	Memory   int
-	Amounts  map[PoolRef]int64
-}
-
-// namespace returns the namespace whose share the reservation charged, or
-// Total when it charged only the provider's pools.
-func (h *Held) namespace() string {
-	for ref := range h.Amounts {
-		if ref.Namespace != Total {
-			return ref.Namespace
-		}
-	}
-
-	return Total
-}
-
-// Verdict is what became of a held execution, and so what the reaper does with
-// its reservation.
-type Verdict int
-
-// The verdicts a Resolver returns.
-const (
-	Keep     Verdict = iota // leave it: still running, or nothing learned
-	Drop                    // remove it: the provider never ran it
-	Finished                // settle at what the run cost, from how long it ran
-	Stand                   // settle as reserved: it ran, for an unknown time
-)
-
-// Resolver asks a provider what became of a held execution. The duration is
-// read only for Finished.
-type Resolver func(ctx context.Context, h Held) (Verdict, time.Duration)
+// Orphaned reports whether a stale reservation's execution was never
+// recorded, so nothing will settle it and it is dropped.
+type Orphaned func(ctx context.Context, id execution.ID) bool
 
 // Store is where reservations and settled usage live. Reserve records a
 // reservation only if every charge fits, otherwise returning the usage it was
 // refused against. Settle replaces a reservation with what the run cost, and
-// is a no-op without one. Reap hands each reservation created before the
-// cutoff to settle and settles those it accepts.
+// is a no-op without one. Reap drops each reservation created before the
+// cutoff that orphaned accepts, charging nothing.
 type Store interface {
 	Reserve(ctx context.Context, r *Reservation) (bool, Usage, error)
 	Settle(ctx context.Context, id execution.ID, actual map[PoolRef]int64) error
 	Reserved(ctx context.Context, id execution.ID) (bool, error)
 	ReadUsage(ctx context.Context, periods []string) (Usage, error)
-	Reap(ctx context.Context, before time.Time,
-		settle func(context.Context, Held) (map[PoolRef]int64, bool)) (int, error)
+	Reap(ctx context.Context, before time.Time, orphaned Orphaned) (int, error)
 }
 
 // Ledger charges executions against every configured pool.
@@ -216,8 +180,6 @@ func (l *Ledger) Reserve(
 	r := Reservation{
 		ID:       id,
 		Provider: provider,
-		CPU:      e.CPU,
-		Memory:   e.Memory,
 		Created:  now,
 		Charges:  append(charges(Total, total, e, now, pays), charges(namespace, share, e, now, pays)...),
 	}
@@ -235,7 +197,7 @@ func (l *Ledger) Reserve(
 }
 
 // Settle replaces a reservation with what the execution actually cost. One
-// that could not be written leaves the reservation standing for the reaper.
+// that could not be written leaves the reservation as it stood.
 func (l *Ledger) Settle(
 	ctx context.Context, id execution.ID, namespace, provider string, actual quota.Execution,
 ) error {
@@ -251,8 +213,8 @@ func (l *Ledger) Settle(
 	return nil
 }
 
-// Drop removes a reservation whose execution the provider never ran, charging
-// nothing, as the reaper does for one the provider has never heard of.
+// Drop removes a reservation whose execution never ran, charging nothing:
+// the provider turned it down or never got it.
 func (l *Ledger) Drop(ctx context.Context, id execution.ID) error {
 	if err := l.store.Settle(ctx, id, nil); err != nil {
 		return fmt.Errorf("dropping the reservation: %w", err)
@@ -261,33 +223,17 @@ func (l *Ledger) Drop(ctx context.Context, id execution.ID) error {
 	return nil
 }
 
-// Reserved reports whether id still holds a reservation, which the reaper
-// settles by asking its provider what it did.
+// Reserved reports whether id still holds a reservation, so a runner restored
+// after its settle knows not to settle again.
 func (l *Ledger) Reserved(ctx context.Context, id execution.ID) (bool, error) {
 	return l.store.Reserved(ctx, id)
 }
 
-// Reap resolves reservations older than StaleAfter, which a process that died
-// between reserving and settling leaves behind.
-func (l *Ledger) Reap(ctx context.Context, resolve Resolver) (int, error) {
-	before := l.now().Add(-StaleAfter)
-
-	reaped, err := l.store.Reap(ctx, before, func(ctx context.Context, h Held) (map[PoolRef]int64, bool) {
-		verdict, ran := resolve(ctx, h)
-
-		switch verdict {
-		case Drop:
-			return nil, true
-		case Stand:
-			return h.Amounts, true
-		case Finished:
-			return l.deltas(h.namespace(), h.Provider, quota.Execution{
-				CPU: h.CPU, Memory: h.Memory, Duration: ran,
-			}), true
-		default:
-			return nil, false
-		}
-	})
+// Reap drops reservations older than StaleAfter whose execution orphaned
+// says was never recorded, which a process that died between reserving and
+// recording leaves behind. Every recorded execution is settled by its runner.
+func (l *Ledger) Reap(ctx context.Context, orphaned Orphaned) (int, error) {
+	reaped, err := l.store.Reap(ctx, l.now().Add(-StaleAfter), orphaned)
 	if err != nil {
 		return reaped, fmt.Errorf("reaping quota reservations: %w", err)
 	}

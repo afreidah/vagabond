@@ -159,9 +159,11 @@ var ErrUnsupported = errors.New("operation not supported by this provider")
 // incoherently.
 var ErrInvalidSubmission = errors.New("invalid submission")
 
-// ErrUnknownExecution reports an execution the platform has no record of. The
-// reaper reads it as never having run, so it drops the quota reservation. Wrap
-// it only when the platform says so, never for a lookup that merely failed.
+// ErrUnknownExecution reports an execution the platform has no record of:
+// deleted, or never received. One being watched fails at once, one stopped
+// before it was seen running is charged nothing, and a Release given it has
+// nothing left to free. Wrap it only when the platform says so, never for a
+// lookup that merely failed.
 var ErrUnknownExecution = errors.New("unknown execution")
 
 // ErrNoResume reports a log stream that cannot be placed at an offset, so a

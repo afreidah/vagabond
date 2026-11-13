@@ -38,7 +38,7 @@ Interactive version, with notes on each component:
 
 ## Pipeline
 
-![A job file is validated, admitted against every provider and ranked. Dispatch then reserves quota, submits to the selected provider, watches the execution, releases what it left behind and settles what it used. An infrastructure failure moves the task to the next ranked provider.](assets/task-path.svg)
+![A job file is validated, admitted against every provider and ranked. Dispatch then reserves quota, submits to the selected provider, watches the execution, settles what it used and releases what it left behind. An infrastructure failure moves the task to the next ranked provider.](assets/task-path.svg)
 
 Interactive version, with notes on each stage:
 [Task path](https://vagabond.munchbox.cc/diagrams/task-path/).
@@ -51,11 +51,12 @@ Interactive version, with notes on each stage:
 | Admission | `scheduler` | Run 13 checks in 4 tiers against every provider; each rejection carries a reason code |
 | Ranking | `scheduler` | Score each candidate with `headroom`, any affinities and, under `weighted` tiers, `tier`; the score is their mean. Under `strict` tiers candidates order by tier, then score |
 | Reserve | `dispatch`, `ledger` | Charge the task's declared worst case against every pool it meters, provider total and namespace share; a refusal moves to the next candidate without spending a retry |
-| Submit | `dispatch`, `providers/*` | Hand the task to the plugin under a fresh execution ID |
+| Submit | `dispatch`, `providers/*` | Start an [execution runner](dispatch.md#execution-runners), which hands the task to the plugin under a fresh execution ID |
 | Watch | `dispatch` | Poll status from 2 s backing off to 15 s; a synchronous submission returns its result from `Submit` and is not polled |
-| Release | `dispatch` | Ask the plugin to delete what the execution left behind: right after `Result` is read, or as soon as a synchronous `Submit` returns. Any other ending, and a failed release, is left to the [provider release](background-services.md#provider-release) service |
-| Settle | `dispatch`, `ledger` | Replace the reservation with what the result says was used. A submission the provider refused as `internal` drops it at zero. Without a result otherwise, the reservation stands until the [reaper](background-services.md#reservation-reaper) resolves it |
-| Reroute | `dispatch` | On an `infrastructure` failure, move to the next ranked provider within the task's `retry` budget |
+| Collect | `dispatch` | Read the result and capture the output into the store, recorded in one write. The task gets its answer here, or earlier when the execution goes `lost` or `Submit` fails |
+| Reroute | `dispatch` | On an `infrastructure` failure, move to the next ranked provider within the task's `retry` budget, while the runner finishes the steps below in the background |
+| Settle | `dispatch`, `ledger` | Replace the reservation with what the execution cost, however it ended: the result's usage, the time it ran, or nothing when it never ran ([Settlement](quotas.md#settlement)) |
+| Release | `dispatch` | Ask the plugin to delete what the execution left behind, retried until it succeeds or the execution is unknown. The dispatch is done once every execution is released |
 
 - The CLI runs parse and validate locally before sending, and the server runs
   them again.
@@ -83,7 +84,7 @@ Every package under `internal/`. `cmd/vagabond` only calls `cli.Run`.
 | `api` | HTTP API request and response bodies, and the client the CLI uses |
 | `cli` | Every command, `server` and `agent` included |
 | `config` | Operator configuration: providers, pools, namespaces, `scheduling`, `store`, `server`; credential sources; config file discovery |
-| `dispatch` | Begin, reserve, submit, watch, release, settle, reroute; leases, resumption, reaping, leftover release, the credential retry |
+| `dispatch` | Begin, reserve, reroute; execution runners (submit, watch, collect, settle, release); leases, cancels through the lease, resumption, reaping, the credential retry |
 | `execution` | Execution and dispatch IDs, records, and the execution state machine |
 | `integration` | End-to-end tests: a real server on Postgres with fake providers (build tag `integration`) |
 | `job` | The provider-independent workload model: tasks, drivers, resources, routing |
@@ -199,7 +200,7 @@ Optional interfaces, detected by type assertion:
 | Interface | Method | Used for | Implemented by |
 |---|---|---|---|
 | `plugin.LogStreamer` | `StreamLogs` | Output before the execution ends, for `GET /v1/execution/{id}/logs?follow=true` | `cloud-run`, `code-engine`, `pool`, `fake-container` |
-| `plugin.Releaser` | `Release` | Deleting what an execution left behind, after its result is read | `cloud-run`, `code-engine`, `pool` |
+| `plugin.Releaser` | `Release` | Deleting what an execution left behind, last, however it ended | `cloud-run`, `code-engine`, `pool` |
 | `plugin.Live` | `LiveCapabilities` | Capabilities read on every plan instead of on the refresh timer | `pool` |
 | `plugin.MemberSubmitter` | `SubmitTo` | Submitting only to the members admission passed | `pool` |
 | `plugin.Recredentialer` | `Recredential` | Taking a credential resolved again from its source after the platform answered 401 or 403; the call is then made once more | `cloud-run`, `code-engine`, `lambda` |
@@ -225,10 +226,11 @@ One server process runs these concurrently:
 |---|---|---|
 | HTTP server | Until shutdown | Serves `/v1`; each request on its own goroutine |
 | Agent listener | Until shutdown | Accepts agent connections, one goroutine per session |
-| Dispatch | One per running dispatch | Runs the job's tasks to the end on a context that outlives the request that started it |
-| Lease renewal | One per running dispatch | Renews the dispatch lease every 20 seconds; the lease runs 60 seconds |
+| Dispatch | One per running dispatch | Runs the job's tasks to the end on a context that outlives the request that started it, then waits for every execution to be released |
+| Execution runner | One per execution not yet released | Submits, watches, collects, settles and releases one execution; the only writer of its record |
+| Lease renewal | One per dispatch not yet done | Renews the dispatch lease every 20 seconds; the lease runs 60 seconds |
 | Log stream | One per open `?follow=true` request on a `LogStreamer` provider | Re-reads the execution record every second while the request copies the provider's stream; ends the response 5 s after the execution does, or at once when shutdown begins |
-| Upkeep | Five tickers until shutdown | Capability refresh (1 min), usage refresh (15 s), reservation reaping (5 min), provider release (5 min), lapsed-lease claiming (30 s) |
+| Upkeep | Five tickers until shutdown | Capability refresh (1 min), usage refresh (15 s), reservation reaping (5 min), lapsed-lease claiming (30 s), output retention (1 h) |
 
 **Startup order:** load configuration, build the registry and refresh every
 provider, open, migrate and verify the store and read quota usage into the
@@ -240,9 +242,9 @@ upkeep and serve HTTP.
 **Shutdown:** on SIGINT or SIGTERM the server stops accepting requests and gives
 in-flight ones 10 seconds to finish. Running dispatches are not cancelled; their
 leases lapse once the process exits, and the next server to claim them resumes
-each from its recorded state. Open `?follow=true` streams end at once. The
-agent listener closes and every agent session is closed; agents reconnect with
-backoff.
+each execution at the first step its record does not show done. Open
+`?follow=true` streams end at once. The agent listener closes and every agent
+session is closed; agents reconnect with backoff.
 
 Intervals, locks and failure handling for every loop are in
 [Background services](background-services.md).

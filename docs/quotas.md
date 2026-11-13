@@ -197,8 +197,8 @@ An execution's life in the ledger:
 | Step | When | Effect |
 |---|---|---|
 | Reserve | Before each submission attempt | Declared charge held against every pool of both layers |
-| Settle | When the execution returns a result | Reservation replaced with the actual charge |
-| Reap | Server start and every 5 minutes | Reservations older than one hour resolved by asking the provider |
+| Settle | When the execution's runner has collected it, however it ended | Reservation replaced with what the execution cost, or dropped when nothing ran |
+| Reap | Server start and every 5 minutes | Reservations older than one hour with no execution record dropped |
 
 A provider with no pools in either layer is never reserved, settled or reaped.
 
@@ -236,44 +236,52 @@ not pay see the pool spent until the period resets.
 
 ### Settlement
 
-When an execution returns a result, its reservation rows are deleted and the
-actual charge is added to settled usage, in one statement, in the periods the
-reservation was made in.
+Every execution is settled by its runner once it has ended and been collected,
+however it ended: its reservation rows are deleted and what it cost is added
+to settled usage, in one statement, in the periods the reservation was made
+in. The first row that applies decides the cost:
 
-| Provider reports | Charged as |
+| Execution | Charged as |
 |---|---|
-| A billed amount | Billed memory * billed duration, billed CPU (0 when not reported) * billed duration |
-| No billed amount | Declared CPU and memory * the execution's measured duration |
+| Nothing ran: `Submit` refused as `internal`, or the provider reports the execution unknown after a failed `Submit`, a cancel or a restart, and it was never seen running | Nothing; the reservation is dropped |
+| Result with a billed amount | Billed memory * billed duration, billed CPU (0 when not reported) * billed duration |
+| Result, no billed amount | Declared CPU and memory * the result's duration |
+| Never answered: `failed` after 24 hours `lost`, or `Status` failed when asked what a cancelled run or failed `Submit` ran, and it was never seen running | Declared CPU and memory * declared timeout: the amount reserved |
+| Anything else: cancelled, a failed `Submit` the provider reports times for, unknown to the provider after it was seen running, `Result` unreadable, provider no longer configured | Declared CPU and memory * the time from the record's `StartedAt` to its `EndedAt`, the provider's own after a cancel or failed `Submit`; 0 when it never started |
 
-`executions` pools are charged 1 either way, and `seconds` pools the billed or
-measured duration.
+`executions` pools are charged 1 on every row but the first, and `seconds`
+pools the duration the row uses.
 
 - **AWS Lambda** reports a billed amount when the invocation's `REPORT` log
   line carries both `Billed Duration` and `Memory Size`. Memory is the
   function's configured size, not the task's declaration, and no CPU is
   reported, so `cpu_seconds` pools are charged 0 for that execution. See
   [Lambda](providers/lambda.md).
-- Every other provider settles at declared resources * measured duration.
+- Every other provider's result settles at declared resources * the result's
+  duration.
 
 Edge cases:
 
 - The actual charge may exceed the reservation. Settlement is not checked
   against the limit, so settled usage can pass it; later tasks are refused.
 - A `Submit` the provider refused with an `internal` error, such as an HTTP
-  400, ran nothing. Its reservation is dropped at once and charges nothing,
-  the execution count included.
-- Any other attempt that returns no result is not settled. This includes a
-  `Submit` that failed as `infrastructure` or with an unclassified error,
-  since the run may exist. Its reservation stands at the declared charge until
-  the reaper resolves it.
-- A failed settle write leaves the reservation standing for the reaper.
-- Settling an execution with no reservation rows does nothing, so a settle
-  after the reaper, or twice, charges once.
+  400, ran nothing. Its reservation is dropped and charges nothing, the
+  execution count included.
+- A `Submit` that failed as `infrastructure` or with an unclassified error may
+  have left a run. The runner cancels it and asks `Status` what ran
+  ([Failed submissions](dispatch.md#failed-submissions)).
+- A `lost` execution holds its reservation until its runner resolves it
+  ([Lost executions](dispatch.md#lost-executions)).
+- A settle write that fails is made again until the store takes it. A runner
+  restored after a claim settles only a reservation still held.
+- Settling an execution with no reservation rows does nothing, so settling
+  twice charges once.
 
 ### Reaper
 
-The reaper resolves reservations a process left behind, for example one killed
-between reserving and settling.
+The reaper drops reservations no runner will settle: those whose execution
+was never recorded, because the process died, or the store refused the
+`pending` record, between reserving and recording.
 
 | Setting | Value |
 |---|---|
@@ -281,23 +289,17 @@ between reserving and settling.
 | Considers | Reservations created more than 1 hour ago |
 | Locking | Rows claimed `FOR UPDATE SKIP LOCKED` in a serializable transaction, so two servers never resolve the same execution |
 
-For each claimed execution it asks the provider for the execution's status:
-
-| Provider answer | Outcome |
+| Execution record | Outcome |
 |---|---|
-| Provider no longer configured | Kept |
-| Unknown execution | Dropped; nothing charged |
-| Status not supported by the provider | Settled at the reserved amounts |
-| Error, or not yet terminal | Kept |
-| Terminal, never started | Settled at duration 0 (`executions` charged 1) |
-| Terminal, started, no end time | Settled at the reserved amounts |
-| Terminal, started and ended | Settled at declared resources * (end - start) |
+| None | Dropped; nothing charged |
+| Exists | Kept; its runner settles it |
+| Cannot be read | Kept, looked at again on the next pass |
 
-A kept reservation is asked about again on the next pass. The server logs
-`resolved abandoned quota reservations` with a count when any were settled or
-dropped, and `resolving abandoned quota reservations` at warn when a pass
-fails. The reaper runs only in `vagabond server`. All
-periodic tasks: [Background services](background-services.md#reservation-reaper).
+No provider is called. The server logs `resolved abandoned quota reservations`
+with a count when any were dropped, and `resolving abandoned quota
+reservations` at warn when a pass fails. The reaper runs only in `vagabond
+server`. All periodic tasks:
+[Background services](background-services.md#reservation-reaper).
 
 ### Usage snapshot
 

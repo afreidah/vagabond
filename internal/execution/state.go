@@ -24,9 +24,9 @@ import (
 // CONSTANTS
 // -------------------------------------------------------------------------
 
-// LostGracePeriod is how long a lost execution stays open for reconciliation
-// before it is recorded as failed, so lost rows are not charged forever. A day
-// outlasts any dispatched task and most provider log retention.
+// LostGracePeriod is how long a lost execution's runner keeps asking the
+// provider before recording it failed, so lost rows are not held open forever.
+// A day outlasts any dispatched task and most provider log retention.
 const LostGracePeriod = 24 * time.Hour
 
 // -------------------------------------------------------------------------
@@ -44,7 +44,7 @@ type State string
 // costs nothing. A synchronous invocation skips both middle states.
 //
 // StateLost is an execution that stopped answering. It is not terminal, since
-// reconciliation may still learn what happened, and not failed, since it may
+// its runner may still learn what happened, and not failed, since it may
 // still be consuming capacity. A task past its timeout is failed, with the
 // failure classification saying why.
 const (

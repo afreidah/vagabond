@@ -6,9 +6,9 @@ weight: 440
 ---
 
 The server keeps its view of providers, quota and dispatches current, and its
-stored output within its retention, with six upkeep loops, and runs each
-dispatch, lease, agent session and followed log
-stream in its own goroutine. The agent holds one connection to the server and reports its
+stored output within its retention, with five upkeep loops, and runs each
+dispatch, execution, lease, agent session and followed log stream in its own
+goroutine. The agent holds one connection to the server and reports its
 workloads on a timer. None of the loops apply jitter, and none take a lock
 across servers: where two servers could collide, the store statement itself
 decides (see [Multiple servers](#multiple-servers)).
@@ -24,12 +24,12 @@ Interactive version, with notes on each loop:
 |---|---|---|---|---|
 | [Capability refresh](#capability-refresh) | 1m | Yes, before serving | Every non-pool provider's `Capabilities` | Provider marked unhealthy, warn |
 | [Usage snapshot refresh](#usage-snapshot-refresh) | 15s | Yes, required | Store: quota usage and reservations | Last snapshot kept, warn |
-| [Reservation reaper](#reservation-reaper) | 5m | Yes, before serving | Store: reservations over 1h old; provider `Status` | Reservation kept, warn |
-| [Provider release](#provider-release) | 5m | No | Store: unreleased executions and their output; provider `Status`, `ReadLogs` and `Release` | Left unreleased, warn, retried next tick |
-| [Dispatch claim](#dispatch-claim) | 30s | Yes, before serving | Store: dispatches with a lapsed lease | Warn, retried next tick |
+| [Reservation reaper](#reservation-reaper) | 5m | Yes, before serving | Store: reservations over 1h old and their execution records | Reservation kept, warn |
+| [Dispatch claim](#dispatch-claim) | 30s | Yes, before serving | Store: dispatches not done with a lapsed lease | Warn, retried next tick |
 | [Output retention](#output-retention) | 1h | No | Store: stored output of executions that ended over `log_retention` ago | Warn, retried next tick |
-| [Dispatch runner](#dispatch-runner) | Per dispatch | | Providers, store, ledger | Dispatch ends `unanswered` |
-| [Lease renewal](#lease-renewal) | 20s per running dispatch | | Store: the dispatch's lease | Ignored; stale lease stops the run |
+| [Dispatch runner](#dispatch-runner) | Per dispatch | | Store, ledger | Dispatch ends `unanswered` |
+| [Execution runner](#execution-runner) | Per execution, polling 2s to 15s | | Provider, store, ledger | Write retried, warn; refused write stops it |
+| [Lease renewal](#lease-renewal) | 20s per open dispatch | | Store: the dispatch's lease | Ignored; stale lease stops every runner |
 | [Live output follow](#live-output-follow) | 1s record re-read, per followed request | | Store: one execution; provider `StreamLogs` | Response ends, warn |
 | [Agent listener](#agent-listener) | Long-running | Yes | Agent connections | Session dropped, node forgotten |
 | [Store health](#store-health) | Per request | | Store ping | 503 from `GET /v1/health` |
@@ -48,12 +48,12 @@ checked when read, not swept ([Pool reservations](#pool-reservations)).
 
 ## Server
 
-The six upkeep loops start when the server begins serving and stop when it
+The five upkeep loops start when the server begins serving and stop when it
 shuts down. Each tick runs synchronously; a run longer than its interval is
 followed immediately by the next, and ticks do not pile up. The first tick is
 one interval after startup. Capability refresh, usage refresh, the reaper and
-the claim each ran once before serving; provider release and output retention
-have no startup pass, so their first passes are 5m and 1h in.
+the claim each ran once before serving; output retention has no startup pass,
+so its first pass is 1h in.
 A failure is logged and waits for the next tick; one loop failing never stops
 another.
 
@@ -100,84 +100,37 @@ current period, so plans see what every server has charged.
 
 ### Reservation reaper
 
-Resolves quota reservations a process left when it died, or failed to settle,
-between reserving and settling. See [Quotas](quotas.md) for reservation and
-settlement.
+Drops quota reservations whose execution was never recorded: a process that
+died, or a store that refused the `pending` record, between reserving and
+recording. Every recorded execution's reservation is settled by its
+[execution runner](#execution-runner). See [Quotas](quotas.md) for reservation
+and settlement.
 
 | | |
 |---|---|
 | Interval | 5m |
 | At startup | Once, before serving |
 | Selects | Reservations created more than 1h ago |
-| Touches | Store: reservations and usage; each reservation's provider `Status` |
+| Touches | Store: reservations and each one's execution record |
 
-Each stale reservation's provider is asked about the execution:
-
-| Provider answer | Verdict |
+| Execution record | Verdict |
 |---|---|
-| Provider no longer configured | Kept |
-| Unknown execution | Dropped: it never ran |
-| `Status` not supported (synchronous providers) | Settled at the reserved amount |
-| Error, or not terminal | Kept, asked again next tick |
-| Terminal, never started | Settled as a run of zero duration |
-| Terminal, started, no end time | Settled at the reserved amount |
-| Terminal, started and ended | Settled at the declared shape over the time it ran |
+| None | Dropped, charging nothing |
+| Exists | Kept; its runner settles it |
+| Cannot be read | Kept, looked at again next tick |
 
+- The hour covers the gap between reserving and recording, so a reservation
+  whose record is about to be written is never dropped.
 - On Postgres the claim locks the rows with `FOR UPDATE SKIP LOCKED` and holds
-  them while providers are asked, so two servers never resolve the same
+  them while each record is read, so two servers never resolve the same
   reservation. The whole pass is one serializable transaction.
-- A serialization failure retries the whole pass, asking every provider again,
-  up to 10 attempts ([Transactions](database.md#transactions)).
-- Provider calls have no timeout of their own; a slow provider holds the pass.
+- A serialization failure retries the whole pass, up to 10 attempts
+  ([Transactions](database.md#transactions)).
+- No provider is called.
 - Only providers with quota pools reserve anything.
 
 **Logs:** info `resolved abandoned quota reservations` with `count` when any
-were settled; warn `resolving abandoned quota reservations` on error.
-
-### Provider release
-
-Releases what providers still hold for executions that are over: a Cloud Run
-Job, a Code Engine job run, a stopped container on a pool node. Dispatch releases after it reads a
-result and captures the output; every other ending leaves the release to this
-service: a cancelled run, a provider that stopped answering, a `Result` that
-failed, a server that died mid-run, a release that failed. An execution whose
-output was never captured has it captured here first, since releasing may
-destroy it.
-
-| | |
-|---|---|
-| Interval | 5m |
-| At startup | No; the first pass is one interval in |
-| Selects | Executions with no `released_at`, unchanged for more than 10m |
-| Touches | Store: executions, their output and reservations; each execution's provider `Status`, `Result`, `ReadLogs` and `Release` |
-
-For each execution, in order:
-
-| Condition | Action |
-|---|---|
-| It is `lost` | Reconciled first ([Lost executions](dispatch.md#lost-executions)): its result recorded if the provider reports it over, `failed` if its provider forgot it or is no longer configured, or 24 hours after it was marked lost. One still unresolved is skipped |
-| It still holds a quota reservation | Skipped: the reaper settles it first by asking the provider, which a released execution can no longer answer |
-| Its provider is no longer configured | Marked released; nothing to do |
-| Its provider implements no `Release`, and its output is captured or it implements no `ReadLogs` | Marked released; nothing to do |
-| No recorded result, provider reports it unknown | Marked released |
-| No recorded result, `Status` errors or is not terminal | Skipped, asked again next tick |
-| Output never captured (`logs_at` null), provider implements `ReadLogs` | Output captured as dispatch would ([Output](dispatch.md#output)) and the record written. A record that cannot be written leaves it for the next tick, unreleased |
-| Otherwise | `Release`, then marked released. An unknown execution counts as released; any other error leaves it for the next tick |
-
-- Every candidate is read each pass, with no batch limit, so executions that
-  cannot be released yet never crowd out ones that can.
-- A pool node that is offline fails `Release` and is retried every pass until
-  it returns.
-- Provider calls have no timeout of their own; a slow provider holds the pass.
-- Releases and marks are idempotent, so several servers running the loop at
-  once is harmless.
-- If a reservation outlives the store being unreachable for longer than the
-  execution's provider keeps it, the reaper finds it unknown and drops its
-  charge.
-
-**Logs:** info `released provider leftovers` with `count` when any were
-released; warn `releasing provider leftovers` with the joined errors when any
-failed.
+were dropped; warn `resolving abandoned quota reservations` on error.
 
 ### Output retention
 
@@ -204,65 +157,105 @@ warn `pruning stored output` with the error.
 
 ### Dispatch claim
 
-Takes over running dispatches whose owner stopped renewing their lease, and
-resumes each ([Resuming](dispatch.md#resuming)).
+Takes over dispatches whose owner stopped renewing their lease before every
+execution was released, and resumes each ([Resuming](dispatch.md#resuming)).
 
 | | |
 |---|---|
 | Interval | 30s |
 | At startup | Once, before serving |
-| Selects | Dispatches in `running` whose lease expired, except those this server is running |
-| Sets | Owner to this server, lease to 60s from now |
+| Selects | Dispatches not done (`done_at` null) whose lease expired, running or ended, except those this server is running |
+| Sets | Owner to this server, epoch up by one, lease to 60s from now |
 
 - The claim is one statement, so two servers never claim the same dispatch.
+- The new epoch makes the store refuse every later write under the old
+  lease, so the previous owner, if it is still alive, stops at its next write.
 - Each claimed dispatch is resumed in its own goroutine, on a context that
-  outlives server shutdown.
-- A dispatch whose executions cannot be read stays `running`; its new lease
-  lapses and a later claim tries again.
+  outlives server shutdown. A cancel requested before the claim is acted on
+  at once.
+- A dispatch whose executions cannot be read stays open; its new lease lapses
+  and a later claim tries again.
 
 **Logs:** warn `claiming abandoned dispatches` on error; per dispatch, info
-`dispatch resumed` with `previous_owner`, then info `resumed dispatch
-finished` with `state` and `reason`, or warn `resuming dispatch` with the
-error.
+`dispatch resumed` with `epoch`, then info `resumed dispatch finished` with
+`state` and `reason` once every execution is released, or warn `resuming
+dispatch` with the error.
 
 ### Dispatch runner
 
 One goroutine per dispatch started through `POST /v1/jobs/run` or
-`POST /v1/job/{name}/dispatch`. Runs the job's tasks in order and records how
-it ended ([Dispatch](dispatch.md)).
+`POST /v1/job/{name}/dispatch`. Runs the job's tasks in order, starting an
+[execution runner](#execution-runner) for each attempt, records how it ended,
+then waits for every execution to be released and marks the dispatch done
+([Dispatch](dispatch.md)).
 
 - Runs on a context detached from the request, so the request returns the
   dispatch ID at once.
-- Cancelled only by `DELETE /v1/execution/{id}` on one of its executions.
-  Server shutdown does not stop it; the process exit does, and the dispatch
-  is resumed after its lease lapses.
-- Inside a dispatch, polling a provider backs off from 2s to 15s, and retry
-  submissions wait `backoff.initial` doubling to `backoff.max`
+- Cancelled only by `DELETE /v1/execution/{id}` on one of its executions: at
+  once on this server, or through its lease from another
+  ([Cancellation](dispatch.md#cancellation)). Server shutdown does not stop
+  it; the process exit does, and the dispatch is resumed after its lease
+  lapses.
+- Retry submissions wait `backoff.initial` doubling to `backoff.max`
   ([Backoff and polling](dispatch.md#backoff-and-polling)).
+- The dispatch's ending and done mark are retried until the store takes them,
+  250ms doubling to 10s.
 
 **Logs:** info `dispatch started`; info `dispatch finished` with `tasks` and
 `succeeded`, or warn `dispatch finished without an answer` with `tasks` and
-`error`. Every line carries `dispatch`, `job`, `version` and `namespace`.
+`error`, once every execution is released. Every line carries `dispatch`,
+`job`, `version` and `namespace`.
+
+### Execution runner
+
+One goroutine per execution: started for each attempt a dispatch makes, and
+for each unfinished execution a claim restores. It submits, watches, collects,
+settles and releases its execution, in that order, and is the only writer of
+its record ([Execution runners](dispatch.md#execution-runners)).
+
+| | |
+|---|---|
+| Polling | `Status` from 2s doubling to 15s while the execution runs or is `lost` |
+| Store writes | Checked against the dispatch's lease, 10s timeout each; one that fails otherwise is retried, 250ms doubling to 10s, until it lands |
+| Provider calls | `Status`, `Result`, `Cancel` and `Release` 30s timeout each; `Submit` none |
+| `Release` | Retried, 250ms doubling to 10s, until it succeeds or the provider reports the execution unknown |
+| Stops | Once its execution is released, or when the store refuses a write under the lease |
+
+- Its task waits only for its first answer; settling and releasing go on
+  after the task has moved on.
+- A `lost` execution's runner polls until a terminal state, until the
+  provider no longer knows it, or until a `Status` failure 24 hours after it
+  became `lost` fails it ([Lost executions](dispatch.md#lost-executions)).
+- A cancelled dispatch stops the watch: the runner cancels the execution at
+  its provider, then collects, settles and releases it.
+- A refused write means another server claimed the dispatch; the runner stops
+  without another provider call.
+
+**Logs:** warn `store write failed, retrying` with `error` for each failed
+write; warn `releasing provider leftovers` with `execution` and `error` for
+each failed `Release`.
 
 ### Lease renewal
 
-One goroutine per running or resumed dispatch, extending its lease
-([Leases](dispatch.md#leases)).
+One goroutine per open dispatch, started or resumed, extending its lease until
+every execution is released ([Leases](dispatch.md#leases)).
 
 | | |
 |---|---|
 | Interval | 20s, first renewal 20s after the dispatch starts |
 | Extends to | 60s from the renewal |
 | Timeout | 10s per write |
-| Stops | When the dispatch ends, or when the lease is found taken |
+| Stops | When the dispatch is done, or when the lease is found taken |
 
 - Any failure but a stale lease is ignored; two renewals can fail before the
   lease lapses.
-- A stale lease (the dispatch ended, or another server claimed it) marks the
-  lease lost: the dispatch starts no further task and does not write its
-  ending.
+- A stale lease (the dispatch is done, or another server claimed it) marks the
+  lease lost: every runner under it stops, the dispatch starts no further task
+  and does not write its ending.
+- Each renewal returns any cancel requested from another server; one that
+  carries a request cancels the dispatch.
 - Runs on a context detached from the dispatch, so a cancelled dispatch keeps
-  its lease until its ending is recorded.
+  its lease until every execution is released.
 
 **Logs:** none.
 
@@ -310,10 +303,10 @@ connection` when a session cannot be opened.
 
 There is no store health loop. `GET /v1/health` pings the store on each
 request with a 5s timeout: 200 with `Store` `ok`, or 503 with `Store`
-`unreachable` and `StoreError`. The server recovers from an outage through its
-loops: each retries on its next tick, the claim picks up dispatches whose
-ending was not written, and the reaper settles reservations that were not
-([Store outage](dispatch.md#store-outage)).
+`unreachable` and `StoreError`. The server recovers from an outage without a
+loop of its own: runners retry their writes until the store takes them, each
+upkeep loop retries on its next tick, and the claim takes dispatches whose
+lease lapsed meanwhile ([Store outage](dispatch.md#store-outage)).
 
 ### Pool reservations
 
@@ -409,9 +402,9 @@ store keeps them apart:
 
 | Service | Coordination |
 |---|---|
-| Dispatch claim | One `UPDATE ... RETURNING` statement: a lapsed dispatch goes to exactly one server |
+| Dispatch claim | One `UPDATE ... RETURNING` statement: a lapsed dispatch goes to exactly one server, under a new epoch |
+| Execution runners | Every execution and output write is checked against the dispatch's lease, so only the current holder's land; a runner whose write is refused stops |
 | Reservation reaper | Row locks with `SKIP LOCKED`: each stale reservation is resolved by one server |
-| Provider release | Releases and marks are idempotent; two servers releasing one execution is harmless, and a capture both make is stored once, since each starts the output over |
 | Output retention | Deleting what another server already deleted deletes nothing |
 | Usage refresh, capability refresh | Per-server reads; nothing to coordinate |
 | Agent sessions | Per server. An agent connects to one server, and its pools exist only there |

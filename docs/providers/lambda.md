@@ -289,10 +289,11 @@ Because it carries no CPU, a `cpu_seconds` pool on a `lambda` provider is
 charged only at reservation and settles to 0.
 
 **Abandoned reservations:** a process that dies during an invoke leaves its
-reservation unsettled. `Status` is unsupported, so the quota reaper charges
-the reserved amount. The execution record is still `pending` at that point, so
-a server that resumes the dispatch records it `failed` with failure class
-`infrastructure`.
+reservation unsettled and its execution record `pending`. The server that
+claims the dispatch asks `Status`, which Lambda does not support, so it
+records the execution `failed` with failure class `infrastructure` and
+settles it at the reserved amount: the declared shape over the declared
+timeout. A `Submit` that fails as `infrastructure` is charged the same way.
 
 **Declare the function's shape on the task.** A task without
 `resources.memory` or `timeout` reserves 0 GB-seconds, so a `gb_seconds` pool

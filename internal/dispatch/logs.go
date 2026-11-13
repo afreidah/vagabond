@@ -3,12 +3,11 @@
 //
 // Author: Alex Freidah
 //
-// An execution's output is copied into the store once it has ended, before its
-// result is recorded and before anything is released. Recording the result is
-// what tells a waiting client to read the output, and releasing may destroy
-// it. The copy is chunked as it streams, so a capture holds one chunk however
-// much the task printed, and best effort: output that cannot be read leaves
-// the record marked truncated, never the execution failed.
+// An execution's output is copied into the store once it has ended, under the
+// dispatch's lease, before its result is recorded and before anything is
+// released: recording the result tells a waiting client to read the output,
+// and releasing may destroy it. The copy is chunked as it streams, and output
+// that cannot be read leaves the record marked truncated, never failed.
 // -------------------------------------------------------------------------------
 
 package dispatch
@@ -34,17 +33,19 @@ const captureTimeout = 5 * time.Minute
 // CAPTURE
 // -------------------------------------------------------------------------
 
-// capture copies what rec's execution printed into the store, and records on
-// rec where its output stands. A provider that holds the output is read; any
-// other's arrived with result, when there is one.
-func (d *Dispatcher) capture(ctx context.Context, provider plugin.Provider, rec *execution.Record, result *execution.Result) {
+// capture copies what rec's execution printed into the store under key, and
+// records on rec where its output stands. A provider that holds the output is
+// read; any other's arrived with result, when there is one.
+func (d *Dispatcher) capture(
+	ctx context.Context, provider plugin.Provider, rec *execution.Record, result *execution.Result, key execution.Lease,
+) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), captureTimeout)
 	defer cancel()
 
 	sink := &logSink{
 		limit: d.maxLogBytes,
 		store: func(seq int64, data []byte, keepFrom int64) error {
-			return d.executions.AppendLog(ctx, rec.ID, seq, data, keepFrom)
+			return d.executions.AppendLog(ctx, rec.ID, seq, data, keepFrom, key)
 		},
 	}
 

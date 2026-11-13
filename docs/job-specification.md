@@ -716,7 +716,9 @@ timeout = "15m"
 - **Admission:** a timeout above the provider's `provider.max_duration` is
   rejected with `duration-exceeded`. With no timeout, the check is skipped.
 - **Quota:** the timeout is the duration charged to duration-metered pools at
-  reservation. A task with no timeout does not charge them.
+  reservation, and at settlement for a run that never answered
+  ([Settlement](quotas.md#settlement)). A task with no timeout does not charge
+  them.
 
 | Provider | Omitted | Limit |
 |---|---|---|

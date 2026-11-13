@@ -3,11 +3,11 @@
 //
 // Author: Alex Freidah
 //
-// A dispatch whose owner died is claimed by a server and taken to its end.
-// Every execution left unfinished is followed to its result and charged, since
-// plugins derive everything from the execution ID. Tasks the job had not
-// reached are not run: the job and its metadata are not kept, so the dispatch
-// ends unanswered unless the task in flight was its last.
+// A dispatch whose owner died is claimed by a server and taken to its end: a
+// runner is restored for every execution not yet released and starts at the
+// first step its record says is left. Tasks the job had not reached are not
+// run, since the job and its metadata are not kept, so the dispatch ends
+// unanswered unless the task in flight was its last.
 // -------------------------------------------------------------------------------
 
 package dispatch
@@ -17,74 +17,77 @@ import (
 	"fmt"
 
 	"github.com/afreidah/vagabond/internal/execution"
-	"github.com/afreidah/vagabond/internal/plugin"
 )
 
 // -------------------------------------------------------------------------
 // RESUME
 // -------------------------------------------------------------------------
 
-// Resume takes a claimed dispatch to its end: follows its unfinished
-// executions, then records how it ended and returns that state and why. A
-// failure to read its executions leaves the dispatch running, so its lease
-// lapses and the next claim tries again.
+// Resume takes a claimed dispatch to its end and returns its verdict and why.
+// A dispatch whose executions cannot be read is left open, so its lease lapses
+// and the next claim tries again.
 func (d *Dispatcher) Resume(
 	ctx context.Context, claimed *execution.Dispatch,
 ) (execution.DispatchState, string, error) {
-	origin := Origin{
-		Namespace:  claimed.Namespace,
-		Job:        claimed.Job,
-		JobVersion: claimed.JobVersion,
-		Dispatch:   claimed.ID,
-		lease:      d.hold(ctx, claimed.ID),
+	l := d.hold(ctx, claimed.ID, claimed.Lease())
+
+	// A cancel asked for while no process held the dispatch is acted on at once
+	if !claimed.CancelRequested.IsZero() {
+		l.requestCancel()
 	}
 
 	records, err := d.executions.DispatchExecutions(ctx, claimed.ID)
 	if err != nil {
-		origin.lease.release()
+		l.release()
 
 		return "", "", fmt.Errorf("reading executions of dispatch %s: %w", claimed.ID, err)
 	}
 
+	runners := make(map[execution.ID]*runner)
+
 	for _, rec := range records {
-		if !rec.Terminal() {
-			d.resume(ctx, rec)
+		if !done(rec) {
+			runners[rec.ID] = d.restore(l, rec).start(ctx)
 		}
 	}
 
+	// The verdict is read from each record once its runner has answered
+	for i, rec := range records {
+		if r, ok := runners[rec.ID]; ok {
+			answered := r.wait().rec
+			records[i] = &answered
+		}
+	}
+
+	if claimed.State != execution.DispatchRunning {
+		defer l.release()
+		d.close(context.WithoutCancel(ctx), l)
+
+		return claimed.State, claimed.Error, nil
+	}
+
 	state, reason := ended(claimed.Tasks, records)
+
+	origin := Origin{
+		Namespace: claimed.Namespace, Job: claimed.Job, JobVersion: claimed.JobVersion, Dispatch: claimed.ID, lease: l,
+	}
 	d.end(ctx, origin, state, reason)
 
 	return state, reason, nil
 }
 
-// resume follows one execution to its result and charges it, updating rec in
-// place for the dispatch's verdict. One the provider cannot account for is
-// recorded failed before submission and lost after, its reservation left for
-// the reaper.
-func (d *Dispatcher) resume(ctx context.Context, rec *execution.Record) {
-	run := &tracked{rec: *rec, store: d.executions, now: d.now}
-	defer func() { *rec = run.rec }()
+// restore builds a runner for a record of a claimed dispatch. It has no task,
+// so a record still pending is asked about rather than submitted.
+func (d *Dispatcher) restore(l *lease, rec *execution.Record) *runner {
+	provider, _ := d.registry.Provider(rec.Provider)
 
-	provider, ok := d.registry.Provider(rec.Provider)
-	if !ok {
-		run.failed(ctx, plugin.Internal(fmt.Errorf("%w: %s", ErrNoProvider, rec.Provider)))
+	return d.newRunner(provider, l, rec)
+}
 
-		return
-	}
-
-	if _, err := d.status(ctx, provider, rec.ID); err != nil {
-		run.failed(ctx, plugin.Infrastructure(err))
-
-		return
-	}
-
-	if run.rec.State == execution.StatePending {
-		run.to(ctx, execution.StateSubmitted)
-	}
-
-	ended, _ := d.follow(ctx, provider, run)
-	d.charge(ctx, &run.rec, ended)
+// done reports whether an execution has finished every step: terminal, its
+// output collected, and what it left behind released.
+func done(rec *execution.Record) bool {
+	return rec.Terminal() && !rec.LogsAt.IsZero() && !rec.Released.IsZero()
 }
 
 // -------------------------------------------------------------------------

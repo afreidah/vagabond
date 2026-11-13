@@ -6,7 +6,8 @@
 // Admission and ranking already decide where a task should go; this runs it
 // there. The selection is not reimplemented here: the same Admit and Rank a
 // plan calls are called again, so what `job plan` printed and what a run does
-// cannot drift apart.
+// cannot drift apart. Each attempt is driven by a runner that holds it under
+// the dispatch's lease until it is released.
 // -------------------------------------------------------------------------------
 
 package dispatch
@@ -15,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
@@ -48,28 +50,25 @@ type Ledger interface {
 	Settle(ctx context.Context, id execution.ID, namespace, provider string, actual quota.Execution) error
 	Drop(ctx context.Context, id execution.ID) error
 	Reserved(ctx context.Context, id execution.ID) (bool, error)
-	Reap(ctx context.Context, resolve ledger.Resolver) (int, error)
+	Reap(ctx context.Context, orphaned ledger.Orphaned) (int, error)
 	Refresh(ctx context.Context) error
 	PoolUsage(namespace, provider string) (total, share quota.PoolUsage)
 }
 
 // Executions is where every run and attempt is recorded, declared here for the
-// same reason as Registry. Update writes only if the stored record is still in
-// from, failing with execution.ErrStale otherwise; FinishDispatch and
-// RenewDispatch change only a dispatch still running under the named owner.
-// Unreleased lists records not yet released and unchanged since before.
-// AppendLog stores chunk seq of an execution's output, dropping the chunks
-// before keepFrom and from seq on.
+// same reason as Registry. Everything written for a dispatch and its
+// executions names the dispatch's lease, and a lease no longer held is
+// execution.ErrStale.
 type Executions interface {
 	CreateDispatch(ctx context.Context, d *execution.Dispatch) error
 	FinishDispatch(ctx context.Context, d *execution.Dispatch) error
-	RenewDispatch(ctx context.Context, id execution.ID, owner string, until time.Time) error
+	CloseDispatch(ctx context.Context, id execution.ID, lease execution.Lease, at time.Time) error
+	RenewDispatch(ctx context.Context, id execution.ID, lease execution.Lease, until time.Time) (time.Time, error)
 	DispatchExecutions(ctx context.Context, dispatch execution.ID) ([]*execution.Record, error)
-	Create(ctx context.Context, r *execution.Record) error
-	Update(ctx context.Context, r *execution.Record, from execution.State) error
-	Unreleased(ctx context.Context, before time.Time) ([]*execution.Record, error)
-	MarkReleased(ctx context.Context, id execution.ID, at time.Time) error
-	AppendLog(ctx context.Context, id execution.ID, seq int64, data []byte, keepFrom int64) error
+	Create(ctx context.Context, r *execution.Record, lease execution.Lease) error
+	Save(ctx context.Context, r *execution.Record, lease execution.Lease) error
+	Get(ctx context.Context, id execution.ID) (*execution.Record, error)
+	AppendLog(ctx context.Context, id execution.ID, seq int64, data []byte, keepFrom int64, lease execution.Lease) error
 }
 
 // Origin is what a task runs for: the job, the namespace it runs in, and the
@@ -90,6 +89,7 @@ type Dispatcher struct {
 	registry   Registry
 	ledger     Ledger
 	executions Executions
+	logger     *slog.Logger
 	owner      string        // who this process's dispatches are leased to
 	leaseTTL   time.Duration // how long a lease runs unrenewed
 	leaseRenew time.Duration // how often a held lease is renewed
@@ -100,6 +100,10 @@ type Dispatcher struct {
 
 	maxLogBytes int64 // how much of an execution's output is kept, the end of it
 }
+
+// recordTimeout bounds one store write, made on a context of its own so an
+// interrupted run is still recorded.
+const recordTimeout = 10 * time.Second
 
 // -------------------------------------------------------------------------
 // CONSTRUCTOR
@@ -143,6 +147,12 @@ func WithMaxLogBytes(n int64) Option {
 	return func(d *Dispatcher) { d.maxLogBytes = n }
 }
 
+// WithLogger sets where store writes being retried are reported, in place of
+// discarding them.
+func WithLogger(logger *slog.Logger) Option {
+	return func(d *Dispatcher) { d.logger = logger }
+}
+
 // New builds a dispatcher over a registry, charging ledger for what it runs and
 // recording every attempt in executions. Both are arguments rather than
 // options, since a dispatcher that charges or records nothing is the failure
@@ -152,6 +162,7 @@ func New(registry Registry, ledger Ledger, executions Executions, opts ...Option
 		registry:   registry,
 		ledger:     ledger,
 		executions: executions,
+		logger:     slog.New(slog.DiscardHandler),
 		owner:      ProcessOwner("vagabond"),
 		leaseTTL:   LeaseTTL,
 		leaseRenew: LeaseRenew,
@@ -173,9 +184,9 @@ func New(registry Registry, ledger Ledger, executions Executions, opts ...Option
 // RUNNING A JOB
 // -------------------------------------------------------------------------
 
-// Begin records a run of j as running, leased to this dispatcher's owner, and
-// returns origin with its dispatch ID, minting one when it has none. A run that
-// cannot be recorded must not start, so the error is the caller's to stop on.
+// Begin records a run of j as running, leased to this dispatcher's owner under
+// its first epoch, and returns origin with its dispatch ID, minting one when
+// it has none. A run that cannot be recorded must not start.
 func (d *Dispatcher) Begin(ctx context.Context, origin Origin, j *job.Job) (Origin, error) {
 	origin.Job = j.Name
 
@@ -190,7 +201,7 @@ func (d *Dispatcher) Begin(ctx context.Context, origin Origin, j *job.Job) (Orig
 
 	now := d.now()
 
-	err := d.executions.CreateDispatch(ctx, &execution.Dispatch{
+	record := &execution.Dispatch{
 		ID:         origin.Dispatch,
 		Namespace:  origin.Namespace,
 		Job:        j.Name,
@@ -198,21 +209,23 @@ func (d *Dispatcher) Begin(ctx context.Context, origin Origin, j *job.Job) (Orig
 		Tasks:      len(j.Tasks),
 		State:      execution.DispatchRunning,
 		Owner:      d.owner,
+		Epoch:      1,
 		LeaseUntil: now.Add(d.leaseTTL),
 		Created:    now,
-	})
-	if err != nil {
+	}
+
+	if err := d.executions.CreateDispatch(ctx, record); err != nil {
 		return origin, fmt.Errorf("recording dispatch %s: %w", origin.Dispatch, err)
 	}
 
-	origin.lease = d.hold(ctx, origin.Dispatch)
+	origin.lease = d.hold(ctx, origin.Dispatch, record.Lease())
 
 	return origin, nil
 }
 
-// Finish records how a begun run ended: succeeded or failed on the tasks'
-// verdicts, or unanswered with runErr, and releases the lease. Best effort,
-// since the run is over, and nothing is written for a run taken over.
+// Finish records how a begun run ended, succeeded or failed on the tasks'
+// verdicts or unanswered with runErr, then waits for every execution to finish
+// through release before closing the dispatch and its lease.
 func (d *Dispatcher) Finish(ctx context.Context, origin Origin, outcome *JobOutcome, runErr error) {
 	state, reason := execution.DispatchFailed, ""
 
@@ -226,27 +239,44 @@ func (d *Dispatcher) Finish(ctx context.Context, origin Origin, outcome *JobOutc
 	d.end(ctx, origin, state, reason)
 }
 
-// end releases origin's lease and records the dispatch as ended in state,
-// unless another process took it over.
+// end records state as the dispatch's verdict, waits for its executions, and
+// closes it. A lease another process claimed is left to it.
 func (d *Dispatcher) end(ctx context.Context, origin Origin, state execution.DispatchState, reason string) {
-	origin.lease.release()
+	defer origin.lease.release()
 
-	if origin.lease.taken() {
+	work := context.WithoutCancel(ctx)
+
+	err := d.persist(work, func(ctx context.Context) error {
+		return d.executions.FinishDispatch(ctx, &execution.Dispatch{
+			ID:         origin.Dispatch,
+			Namespace:  origin.Namespace,
+			Job:        origin.Job,
+			JobVersion: origin.JobVersion,
+			State:      state,
+			Error:      reason,
+			Owner:      origin.lease.key.Owner,
+			Epoch:      origin.lease.key.Epoch,
+			Ended:      d.now(),
+		})
+	})
+	if err != nil {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
-	defer cancel()
+	d.close(work, origin.lease)
+}
 
-	_ = d.executions.FinishDispatch(ctx, &execution.Dispatch{
-		ID:         origin.Dispatch,
-		Namespace:  origin.Namespace,
-		Job:        origin.Job,
-		JobVersion: origin.JobVersion,
-		State:      state,
-		Error:      reason,
-		Owner:      d.owner,
-		Ended:      d.now(),
+// close waits for every execution under l to finish its steps, then records
+// the dispatch done, which ends its lease.
+func (d *Dispatcher) close(ctx context.Context, l *lease) {
+	l.runners.Wait()
+
+	if l.taken() {
+		return
+	}
+
+	_ = d.persist(ctx, func(ctx context.Context) error {
+		return d.executions.CloseDispatch(ctx, l.id, l.key, d.now())
 	})
 }
 
@@ -266,8 +296,8 @@ func (d *Dispatcher) Run(
 	for i := range j.Tasks {
 		task := &j.Tasks[i]
 
-		if origin.lease.taken() {
-			return outcome, ErrLeaseLost
+		if err := origin.lease.stopReason(); err != nil {
+			return outcome, err
 		}
 
 		result, err := d.RunTask(ctx, origin, task, j.Routing, eval)
@@ -326,14 +356,13 @@ func (d *Dispatcher) RunTask(
 func (d *Dispatcher) attempt(
 	ctx context.Context, origin Origin, req *scheduler.Request, ranking scheduler.Ranking, outcome *TaskOutcome,
 ) (*TaskOutcome, error) {
-	task := req.Task
-	policy := retryPolicy(task)
+	policy := retryPolicy(req.Task)
 	budget := policy.budget()
 
 	var (
-		lastErr  error
-		tried    int
-		previous execution.ID
+		lastErr       error
+		tried, waited int
+		previous      execution.ID
 	)
 
 	for i := 0; i < len(ranking) && tried < budget; i++ {
@@ -344,10 +373,17 @@ func (d *Dispatcher) attempt(
 			return outcome, fmt.Errorf("%w: %s", ErrNoProvider, name)
 		}
 
-		run, err := d.prepare(ctx, origin, req, name, tried+1, previous)
+		// Before the reservation, so giving up during the wait leaves nothing held
+		if err := d.pause(ctx, policy, tried, waited); err != nil {
+			return outcome, err
+		}
+
+		waited = tried
+
+		rec, err := d.prepare(ctx, origin, req, name, tried+1, previous)
 		if refused(err) {
 			outcome.Attempts = append(outcome.Attempts, Attempt{
-				Provider: name, ID: run.rec.ID, Err: err, Refused: true,
+				Provider: name, ID: rec.ID, Err: err, Refused: true,
 			})
 			lastErr = err
 
@@ -358,27 +394,19 @@ func (d *Dispatcher) attempt(
 			return outcome, err
 		}
 
-		id := run.rec.ID
-		previous = id
-
-		if err := d.pause(ctx, policy, tried); err != nil {
-			return outcome, err
-		}
-
+		previous = rec.ID
 		tried++
 
-		ended, err := d.execute(ctx, provider, task, run, ranking[i].Members)
-		d.charge(ctx, &run.rec, ended)
+		run := d.newRunner(provider, origin.lease, rec)
+		run.task, run.members = req.Task, ranking[i].Members
 
-		outcome.Attempts = append(outcome.Attempts, Attempt{
-			Provider: name,
-			ID:       id,
-			Err:      err,
-		})
+		ended := run.start(ctx).wait()
 
-		if err == nil {
+		outcome.Attempts = append(outcome.Attempts, Attempt{Provider: name, ID: rec.ID, Err: ended.err})
+
+		if ended.err == nil {
 			outcome.Provider = name
-			outcome.ID = id
+			outcome.ID = rec.ID
 			outcome.State = ended.state
 			outcome.Result = ended.result
 
@@ -386,11 +414,11 @@ func (d *Dispatcher) attempt(
 		}
 
 		// An internal fault fails identically on every provider
-		if !plugin.Reroutable(err) {
-			return outcome, err
+		if !plugin.Reroutable(ended.err) {
+			return outcome, ended.err
 		}
 
-		lastErr = err
+		lastErr = ended.err
 	}
 
 	// Every candidate refused its reservation, so nothing was attempted
@@ -402,51 +430,63 @@ func (d *Dispatcher) attempt(
 }
 
 // prepare mints an execution ID, reserves name's quota for it, and records it
-// as pending; a refusal returns the *ledger.Refusal alongside the run. The ID
-// is per attempt because it is the submission idempotency key, and reusing it
-// would resume the attempt that just failed.
+// as pending under the dispatch's lease; a refusal returns the
+// *ledger.Refusal alongside the record. The ID is per attempt because it is
+// the submission idempotency key.
 func (d *Dispatcher) prepare(
 	ctx context.Context, origin Origin, req *scheduler.Request, name string, attempt int, previous execution.ID,
-) (*tracked, error) {
+) (*execution.Record, error) {
 	id, err := execution.NewID()
 	if err != nil {
 		return nil, plugin.Internal(fmt.Errorf("generating an execution id: %w", err))
 	}
 
-	now := d.now()
-
-	run := &tracked{
-		store: d.executions,
-		now:   d.now,
-		rec: execution.Record{
-			Status:     execution.Status{ID: id, State: execution.StatePending, UpdatedAt: now},
-			Namespace:  origin.Namespace,
-			Job:        origin.Job,
-			JobVersion: origin.JobVersion,
-			Dispatch:   origin.Dispatch,
-			Task:       req.Task.Name,
-			Provider:   name,
-			Attempt:    attempt,
-			Previous:   previous,
-			CPU:        req.Execution.CPU,
-			Memory:     req.Execution.Memory,
-		},
+	rec := &execution.Record{
+		ID:         id,
+		State:      execution.StatePending,
+		UpdatedAt:  d.now(),
+		Namespace:  origin.Namespace,
+		Job:        origin.Job,
+		JobVersion: origin.JobVersion,
+		Dispatch:   origin.Dispatch,
+		Task:       req.Task.Name,
+		Provider:   name,
+		Attempt:    attempt,
+		Previous:   previous,
+		CPU:        req.Execution.CPU,
+		Memory:     req.Execution.Memory,
+		Timeout:    req.Execution.Duration,
 	}
 
 	// A paying job passed admission's quota check, so its reservation is uncapped
 	if err := d.ledger.Reserve(ctx, id, origin.Namespace, name, req.Execution, req.WillPay()); err != nil {
 		if refused(err) {
-			return run, err
+			return rec, err
 		}
 
 		return nil, fmt.Errorf("reserving quota on %s: %w", name, err)
 	}
 
-	if err := d.executions.Create(ctx, &run.rec); err != nil {
+	if err := d.executions.Create(ctx, rec, origin.lease.key); err != nil {
+		if errors.Is(err, execution.ErrStale) {
+			origin.lease.lose()
+		}
+
 		return nil, fmt.Errorf("recording execution %s: %w", id, err)
 	}
 
-	return run, nil
+	return rec, nil
+}
+
+// pause waits out the backoff before every submission but the first, once per
+// submission: waited is the submission count it last waited after, so a
+// reservation refused after the wait does not make the next one wait again.
+func (d *Dispatcher) pause(ctx context.Context, p policy, tried, waited int) error {
+	if tried == waited {
+		return nil
+	}
+
+	return d.sleep(ctx, p.backoff(tried))
 }
 
 // refused reports whether err is the ledger turning a reservation down.
@@ -456,40 +496,31 @@ func refused(err error) bool {
 	return errors.As(err, &refusal)
 }
 
-// pause waits out the backoff before every submission but the first.
-func (d *Dispatcher) pause(ctx context.Context, p policy, tried int) error {
-	if tried == 0 {
-		return nil
+// -------------------------------------------------------------------------
+// STORE WRITES
+// -------------------------------------------------------------------------
+
+// persist makes write until the store takes it, waiting longer after each
+// failure while the store is unreachable. A write refused because the lease
+// moved ends it with ErrLeaseLost; ctx ending ends it with its error.
+func (d *Dispatcher) persist(ctx context.Context, write func(ctx context.Context) error) error {
+	for n := 0; ; n++ {
+		wctx, cancel := context.WithTimeout(ctx, recordTimeout)
+		err := write(wctx)
+
+		cancel()
+
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, execution.ErrStale):
+			return fmt.Errorf("%w: %w", ErrLeaseLost, err)
+		}
+
+		d.logger.WarnContext(ctx, "store write failed, retrying", "error", err)
+
+		if err := d.sleep(ctx, doubling(persistRetry, persistRetryMax, n)); err != nil {
+			return err
+		}
 	}
-
-	return d.sleep(ctx, p.backoff(tried))
-}
-
-// charge settles what an execution cost: nothing for a submission the provider
-// refused, what the platform billed when the result carries it, otherwise the
-// declared shape over how long it ran. Without a result the worst-case
-// reservation stands, since the run may still be out there.
-func (d *Dispatcher) charge(ctx context.Context, rec *execution.Record, ended answer) {
-	result := ended.result
-
-	switch {
-	case ended.refused:
-		_ = d.ledger.Drop(ctx, rec.ID)
-
-		return
-	case result == nil:
-		return
-	}
-
-	actual := quota.Execution{
-		CPU:      rec.CPU,
-		Memory:   rec.Memory,
-		Duration: result.Duration,
-	}
-
-	if result.Billed != nil {
-		actual = *result.Billed
-	}
-
-	_ = d.ledger.Settle(ctx, rec.ID, rec.Namespace, rec.Provider, actual)
 }
