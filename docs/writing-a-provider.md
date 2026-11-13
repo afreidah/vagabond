@@ -67,7 +67,8 @@ Rules that apply to every method:
   plugin state.
 - **Return `*plugin.Error`.** An unclassified error is treated as not
   reroutable.
-- **Honour `ctx`.** Dispatch cancels it when the caller gives up.
+- **Honour `ctx`.** The execution's runner cancels it when the dispatch is
+  cancelled or claimed by another server.
 
 ### `Name`
 
@@ -124,15 +125,17 @@ Dispatch calls `Submission.Validate()` on every submission. It fails, as an
 | `Result` set with `accepted` or `running` | Result on a non-terminal state |
 | `Result` nil with `succeeded` or `failed` | Terminal state without a result |
 
-A submission with a `Result` is **synchronous**: dispatch records the result,
-calls `Release` if implemented, and never calls `Status` or `Result`. Otherwise
-dispatch polls `Status`.
+A submission with a `Result` is **synchronous**: the runner records the
+result, calls `Release` if implemented, and never polls `Status` or calls
+`Result`. Otherwise it polls `Status`.
 
 ### `Status`
 
-Where an execution has reached. Polled by dispatch at 2s, doubling to a 15s
-ceiling; also called by the quota reaper, the provider release loop, and when a
-dispatch is resumed.
+Where an execution has reached. Polled by the execution's runner at 2s,
+doubling to a 15s ceiling, while it runs or is `lost`. Also called once after
+a cancel, or a `Submit` that failed as `infrastructure` or unclassified, to
+learn what ran; and once for a `pending` record a resumed dispatch restores,
+to learn whether the platform ever got it.
 
 | `execution.Status` field | Set to |
 |---|---|
@@ -146,16 +149,23 @@ dispatch is resumed.
 - Report `accepted` for provisioning and image pull, `running` only once the
   workload runs.
 - Wrap `plugin.ErrUnknownExecution` only when the platform says it has no
-  record of the ID. The reaper then drops the quota reservation as never having
-  run. A lookup that merely failed must not wrap it.
-- Set `StartedAt` and `EndedAt` on terminal states. The reaper charges an
-  abandoned execution the declared shape over `EndedAt - StartedAt`.
+  record of the ID. While polling it records the execution `failed` at once,
+  charged for the time it was seen running. Classify it `infrastructure` when
+  it may pass, as a listing that lags the run; the execution then goes `lost`
+  like any other failure. Asked after a cancel or a failed `Submit`, it
+  charges nothing for a run never seen running. A lookup that merely failed
+  must not wrap it.
+- Set `StartedAt` and `EndedAt`, on terminal states especially. A cancelled
+  run, or a failed `Submit` the platform ran anyway, is charged the declared
+  shape over the `EndedAt - StartedAt` that `Status` reports.
 
 ### `Result`
 
-What a finished execution produced. Called after `Status` reports a terminal
-state and before `Release`: by dispatch, or by the release loop for a `lost`
-execution it reconciles, which retries a failed call on its next pass.
+What a finished execution produced. Called once by the execution's runner
+after `Status` reports a terminal state, before `ReadLogs` and `Release`. Not
+called for a run Vagabond cancelled, or one that ended without an answer. A
+failed call is not repeated: the execution keeps its terminal state without a
+result.
 
 | `execution.Result` field | Meaning |
 |---|---|
@@ -183,13 +193,19 @@ execution it reconciles, which retries a failed call on its next pass.
 
 ### `Cancel`
 
-Stops a running execution. Called when the dispatching caller gives up (on a
-fresh context with a 30s timeout) and for `DELETE /v1/execution/{id}` on an
-execution no local dispatch is running.
+Stops a running execution. Called by the execution's runner, on a fresh
+context with a 30s timeout, when its dispatch is cancelled
+(`DELETE /v1/execution/{id}`, on this server or through the lease), and after
+a `Submit` that failed as `infrastructure` or unclassified, since the run may
+exist. One `Status` call follows, for the times it ran. Its error is ignored.
 
 - Cancelling a finished or already deleted execution returns `nil`.
 - If cancelling destroys what `Result` or `ReadLogs` reads, document it on the
   provider page.
+- If cancelling makes `Status` report the execution unknown, as deleting it
+  does, a cancelled run is charged for the time Vagabond saw it running
+  rather than the times the platform kept. Document that on the provider page
+  too.
 
 ## Unsupported operations
 
@@ -210,8 +226,11 @@ type Provider struct {
 | `ResultNotSupported` | `Result` | `Internal("result: " + ErrUnsupported)` |
 | `CancelNotSupported` | `Cancel` | `Internal("cancel: " + ErrUnsupported)` |
 
-The reaper reads `ErrUnsupported` from `Status` as "it ran, for an unknown
-time" and charges the reserved amount.
+Nothing reads `ErrUnsupported` specially; it is an `internal` failure like any
+other. A provider that embeds `StatusNotSupported` is asked `Status` only after
+a `Submit` that failed as `infrastructure` or unclassified, or for a `pending`
+record a resumed dispatch restores. The call fails, so nothing says what ran,
+and the execution is charged the reserved amount.
 
 ## Optional interfaces
 
@@ -221,9 +240,9 @@ is absent.
 | Interface | Method | Called by | When |
 |---|---|---|---|
 | `LogStreamer` | `StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error` | Server | While a client follows a running execution's output |
-| `LogReader` | `ReadLogs(ctx context.Context, id execution.ID, w io.Writer) error` | Dispatch; the release loop | Once the execution ends, before the result is recorded and before `Release`; by the loop for an execution whose output was never captured |
-| `Releaser` | `Release(ctx context.Context, id execution.ID) error` | Dispatch; the release loop | After `Result` and `ReadLogs` (or after a synchronous `Submit`); for every other ending, once the execution is over |
-| `Recredentialer` | `Recredential(ctx context.Context, credential []byte) error` | Registry, for dispatch | After a dispatch call (`Submit`, `SubmitTo`, `Status`, `Result`, `ReadLogs`, dispatch's `Cancel`, `Release`) failed with `ErrUnauthorized`, when the provider block has a `credentials` block; at most once a minute per provider |
+| `LogReader` | `ReadLogs(ctx context.Context, id execution.ID, w io.Writer) error` | Execution runner | Once the execution ends, however it ended, after `Result` and before the result is recorded and `Release`; not after a failed `Submit` |
+| `Releaser` | `Release(ctx context.Context, id execution.ID) error` | Execution runner | Last, for every ending: after `Result`, `ReadLogs` and the settle |
+| `Recredentialer` | `Recredential(ctx context.Context, credential []byte) error` | Registry, for the execution runner | After a runner call (`Submit`, `SubmitTo`, `Status`, `Result`, `ReadLogs`, `Cancel`, `Release`) failed with `ErrUnauthorized`, when the provider block has a `credentials` block; at most once a minute per provider |
 | `Live` | `LiveCapabilities() (Capabilities, error)` | Registry | On every plan, in place of the refreshed snapshot |
 | `MemberSubmitter` | `SubmitTo(ctx context.Context, id execution.ID, task *job.Task, members []string) (Submission, error)` | Dispatch | In place of `Submit`, when admission passed specific members |
 
@@ -273,15 +292,17 @@ is absent.
 - Deletes a resource the execution left behind, such as Cloud Run's Job.
   Implementing it is all a provider does for cleanup: the control plane records
   which executions are released and calls it for every one that is not.
-- Dispatch calls it after `Result` and `ReadLogs`, because releasing may
-  destroy what they read, on a fresh context with a 30-second timeout.
-- The [provider release](background-services.md#provider-release) loop calls it
-  for every other ending: a cancelled run, a failed `Result`, a provider that
-  stopped answering, a server that died. It first waits for `Status` to report
-  the execution over and for any quota reservation to settle.
+- The execution's runner calls it last, however the execution ended: a
+  result, a cancel, a failed `Submit`, a failed `Result`, a `lost` execution
+  once resolved. It comes after `Result` and `ReadLogs`, because releasing may
+  destroy what they read, and after the quota settle. A runner restored after
+  a claim calls it for an execution whose last runner did not.
+- Called on a context with no deadline; a call that never returns holds the
+  dispatch open.
 - Idempotent: it may be called more than once for an execution. Return nil or
-  `ErrUnknownExecution` when there is nothing left; any other error is retried
-  on the loop's next pass.
+  `ErrUnknownExecution` when there is nothing left; any other error is retried,
+  250ms doubling to 10s, until one of those comes back, and the dispatch stays
+  open meanwhile.
 
 ### `Recredentialer`
 
@@ -297,8 +318,8 @@ is absent.
   nothing to resolve again.
 - Called at most once a minute per provider. A rejection within a minute of the
   last refresh is retried on the credential already in place.
-- Only dispatch's calls are retried. A rejection from `StreamLogs`, or from the
-  `Cancel` behind `DELETE /v1/execution/{id}`, is returned as is.
+- Only a runner's calls are retried. A rejection from `StreamLogs` is returned
+  as is.
 
 ### `Live`
 
@@ -405,8 +426,8 @@ A platform that uses a status unusually builds the `*Error` directly.
 | `plugin.ErrProvider` | Matches any `*plugin.Error` via `errors.Is` | Callers that only need "a provider call failed" |
 | `plugin.ErrNotFound` | `ClassifyHTTP` saw a 404 | The plugin, to translate into `ErrUnknownExecution` or success |
 | `plugin.ErrUnauthorized` | `ClassifyHTTP` saw a 401 or 403: the credential was rejected | Dispatch: for a `Recredentialer` whose block has `credentials`, re-resolves the credential and retries the call once |
-| `plugin.ErrUnknownExecution` | The platform has no record of the execution | Quota reaper: drops the reservation |
-| `plugin.ErrUnsupported` | The platform has no such operation | Quota reaper: charges the reservation |
+| `plugin.ErrUnknownExecution` | The platform has no record of the execution | Execution runner: while polling, fails the execution at once, or makes it `lost` when classified `infrastructure`; from the `Status` after a cancel or failed `Submit`, charges for the time seen running, or drops the reservation for a run never seen running; from `Release`, counts the execution released |
+| `plugin.ErrUnsupported` | The platform has no such operation | Nobody specially; an `internal` failure like any other |
 | `plugin.ErrInvalidSubmission` | `Submission.Validate` failed | Dispatch |
 | `plugin.ErrNoResume` | The log stream cannot be placed at the requested offset | Server: answers 416 when nothing was written yet; the client finishes from the stored output |
 
@@ -414,17 +435,20 @@ A platform that uses a status unusually builds the `*Error` directly.
 
 | Where | Outcome | Execution record | Next step |
 |---|---|---|---|
-| `Submit` returns `infrastructure` | No run | `failed`, failure `infrastructure` | Next ranked provider, if the task's `retry` block allows reroute and attempts remain |
-| `Submit` returns `internal` or unclassified | No run | `failed`, failure `internal` | Task stops; job fails |
+| `Submit` returns `infrastructure` | The run may exist: `Cancel`, then one `Status` for what ran; then `Release` | `failed`, failure `infrastructure` | Next ranked provider, if the task's `retry` block allows reroute and attempts remain |
+| `Submit` returns `internal` | No run; the reservation is dropped; then `Release` | `failed`, failure `internal` | Task stops; job fails |
+| `Submit` returns an unclassified error | As `infrastructure`: `Cancel`, `Status`, `Release` | `failed`, failure `internal` | Task stops; job fails |
 | `Submission.Validate` fails | Treated as `internal` | `failed`, failure `internal` | Task stops |
-| `Status` returns an error while polling | Watch ends; the run is not cancelled; released later by the loop | `lost` | Reroute if `infrastructure`, else stop |
-| Caller gives up while polling | `Cancel` called; released later by the loop | `cancelled` | Stop |
-| `Status` reports `cancelled` | `Result` read, `Release` called | `cancelled` | Treated as `infrastructure`: reroute if allowed |
-| `Result` returns an error | Released later by the loop | Terminal state from `Status`, no result | Reroute if `infrastructure`, else stop |
+| `Status` returns an error while polling | The attempt ends; the run is not cancelled; the runner keeps polling it | `lost` | Reroute if `infrastructure`, else stop |
+| `Status` returns `ErrUnknownExecution`, not `infrastructure`, while polling | The attempt ends; output captured; `Release` called | `failed` | Stop |
+| `Status`, `Result`, `Cancel` or `Release` runs past 30s | The call is given up on, as an `infrastructure` error | As for that call's error | As for that call's error |
+| Dispatch cancelled while polling | `Cancel`, then one `Status` for what ran; output captured; `Release` | `cancelled` | Stop |
+| `Status` reports `cancelled` | `Result` read, output captured, `Release` called | `cancelled` | Treated as `infrastructure`: reroute if allowed |
+| `Result` returns an error | Output captured, `Release` called | Terminal state from `Status`, no result | Reroute if `infrastructure`, else stop |
 | `Status` reports `succeeded` or `failed`, `Result` returns | Output captured, then `Release` called | Terminal state and result | Task ends; a non-zero exit stops the job |
 | `ReadLogs` returns an error | What was written is stored | `LogsTruncated` set | None; the execution's outcome is unchanged |
 | `StreamLogs` returns an error | Logged; the client's response ends | Unchanged | None |
-| `Release` returns an error | Retried by the loop | Unchanged | None |
+| `Release` returns an error | Retried, 250ms doubling to 10s, until it succeeds or returns `ErrUnknownExecution`; the dispatch stays open meanwhile | `released_at` set once it does | None |
 
 Retry budgets, backoff and reroute rules are in [Dispatch](dispatch.md).
 
@@ -482,7 +506,8 @@ The charge is arithmetic over what the task declared, because `job plan` prices
 a job without dispatching it. What a plugin contributes:
 
 - `Result.Duration` and `Result.Billed`, which settle the reservation.
-- `Status.StartedAt` and `EndedAt`, which price an abandoned reservation.
+- `Status.StartedAt` and `EndedAt`, which price a cancelled run, or a failed
+  `Submit` the platform ran anyway.
 - A provider page under `docs/providers/` naming the platform's billed
   quantities, the meter each maps to, the published free-tier figures, and any
   quantity no meter expresses.
@@ -721,7 +746,7 @@ func (p *Provider) Cancel(ctx context.Context, id execution.ID) error {
 	return err
 }
 
-// Release deletes the run record once dispatch has read the result.
+// Release deletes the run record, the last call for every execution.
 func (p *Provider) Release(ctx context.Context, id execution.ID) error {
 	err := p.call(ctx, http.MethodDelete, "/runs/"+runName(id), nil, nil)
 	if errors.Is(err, plugin.ErrNotFound) {

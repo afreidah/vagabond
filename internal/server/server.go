@@ -60,15 +60,16 @@ type serverLedger interface {
 }
 
 // serverExecutions is where runs and attempts are recorded and read back,
-// where dispatches a dead owner left are claimed, where stored output is read
-// and pruned, and whose reachability health reports.
+// where dispatches a dead owner left are claimed and cancels are requested,
+// where stored output is read and pruned, and whose reachability health
+// reports.
 type serverExecutions interface {
 	dispatch.Executions
 	GetDispatch(ctx context.Context, id execution.ID) (*execution.Dispatch, error)
-	Get(ctx context.Context, id execution.ID) (*execution.Record, error)
 	ClaimDispatches(
 		ctx context.Context, owner string, now, until time.Time, skip []execution.ID,
 	) ([]*execution.Dispatch, error)
+	RequestCancel(ctx context.Context, id execution.ID, at time.Time) error
 	ReadLog(ctx context.Context, id execution.ID, fromSeq int64, w io.Writer) error
 	PruneLogs(ctx context.Context, before time.Time) (int, error)
 	Ping(ctx context.Context) error
@@ -192,7 +193,7 @@ func New(
 
 	s.dispatcher = dispatch.New(reg, ledger, executions,
 		dispatch.WithOwner(s.owner), dispatch.WithLease(s.leaseTTL, s.leaseRenew), dispatch.WithTierMode(s.tiers),
-		dispatch.WithMaxLogBytes(s.maxLogBytes))
+		dispatch.WithMaxLogBytes(s.maxLogBytes), dispatch.WithLogger(s.logger))
 
 	return s
 }

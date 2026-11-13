@@ -174,18 +174,18 @@ func (mr *MockserverLedgerMockRecorder) PoolUsage(namespace, provider any) *gomo
 }
 
 // Reap mocks base method.
-func (m *MockserverLedger) Reap(ctx context.Context, resolve ledger.Resolver) (int, error) {
+func (m *MockserverLedger) Reap(ctx context.Context, orphaned ledger.Orphaned) (int, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Reap", ctx, resolve)
+	ret := m.ctrl.Call(m, "Reap", ctx, orphaned)
 	ret0, _ := ret[0].(int)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Reap indicates an expected call of Reap.
-func (mr *MockserverLedgerMockRecorder) Reap(ctx, resolve any) *gomock.Call {
+func (mr *MockserverLedgerMockRecorder) Reap(ctx, orphaned any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reap", reflect.TypeOf((*MockserverLedger)(nil).Reap), ctx, resolve)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reap", reflect.TypeOf((*MockserverLedger)(nil).Reap), ctx, orphaned)
 }
 
 // Refresh mocks base method.
@@ -284,17 +284,17 @@ func (m *MockserverExecutions) EXPECT() *MockserverExecutionsMockRecorder {
 }
 
 // AppendLog mocks base method.
-func (m *MockserverExecutions) AppendLog(ctx context.Context, id execution.ID, seq int64, data []byte, keepFrom int64) error {
+func (m *MockserverExecutions) AppendLog(ctx context.Context, id execution.ID, seq int64, data []byte, keepFrom int64, lease execution.Lease) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AppendLog", ctx, id, seq, data, keepFrom)
+	ret := m.ctrl.Call(m, "AppendLog", ctx, id, seq, data, keepFrom, lease)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // AppendLog indicates an expected call of AppendLog.
-func (mr *MockserverExecutionsMockRecorder) AppendLog(ctx, id, seq, data, keepFrom any) *gomock.Call {
+func (mr *MockserverExecutionsMockRecorder) AppendLog(ctx, id, seq, data, keepFrom, lease any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AppendLog", reflect.TypeOf((*MockserverExecutions)(nil).AppendLog), ctx, id, seq, data, keepFrom)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AppendLog", reflect.TypeOf((*MockserverExecutions)(nil).AppendLog), ctx, id, seq, data, keepFrom, lease)
 }
 
 // ClaimDispatches mocks base method.
@@ -312,18 +312,32 @@ func (mr *MockserverExecutionsMockRecorder) ClaimDispatches(ctx, owner, now, unt
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClaimDispatches", reflect.TypeOf((*MockserverExecutions)(nil).ClaimDispatches), ctx, owner, now, until, skip)
 }
 
-// Create mocks base method.
-func (m *MockserverExecutions) Create(ctx context.Context, r *execution.Record) error {
+// CloseDispatch mocks base method.
+func (m *MockserverExecutions) CloseDispatch(ctx context.Context, id execution.ID, lease execution.Lease, at time.Time) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Create", ctx, r)
+	ret := m.ctrl.Call(m, "CloseDispatch", ctx, id, lease, at)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CloseDispatch indicates an expected call of CloseDispatch.
+func (mr *MockserverExecutionsMockRecorder) CloseDispatch(ctx, id, lease, at any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CloseDispatch", reflect.TypeOf((*MockserverExecutions)(nil).CloseDispatch), ctx, id, lease, at)
+}
+
+// Create mocks base method.
+func (m *MockserverExecutions) Create(ctx context.Context, r *execution.Record, lease execution.Lease) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Create", ctx, r, lease)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Create indicates an expected call of Create.
-func (mr *MockserverExecutionsMockRecorder) Create(ctx, r any) *gomock.Call {
+func (mr *MockserverExecutionsMockRecorder) Create(ctx, r, lease any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockserverExecutions)(nil).Create), ctx, r)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockserverExecutions)(nil).Create), ctx, r, lease)
 }
 
 // CreateDispatch mocks base method.
@@ -399,20 +413,6 @@ func (mr *MockserverExecutionsMockRecorder) GetDispatch(ctx, id any) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDispatch", reflect.TypeOf((*MockserverExecutions)(nil).GetDispatch), ctx, id)
 }
 
-// MarkReleased mocks base method.
-func (m *MockserverExecutions) MarkReleased(ctx context.Context, id execution.ID, at time.Time) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MarkReleased", ctx, id, at)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// MarkReleased indicates an expected call of MarkReleased.
-func (mr *MockserverExecutionsMockRecorder) MarkReleased(ctx, id, at any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkReleased", reflect.TypeOf((*MockserverExecutions)(nil).MarkReleased), ctx, id, at)
-}
-
 // Ping mocks base method.
 func (m *MockserverExecutions) Ping(ctx context.Context) error {
 	m.ctrl.T.Helper()
@@ -457,46 +457,46 @@ func (mr *MockserverExecutionsMockRecorder) ReadLog(ctx, id, fromSeq, w any) *go
 }
 
 // RenewDispatch mocks base method.
-func (m *MockserverExecutions) RenewDispatch(ctx context.Context, id execution.ID, owner string, until time.Time) error {
+func (m *MockserverExecutions) RenewDispatch(ctx context.Context, id execution.ID, lease execution.Lease, until time.Time) (time.Time, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "RenewDispatch", ctx, id, owner, until)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// RenewDispatch indicates an expected call of RenewDispatch.
-func (mr *MockserverExecutionsMockRecorder) RenewDispatch(ctx, id, owner, until any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RenewDispatch", reflect.TypeOf((*MockserverExecutions)(nil).RenewDispatch), ctx, id, owner, until)
-}
-
-// Unreleased mocks base method.
-func (m *MockserverExecutions) Unreleased(ctx context.Context, before time.Time) ([]*execution.Record, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Unreleased", ctx, before)
-	ret0, _ := ret[0].([]*execution.Record)
+	ret := m.ctrl.Call(m, "RenewDispatch", ctx, id, lease, until)
+	ret0, _ := ret[0].(time.Time)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// Unreleased indicates an expected call of Unreleased.
-func (mr *MockserverExecutionsMockRecorder) Unreleased(ctx, before any) *gomock.Call {
+// RenewDispatch indicates an expected call of RenewDispatch.
+func (mr *MockserverExecutionsMockRecorder) RenewDispatch(ctx, id, lease, until any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Unreleased", reflect.TypeOf((*MockserverExecutions)(nil).Unreleased), ctx, before)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RenewDispatch", reflect.TypeOf((*MockserverExecutions)(nil).RenewDispatch), ctx, id, lease, until)
 }
 
-// Update mocks base method.
-func (m *MockserverExecutions) Update(ctx context.Context, r *execution.Record, from execution.State) error {
+// RequestCancel mocks base method.
+func (m *MockserverExecutions) RequestCancel(ctx context.Context, id execution.ID, at time.Time) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Update", ctx, r, from)
+	ret := m.ctrl.Call(m, "RequestCancel", ctx, id, at)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// Update indicates an expected call of Update.
-func (mr *MockserverExecutionsMockRecorder) Update(ctx, r, from any) *gomock.Call {
+// RequestCancel indicates an expected call of RequestCancel.
+func (mr *MockserverExecutionsMockRecorder) RequestCancel(ctx, id, at any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockserverExecutions)(nil).Update), ctx, r, from)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RequestCancel", reflect.TypeOf((*MockserverExecutions)(nil).RequestCancel), ctx, id, at)
+}
+
+// Save mocks base method.
+func (m *MockserverExecutions) Save(ctx context.Context, r *execution.Record, lease execution.Lease) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Save", ctx, r, lease)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Save indicates an expected call of Save.
+func (mr *MockserverExecutionsMockRecorder) Save(ctx, r, lease any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Save", reflect.TypeOf((*MockserverExecutions)(nil).Save), ctx, r, lease)
 }
 
 // MockserverJobs is a mock of serverJobs interface.

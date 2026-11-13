@@ -248,8 +248,8 @@ func (p *Provider) Cancel(ctx context.Context, id execution.ID) error {
 }
 
 // Release deletes the job run a finished execution left behind, which
-// otherwise counts against the project's limit of 100. Dispatch calls it after
-// the result, and the release loop for every other ending.
+// otherwise counts against the project's limit of 100. The execution's runner
+// calls it last, however the execution ended.
 func (p *Provider) Release(ctx context.Context, id execution.ID) error {
 	return p.Cancel(ctx, id)
 }

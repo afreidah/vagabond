@@ -85,7 +85,7 @@ server under a supervisor that restarts it.
 | Source | `internal/state/postgres/migrations/*.sql`, embedded in the binary |
 | Applied | At every `vagabond server` start, pending ones only |
 | Version table | `goose_db_version`, created by goose |
-| Expected version | `9` in this release (`SchemaVersion`) |
+| Expected version | `10` in this release (`SchemaVersion`) |
 | Connection | A separate `database/sql` connection opened from the DSN as written and closed after; the 5s `connect_timeout` default does not apply to it |
 
 After migrating, the server reads `MAX(version_id)` from `goose_db_version`
@@ -95,8 +95,8 @@ for:
 | Database version | Result |
 |---|---|
 | Equal | Starts |
-| Lower | Refuses: `older than the 9 this binary expects; a migration may have failed partway` |
-| Higher | Refuses: `newer than the 9 this binary expects; upgrade vagabond` |
+| Lower | Refuses: `older than the 10 this binary expects; a migration may have failed partway` |
+| Higher | Refuses: `newer than the 10 this binary expects; upgrade vagabond` |
 
 - There is no command to migrate down. The files carry `Down` sections, but
   the binary never runs them. Rolling back a release means restoring a backup
@@ -117,6 +117,7 @@ for:
 | 7 | `00007_execution_release.sql` | `executions.released_at`, backfilled for rows with a result; index `executions_unreleased` |
 | 8 | `00008_execution_reason.sql` | `executions.reason`, `''` for existing rows |
 | 9 | `00009_execution_logs.sql` | `execution_logs`, holding each existing row's output as chunk 0; `executions.logs_start` and `logs_at`, backfilled for rows with a result; `executions.logs` dropped |
+| 10 | `00010_dispatch_ownership.sql` | `dispatches.epoch` (`1` for existing rows), `cancel_requested_at` and `done_at`, the last backfilled for ended dispatches whose executions are all released, so one with an unreleased execution is claimed and finished; `executions.timeout_ms`, `0` for existing rows; executions with no dispatch marked released; `quota_reservations.cpu` and `memory` dropped; index `dispatches_lease` rebuilt as `(lease_until) WHERE done_at IS NULL`; index `executions_unreleased` dropped |
 
 ## Schema
 
@@ -130,7 +131,7 @@ Interactive version, with columns and indexes on each table:
 |---|---|---|
 | `jobs` | `(namespace, name)` | Each registered job's current version and whether it is stopped |
 | `job_versions` | `(namespace, name, version)` | Every registered version's source as written, and the fingerprint of its formatted form |
-| `dispatches` | `dispatch_id` | One row per run of a job: state, error, task count, lease owner and expiry |
+| `dispatches` | `dispatch_id` | One row per run of a job: state, error, task count, lease owner, epoch and expiry, a requested cancel, when it was done |
 | `executions` | `id` | One row per attempt of one task on one provider, with its result and stored output |
 | `quota_usage` | `(namespace, provider, pool, period)` | Settled usage per pool per period |
 | `quota_reservations` | `(execution_id, namespace, pool)` | Usage held by executions not yet settled |
@@ -156,13 +157,17 @@ serializable transaction.
 | `error` | Why an `unanswered` run got no answer; `''` otherwise |
 | `tasks` | Tasks the job declares |
 | `owner` | Process holding the lease, `server:<host>:<pid>` |
-| `lease_until` | Lease expiry; renewed every 20s to 60s ahead |
-| `ended_at` | Null while running |
+| `epoch` | Claims of the lease: `1` when the dispatch starts, one more at each claim |
+| `lease_until` | Lease expiry; renewed every 20s to 60s ahead until the dispatch is done |
+| `ended_at` | When the verdict was written; null while running |
+| `cancel_requested_at` | When a server that does not hold the dispatch asked for it to be cancelled; the first request's time is kept. Null otherwise |
+| `done_at` | When every execution was released, which ends the lease; null until then |
 
-Index `dispatches_lease (state, lease_until)` serves the claim query. Finishing
-and renewing match `state = 'running' AND owner = <caller>`, so only the lease
-holder can end a run. Claiming is one `UPDATE ... RETURNING`. See
-[dispatch](dispatch.md#leases).
+Index `dispatches_lease (lease_until) WHERE done_at IS NULL` serves the claim
+query. Finishing matches `state = 'running'`, and renewing and closing match
+`done_at IS NULL`, each with the caller's `owner` and `epoch`, so only the
+lease holder can end a run or keep it. Claiming is one `UPDATE ... RETURNING`
+that increments `epoch`. See [dispatch](dispatch.md#leases).
 
 ### `executions`
 
@@ -174,7 +179,7 @@ holder can end a run. Claiming is one `UPDATE ... RETURNING`. See
 | `state` | `pending`, `submitted`, `accepted`, `running`, `succeeded`, `failed`, `cancelled`, `lost` |
 | `provider_id` | The provider's own identifier for the run |
 | `failure` | Failure class that ended it without an answer; `''` otherwise |
-| `cpu`, `memory` | Declared millicores and MiB, for charging without the job |
+| `cpu`, `memory`, `timeout_ms` | Declared millicores, MiB and timeout, for charging without the job |
 | `exit_code`, `duration_ms` | Null until a result is recorded |
 | `billed_cpu`, `billed_memory`, `billed_ms` | What the provider reported billing, when it reports it |
 | `logs_at` | When the output was captured into `execution_logs`; null until then |
@@ -183,14 +188,13 @@ holder can end a run. Claiming is one `UPDATE ... RETURNING`. See
 | `reason` | Why the platform ended the workload, in its words; `''` when it did not say |
 | `released_at` | When what the provider left behind was released; null until then |
 | `created_at`, `started_at`, `ended_at` | From the ID; on reaching `running`; on a terminal state |
-| `updated_at` | Last state change; the release loop takes rows unchanged for 10m |
+| `updated_at` | Last state change |
 
-Updates match the state the writer read, so two writers cannot overwrite each
-other, and never touch `released_at`, which only a release writes: dispatch
-after reading a result, or the release loop.
-Index `executions_job (namespace, job, created_at)` serves job status; the
-partial index `executions_unreleased (updated_at) WHERE released_at IS NULL`
-serves the [release loop](background-services.md#provider-release).
+Every write, the insert, each save and each output chunk, applies only while
+the execution's dispatch is held under the writer's `owner` and `epoch` and is
+not done; a write that matches no row is refused as stale. A save carries the
+whole record, `released_at` included, so making it twice changes nothing.
+Index `executions_job (namespace, job, created_at)` serves job status.
 
 ### `execution_logs`
 
@@ -219,8 +223,7 @@ needs no index beyond the key.
 | `provider`, `pool` | Labels from the configuration |
 | `period` | Calendar key: `2026-09` for monthly, `2026-09-22` for daily, UTC |
 | `used`, `amount` | Base units: executions; MiB-ms for `gb_seconds`; millicore-ms for `cpu_seconds`; ms for `seconds` |
-| `quota_reservations.cpu`, `memory` | Declared shape, so the reaper can price a run it did not dispatch |
-| `quota_reservations.created_at` | Reservations older than 1 hour are reaped |
+| `quota_reservations.created_at` | A reservation older than 1 hour with no execution record is dropped by the reaper |
 
 Index `quota_reservations_pool (namespace, provider, pool, period)` serves the
 per-pool sum in the reserve statement. Nothing indexes `period` alone or
@@ -242,11 +245,15 @@ default) per attempt. `jobs`, `job_versions`, `dispatches`, `executions` and
 past periods of `quota_usage` grow without bound, a few hundred bytes a row.
 Pruning old rows by hand is safe for:
 
-- `executions` and `dispatches` that are not `running`, older than any history
-  you want from `vagabond job status`, with their `execution_logs` rows
+- `dispatches` that are done (`done_at` set) and their `executions`, older
+  than any history you want from `vagabond job status`, with their
+  `execution_logs` rows. A dispatch that has ended but is not done still has
+  executions being released.
 - `quota_usage` rows for periods that have ended
 
-Never delete `quota_reservations` rows by hand; the reaper resolves them.
+Never delete `quota_reservations` rows by hand. Each is settled by its
+execution's runner, or dropped by the reaper when no execution was recorded
+for it.
 
 ## Transactions
 
@@ -282,8 +289,8 @@ A new migration also raises `SchemaVersion` in
 
 `vagabond server -dev` replaces every store with an in-memory one and ignores
 any `store` block (with a warning). The memory stores follow the same rules as
-Postgres: conditional updates, lease claims, reservations that refuse past a
-limit.
+Postgres: writes checked against the dispatch's lease, lease claims,
+reservations that refuse past a limit.
 
 What is lost:
 
@@ -311,14 +318,16 @@ unreachable`.
 | Status, list, logs | 503, as every query's connection failure is classified unreachable |
 | Plan of a job file | Answers from the last usage snapshot |
 | Plan of a registered job by name | 503: the job is read from the store |
-| Dispatch already running | Continues; record writes after `pending` are best effort |
+| Dispatch already running | Continues; each record, quota and dispatch write is retried until the store answers, and its runner waits on it |
 | `GET /v1/health` | 503, `"Store": "unreachable"` |
 | Usage refresh (15s) | Fails with a warning, keeps the last snapshot |
 
-Recovery needs no action. The pool reconnects on the next call; a dispatch
-whose finish was not written has a lapsed lease and is claimed and resumed
-within 30 s; an unsettled reservation is settled by the reaper after it is an
-hour old. Details: [dispatch](dispatch.md#store-outage),
+Recovery needs no action. The pool reconnects on the next call and the writes
+being retried land. A dispatch whose lease lapsed meanwhile can be claimed by
+another server, which continues it; the old owner's writes are then refused
+and its runners stop. A reservation whose execution record was never created
+is dropped by the reaper once it is an hour old. Details:
+[dispatch](dispatch.md#store-outage),
 [background services](background-services.md).
 
 ## Backups
@@ -343,7 +352,7 @@ pg_restore --clean --if-exists --dbname="postgres://vagabond@db.internal:5432/va
 Restoring an older backup:
 
 - Usage settled after the backup is not counted, so the period under-counts.
-- Dispatches `running` at backup time have lapsed leases and are claimed and
+- Dispatches not done at backup time have lapsed leases and are claimed and
   resumed; each unfinished execution is asked about by ID.
 - Stop every server before restoring, and start them on a binary whose
   `SchemaVersion` matches the backup or is newer.
@@ -352,7 +361,7 @@ Restoring an older backup:
 
 Supported with the same code and migrations. Differences the code accounts for:
 
-- Migrations 2, 4 and 6 to 9 run outside a transaction (`-- +goose NO
+- Migrations 2, 4 and 6 to 10 run outside a transaction (`-- +goose NO
   TRANSACTION`). CockroachDB refuses a primary key change in the same
   transaction as the column it adds (2); the others follow suit so each schema
   change applies on its own.

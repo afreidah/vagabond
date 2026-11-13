@@ -11,50 +11,29 @@ import (
 )
 
 const claimStaleReservations = `-- name: ClaimStaleReservations :many
-SELECT execution_id, namespace, provider, pool, period, amount, cpu, memory, created_at
+SELECT execution_id
 FROM quota_reservations
 WHERE created_at < $1::timestamptz
-ORDER BY execution_id, namespace, pool
+ORDER BY execution_id
 FOR UPDATE SKIP LOCKED
 `
 
-type ClaimStaleReservationsRow struct {
-	ExecutionID string
-	Namespace   string
-	Provider    string
-	Pool        string
-	Period      string
-	Amount      int64
-	Cpu         int64
-	Memory      int64
-	CreatedAt   time.Time
-}
-
 // Locks reservation rows older than the cutoff, skipping any another process
-// holds, so two reapers never resolve the same execution.
-func (q *Queries) ClaimStaleReservations(ctx context.Context, before time.Time) ([]ClaimStaleReservationsRow, error) {
+// holds, so two reapers never resolve the same execution. One row per pool,
+// so an execution's ID repeats.
+func (q *Queries) ClaimStaleReservations(ctx context.Context, before time.Time) ([]string, error) {
 	rows, err := q.db.Query(ctx, claimStaleReservations, before)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ClaimStaleReservationsRow{}
+	items := []string{}
 	for rows.Next() {
-		var i ClaimStaleReservationsRow
-		if err := rows.Scan(
-			&i.ExecutionID,
-			&i.Namespace,
-			&i.Provider,
-			&i.Pool,
-			&i.Period,
-			&i.Amount,
-			&i.Cpu,
-			&i.Memory,
-			&i.CreatedAt,
-		); err != nil {
+		var execution_id string
+		if err := rows.Scan(&execution_id); err != nil {
 			return nil, err
 		}
-		items = append(items, i)
+		items = append(items, execution_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -66,7 +45,7 @@ const executionReserved = `-- name: ExecutionReserved :one
 SELECT EXISTS (SELECT 1 FROM quota_reservations WHERE execution_id = $1)
 `
 
-// Whether an execution still holds a reservation the reaper has not settled.
+// Whether an execution still holds a reservation that has not been settled.
 func (q *Queries) ExecutionReserved(ctx context.Context, executionID string) (bool, error) {
 	row := q.db.QueryRow(ctx, executionReserved, executionID)
 	var exists bool
@@ -128,12 +107,12 @@ const reserveQuota = `-- name: ReserveQuota :execrows
 
 WITH wanted AS (
     SELECT
-        ($6::text[])[g.i] AS namespace,
-        ($7::text[])[g.i]      AS pool,
-        ($8::text[])[g.i]    AS period,
-        ($9::bigint[])[g.i]  AS amount,
-        ($10::bigint[])[g.i]   AS pool_limit
-    FROM generate_series(1, array_length($7::text[], 1)) AS g (i)
+        ($4::text[])[g.i] AS namespace,
+        ($5::text[])[g.i]      AS pool,
+        ($6::text[])[g.i]    AS period,
+        ($7::bigint[])[g.i]  AS amount,
+        ($8::bigint[])[g.i]   AS pool_limit
+    FROM generate_series(1, array_length($5::text[], 1)) AS g (i)
 ),
 standing AS (
     SELECT
@@ -153,8 +132,8 @@ standing AS (
         ), 0) AS charged
     FROM wanted
 )
-INSERT INTO quota_reservations (execution_id, namespace, provider, pool, period, amount, cpu, memory, created_at)
-SELECT $1::text, s.namespace, $2::text, s.pool, s.period, s.amount, $3::bigint, $4::bigint, $5::timestamptz
+INSERT INTO quota_reservations (execution_id, namespace, provider, pool, period, amount, created_at)
+SELECT $1::text, s.namespace, $2::text, s.pool, s.period, s.amount, $3::timestamptz
 FROM standing s
 WHERE NOT EXISTS (
     SELECT 1 FROM standing x
@@ -165,8 +144,6 @@ WHERE NOT EXISTS (
 type ReserveQuotaParams struct {
 	ExecutionID string
 	Provider    string
-	Cpu         int64
-	Memory      int64
 	CreatedAt   time.Time
 	Namespaces  []string
 	Pools       []string
@@ -195,8 +172,6 @@ func (q *Queries) ReserveQuota(ctx context.Context, arg ReserveQuotaParams) (int
 	result, err := q.db.Exec(ctx, reserveQuota,
 		arg.ExecutionID,
 		arg.Provider,
-		arg.Cpu,
-		arg.Memory,
 		arg.CreatedAt,
 		arg.Namespaces,
 		arg.Pools,

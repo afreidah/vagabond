@@ -3,112 +3,42 @@
 //
 // Author: Alex Freidah
 //
-// What each provider answer becomes. The ledger's own tests cover what each
-// verdict does to the counters.
+// What becomes of a stale reservation: dropped when nothing was recorded on
+// it, kept for its runner otherwise. The ledger's own tests cover what a drop
+// does to the counters.
 // -------------------------------------------------------------------------------
 
 package dispatch
 
 import (
-	"context"
-	"errors"
-	"fmt"
 	"testing"
 	"time"
 
 	"github.com/afreidah/vagabond/internal/execution"
-	"github.com/afreidah/vagabond/internal/ledger"
-	"github.com/afreidah/vagabond/internal/plugin"
 )
 
-// statusProvider answers Status with whatever a case gives it.
-type statusProvider struct {
-	*scriptedProvider
-	status execution.Status
-	err    error
-}
-
-// Status returns the case's status and error.
-func (p *statusProvider) Status(context.Context, execution.ID) (execution.Status, error) {
-	return p.status, p.err
-}
-
-// Each provider answer resolves to the verdict and run time the ledger needs.
+// A reservation with no execution record was never submitted on, so it is
+// dropped; one with a record is its runner's to settle.
 func TestResolve(t *testing.T) {
 	t.Parallel()
 
-	started := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-	ended := started.Add(90 * time.Second)
+	reg := newRegistry(&scriptedProvider{name: "a"})
+	d := newDispatcher(t, reg)
+	o := begin(t, d)
 
-	tests := []struct {
-		name         string
-		status       execution.Status
-		err          error
-		want         ledger.Verdict
-		wantRan      time.Duration
-		unregistered bool
-	}{
-		{
-			name: "never heard of it", want: ledger.Drop,
-			err: plugin.Internal(fmt.Errorf("%w: gone", plugin.ErrUnknownExecution)),
-		},
-		{
-			name: "finished inside Submit", want: ledger.Stand,
-			err: plugin.Internal(fmt.Errorf("status: %w", plugin.ErrUnsupported)),
-		},
-		{
-			name: "could not be asked", want: ledger.Keep,
-			err: plugin.Infrastructure(errors.New("503")),
-		},
-		{
-			name: "still running", want: ledger.Keep,
-			status: execution.Status{State: execution.StateRunning, StartedAt: started},
-		},
-		{
-			name: "finished", want: ledger.Finished, wantRan: 90 * time.Second,
-			status: execution.Status{State: execution.StateSucceeded, StartedAt: started, EndedAt: ended},
-		},
-		{
-			name: "ended without starting", want: ledger.Finished,
-			status: execution.Status{State: execution.StateCancelled, EndedAt: ended},
-		},
-		{
-			name: "started with no recorded end", want: ledger.Stand,
-			status: execution.Status{State: execution.StateFailed, StartedAt: started},
-		},
-		{
-			// Lost is not terminal: reconciliation may still learn the answer.
-			name: "lost", want: ledger.Keep,
-			status: execution.Status{State: execution.StateLost, StartedAt: started},
-		},
-		{
-			name: "provider no longer configured", want: ledger.Keep, unregistered: true,
-		},
+	defer o.lease.release()
+
+	recorded := &execution.Record{
+		ID: newTestID(t), State: execution.StatePending, UpdatedAt: time.Now(), Dispatch: o.Dispatch, Provider: "a",
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+	if err := reg.executions.Create(t.Context(), recorded, o.lease.key); err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
 
-			reg := newRegistry()
-			if !tt.unregistered {
-				reg.providers["a"] = &statusProvider{
-					scriptedProvider: &scriptedProvider{name: "a"},
-					status:           tt.status,
-					err:              tt.err,
-				}
-			}
-
-			id, err := execution.NewID()
-			if err != nil {
-				t.Fatalf("NewID() = %v", err)
-			}
-
-			verdict, ran := newDispatcher(t, reg).resolve(t.Context(), ledger.Held{ID: id, Provider: "a"})
-
-			if verdict != tt.want || ran != tt.wantRan {
-				t.Errorf("resolve() = %d, %v; want %d, %v", verdict, ran, tt.want, tt.wantRan)
-			}
-		})
+	for id, want := range map[execution.ID]bool{newTestID(t): true, recorded.ID: false} {
+		if got := d.orphaned(t.Context(), id); got != want {
+			t.Errorf("orphaned(%s) = %t, want %t", id, got, want)
+		}
 	}
 }

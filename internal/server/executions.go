@@ -4,30 +4,21 @@
 // Author: Alex Freidah
 //
 // Reading one execution, its output stored or live, and cancelling it. A
-// cancel stops the whole dispatch when this process is running it, and
-// otherwise asks the provider directly.
+// cancel stops the whole dispatch: at once when this process is running it,
+// otherwise through the dispatch's lease, so only its holder acts on the
+// provider.
 // -------------------------------------------------------------------------------
 
 package server
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/plugin"
 )
-
-// -------------------------------------------------------------------------
-// CONSTANTS
-// -------------------------------------------------------------------------
-
-// cancelTimeout bounds asking a provider to stop an execution.
-const cancelTimeout = 30 * time.Second
 
 // -------------------------------------------------------------------------
 // STATUS
@@ -116,8 +107,9 @@ func (s *Server) logsRequest(r *http.Request) (*execution.Record, int64, error) 
 // CANCELLATION
 // -------------------------------------------------------------------------
 
-// cancelExecution stops an execution and answers with its record. A dispatch
-// running here is cancelled whole, ending the job as an interrupted run does.
+// cancelExecution stops an execution's dispatch and answers with its record as
+// it stands. A dispatch running here is cancelled at once; any other is asked
+// to stop through its lease, which its holder renews within LeaseRenew.
 func (s *Server) cancelExecution(_ http.ResponseWriter, r *http.Request) (any, error) {
 	id, err := executionID(r)
 	if err != nil {
@@ -133,37 +125,9 @@ func (s *Server) cancelExecution(_ http.ResponseWriter, r *http.Request) (any, e
 		return executionOf(rec), nil
 	}
 
-	if err := s.cancelUnwatched(r.Context(), rec); err != nil {
-		return nil, err
+	if err := s.executions.RequestCancel(r.Context(), rec.Dispatch, s.now()); err != nil {
+		return nil, fmt.Errorf("requesting the cancel of %s: %w", rec.ID, err)
 	}
 
 	return executionOf(rec), nil
-}
-
-// cancelUnwatched stops an execution no dispatch here is running, and records
-// it cancelled unless something recorded it first.
-func (s *Server) cancelUnwatched(ctx context.Context, rec *execution.Record) error {
-	provider, ok := s.registry.Provider(rec.Provider)
-	if !ok {
-		return fmt.Errorf("execution %s ran on %q, which is no longer configured", rec.ID, rec.Provider)
-	}
-
-	cancelCtx, cancel := context.WithTimeout(ctx, cancelTimeout)
-	defer cancel()
-
-	if err := provider.Cancel(cancelCtx, rec.ID); err != nil {
-		return fmt.Errorf("cancelling %s on %s: %w", rec.ID, rec.Provider, err)
-	}
-
-	from := rec.State
-
-	if err := rec.To(execution.StateCancelled, s.now()); err != nil {
-		return err
-	}
-
-	if err := s.executions.Update(ctx, rec, from); err != nil && !errors.Is(err, execution.ErrStale) {
-		return err
-	}
-
-	return nil
 }

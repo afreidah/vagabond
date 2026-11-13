@@ -110,7 +110,7 @@ Every non-2xx response from a route in the table below has this body:
 | 404 | Job not registered in the namespace; no such dispatch or execution |
 | 409 | Dispatching or planning (by `Name`) a stopped job |
 | 416 | `GET /v1/execution/{id}/logs?follow=true` on a running execution whose provider cannot place its stream at `offset`: on Cloud Run, a backfill that failed or stopped at its page cap. Sent before any output |
-| 500 | Anything else: a provider refusing a cancel, a provider no longer configured, an internal error. Logged by the server |
+| 500 | Anything else: a store error other than an unreachable store, an internal error. Logged by the server |
 | 503 | The store is unreachable: connection refused, broken or timed out. Nothing was written; the same request can be retried once the store is back. Other store errors are 500 |
 
 Error messages carry the identifier, for example
@@ -319,9 +319,10 @@ runs, and once `HasResult` is `true`, read whatever did not stream with
 There is no blocking query.
 
 **Ownership:** the server that accepted the request runs the dispatch and holds
-a lease on it. The run is not tied to the HTTP request: a client disconnecting
-does not stop it. If the server stops, the lease lapses and another server
-resumes the run; see [dispatch](dispatch.md).
+a lease on it until every execution is released, which can be after `State`
+has its verdict. The run is not tied to the HTTP request: a client
+disconnecting does not stop it. If the server stops, the lease lapses and
+another server resumes the run; see [dispatch](dispatch.md#leases).
 
 ### Dispatch a registered job
 
@@ -618,7 +619,7 @@ and `JobStatus`.
 | `succeeded` | yes | Exited successfully |
 | `failed` | yes | Exited unsuccessfully or the provider failed |
 | `cancelled` | yes | Cancelled |
-| `lost` | no | Stopped answering after submission; resolved by the server within 24 hours, to its real outcome or `failed` |
+| `lost` | no | Stopped answering after submission; the server keeps asking until it reaches its real outcome, or records it `failed` once it has been `lost` 24 hours and still cannot be asked |
 
 ### Read an execution
 
@@ -697,18 +698,22 @@ Errors: 400 (malformed ID; `offset "<value>" is not a byte count`), 404, 416
 
 `DELETE /v1/execution/{id}`
 
+Cancels the execution's whole dispatch: the run stops its tasks and ends
+`unanswered`. Only the server holding the dispatch calls the provider.
+
 | Execution | Effect |
 |---|---|
 | Terminal (`succeeded`, `failed`, `cancelled`) | Nothing; returns the record |
-| Its dispatch is running in this server | Cancels the whole dispatch; the run stops its tasks and ends `unanswered`. Returns the record as read before cancelling |
-| Otherwise (dispatch running in another server, or not running) | Asks the provider to stop it, with a 30 s timeout, then records it `cancelled` unless another writer recorded it first. Returns the updated record |
+| Its dispatch is held by this server | Cancels the dispatch at once. Returns the record as read before cancelling |
+| Otherwise (dispatch held by another server, or by none) | Records the request on the dispatch, keeping the first request's time, and returns the record unchanged. The holder sees it at its next lease renewal, within 20 s; a dispatch no server holds is cancelled by the server that claims it |
 
 | Parameter | In | Description |
 |---|---|---|
 | `id` | path | Execution ID |
 
 Response: [`Execution`](#execution-object). Read it again, or its dispatch, to
-see the final state.
+see the final state: `cancelled`, once the holder has stopped it at the
+provider. See [dispatch](dispatch.md#cancellation).
 
 Errors:
 
@@ -716,7 +721,7 @@ Errors:
 |---|---|
 | 400 | Malformed ID |
 | 404 | No such execution |
-| 500 | `execution <id> ran on "<provider>", which is no longer configured`; `cancelling <id> on <provider>: <error>` |
+| 500 | `requesting the cancel of <id>: <error>`, a store error other than an unreachable store |
 | 503 | Store unreachable |
 
 ```bash
@@ -883,7 +888,7 @@ Response, `Health`:
 | `Store` | `ok` or `unreachable` |
 | `StoreError` | Why the ping failed; omitted when `ok` |
 | `UsageRefreshed` | When the usage snapshot plans are priced from was last read. Ages while the store is unreachable |
-| `Running` | Dispatches running in this server |
+| `Running` | Dispatches this server holds, started or resumed here, until every one of their executions is released |
 
 Use the status code for load balancer checks: a 503 server still answers plans
 from its snapshot and finishes running dispatches, but refuses new ones.

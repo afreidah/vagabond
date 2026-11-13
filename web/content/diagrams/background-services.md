@@ -5,7 +5,7 @@ description: "Interactive diagram of every loop and long-running goroutine the s
 weight: 8
 ---
 
-Every loop the server and the agent run, with its interval and what it touches. The server runs six upkeep tickers plus one goroutine per dispatch, lease, agent session and followed log; the agent holds one connection to the server and reports its workloads on a timer. **Hover over any component** for implementation details.
+Every loop the server and the agent run, with its interval and what it touches. The server runs five upkeep tickers plus one goroutine per dispatch, lease, execution, agent session and followed log; the agent holds one connection to the server and reports its workloads on a timer. **Hover over any component** for implementation details.
 
 {{< diagram >}}
 
@@ -17,14 +17,14 @@ window.vagabondDiagram = {
     '    CAPS[Capability<br>refresh 1m]:::background',
     '    USAGE[Usage<br>refresh 15s]:::background',
     '    REAP[Reservation<br>reaper 5m]:::background',
-    '    RELEASE[Provider<br>release 5m]:::background',
     '    CLAIM[Dispatch<br>claim 30s]:::background',
     '    PRUNE[Output<br>retention 1h]:::background',
     '    API([HTTP<br>requests]):::entry',
     '    HEALTH[Store<br>health]:::filter',
     '    FOLLOW[Live output<br>follow]:::process',
-    '    RUNNER[Dispatch<br>runner]:::process',
+    '    DISPATCH[Dispatch<br>run]:::process',
     '    LEASE[Lease<br>renewal 20s]:::process',
+    '    RUNNER[Execution<br>runner]:::process',
     '    POOLRES[Pool<br>reservations]:::filter',
     '    REGSNAP[(Capability<br>snapshots)]:::storage',
     '    LEDSNAP[(Usage<br>snapshot)]:::storage',
@@ -41,16 +41,18 @@ window.vagabondDiagram = {
     '    SRV --> CAPS',
     '    SRV --> USAGE',
     '    SRV --> REAP',
-    '    SRV --> RELEASE',
     '    SRV --> CLAIM',
     '    SRV --> PRUNE',
     '    SRV --> LISTENER',
     '',
-    '    API --> RUNNER',
+    '    API --> DISPATCH',
     '    API --> HEALTH',
     '    API --> FOLLOW',
-    '    CLAIM -->|resume| RUNNER',
-    '    RUNNER --> LEASE',
+    '    API -->|cancel request| STORE',
+    '    CLAIM -->|resume| DISPATCH',
+    '    DISPATCH --> LEASE',
+    '    DISPATCH -->|per attempt| RUNNER',
+    '    LEASE -->|cancel, lease lost| RUNNER',
     '    RUNNER --> POOLRES',
     '',
     '    CAPS --> PROVIDERS',
@@ -58,11 +60,9 @@ window.vagabondDiagram = {
     '    USAGE --> STORE',
     '    USAGE --> LEDSNAP',
     '    REAP --> STORE',
-    '    REAP --> PROVIDERS',
-    '    RELEASE --> STORE',
-    '    RELEASE --> PROVIDERS',
     '    CLAIM --> STORE',
     '    PRUNE --> STORE',
+    '    DISPATCH --> STORE',
     '    RUNNER --> STORE',
     '    RUNNER --> PROVIDERS',
     '    LEASE --> STORE',
@@ -85,12 +85,12 @@ window.vagabondDiagram = {
     SRV: {
       title: 'vagabond server',
       badge: 'entry', badgeText: 'process',
-      body: '<p><code>internal/cli/server.go</code> builds the registry and refreshes every provider, opens, migrates and verifies the store (or builds memory stores under <code>-dev</code>), and reads quota usage. A server that cannot read usage does not start.</p><p>It then starts the agent listener and listens on the API address. <code>Server.ServeListener</code> claims lapsed dispatches and reaps stale reservations once, starts the six upkeep tickers in <code>internal/server/upkeep.go</code>, and serves HTTP.</p><p>Each tick runs synchronously; a tick longer than its interval is followed at once by the next, and ticks do not pile up. A failure is logged and waits for the next tick, and one loop failing never stops another. No loop applies jitter or takes a lock across servers: where two servers could collide, the store statement decides.</p><p><a href="../../docs/background-services/">Background services reference &rarr;</a></p>'
+      body: '<p><code>internal/cli/server.go</code> builds the registry and refreshes every provider, opens, migrates and verifies the store (or builds memory stores under <code>-dev</code>), and reads quota usage. A server that cannot read usage does not start.</p><p>It then starts the agent listener and listens on the API address. <code>Server.ServeListener</code> claims lapsed dispatches and reaps stale reservations once, starts the five upkeep tickers in <code>internal/server/upkeep.go</code>, and serves HTTP.</p><p>Each tick runs synchronously; a tick longer than its interval is followed at once by the next, and ticks do not pile up. A failure is logged and waits for the next tick, and one loop failing never stops another. No loop applies jitter or takes a lock across servers: where two servers could collide, the store statement decides.</p><p><a href="../../docs/background-services/">Background services reference &rarr;</a></p>'
     },
     API: {
       title: 'HTTP API',
       badge: 'entry', badgeText: 'per request',
-      body: '<p>Requests start the per-dispatch and per-request goroutines: <code>POST /v1/jobs/run</code> and <code>POST /v1/job/{name}/dispatch</code> start a dispatch runner, <code>GET /v1/health</code> pings the store, and <code>GET /v1/execution/{id}/logs?follow=true</code> opens a live output stream.</p><p>On SIGINT or SIGTERM in-flight requests get 10s and every live stream ends at once. Running dispatches are not cancelled.</p><p><a href="../architecture/">Architecture diagram &rarr;</a></p>'
+      body: '<p>Requests start the per-dispatch and per-request goroutines: <code>POST /v1/jobs/run</code> and <code>POST /v1/job/{name}/dispatch</code> start a dispatch, <code>GET /v1/health</code> pings the store, and <code>GET /v1/execution/{id}/logs?follow=true</code> opens a live output stream.</p><p><code>DELETE /v1/execution/{id}</code> cancels a dispatch this server runs at once. For one held elsewhere it writes <code>cancel_requested_at</code> on the dispatch, keeping the first request&rsquo;s time, and returns the execution as it stands; the owner sees the request at its next lease renewal.</p><p>On SIGINT or SIGTERM in-flight requests get 10s and every live stream ends at once. Running dispatches are not cancelled.</p><p><a href="../architecture/">Architecture diagram &rarr;</a></p>'
     },
     CAPS: {
       title: 'Capability refresh',
@@ -105,12 +105,7 @@ window.vagabondDiagram = {
     REAP: {
       title: 'Reservation reaper',
       badge: 'background', badgeText: 'every 5 min',
-      body: '<p><code>Dispatcher.Reap</code> resolves quota reservations a process left when it died, or failed to settle, between reserving and settling. It selects reservations created more than 1h ago (<code>ledger.StaleAfter</code>) and asks each one&rsquo;s provider about the execution.</p><p><b>At startup:</b> once, before serving.</p><p><b>Verdicts:</b> provider no longer configured, an error, or not terminal: kept for the next tick. Unknown execution: dropped. <code>Status</code> unsupported (synchronous providers) or no end time: settled at the reserved amount. Terminal and never started: settled as zero duration. Started and ended: settled at the declared shape over the time it ran.</p><p>On Postgres the pass is one serializable transaction that claims rows <code>FOR UPDATE SKIP LOCKED</code> and holds them while providers are asked, so two servers never resolve the same reservation. Provider calls have no timeout of their own; a slow provider holds the pass.</p><p class="dg-metric">Logs: info <code>resolved abandoned quota reservations</code> with <code>count</code>; warn <code>resolving abandoned quota reservations</code></p><p><a href="../quotas/">Quotas diagram &rarr;</a></p>'
-    },
-    RELEASE: {
-      title: 'Provider release',
-      badge: 'background', badgeText: 'every 5 min',
-      body: '<p><code>Dispatcher.ReleaseLeftovers</code> releases what providers still hold for executions that are over: a Cloud Run Job, a Code Engine job run, a stopped container on a pool node. Dispatch releases after it reads a result and captures the output; a cancelled run, a provider that stopped answering, a failed <code>Result</code>, a server that died mid-run or a failed release leaves it to this loop.</p><p><b>At startup:</b> no; the first pass is one interval in.<br><b>Selects:</b> executions with no <code>released_at</code>, unchanged for more than 10m (<code>dispatch.ReleaseAfter</code>), every one each pass with no batch limit.</p><p><b>Per execution:</b> a <code>lost</code> one is reconciled first, its result recorded if the provider reports it over and <code>failed</code> if the provider no longer knows it or 24h passed; one still unresolved is skipped. One still holding a reservation is skipped until the reaper settles it (<code>Dispatcher.settled</code>). A provider no longer configured, or with no <code>Release</code> and nothing to capture, is marked released. Without a recorded result, the provider&rsquo;s <code>Status</code> must be terminal first. Output never captured (<code>logs_at</code> null) on a provider with <code>ReadLogs</code> is captured and the record written, since releasing may destroy it. Then <code>Release</code>, and the record is marked released.</p><p>Releases and marks are idempotent, so several servers running the loop is harmless. A pool node that is offline fails <code>Release</code> and is retried every pass.</p><p class="dg-metric">Logs: info <code>released provider leftovers</code> with <code>count</code>; warn <code>releasing provider leftovers</code> with the joined errors</p><p><a href="../execution-states/">Execution states diagram &rarr;</a></p>'
+      body: '<p><code>Dispatcher.Reap</code> drops quota reservations no execution was recorded for: the process died, or the store refused the record, between reserving and recording. It selects reservations created more than 1h ago (<code>ledger.StaleAfter</code>) and drops, charging nothing, each one whose execution record does not exist.</p><p><b>At startup:</b> once, before serving.</p><p>A reservation whose execution is recorded is left to that execution&rsquo;s runner, and one whose record cannot be read is kept for the next tick. No provider is called.</p><p>On Postgres the pass is one serializable transaction that claims rows <code>FOR UPDATE SKIP LOCKED</code> and holds them while each record is looked up, so two servers never resolve the same reservation.</p><p class="dg-metric">Logs: info <code>resolved abandoned quota reservations</code> with <code>count</code>; warn <code>resolving abandoned quota reservations</code></p><p><a href="../quotas/">Quotas diagram &rarr;</a></p>'
     },
     PRUNE: {
       title: 'Output retention',
@@ -120,17 +115,22 @@ window.vagabondDiagram = {
     CLAIM: {
       title: 'Dispatch claim',
       badge: 'background', badgeText: 'every 30 s',
-      body: '<p><code>Server.claim</code> takes over running dispatches whose owner stopped renewing the lease. <code>ClaimDispatches</code> gives every <code>running</code> dispatch whose lease expired, except those this server is running, this server as owner and a lease 60s from now, in one statement, so two servers never claim the same dispatch.</p><p><b>At startup:</b> once, before serving.</p><p>Each claimed dispatch is resumed in its own goroutine on a context that outlives server shutdown. A dispatch whose executions cannot be read stays <code>running</code>; its new lease lapses and a later claim tries again.</p><p class="dg-metric">Logs: warn <code>claiming abandoned dispatches</code>; per dispatch, info <code>dispatch resumed</code> with <code>previous_owner</code>, then info <code>resumed dispatch finished</code> with <code>state</code> and <code>reason</code>, or warn <code>resuming dispatch</code></p><p><a href="../task-path/">Task path diagram &rarr;</a> &middot; <a href="../execution-states/">Execution states diagram &rarr;</a></p>'
+      body: '<p><code>Server.claim</code> takes over dispatches whose owner stopped renewing the lease. <code>ClaimDispatches</code> gives every dispatch with no <code>done_at</code> whose lease expired, except those this server is running, this server as owner, the next epoch and a lease 60s from now, in one statement, so two servers never claim the same dispatch. That covers running dispatches and ended ones whose executions are still settling or releasing. From the claim on, every write under the previous epoch is refused.</p><p><b>At startup:</b> once, before serving.</p><p>Each claimed dispatch is resumed in its own goroutine on a context that outlives server shutdown. The lease is held, a cancel requested before the claim is acted on at once, and a runner is restored for every execution not yet terminal, collected and released, starting at the first step its record says is left. An ended dispatch keeps its ending; a running one is given one from its executions. Either is recorded done once every runner has finished. A dispatch whose executions cannot be read stays open; its new lease lapses and a later claim tries again.</p><p class="dg-metric">Logs: warn <code>claiming abandoned dispatches</code>; per dispatch, info <code>dispatch resumed</code> with <code>epoch</code>, then info <code>resumed dispatch finished</code> with <code>state</code> and <code>reason</code>, or warn <code>resuming dispatch</code></p><p><a href="../task-path/">Task path diagram &rarr;</a> &middot; <a href="../execution-states/">Execution states diagram &rarr;</a></p>'
     },
-    RUNNER: {
-      title: 'Dispatch runner',
+    DISPATCH: {
+      title: 'Dispatch run',
       badge: 'process', badgeText: 'per dispatch',
-      body: '<p>One goroutine per dispatch started through <code>POST /v1/jobs/run</code> or <code>POST /v1/job/{name}/dispatch</code>, or resumed by a claim. Runs the job&rsquo;s tasks in order and records how the dispatch ended: <code>succeeded</code>, <code>failed</code> or <code>unanswered</code>.</p><p>Runs on a context detached from the request, so the request returns the dispatch ID at once. Cancelled only by <code>DELETE /v1/execution/{id}</code> on one of its executions. Shutdown does not stop it; the process exit does, and the dispatch is resumed once its lease lapses.</p><p>Inside it, <code>Status</code> polls back off from 2s to 15s, and retry submissions wait <code>backoff.initial</code> (default 5s) doubling to <code>backoff.max</code> (default 30s). A resumed dispatch follows only the executions already created: the job file is not stored, so tasks not yet reached are not run.</p><p class="dg-metric">Logs: info <code>dispatch started</code>; info <code>dispatch finished</code> with <code>tasks</code> and <code>succeeded</code>, or warn <code>dispatch finished without an answer</code> with <code>tasks</code> and <code>error</code></p><p><a href="../task-path/">Task path diagram &rarr;</a> &middot; <a href="../execution-states/">Execution states diagram &rarr;</a></p>'
+      body: '<p>One goroutine per dispatch started through <code>POST /v1/jobs/run</code> or <code>POST /v1/job/{name}/dispatch</code>, or resumed by a claim. Runs the job&rsquo;s tasks in order, starting an execution runner for each attempt and waiting for its first answer, and records how the dispatch ended: <code>succeeded</code>, <code>failed</code> or <code>unanswered</code>. It then waits for every runner to finish through release and records the dispatch done (<code>done_at</code>), which ends the lease.</p><p>Runs on a context detached from the request, so the request returns the dispatch ID at once. Cancelled by <code>DELETE /v1/execution/{id}</code> on one of its executions: at once on this server, or through a cancel request seen at the next lease renewal. Shutdown does not stop it; the process exit does, and the dispatch is resumed once its lease lapses.</p><p>Retry submissions wait <code>backoff.initial</code> (default 5s) doubling to <code>backoff.max</code> (default 30s). A resumed dispatch follows only the executions already created: the job file is not stored, so tasks not yet reached are not run.</p><p class="dg-metric">Logs: info <code>dispatch started</code>; once the dispatch is done, info <code>dispatch finished</code> with <code>tasks</code> and <code>succeeded</code>, or warn <code>dispatch finished without an answer</code> with <code>tasks</code> and <code>error</code></p><p><a href="../task-path/">Task path diagram &rarr;</a> &middot; <a href="../execution-states/">Execution states diagram &rarr;</a></p>'
     },
     LEASE: {
       title: 'Lease renewal',
       badge: 'process', badgeText: 'every 20 s per dispatch',
-      body: '<p>One goroutine per running or resumed dispatch, extending its lease to 60s from each renewal through <code>RenewDispatch</code>. The first renewal is 20s after the dispatch starts, and each write has a 10s timeout.</p><p>Any failure but a stale lease is ignored: two renewals can fail before the lease lapses. A stale lease (the dispatch ended, or another server claimed it) marks the lease lost: the dispatch starts no further task (<code>ErrLeaseLost</code>) and does not write its ending.</p><p>Runs on a context detached from the dispatch, so a cancelled dispatch keeps its lease until its ending is recorded. Stops when the dispatch ends or the lease is found taken.</p><p class="dg-metric">Logs: none</p><p><a href="../../docs/dispatch/#leases">Leases &rarr;</a></p>'
+      body: '<p>One goroutine per held dispatch, started or claimed, extending its lease to 60s from each renewal through <code>RenewDispatch</code>. The first renewal is 20s after the lease is taken, and each write has a 10s timeout. A renewal applies only while the owner and epoch match and the dispatch is not done, and returns any cancel requested for it.</p><p>A cancel request stops every runner under the lease, each cancelling its execution, and the dispatch starts no further task. A refused renewal means another server claimed the dispatch: the lease is lost, every runner stops without cancelling or releasing its execution (<code>ErrLeaseLost</code>), and the dispatch writes no ending. Any other failure waits for the next tick: two renewals can fail before the lease lapses.</p><p>Runs on a context detached from the dispatch, so a cancelled dispatch keeps its lease until its executions are released. Stops once the dispatch is recorded done or the lease is lost.</p><p class="dg-metric">Logs: none</p><p><a href="../../docs/dispatch/#leases">Leases &rarr;</a></p>'
+    },
+    RUNNER: {
+      title: 'Execution runner',
+      badge: 'process', badgeText: 'per execution',
+      body: '<p>One goroutine per execution, under its dispatch&rsquo;s lease and the only writer of its record: submit, watch, collect, settle, release. Each step leaves a mark on the record, so a runner restored after a claim starts at the first step not done. The attempt takes the runner&rsquo;s first answer, once the execution is terminal, lost or failed to submit; settling and releasing follow.</p><p><b>Watch:</b> <code>Status</code> polls back off from 2s to 15s. A failed poll makes the execution <code>lost</code>, and polling goes on; one the provider no longer knows, or still failing after 24h lost, is <code>failed</code>.<br><b>Cancel:</b> the provider&rsquo;s <code>Cancel</code>, then one <code>Status</code> for the times it ran.<br><b>Release:</b> retried 250ms doubling to 10s until it succeeds or the provider no longer knows the execution.<br>Every <code>Status</code>, <code>Result</code>, <code>Cancel</code> and <code>Release</code> call has a 30s timeout.</p><p>Every write is checked against the lease. A refused one means another server claimed the dispatch: the runner stops and calls the provider no further. Any other store failure is retried, 250ms doubling to 10s with a 10s timeout per try, until the write lands.</p><p class="dg-metric">Logs: warn <code>releasing provider leftovers</code> with <code>execution</code> and <code>error</code>, per failed release; warn <code>store write failed, retrying</code> with <code>error</code></p><p><a href="../task-path/">Task path diagram &rarr;</a> &middot; <a href="../execution-states/">Execution states diagram &rarr;</a></p>'
     },
     POOLRES: {
       title: 'Pool reservations',
@@ -145,7 +145,7 @@ window.vagabondDiagram = {
     HEALTH: {
       title: 'Store health',
       badge: 'filter', badgeText: 'per request',
-      body: '<p>Not a loop. <code>GET /v1/health</code> pings the store on each request with a 5s timeout: 200 with <code>Store</code> <code>ok</code>, or 503 with <code>Store</code> <code>unreachable</code> and <code>StoreError</code>. It also reports <code>UsageRefreshed</code> and how many dispatches this server is running.</p><p>The server recovers from an outage through its loops: each retries on its next tick, the claim picks up dispatches whose ending was not written, and the reaper settles reservations that were not.</p><p><a href="../../docs/dispatch/#store-outage">Store outage &rarr;</a></p>'
+      body: '<p>Not a loop. <code>GET /v1/health</code> pings the store on each request with a 5s timeout: 200 with <code>Store</code> <code>ok</code>, or 503 with <code>Store</code> <code>unreachable</code> and <code>StoreError</code>. It also reports <code>UsageRefreshed</code> and how many dispatches this server is running.</p><p>The server recovers from an outage on its own: execution runners retry each write until the store takes it, a dispatch whose lease lapsed meanwhile is claimed and its runners restored while the old owner&rsquo;s writes are refused, the loops retry on their next tick, and the reaper drops reservations whose execution was never recorded.</p><p><a href="../../docs/dispatch/#store-outage">Store outage &rarr;</a></p>'
     },
     FOLLOW: {
       title: 'Live output follow',
@@ -175,12 +175,12 @@ window.vagabondDiagram = {
     STORE: {
       title: 'Store (Postgres or CockroachDB)',
       badge: 'storage', badgeText: 'shared state',
-      body: '<p><code>state/postgres</code>, or memory stores under <code>-dev</code>. The loops read and write <code>dispatches</code> (owner and lease), <code>executions</code> (<code>released_at</code>, <code>logs_at</code>), <code>execution_logs</code>, <code>quota_usage</code> and <code>quota_reservations</code>.</p><p>Several servers can share one store. Every loop runs on every server, and the store keeps them apart: the claim is one <code>UPDATE ... RETURNING</code>, so a lapsed dispatch goes to exactly one server; the reaper resolves each stale reservation under a <code>SKIP LOCKED</code> row lock; releases are idempotent; the refreshes are per-server reads.</p><p><a href="../database-schema/">Database schema diagram &rarr;</a></p>'
+      body: '<p><code>state/postgres</code>, or memory stores under <code>-dev</code>. The loops and runners read and write <code>dispatches</code> (owner, epoch, lease, cancel request, <code>done_at</code>), <code>executions</code> (the record and its <code>logs_at</code> and <code>released_at</code> marks), <code>execution_logs</code>, <code>quota_usage</code> and <code>quota_reservations</code>.</p><p>Several servers can share one store. Every loop runs on every server, and the store keeps them apart: the claim is one <code>UPDATE ... RETURNING</code> that moves the dispatch to its next epoch, so a lapsed dispatch goes to exactly one server and every write under the old lease is refused; the reaper resolves each stale reservation under a <code>SKIP LOCKED</code> row lock; the refreshes are per-server reads.</p><p><a href="../database-schema/">Database schema diagram &rarr;</a></p>'
     },
     PROVIDERS: {
       title: 'Providers',
       badge: 'data', badgeText: 'external',
-      body: '<p>The configured plugins and the platforms behind them: <code>cloud-run</code>, <code>code-engine</code>, <code>lambda</code> and <code>pool</code>. The loops call <code>Capabilities</code> (capability refresh, pools excepted), <code>Status</code> (reaper, release), <code>Result</code>, <code>ReadLogs</code> and <code>Release</code> (release), and <code>StreamLogs</code> (live output).</p><p>A call made through dispatch that the platform rejects as unauthorized has the provider&rsquo;s credential resolved again from its source, at most once a minute, and is made once more.</p>'
+      body: '<p>The configured plugins and the platforms behind them: <code>cloud-run</code>, <code>code-engine</code>, <code>lambda</code> and <code>pool</code>. The capability refresh calls <code>Capabilities</code> (pools excepted); execution runners call <code>Submit</code>, <code>Status</code>, <code>Cancel</code>, <code>Result</code>, <code>ReadLogs</code> and <code>Release</code>; live output calls <code>StreamLogs</code>. The reaper calls none.</p><p>A call made through dispatch that the platform rejects as unauthorized has the provider&rsquo;s credential resolved again from its source, at most once a minute, and is made once more.</p>'
     },
     REGSNAP: {
       title: 'Capability snapshots',
@@ -212,7 +212,7 @@ window.vagabondDiagram = {
 |------|---------|
 | <span class="dg-swatch dg-entry"></span> | Processes and the API that start the loops |
 | <span class="dg-swatch dg-background"></span> | Periodic loop |
-| <span class="dg-swatch dg-process"></span> | Goroutine per dispatch, session, request or workload |
+| <span class="dg-swatch dg-process"></span> | Goroutine per dispatch, execution, session, request or workload |
 | <span class="dg-swatch dg-filter"></span> | Checked when read; not a loop |
 | <span class="dg-swatch dg-storage"></span> | State the loops read and write |
 | <span class="dg-swatch dg-success"></span> | External systems: provider platforms, containerd |
@@ -224,11 +224,11 @@ window.vagabondDiagram = {
 | Capability refresh | Server | 1m | Yes, before the server is built | `registry.Refresh` |
 | Usage snapshot refresh | Server | 15s, and before each task | Yes, required | `ledger.Refresh` |
 | Reservation reaper | Server | 5m | Yes, before serving | `Dispatcher.Reap` |
-| Provider release | Server | 5m | No | `Dispatcher.ReleaseLeftovers` |
 | Dispatch claim | Server | 30s | Yes, before serving | `Server.claim` |
 | Output retention | Server | 1h | No | `Server.prune` |
-| Dispatch runner | Server | Per dispatch | | `Dispatcher.Run`, `Dispatcher.Resume` |
-| Lease renewal | Server | 20s per dispatch | | `Dispatcher.hold` |
+| Dispatch run | Server | Per dispatch | | `Dispatcher.Run`, `Dispatcher.Resume` |
+| Execution runner | Server | Per execution, `Status` every 2s to 15s | | `runner.run` |
+| Lease renewal | Server | 20s per dispatch, until it is done | | `Dispatcher.hold` |
 | Agent listener | Server | Long-running | Yes | `Server.ServeAgents` |
 | Live output follow | Server | Per request, record re-read every 1s | | `Server.follow` |
 | Server connection | Agent | Backoff 1s to 30s | Yes | `Agent.Run` |

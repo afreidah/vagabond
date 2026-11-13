@@ -148,8 +148,8 @@ func (p *Provider) createJobRun(ctx context.Context, spec *jobRunSpec) (*jobRun,
 	return &run, nil
 }
 
-// getJobRun reads one job run. A run Code Engine has no record of wraps
-// ErrUnknownExecution, so the reaper drops its reservation.
+// getJobRun reads one job run. A run Code Engine has no record of, deleted
+// or never created, wraps ErrUnknownExecution.
 func (p *Provider) getJobRun(ctx context.Context, name string) (*jobRun, error) {
 	var run jobRun
 

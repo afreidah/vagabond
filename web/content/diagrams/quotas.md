@@ -32,17 +32,21 @@ window.vagabondDiagram = {
     '',
     '    RESERVE -->|zero rows| REFUSAL[Refusal<br>next ranked provider]:::reject',
     '    RESERVE -->|rows inserted| RESV[(quota_reservations)]:::storage',
-    '    RESV --> RESULTQ{Result<br>returned?}:::decision',
-    '    RESULTQ -->|yes| BILLED{Billed<br>amount?}:::decision',
+    '    RESV -->|runner settles| RAN{What<br>ran?}:::decision',
+    '    RAN -->|nothing| DROP[Drop<br>charged nothing]:::process',
+    '    RAN -->|a result| BILLED{Billed<br>amount?}:::decision',
     '    BILLED -->|yes| BILLEDCHG[Billed memory and CPU<br>over billed duration]:::process',
-    '    BILLED -->|no| DECLCHG[Declared CPU and memory<br>over measured duration]:::process',
+    '    BILLED -->|no| DECLCHG[Declared CPU and memory<br>over result duration]:::process',
+    '    RAN -->|never answered| RESERVEDCHG[Declared shape<br>over declared timeout]:::process',
+    '    RAN -->|otherwise| SEENCHG[Declared shape<br>over time seen running]:::process',
     '    BILLEDCHG --> SETTLE[Settle<br>reservation replaced]:::process',
     '    DECLCHG --> SETTLE',
+    '    RESERVEDCHG --> SETTLE',
+    '    SEENCHG --> SETTLE',
     '    SETTLE --> USAGE[(quota_usage)]:::storage',
     '',
-    '    RESULTQ -->|no: reservation stands| REAPER[Reservation reaper<br>every 5 min, over 1 h old]:::background',
-    '    SETTLE -->|write failed| REAPER',
-    '    REAPER -->|settled or dropped| USAGE',
+    '    RESV -->|no execution record| REAPER[Reservation reaper<br>every 5 min, over 1 h old]:::background',
+    '    REAPER --> DROP',
     '    REFRESH -->|reads| USAGE',
   ].join('\n'),
 
@@ -100,12 +104,17 @@ window.vagabondDiagram = {
     RESV: {
       title: 'quota_reservations',
       badge: 'storage', badgeText: 'table',
-      body: '<p>Open reservations: <code>execution_id</code>, <code>namespace</code> (<code>&#39;&#39;</code> for the provider&rsquo;s own pools), <code>provider</code>, <code>pool</code>, <code>period</code>, <code>amount</code> in base units, the declared <code>cpu</code> and <code>memory</code> so the reaper can price a run it did not dispatch, and <code>created_at</code>.</p><p>Counted in the usage snapshot alongside settled usage, so <code>free_quota_percent</code> and the next reservation see a run while it is open. Never delete these rows by hand; the reaper resolves them.</p><p><a href="../database-schema/">Database schema diagram &rarr;</a></p>'
+      body: '<p>Open reservations: <code>execution_id</code>, <code>namespace</code> (<code>&#39;&#39;</code> for the provider&rsquo;s own pools), <code>provider</code>, <code>pool</code>, <code>period</code>, <code>amount</code> in base units, and <code>created_at</code>.</p><p>Counted in the usage snapshot alongside settled usage, so <code>free_quota_percent</code> and the next reservation see a run while it is open. Never delete these rows by hand; each execution&rsquo;s runner settles its own, and the reaper drops those with no execution record.</p><p><a href="../database-schema/">Database schema diagram &rarr;</a></p>'
     },
-    RESULTQ: {
-      title: 'Result Returned?',
-      badge: 'decision', badgeText: 'dispatch.charge',
-      body: '<p>Only a result says what a run cost, so only an attempt that returns one is settled. Without one the reservation stands at the declared charge: the run may still be going, and the declared worst case is the over-count the ledger errs toward.</p>'
+    RAN: {
+      title: 'What Ran?',
+      badge: 'decision', badgeText: 'execution runner',
+      body: '<p>The execution&rsquo;s runner settles its reservation after it has answered the attempt, and only while the reservation is still held (<code>Ledger.Reserved</code>), so a runner restored after a claim settles once. The cost is the first of these that applies:</p><p><b>Nothing ran</b>: a <code>Submit</code> refused as <code>internal</code>, or one the provider never heard of that was never seen running.<br><b>A result</b>: what it says the run used.<br><b>Never answered</b>: still lost after 24 hours, or a failed <code>Submit</code> or a cancel after which <code>Status</code> cannot be asked and the record never saw a start.<br><b>Otherwise</b>: a run Vagabond cancelled, one the provider forgot after it was seen running, or one whose result could not be read.</p><p>Until then the reservation stands at the declared charge, the over-count the ledger errs toward.</p><p><a href="../task-path/">Task path diagram &rarr;</a></p>'
+    },
+    DROP: {
+      title: 'Drop',
+      badge: 'process', badgeText: 'ledger.Drop',
+      body: '<p>The reservation rows are deleted and nothing is added to <code>quota_usage</code>: the settle statement with no amounts.</p><p>The runner drops the reservation of an execution that never ran; the reaper drops one whose execution was never recorded.</p>'
     },
     BILLED: {
       title: 'Billed Amount?',
@@ -120,12 +129,22 @@ window.vagabondDiagram = {
     DECLCHG: {
       title: 'Declared Charge',
       badge: 'process', badgeText: 'estimate',
-      body: '<p>The declared CPU and memory &times; the execution&rsquo;s measured duration, rather than its timeout. <code>executions</code> pools are charged 1.</p><p>A task with no timeout reserved 0 on duration meters and is charged its real duration here.</p>'
+      body: '<p>The declared CPU and memory &times; the duration in the result, rather than its timeout. <code>executions</code> pools are charged 1.</p><p>A task with no timeout reserved 0 on duration meters and is charged its real duration here.</p>'
+    },
+    RESERVEDCHG: {
+      title: 'Charged as Reserved',
+      badge: 'process', badgeText: 'never answered',
+      body: '<p>The declared CPU and memory &times; the declared timeout (<code>executions.timeout_ms</code>), which is what was reserved. <code>executions</code> pools are charged 1.</p><p>Charged when nothing says what ran: an execution whose <code>Status</code> still fails after 24 hours lost, or a failed <code>Submit</code> or a cancel the provider cannot be asked about, with no start on the record. A failed <code>Submit</code> on AWS Lambda, where <code>Status</code> is unsupported, is charged this way.</p>'
+    },
+    SEENCHG: {
+      title: 'Time Seen Running',
+      badge: 'process', badgeText: 'no result',
+      body: '<p>The declared CPU and memory &times; the time from <code>StartedAt</code> to <code>EndedAt</code>, or to now when there is no end; zero when it never started. <code>executions</code> pools are charged 1.</p><p>A run Vagabond cancelled, and a failed <code>Submit</code> the provider reports on, take both times from the provider&rsquo;s <code>Status</code>. One the provider no longer knows, as Cloud Run and Code Engine after their <code>Cancel</code>, is charged from when the runner saw it start to when it ended.</p>'
     },
     SETTLE: {
       title: 'Settle',
       badge: 'process', badgeText: 'ledger.Settle',
-      body: '<p>One statement deletes the execution&rsquo;s reservation rows and adds the actual charge to <code>quota_usage</code>, in the periods the reservation was made in. A run that ends after midnight UTC is charged to the day it was reserved in.</p><p>Not checked against the limit: settled usage can pass it, and later tasks are refused. Settling an execution with no reservation rows does nothing, so a settle after the reaper, or twice, charges once.</p><p>A failed settle write leaves the reservation for the reaper.</p><p><a href="../task-path/">Task path diagram &rarr;</a></p>'
+      body: '<p>One statement deletes the execution&rsquo;s reservation rows and adds the actual charge to <code>quota_usage</code>, in the periods the reservation was made in. A run that ends after midnight UTC is charged to the day it was reserved in.</p><p>Not checked against the limit: settled usage can pass it, and later tasks are refused. Settling an execution with no reservation rows does nothing, so settling twice charges once.</p><p>The runner retries a failed settle write until the store takes it.</p><p><a href="../task-path/">Task path diagram &rarr;</a></p>'
     },
     USAGE: {
       title: 'quota_usage',
@@ -135,7 +154,7 @@ window.vagabondDiagram = {
     REAPER: {
       title: 'Reservation Reaper',
       badge: 'background', badgeText: 'every 5 min',
-      body: '<p>On <code>vagabond server</code> start, then every 5 minutes, claims reservations created more than 1 hour ago (<code>FOR UPDATE SKIP LOCKED</code>, one serializable transaction) and asks each execution&rsquo;s provider for its status.</p><p><b>Unknown execution</b>: dropped, nothing charged.<br><b>Status unsupported</b>, or <b>terminal, started, no end time</b>: settled at the reserved amounts.<br><b>Terminal, never started</b>: settled at duration 0.<br><b>Terminal, started and ended</b>: declared shape &times; (end &minus; start).<br><b>Provider gone, error, not terminal</b>: kept for the next pass.</p><p>Logs <code>resolved abandoned quota reservations</code> with a count.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
+      body: '<p>On <code>vagabond server</code> start, then every 5 minutes, claims reservations created more than 1 hour ago (<code>FOR UPDATE SKIP LOCKED</code>, one serializable transaction) and drops each one with no execution record, charging nothing. A process that died, or a record the store refused, between reserving and recording leaves these.</p><p>A reservation whose execution is recorded is its runner&rsquo;s to settle, and one whose record cannot be read is kept for the next pass. No provider is asked.</p><p>Logs <code>resolved abandoned quota reservations</code> with a count.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
     },
     REFRESH: {
       title: 'Usage Snapshot Refresh',

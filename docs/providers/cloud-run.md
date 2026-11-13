@@ -386,20 +386,21 @@ for `GET /v1/execution/{id}/logs?follow=true`
 
 | Mechanism | When | Effect |
 |---|---|---|
-| `Release` | After every `Result` and `ReadLogs`, by dispatch, 30s timeout | Deletes the job |
-| `Release` | Every other ending, by the [provider release](../background-services.md#provider-release) loop | Deletes the job |
-| `Cancel` | When the dispatching caller gives up, or `DELETE /v1/execution/{id}` for an execution no local dispatch is running | Deletes the job, stopping its execution |
+| `Release` | Last step of every execution, by its runner, after `Result`, `ReadLogs` and the settle; retried until it succeeds | Deletes the job |
+| `Cancel` | When the execution's dispatch is cancelled, or after a `Submit` that failed as `infrastructure` | Deletes the job, stopping its execution |
 | Failed `:run` | Inside `Submit` | Deletes the job |
 
 **Cancel destroys the result.** Deleting the job deletes its executions and
 tasks, and the exit code with them. `Result` after `Cancel` fails with
-`ErrUnknownExecution`. Dispatch always reads `Result` before `Release`.
+`ErrUnknownExecution`, and so does the `Status` call that follows a cancel, so
+a cancelled execution is charged for the time Vagabond saw it running, and
+nothing if it never reached `running`. The runner always reads `Result`
+before `Release`.
 
-A job outlives its run when dispatch never reaches `Release`: a failed
-`Result`, a provider that stopped answering, a server that died. The release
-loop deletes it once the record has gone 10 minutes unchanged, `Status`
-reports the execution over and any quota reservation is settled. Leftover jobs count against Cloud Run's per-region job
-quota until then.
+A job outlives its run until its runner reaches `Release`: while the
+execution is `lost`, which lasts until Cloud Run answers or 24 hours pass, or
+while its dispatch waits to be claimed after its server died. Leftover jobs
+count against Cloud Run's per-region job quota until then.
 
 ## Failure classification
 
@@ -515,11 +516,15 @@ provider "gcp-cloud-run" {
 - **Hand-run executions:** if someone runs a `vagabond-` job by hand, `Status`
   and `Result` follow the execution with the latest start time.
 - **Deleted from the console:** a job deleted outside Vagabond while running
-  reports `ErrUnknownExecution` on the next poll, and the quota reaper drops its
-  reservation.
+  reports `ErrUnknownExecution`, classified internal, on the next poll. The
+  execution is `failed` at once, which stops the task, and charged for the
+  time it was seen running ([Lost executions](../dispatch.md#lost-executions)).
+  A job whose execution listing is still empty is classified infrastructure
+  instead, since the listing can lag the run: the execution goes `lost` and
+  is polled on.
 - **Restart during an execution:** the job keeps running. The server that
-  resumes the dispatch polls it by name and collects its result; see
-  [Dispatch](../dispatch.md).
+  resumes the dispatch polls it by name, collects its result and releases it;
+  see [Resuming](../dispatch.md#resuming).
 
 ## Testing against a real project
 

@@ -1,6 +1,6 @@
 ---
 title: "Vagabond"
-description: "Compute broker for short-lived, stateless jobs on Cloud Run Jobs, AWS Lambda and agent nodes, with quota admission and per-run usage tracking."
+description: "Compute broker for short-lived, stateless jobs on Cloud Run Jobs, Code Engine Jobs, AWS Lambda and agent nodes, with quota admission and per-run usage tracking."
 layout: hextra-home
 ---
 
@@ -17,7 +17,7 @@ layout: hextra-home
 
 <div class="hx:mb-10">
 {{< hextra/hero-subtitle style="margin: 0 auto;" >}}
-  Jobs are written in Nomad-style HCL and run on Cloud Run Jobs, AWS Lambda or agent nodes.<br class="hx:sm:block hx:hidden" /> Backends are checked against each job's constraints, resources, cost limit and quota, and usage is recorded per run.
+  Jobs are written in Nomad-style HCL and run on Cloud Run Jobs, Code Engine Jobs, AWS Lambda or agent nodes.<br class="hx:sm:block hx:hidden" /> Backends are checked against each job's constraints, resources, cost limit and quota, and usage is recorded per run.
 {{< /hextra/hero-subtitle >}}
 </div>
 
@@ -181,24 +181,27 @@ box2  homelab  10.0.0.22:3877  arm64  0/4000m     0/8192MiB      0          2026
 ### Execution history
 
 Every dispatch and attempt is recorded in Postgres or CockroachDB, with its
-output, which streams live while a task runs. Dispatches are leased, so a
-server resumes those a dead one left running.
+output, which streams live while a task runs. Dispatches are leased until
+every execution is cleaned up, so a server resumes those a dead one left
+unfinished.
 
 </div>
 <div>
 
 ### Provider plugins
 
-Cloud Run Jobs and AWS Lambda today. A plugin translates a task and classifies
-failures; scheduling, retries and accounting stay in Vagabond.
+Cloud Run Jobs, Code Engine Jobs, AWS Lambda and agent pools today. A plugin
+translates a task and classifies failures; scheduling, retries and accounting
+stay in Vagabond.
 
 </div>
 <div>
 
 ### Store outages
 
-While the store is unreachable, new work is refused with 503 and running work
-finishes. What the outage lost is repaired when the store returns.
+While the store is unreachable, new work is refused with 503 and running
+executions carry on; their record writes are retried until the store returns.
+A dispatch whose lease lapsed meanwhile is taken over by another server.
 
 </div>
 

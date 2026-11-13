@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -438,6 +439,53 @@ func TestCancel_StopsARunningDispatch(t *testing.T) {
 	h.awaitExecution(t, started.DispatchID, "cancelled")
 }
 
+// refusingCancels is a memory store whose cancel requests fail, as a store
+// with an error other than an outage does.
+type refusingCancels struct {
+	*memory.Executions
+}
+
+// RequestCancel fails.
+func (refusingCancels) RequestCancel(context.Context, execution.ID, time.Time) error {
+	return errors.New("disk full")
+}
+
+// A cancel for a dispatch another server holds that cannot be recorded fails
+// with the store's error, rather than answering as if it were on its way.
+func TestCancel_UnrecordableRequestFails(t *testing.T) {
+	ctx := t.Context()
+	reg, led := fixtures(t)
+	executions := refusingCancels{memory.NewExecutions()}
+
+	d := &execution.Dispatch{
+		ID: newExecutionID(t), Namespace: "default", Job: "sleepy", Tasks: 1, State: execution.DispatchRunning,
+		Owner: "server:b:2", Epoch: 1, LeaseUntil: time.Now().Add(time.Minute), Created: time.Now(),
+	}
+	if err := executions.CreateDispatch(ctx, d); err != nil {
+		t.Fatalf("CreateDispatch() = %v", err)
+	}
+
+	id := newExecutionID(t)
+
+	err := executions.Create(ctx, &execution.Record{
+		ID: id, State: execution.StateRunning, UpdatedAt: time.Now(),
+		Namespace: "default", Job: "sleepy", Dispatch: d.ID, Task: "wait", Provider: "box", Attempt: 1,
+	}, d.Lease())
+	if err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+
+	srv := httptest.NewServer(New(reg, led, executions, NewMockserverJobs(gomock.NewController(t)),
+		slog.New(slog.DiscardHandler)).Handler())
+	t.Cleanup(srv.Close)
+
+	h := &harness{url: srv.URL}
+
+	if status := h.call(t, http.MethodDelete, "/v1/execution/"+id.String(), nil, nil); status != http.StatusInternalServerError {
+		t.Errorf("DELETE status = %d, want 500", status)
+	}
+}
+
 // -------------------------------------------------------------------------
 // PLANS AND ERRORS
 // -------------------------------------------------------------------------
@@ -554,7 +602,7 @@ func TestServeListener_ResumesAnAbandonedDispatch(t *testing.T) {
 
 	d := &execution.Dispatch{
 		ID: newExecutionID(t), Namespace: "default", Job: "sleepy", Tasks: 1,
-		State: execution.DispatchRunning, Owner: "cli:dead:1", LeaseUntil: lapsed, Created: lapsed,
+		State: execution.DispatchRunning, Owner: "cli:dead:1", Epoch: 1, LeaseUntil: lapsed, Created: lapsed,
 	}
 	if err := executions.CreateDispatch(ctx, d); err != nil {
 		t.Fatalf("CreateDispatch() = %v", err)
@@ -574,7 +622,7 @@ func TestServeListener_ResumesAnAbandonedDispatch(t *testing.T) {
 	err := executions.Create(ctx, &execution.Record{
 		ID: id, State: execution.StateRunning, UpdatedAt: lapsed,
 		Namespace: "default", Job: "sleepy", Dispatch: d.ID, Task: "wait", Provider: "box", Attempt: 1,
-	})
+	}, d.Lease())
 	if err != nil {
 		t.Fatalf("Create() = %v", err)
 	}

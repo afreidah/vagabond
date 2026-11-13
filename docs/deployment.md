@@ -227,15 +227,15 @@ configured providers, not with registered jobs.
 
 | Load | Per | Cost |
 |---|---|---|
-| Lease renewal | Running dispatch | One `UPDATE` every 20s |
-| Execution polling | Running execution on Cloud Run or a pool | One provider `Status` call, interval doubling from 2s to 15s |
+| Lease renewal | Dispatch not yet done | One `UPDATE` every 20s, until every execution is released |
+| Execution polling | Running or `lost` execution on an asynchronous provider | One provider `Status` call, interval doubling from 2s to 15s |
 | Capability refresh | Enabled non-pool provider | One provider call per minute, 30s timeout |
 | Usage refresh | Server | One read of current-period quota rows every 15s |
 | Lease claim | Server | One `UPDATE ... RETURNING` every 30s |
-| Reaper | Server | One locking read of reservations older than 1 hour every 5 minutes, plus a provider `Status` call per stale reservation |
-| Record writes | Execution | A few `INSERT`/`UPDATE`s per state change |
+| Reaper | Server | One locking read of reservations older than 1 hour every 5 minutes, plus one execution record read per stale reservation |
+| Record writes | Execution | One conditional `INSERT` or `UPDATE` per state change, plus one each for the result and the release |
 | Output capture | Ended execution | One provider `ReadLogs`, and one transaction per 256 KiB of output, up to `max_log_mib`. On Cloud Run, one `entries:list` request per page, against a quota of 60 a minute per project |
-| Provider release | Server | Every 5 minutes: one read of every unreleased execution unchanged for 10 minutes; per candidate a reservation lookup, a provider `Status` when it has no result, a capture when its output was never captured, then `Release` and an `UPDATE` |
+| Settle and release | Ended execution | A reservation lookup and a settle; one provider `Release`, retried from 250ms doubling to 10s while it fails |
 | Output retention | Server | One `DELETE` of output past `log_retention` every hour |
 | Live output | Followed request | One execution read per second, plus the provider's stream |
 | Dispatch follow | `job run` / `job dispatch` | One `GET /v1/dispatch/{id}` per second: the dispatch and all of its executions |
@@ -267,8 +267,8 @@ Safe:
 | Quota reservation | One `INSERT ... SELECT` in a serializable transaction; two servers cannot both see room |
 | Settling | Deleting the reservation and adding usage is one statement; settling twice charges once |
 | Resuming a dead server's dispatches | Claiming is one `UPDATE ... RETURNING` of lapsed leases; one server gets each |
-| Finishing and renewing a dispatch | Conditional on `owner`; a server whose lease was taken stops starting tasks and does not record the end |
-| Execution updates | Conditional on the state the writer read |
+| Finishing and renewing a dispatch | Conditional on `owner` and `epoch`; a server whose lease was taken stops every runner, starts no task and does not record the end |
+| Execution writes | Conditional on the dispatch's lease (`owner`, `epoch`, not done); a runner whose write is refused stops, with no further provider call |
 | Reaping | `FOR UPDATE SKIP LOCKED`; two reapers never resolve the same reservation |
 | Registering a job | Serializable; concurrent registers are retried |
 
@@ -278,20 +278,24 @@ Not safe, or not shared:
   into the reservation statement, so servers with different limits enforce
   different ceilings over the same usage. A server claiming a dispatch on a
   provider it does not have configured records its unfinished executions
-  `failed` or `lost`.
+  `failed`, charges them for the time they were seen running, and marks them
+  released without a provider call.
 - **Agents belong to one server.** An agent dials one `-server` address, and
   a `pool` provider sees only the agents connected to its own server. The same
   pool name on two servers is two disjoint sets of nodes. When a server dies,
-  another server that claims its pool dispatches cannot reach those nodes;
-  the executions end `lost` or `failed` and their reservations are dropped by
-  the reaper, while the workload may still be running on the node.
+  another server that claims its pool dispatches cannot reach those nodes:
+  their executions are `lost` for the pool's first 5 minutes, then `failed`
+  as unknown, charged for the time they were seen running, and count as
+  released without reaching the node, while the workload may still be running
+  there ([Agent](agent.md#node-leaving-mid-run)).
 - **Owners need distinct hostnames.** A lease owner is
   `server:<hostname>:<pid>`. Two servers with the same hostname and PID, such
   as containers both running as PID 1 under one hostname, share an owner and
   cannot tell their leases apart.
-- **Cancelling is per server.** `DELETE /v1/execution/{id}` on the server
-  running the dispatch stops the whole dispatch. On any other server it
-  cancels that execution at the provider only.
+- **Cancelling goes through the lease.** `DELETE /v1/execution/{id}` on the
+  server holding the dispatch stops it at once. On any other server it records
+  the request on the dispatch, and the holder cancels the whole dispatch at
+  its next renewal, within 20 seconds.
 - **Plans can lag.** Each server's usage snapshot refreshes every 15 seconds,
   so `job plan` on two servers can disagree briefly. Reservations are still
   exact.
@@ -338,7 +342,7 @@ $ curl -s http://127.0.0.1:4747/v1/health
 | `Store` | `ok`, or `unreachable` when a ping within 5 seconds fails |
 | `StoreError` | Present only when unreachable |
 | `UsageRefreshed` | When the quota usage snapshot was last read, UTC. Older than about 15 seconds means refreshes are failing. |
-| `Running` | Dispatches this server is running, started or resumed |
+| `Running` | Dispatches this server holds, started or resumed, until every one of their executions is released |
 
 | Status | When |
 |---|---|
@@ -365,8 +369,8 @@ time=2026-09-28T14:03:12.540Z level=INFO msg="dispatch started" dispatch=... job
 | Level | Server events |
 |---|---|
 | `debug` | Every API request: `method`, `path`, `status`, `duration` |
-| `info` | `serving`, `serving agents`, `stopped`, `node registered`, `dispatch started`, `dispatch finished`, `dispatch resumed`, `resumed dispatch finished`, `resolved abandoned quota reservations`, `released provider leftovers` |
-| `warn` | `dispatch finished without an answer`, `store unreachable`, `node disconnected`, `agent connection`, `refreshing provider capabilities`, `refreshing quota usage`, `resolving abandoned quota reservations`, `releasing provider leftovers`, `claiming abandoned dispatches`, `resuming dispatch`, `log stream ended early` |
+| `info` | `serving`, `serving agents`, `stopped`, `node registered`, `dispatch started`, `dispatch finished`, `dispatch resumed`, `resumed dispatch finished`, `resolved abandoned quota reservations`, `pruned stored output` |
+| `warn` | `dispatch finished without an answer`, `store unreachable`, `store write failed, retrying`, `node disconnected`, `agent connection`, `refreshing provider capabilities`, `refreshing quota usage`, `resolving abandoned quota reservations`, `releasing provider leftovers`, `claiming abandoned dispatches`, `resuming dispatch`, `pruning stored output`, `reading stored output ended early`, `log stream ended early` |
 | `error` | `request failed`: an API request that answered 500 |
 
 Startup errors, configuration diagnostics, and the `Some providers did not

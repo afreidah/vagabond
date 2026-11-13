@@ -105,40 +105,19 @@ func (m *Memory) ReadUsage(_ context.Context, periods []string) (Usage, error) {
 	return usage, nil
 }
 
-// Reap settles the reservations created before the cutoff that settle accepts.
-func (m *Memory) Reap(
-	ctx context.Context, before time.Time,
-	settle func(context.Context, Held) (map[PoolRef]int64, bool),
-) (int, error) {
+// Reap drops the reservations created before the cutoff that orphaned
+// accepts, charging nothing.
+func (m *Memory) Reap(ctx context.Context, before time.Time, orphaned Orphaned) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	reaped := 0
 
 	for id, r := range m.held {
-		if !r.Created.Before(before) {
-			continue
+		if r.Created.Before(before) && orphaned(ctx, id) {
+			m.settle(id, nil)
+			reaped++
 		}
-
-		held := Held{
-			ID:       id,
-			Provider: r.Provider,
-			CPU:      r.CPU,
-			Memory:   r.Memory,
-			Amounts:  make(map[PoolRef]int64, len(r.Charges)),
-		}
-
-		for _, c := range r.Charges {
-			held.Amounts[PoolRef{Namespace: c.Namespace, Pool: c.Pool}] = c.Amount
-		}
-
-		actual, ok := settle(ctx, held)
-		if !ok {
-			continue
-		}
-
-		m.settle(id, actual)
-		reaped++
 	}
 
 	return reaped, nil

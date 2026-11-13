@@ -5,7 +5,7 @@ description: "Interactive map of the Postgres store's tables and how they relate
 weight: 9
 ---
 
-The tables of the Postgres store. CockroachDB runs the same migrations against the same schema; six of them run outside a transaction so CockroachDB applies each schema change on its own, and `execution_logs.data` reads back as `BYTES` there. Under `-dev` in-memory stores replace the database and none of these tables exist. **Hover over any table** for column details and usage context.
+The tables of the Postgres store. CockroachDB runs the same migrations against the same schema; seven of them run outside a transaction so CockroachDB applies each schema change on its own, and `execution_logs.data` reads back as `BYTES` there. Under `-dev` in-memory stores replace the database and none of these tables exist. **Hover over any table** for column details and usage context.
 
 {{< diagram >}}
 
@@ -79,7 +79,7 @@ window.vagabondDiagram = {
     dispatches: {
       title: 'dispatches',
       badge: 'runs', badgeText: 'run record',
-      body: '<p>One row per run of a job, above its executions. A run refused before any task was submitted has no executions, so this row is its only trace. The server running the dispatch holds a lease on the row and renews it; another server claims a row whose lease lapsed and resumes the run.</p>' +
+      body: '<p>One row per run of a job, above its executions. A run refused before any task was submitted has no executions, so this row is its only trace. The server running the dispatch holds a lease on the row and renews it until every execution of the run is released; another server claims a row whose lease lapsed and resumes the run.</p>' +
         '<table class="dg-cols"><tr><th>Column</th><th>Type</th><th>Notes</th></tr>' +
         '<tr><td class="pk">dispatch_id</td><td>TEXT</td><td>PRIMARY KEY; UUIDv7 minted when the run starts</td></tr>' +
         '<tr><td>namespace</td><td>TEXT</td><td>Namespace the job runs in</td></tr>' +
@@ -91,16 +91,19 @@ window.vagabondDiagram = {
         '<tr><td>ended_at</td><td>TIMESTAMPTZ</td><td>Nullable; null while running</td></tr>' +
         '<tr><td>tasks</td><td>BIGINT</td><td>Tasks the job declares; resume compares it with the executions to decide how the run ended. DEFAULT 0, the value on rows from before migration 6</td></tr>' +
         '<tr><td>owner</td><td>TEXT</td><td>Lease holder, <code>server:&lt;host&gt;:&lt;pid&gt;</code>. DEFAULT <code>\'\'</code></td></tr>' +
-        '<tr><td>lease_until</td><td>TIMESTAMPTZ</td><td>Lease expiry, renewed every 20s to 60s ahead. DEFAULT <code>1970-01-01 00:00:00+00</code>, so a row left running before migration 6 is claimed at once</td></tr></table>' +
-        '<div class="dg-idx"><b>Indexes:</b> PK on dispatch_id &bull; dispatches_lease (state, lease_until) for the claim</div>' +
-        '<p>Finishing and renewing match <code>state = \'running\' AND owner = &lt;caller&gt;</code>; zero rows is <code>ErrStale</code>, so a server whose lease was taken over cannot overwrite how the run ended.</p>' +
-        '<p>Used by: the dispatcher (CreateDispatch as a run starts, FinishDispatch as it ends; <a href="../task-path/">task path</a>) &bull; <a href="../background-services/">lease renewal</a> (RenewDispatch every 20s; stale marks the lease lost and the run starts no further task) &bull; <a href="../background-services/">dispatch claim</a> (ClaimDispatches at startup and every 30s: one <code>UPDATE ... RETURNING</code> takes every running row whose <code>lease_until</code> is past, except the ones this server runs, so two servers never claim the same row) &bull; <code>GET /v1/dispatch/{id}</code> (GetDispatch). See <a href="../../docs/database/#dispatches">Database</a> and <a href="../../docs/dispatch/#leases">leases</a>.</p>' +
-        '<p class="dg-metric">Key queries: CreateDispatch, FinishDispatch, RenewDispatch, ClaimDispatches, GetDispatch</p>'
+        '<tr><td>lease_until</td><td>TIMESTAMPTZ</td><td>Lease expiry, renewed every 20s to 60s ahead. DEFAULT <code>1970-01-01 00:00:00+00</code>, so a row left running before migration 6 is claimed at once</td></tr>' +
+        '<tr><td>epoch</td><td>BIGINT</td><td>Claims of the row, 1 at insert; each claim adds one, so every write under an earlier lease is refused. DEFAULT 1</td></tr>' +
+        '<tr><td>cancel_requested_at</td><td>TIMESTAMPTZ</td><td>Nullable; when a cancel was first requested by a server not holding the lease, for the owner to act on</td></tr>' +
+        '<tr><td>done_at</td><td>TIMESTAMPTZ</td><td>Nullable; when every execution finished through release, which ends the lease. Migration 10 backfilled it for ended dispatches whose executions were all released</td></tr></table>' +
+        '<div class="dg-idx"><b>Indexes:</b> PK on dispatch_id &bull; dispatches_lease (lease_until) WHERE done_at IS NULL, a partial index holding only the rows a claim can take</div>' +
+        '<p>Every write under the lease matches the caller&rsquo;s owner and epoch: finishing also requires <code>state = \'running\'</code>, renewing and closing <code>done_at IS NULL</code>. Zero rows is <code>ErrStale</code>, so a server whose lease was taken over cannot overwrite how the run ended.</p>' +
+        '<p>Used by: the dispatcher (CreateDispatch as a run starts, FinishDispatch as it ends, CloseDispatch once every execution is released; <a href="../task-path/">task path</a>) &bull; <a href="../background-services/">lease renewal</a> (RenewDispatch every 20s, returning <code>cancel_requested_at</code>; stale marks the lease lost and every runner under it stops) &bull; <a href="../background-services/">dispatch claim</a> (ClaimDispatches at startup and every 30s: one <code>UPDATE ... RETURNING</code> takes every row with no <code>done_at</code> whose <code>lease_until</code> is past, except the ones this server runs, under <code>epoch + 1</code>, so two servers never claim the same row) &bull; the API (RequestCancel for <code>DELETE /v1/execution/{id}</code> on a dispatch held elsewhere, keeping the first request&rsquo;s time; GetDispatch for <code>GET /v1/dispatch/{id}</code>). See <a href="../../docs/database/#dispatches">Database</a> and <a href="../../docs/dispatch/#leases">leases</a>.</p>' +
+        '<p class="dg-metric">Key queries: CreateDispatch, FinishDispatch, CloseDispatch, RenewDispatch, RequestCancel, ClaimDispatches, GetDispatch</p>'
     },
     executions: {
       title: 'executions',
       badge: 'runs', badgeText: 'run record',
-      body: '<p>One row per attempt: one task submitted to one provider. The row is written before <code>Submit</code>, so a crash between dispatching and recording leaves a row to reconcile against. An update names the state the writer read and changes nothing if the row has moved since, so a resumed server, the dispatcher and a cancel cannot overwrite each other. The update writes only the columns that change after creation, never <code>released_at</code>.</p>' +
+      body: '<p>One row per attempt: one task submitted to one provider. The row is written before <code>Submit</code>, so a crash between dispatching and recording leaves a row to resume from. Every write after it is the execution runner&rsquo;s, carries every column that changes after creation, and applies only while the dispatch&rsquo;s owner and epoch match and it is not done, so a server whose lease was taken over cannot overwrite the new owner&rsquo;s record, and repeating a write changes nothing.</p>' +
         '<table class="dg-cols"><tr><th>Column</th><th>Type</th><th>Notes</th></tr>' +
         '<tr><td class="pk">id</td><td>TEXT</td><td>PRIMARY KEY; UUIDv7, also the submission idempotency key</td></tr>' +
         '<tr><td>namespace</td><td>TEXT</td><td>Namespace of the run</td></tr>' +
@@ -116,7 +119,7 @@ window.vagabondDiagram = {
         '<tr><td>created_at</td><td>TIMESTAMPTZ</td><td>Read from the UUIDv7 in id</td></tr>' +
         '<tr><td>started_at</td><td>TIMESTAMPTZ</td><td>Nullable; set on reaching running</td></tr>' +
         '<tr><td>ended_at</td><td>TIMESTAMPTZ</td><td>Nullable; set on a terminal state</td></tr>' +
-        '<tr><td>updated_at</td><td>TIMESTAMPTZ</td><td>When the state last changed; the release loop\'s age test</td></tr>' +
+        '<tr><td>updated_at</td><td>TIMESTAMPTZ</td><td>When the state last changed; the 24 hours a <code>lost</code> execution is given count from it</td></tr>' +
         '<tr><td>exit_code</td><td>BIGINT</td><td>Nullable</td></tr>' +
         '<tr><td>duration_ms</td><td>BIGINT</td><td>Nullable; null means no result is recorded</td></tr>' +
         '<tr><td>billed_cpu</td><td>BIGINT</td><td>Nullable; billed millicores, 0 when the provider bills no CPU</td></tr>' +
@@ -126,13 +129,14 @@ window.vagabondDiagram = {
         '<tr><td class="fk">dispatch_id</td><td>TEXT</td><td>The <code>dispatches</code> row it belongs to. DEFAULT <code>\'\'</code>, the value on rows from before migration 4</td></tr>' +
         '<tr><td>cpu</td><td>BIGINT</td><td>Declared millicores, so a resumed execution is charged without its job. DEFAULT 0</td></tr>' +
         '<tr><td>memory</td><td>BIGINT</td><td>Declared MiB. DEFAULT 0</td></tr>' +
-        '<tr><td>released_at</td><td>TIMESTAMPTZ</td><td>Nullable; when what the provider left behind was released. Migration 7 backfilled it to <code>updated_at</code> for rows with a result</td></tr>' +
+        '<tr><td>released_at</td><td>TIMESTAMPTZ</td><td>Nullable; when what the provider left behind was released. Migration 7 backfilled it to <code>updated_at</code> for rows with a result, and migration 10 for rows with no dispatch</td></tr>' +
         '<tr><td>reason</td><td>TEXT</td><td>Why the platform ended the workload, in its words. DEFAULT <code>\'\'</code>, the value on rows from before migration 8 and when the platform did not say</td></tr>' +
         '<tr><td>logs_start</td><td>BIGINT</td><td>First byte of output still in <code>execution_logs</code>; above 0 once the front was dropped past <code>max_log_mib</code>. DEFAULT 0</td></tr>' +
-        '<tr><td>logs_at</td><td>TIMESTAMPTZ</td><td>Nullable; when the output was captured. Null tells the release loop to capture it before releasing. Migration 9 backfilled it for rows with a result</td></tr></table>' +
-        '<div class="dg-idx"><b>Indexes:</b> PK on id &bull; executions_job (namespace, job, created_at) for the job\'s newest executions &bull; executions_unreleased (updated_at) WHERE released_at IS NULL, a partial index holding only the rows the release loop reads</div>' +
-        '<p>Used by: the dispatcher (CreateExecution after the quota reservation and before Submit, where a failure means nothing is submitted; UpdateExecution on every state change, best effort with a 10s timeout of its own, the terminal one after the output is stored; MarkExecutionReleased after it reads a result and releases; <a href="../task-path/">task path</a>, <a href="../execution-states/">execution states</a>) &bull; resume (ListDispatchExecutions on a claimed dispatch, following every row not yet terminal) &bull; <a href="../background-services/">provider release</a> (ListUnreleasedExecutions every 5m for rows unchanged for 10m, UpdateExecution from <code>lost</code> when a lost execution is reconciled and again after capturing output nobody captured, then MarkExecutionReleased) &bull; the API (GetExecution for <code>GET /v1/execution/{id}</code>, where its stored logs begin, and a cancel; ListJobExecutions, the newest 20, for <code>GET /v1/job/{name}</code>; ListDispatchExecutions for <code>GET /v1/dispatch/{id}</code>) &bull; <a href="../live-output/">live output</a> (GetExecution every second, to see the execution end). See <a href="../../docs/database/#executions">Database</a>.</p>' +
-        '<p class="dg-metric">Key queries: CreateExecution, UpdateExecution (WHERE id AND state = from_state; zero rows is ErrStale), GetExecution, ListDispatchExecutions, ListJobExecutions, ListUnreleasedExecutions, MarkExecutionReleased</p>'
+        '<tr><td>logs_at</td><td>TIMESTAMPTZ</td><td>Nullable; when the output was captured. Null tells a restored runner the output is still to be captured. Migration 9 backfilled it for rows with a result</td></tr>' +
+        '<tr><td>timeout_ms</td><td>BIGINT</td><td>Declared timeout, what an execution that never answered is charged for. DEFAULT 0, the value on rows from before migration 10</td></tr></table>' +
+        '<div class="dg-idx"><b>Indexes:</b> PK on id &bull; executions_job (namespace, job, created_at) for the job\'s newest executions</div>' +
+        '<p>Used by: the dispatcher (CreateExecution after the quota reservation and before Submit, where a failure means nothing is submitted) &bull; execution runners (SaveExecution at every step, retried until the store takes it: each state change, the result with <code>logs_at</code> once the output is stored, then <code>released_at</code>; <a href="../task-path/">task path</a>, <a href="../execution-states/">execution states</a>) &bull; resume (ListDispatchExecutions on a claimed dispatch, restoring a runner for every row not yet terminal, collected and released) &bull; the API (GetExecution for <code>GET /v1/execution/{id}</code>, where its stored logs begin, and a cancel; ListJobExecutions, the newest 20, for <code>GET /v1/job/{name}</code>; ListDispatchExecutions for <code>GET /v1/dispatch/{id}</code>) &bull; the <a href="../background-services/">reservation reaper</a> (GetExecution, to find reservations with no record) &bull; <a href="../live-output/">live output</a> (GetExecution every second, to see the execution end). See <a href="../../docs/database/#executions">Database</a>.</p>' +
+        '<p class="dg-metric">Key queries: CreateExecution and SaveExecution (each applied only under the dispatch\'s lease; zero rows is ErrStale), HoldsExecution, GetExecution, ListDispatchExecutions, ListJobExecutions</p>'
     },
     execution_logs: {
       title: 'execution_logs',
@@ -143,13 +147,13 @@ window.vagabondDiagram = {
         '<tr><td class="pk">seq</td><td>BIGINT</td><td>PRIMARY KEY (composite); chunk number from the start of the output</td></tr>' +
         '<tr><td>data</td><td>BYTEA</td><td>Up to 256 KiB. BYTEA because output need not be valid UTF-8</td></tr></table>' +
         '<div class="dg-idx"><b>Indexes:</b> PK (execution_id, seq), which serves the chunk-at-a-time read and both deletes</div>' +
-        '<p>Used by: the dispatcher\'s capture once an execution ends, and the <a href="../background-services/">provider release</a> loop\'s for one never captured (DropExecutionLogs then InsertExecutionLog in one transaction per chunk: the chunks from <code>seq</code> on go, so a capture that starts again at 0 replaces the last, and those before <code>keep_from</code> go past <code>max_log_mib</code>) &bull; the API (NextExecutionLog, one chunk per query, for <code>GET /v1/execution/{id}/logs</code>; <a href="../live-output/">live output</a>) &bull; <a href="../background-services/">output retention</a> (PruneExecutionLogs every hour, for executions that ended over <code>log_retention</code> ago). See <a href="../../docs/database/#execution_logs">Database</a>.</p>' +
-        '<p class="dg-metric">Key queries: DropExecutionLogs, InsertExecutionLog, NextExecutionLog, PruneExecutionLogs</p>'
+        '<p>Used by: the execution runner\'s capture once an execution ends (HoldsExecution checks the dispatch\'s lease, then DropExecutionLogs and InsertExecutionLog, in one transaction per chunk: the chunks from <code>seq</code> on go, so a capture that starts again at 0 replaces the last, and those before <code>keep_from</code> go past <code>max_log_mib</code>) &bull; the API (NextExecutionLog, one chunk per query, for <code>GET /v1/execution/{id}/logs</code>; <a href="../live-output/">live output</a>) &bull; <a href="../background-services/">output retention</a> (PruneExecutionLogs every hour, for executions that ended over <code>log_retention</code> ago). See <a href="../../docs/database/#execution_logs">Database</a>.</p>' +
+        '<p class="dg-metric">Key queries: HoldsExecution, DropExecutionLogs, InsertExecutionLog, NextExecutionLog, PruneExecutionLogs</p>'
     },
     quota_reservations: {
       title: 'quota_reservations',
       badge: 'ledger', badgeText: 'quota ledger',
-      body: '<p>What running executions are expected to cost: one row per pool the execution charges, in both layers, the provider\'s total and the namespace\'s share. Zero amounts are included so settling knows the period each pool was charged in. Inserted before each submission attempt, ahead of the execution row; deleted by settlement or the reaper. A provider with no pools reserves nothing.</p>' +
+      body: '<p>What running executions are expected to cost: one row per pool the execution charges, in both layers, the provider\'s total and the namespace\'s share. Zero amounts are included so settling knows the period each pool was charged in. Inserted before each submission attempt, ahead of the execution row; deleted when the execution&rsquo;s runner settles, or by the reaper when no execution was recorded. A provider with no pools reserves nothing.</p>' +
         '<table class="dg-cols"><tr><th>Column</th><th>Type</th><th>Notes</th></tr>' +
         '<tr><td class="pk fk">execution_id</td><td>TEXT</td><td>PRIMARY KEY (composite); the <code>executions.id</code> of the attempt</td></tr>' +
         '<tr><td class="pk">namespace</td><td>TEXT</td><td>PRIMARY KEY (composite); <code>\'\'</code> for the provider\'s total, otherwise that namespace\'s share. DEFAULT <code>\'\'</code></td></tr>' +
@@ -157,12 +161,10 @@ window.vagabondDiagram = {
         '<tr><td>provider</td><td>TEXT</td><td>Provider label from the configuration</td></tr>' +
         '<tr><td>period</td><td>TEXT</td><td>Calendar key current at reserve, UTC: <code>2026-09</code> monthly, <code>2026-09-22</code> daily</td></tr>' +
         '<tr><td>amount</td><td>BIGINT</td><td>Declared charge in the pool\'s base unit</td></tr>' +
-        '<tr><td>cpu</td><td>BIGINT</td><td>Declared millicores, so the reaper can price a run it did not dispatch</td></tr>' +
-        '<tr><td>memory</td><td>BIGINT</td><td>Declared MiB, for the same reason</td></tr>' +
         '<tr><td>created_at</td><td>TIMESTAMPTZ</td><td>Reserve time; the reaper takes rows older than 1 hour</td></tr></table>' +
         '<div class="dg-idx"><b>Indexes:</b> PK (execution_id, namespace, pool), which serves the settle delete and the reserved check &bull; quota_reservations_pool (namespace, provider, pool, period) for the per-pool sum in ReserveQuota</div>' +
         '<p><b>Reserve</b> (ReserveQuota) is one <code>INSERT ... SELECT</code> that inserts every row only if, for every pool with a non-zero amount, settled + reserved + amount &le; limit. Zero rows is a refusal, and ReadQuotaUsage then runs in the same serializable transaction so the refusal names a pool that was full. <b>Settle</b> (SettleQuota) deletes the rows and adds the actual amounts to <code>quota_usage</code> in the periods they were reserved in, in one statement; settling twice, or after the reaper, finds no rows and charges nothing.</p>' +
-        '<p>Used by: the ledger\'s Reserve and Settle (<a href="../quotas/">quotas</a>, <a href="../admission/">admission</a>) &bull; the <a href="../background-services/">reservation reaper</a> (ClaimStaleReservations at startup and every 5m: rows older than 1 hour, <code>FOR UPDATE SKIP LOCKED</code>, held while each provider is asked, so two servers never resolve the same execution) &bull; <a href="../background-services/">provider release</a> (ExecutionReserved: an execution still holding a reservation is not released, since the reaper still has to ask its provider). See <a href="../../docs/database/#quota_usage-and-quota_reservations">Database</a>.</p>' +
+        '<p>Used by: the ledger\'s Reserve and Settle (<a href="../quotas/">quotas</a>, <a href="../admission/">admission</a>) &bull; execution runners (ExecutionReserved before settling, so a restored runner settles once) &bull; the <a href="../background-services/">reservation reaper</a> (ClaimStaleReservations at startup and every 5m: rows older than 1 hour, <code>FOR UPDATE SKIP LOCKED</code>, held while each execution record is looked up, so two servers never resolve the same execution; one with no record is dropped through SettleQuota with no amounts). See <a href="../../docs/database/#quota_usage-and-quota_reservations">Database</a>.</p>' +
         '<p class="dg-metric">Key queries: ReserveQuota, SettleQuota, ClaimStaleReservations, ExecutionReserved, ReadQuotaUsage</p>'
     },
     quota_usage: {
@@ -186,11 +188,11 @@ window.vagabondDiagram = {
       body: '<p>goose\'s record of applied migrations. goose creates it on the first migrate; no migration defines it, and its layout is the goose v3.29 Postgres dialect\'s.</p>' +
         '<table class="dg-cols"><tr><th>Column</th><th>Type</th><th>Notes</th></tr>' +
         '<tr><td class="pk">id</td><td>INTEGER</td><td>PRIMARY KEY, GENERATED BY DEFAULT AS IDENTITY</td></tr>' +
-        '<tr><td>version_id</td><td>BIGINT</td><td>Migration number, 1 to 7 in this release</td></tr>' +
+        '<tr><td>version_id</td><td>BIGINT</td><td>Migration number, 1 to 10 in this release</td></tr>' +
         '<tr><td>is_applied</td><td>BOOLEAN</td><td>Whether the migration is applied</td></tr>' +
         '<tr><td>tstamp</td><td>TIMESTAMP</td><td>DEFAULT now(); no time zone</td></tr></table>' +
         '<div class="dg-idx"><b>Indexes:</b> PK on id</div>' +
-        '<p>Used by: <code>Store.Migrate</code> (goose applies the embedded migrations not yet recorded, at every server start, over a <code>database/sql</code> connection opened for it) &bull; <code>Store.VerifySchema</code> (reads <code>MAX(version_id)</code> where <code>is_applied</code> and requires it to equal <code>SchemaVersion</code>, 8; lower means a migration failed partway, higher means the binary is older than the database, and either stops the server from starting). See <a href="../../docs/database/#migrations">Migrations</a>.</p>'
+        '<p>Used by: <code>Store.Migrate</code> (goose applies the embedded migrations not yet recorded, at every server start, over a <code>database/sql</code> connection opened for it) &bull; <code>Store.VerifySchema</code> (reads <code>MAX(version_id)</code> where <code>is_applied</code> and requires it to equal <code>SchemaVersion</code>, 10; lower means a migration failed partway, higher means the binary is older than the database, and either stops the server from starting). See <a href="../../docs/database/#migrations">Migrations</a>.</p>'
     }
   }
 };
@@ -233,3 +235,4 @@ An arrow joins two tables on the columns in its label, from the table that holds
 | `00007_execution_release` | `executions.released_at`, backfilled for rows with a result, and partial index `executions_unreleased`. Outside a transaction |
 | `00008_execution_reason` | `executions.reason`, `''` for existing rows. Outside a transaction |
 | `00009_execution_logs` | `execution_logs`, holding each existing row's output as chunk 0; `executions.logs_start` and `logs_at`, backfilled for rows with a result; `executions.logs` dropped. Outside a transaction |
+| `00010_dispatch_ownership` | `dispatches.epoch`, `cancel_requested_at` and `done_at`, `done_at` backfilled for ended dispatches whose executions are all released; `executions.timeout_ms`; `quota_reservations.cpu` and `memory` dropped; executions with no dispatch marked released; `dispatches_lease` rebuilt as `(lease_until) WHERE done_at IS NULL`; `executions_unreleased` dropped. Outside a transaction |

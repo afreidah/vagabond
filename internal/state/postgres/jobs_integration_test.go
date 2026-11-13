@@ -170,17 +170,16 @@ func TestJobs_ExecutionsCarryTheirDispatch(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
-			dispatch := newID(t)
+			dispatch, lease := leased(ctx, t, store)
 
 			var ids []execution.ID
 
 			for range 2 {
-				r := pendingRecord(t)
+				r := pendingRecord(t, dispatch)
 				r.Job = "go-test"
-				r.Dispatch = dispatch
 				r.JobVersion = 3
 
-				if err := store.Create(ctx, r); err != nil {
+				if err := store.Create(ctx, r, lease); err != nil {
 					t.Fatalf("Create() = %v", err)
 				}
 

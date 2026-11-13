@@ -3,10 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// Execution records in a map, for local mode without a database and for tests.
-// The same rules as the Postgres store: an update names the state it was read
-// in and is refused if the record has moved on. Output is kept apart from the
-// records, so reading a record never copies it. Lost with the process.
+// Dispatches, execution records and their output in maps, for local mode
+// without a database and for tests. The same rules as the Postgres store:
+// executions and output are written only under the dispatch's lease. Lost
+// with the process.
 // -------------------------------------------------------------------------------
 
 package memory
@@ -66,14 +66,14 @@ func (s *Executions) CreateDispatch(_ context.Context, d *execution.Dispatch) er
 	return nil
 }
 
-// FinishDispatch records how a run ended, only while it is still running under
-// d.Owner, and keeps the time it was created.
+// FinishDispatch records the verdict of a run still running under d's lease,
+// and keeps the time it was created.
 func (s *Executions) FinishDispatch(_ context.Context, d *execution.Dispatch) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	stored, ok := s.held(d.ID, d.Owner)
-	if !ok {
+	stored, ok := s.held(d.ID, d.Lease())
+	if !ok || stored.State != execution.DispatchRunning {
 		return fmt.Errorf("%w: dispatch %s", execution.ErrStale, d.ID)
 	}
 
@@ -83,29 +83,59 @@ func (s *Executions) FinishDispatch(_ context.Context, d *execution.Dispatch) er
 	return nil
 }
 
-// Ping reports the store reachable, which memory always is.
-func (s *Executions) Ping(context.Context) error {
-	return nil
-}
-
-// RenewDispatch extends owner's lease on a running dispatch to until.
-func (s *Executions) RenewDispatch(_ context.Context, id execution.ID, owner string, until time.Time) error {
+// CloseDispatch records under lease that every execution of the dispatch
+// finished through release, which ends the lease.
+func (s *Executions) CloseDispatch(_ context.Context, id execution.ID, lease execution.Lease, at time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	stored, ok := s.held(id, owner)
+	stored, ok := s.held(id, lease)
 	if !ok {
 		return fmt.Errorf("%w: dispatch %s", execution.ErrStale, id)
 	}
 
-	stored.LeaseUntil = until
+	stored.Done = at
 	s.dispatches[id] = stored
 
 	return nil
 }
 
-// ClaimDispatches takes over every running dispatch whose lease lapsed before
-// now, except those in skip, leasing each to owner until until.
+// RenewDispatch extends lease on an open dispatch to until and returns when a
+// cancel was requested, zero if none. Stale once done or claimed.
+func (s *Executions) RenewDispatch(
+	_ context.Context, id execution.ID, lease execution.Lease, until time.Time,
+) (time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stored, ok := s.held(id, lease)
+	if !ok {
+		return time.Time{}, fmt.Errorf("%w: dispatch %s", execution.ErrStale, id)
+	}
+
+	stored.LeaseUntil = until
+	s.dispatches[id] = stored
+
+	return stored.CancelRequested, nil
+}
+
+// RequestCancel asks whoever holds an open dispatch to cancel it. The first
+// request's time stands.
+func (s *Executions) RequestCancel(_ context.Context, id execution.ID, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stored, ok := s.dispatches[id]
+	if ok && stored.Done.IsZero() && stored.CancelRequested.IsZero() {
+		stored.CancelRequested = at
+		s.dispatches[id] = stored
+	}
+
+	return nil
+}
+
+// ClaimDispatches takes every open dispatch whose lease lapsed before now,
+// except those in skip, leasing each to owner until until under its next epoch.
 func (s *Executions) ClaimDispatches(
 	_ context.Context, owner string, now, until time.Time, skip []execution.ID,
 ) ([]*execution.Dispatch, error) {
@@ -116,11 +146,12 @@ func (s *Executions) ClaimDispatches(
 
 	for id := range s.dispatches {
 		stored := s.dispatches[id]
-		if stored.State != execution.DispatchRunning || !stored.LeaseUntil.Before(now) || slices.Contains(skip, id) {
+		if !stored.Done.IsZero() || !stored.LeaseUntil.Before(now) || slices.Contains(skip, id) {
 			continue
 		}
 
 		stored.Owner, stored.LeaseUntil = owner, until
+		stored.Epoch++
 		s.dispatches[id] = stored
 		claimed = append(claimed, &stored)
 	}
@@ -128,11 +159,12 @@ func (s *Executions) ClaimDispatches(
 	return claimed, nil
 }
 
-// held returns the dispatch for id when it is running under owner.
-func (s *Executions) held(id execution.ID, owner string) (execution.Dispatch, bool) {
+// held returns the dispatch for id when it is open and held under lease.
+// Callers hold the mutex.
+func (s *Executions) held(id execution.ID, lease execution.Lease) (execution.Dispatch, bool) {
 	stored, ok := s.dispatches[id]
 
-	return stored, ok && stored.State == execution.DispatchRunning && stored.Owner == owner
+	return stored, ok && stored.Done.IsZero() && stored.Lease() == lease
 }
 
 // GetDispatch returns a copy of the dispatch record for id.
@@ -148,13 +180,18 @@ func (s *Executions) GetDispatch(_ context.Context, id execution.ID) (*execution
 	return &stored, nil
 }
 
+// Ping reports the store reachable, which memory always is.
+func (s *Executions) Ping(context.Context) error {
+	return nil
+}
+
 // -------------------------------------------------------------------------
 // RECORDS
 // -------------------------------------------------------------------------
 
-// Create records a new execution. An ID already recorded is refused, since the
-// ID is the submission idempotency key.
-func (s *Executions) Create(_ context.Context, r *execution.Record) error {
+// Create records a new execution while its dispatch is held under lease.
+// Recording an ID twice fails; a lease no longer held is execution.ErrStale.
+func (s *Executions) Create(_ context.Context, r *execution.Record, lease execution.Lease) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -162,61 +199,26 @@ func (s *Executions) Create(_ context.Context, r *execution.Record) error {
 		return fmt.Errorf("execution %s already recorded", r.ID)
 	}
 
+	if _, ok := s.held(r.Dispatch, lease); !ok {
+		return stale(r.ID)
+	}
+
 	s.records[r.ID] = clone(r)
 
 	return nil
 }
 
-// Update writes r over the stored record if it is still in from.
-func (s *Executions) Update(_ context.Context, r *execution.Record, from execution.State) error {
+// Save writes r over the stored record, whatever its state, while r's
+// dispatch is held under lease; otherwise execution.ErrStale.
+func (s *Executions) Save(_ context.Context, r *execution.Record, lease execution.Lease) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	stored, ok := s.records[r.ID]
-	if !ok || stored.State != from {
-		return fmt.Errorf("%w: %s", execution.ErrStale, r.ID)
+	if !s.holds(r.ID, lease) {
+		return stale(r.ID)
 	}
 
-	// Release is written on its own, so an update leaves it as stored.
-	updated := clone(r)
-	updated.Released = stored.Released
-	s.records[r.ID] = updated
-
-	return nil
-}
-
-// Unreleased returns copies of the records not yet released and unchanged
-// since before, oldest first.
-func (s *Executions) Unreleased(_ context.Context, before time.Time) ([]*execution.Record, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var out []*execution.Record
-
-	for id := range s.records {
-		if stored := s.records[id]; stored.Released.IsZero() && stored.UpdatedAt.Before(before) {
-			r := clone(&stored)
-			out = append(out, &r)
-		}
-	}
-
-	slices.SortFunc(out, func(a, b *execution.Record) int { return a.UpdatedAt.Compare(b.UpdatedAt) })
-
-	return out, nil
-}
-
-// MarkReleased records that id's leftovers were released at at.
-func (s *Executions) MarkReleased(_ context.Context, id execution.ID, at time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	stored, ok := s.records[id]
-	if !ok {
-		return fmt.Errorf("%w: %s", execution.ErrNotFound, id)
-	}
-
-	stored.Released = at
-	s.records[id] = stored
+	s.records[r.ID] = clone(r)
 
 	return nil
 }
@@ -280,16 +282,34 @@ func (s *Executions) jobExecutions(namespace, job string, limit int) []*executio
 	return out[:min(limit, len(out))]
 }
 
+// holds reports whether the dispatch of execution id is open and held under
+// lease. Callers hold the mutex.
+func (s *Executions) holds(id execution.ID, lease execution.Lease) bool {
+	stored, ok := s.records[id]
+	if !ok {
+		return false
+	}
+
+	_, held := s.held(stored.Dispatch, lease)
+
+	return held
+}
+
 // -------------------------------------------------------------------------
 // OUTPUT
 // -------------------------------------------------------------------------
 
-// AppendLog stores chunk seq of id's output, dropping every chunk before
-// keepFrom and every one from seq on, so a write at seq 0 starts the output
-// over.
-func (s *Executions) AppendLog(_ context.Context, id execution.ID, seq int64, data []byte, keepFrom int64) error {
+// AppendLog stores chunk seq of id's output under lease, dropping every chunk
+// before keepFrom and every one from seq on, so a write at 0 starts over.
+func (s *Executions) AppendLog(
+	_ context.Context, id execution.ID, seq int64, data []byte, keepFrom int64, lease execution.Lease,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if !s.holds(id, lease) {
+		return stale(id)
+	}
 
 	chunks, ok := s.logs[id]
 	if !ok {
@@ -347,9 +367,14 @@ func (s *Executions) PruneLogs(_ context.Context, before time.Time) (int, error)
 // HELPERS
 // -------------------------------------------------------------------------
 
+// stale reports a write to id refused because its dispatch is no longer held
+// under the caller's lease.
+func stale(id execution.ID) error {
+	return fmt.Errorf("%w: %s is no longer held under this lease", execution.ErrStale, id)
+}
+
 // clone copies r so neither the caller nor the store can change the other's.
-// A result's own copy of the output is not kept, as in Postgres: output is
-// stored apart.
+// A result's own copy of the output is not kept: output is stored apart.
 func clone(r *execution.Record) execution.Record {
 	out := *r
 

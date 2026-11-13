@@ -24,12 +24,22 @@ import (
 	db "github.com/afreidah/vagabond/internal/state/postgres/sqlc"
 )
 
-// AppendLog stores chunk seq of id's output, dropping every chunk before
-// keepFrom and every one from seq on, so a write at seq 0 starts the output
-// over.
-func (s *Store) AppendLog(ctx context.Context, id execution.ID, seq int64, data []byte, keepFrom int64) error {
+// AppendLog stores chunk seq of id's output under lease, dropping every chunk
+// before keepFrom and every one from seq on, so a write at 0 starts over.
+func (s *Store) AppendLog(
+	ctx context.Context, id execution.ID, seq int64, data []byte, keepFrom int64, lease execution.Lease,
+) error {
 	return s.serializable(ctx, func(q *db.Queries) error {
-		err := q.DropExecutionLogs(ctx, db.DropExecutionLogsParams{ExecutionID: id.String(), KeepFrom: keepFrom, Seq: seq})
+		holds, err := q.HoldsExecution(ctx, db.HoldsExecutionParams{ID: id.String(), Owner: lease.Owner, Epoch: lease.Epoch})
+		if err != nil {
+			return fmt.Errorf("check the lease of %s: %w", id, err)
+		}
+
+		if !holds {
+			return heldWrite(0, id)
+		}
+
+		err = q.DropExecutionLogs(ctx, db.DropExecutionLogsParams{ExecutionID: id.String(), KeepFrom: keepFrom, Seq: seq})
 		if err != nil {
 			return fmt.Errorf("drop output of %s: %w", id, err)
 		}

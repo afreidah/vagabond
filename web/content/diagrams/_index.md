@@ -12,7 +12,7 @@ in detail links to it, and its panel stays in place so the link can be clicked.
 
 {{< cards >}}
   {{< card link="architecture/" title="System Architecture" icon="cube" subtitle="The CLI, the server's internals, the store, providers and agent nodes." >}}
-  {{< card link="task-path/" title="Task Path" icon="arrow-right" subtitle="One run of a job, from admission and ranking to release, settle and reroute." >}}
+  {{< card link="task-path/" title="Task Path" icon="arrow-right" subtitle="One run of a job, from admission and ranking through the execution runner to settle, release and reroute." >}}
   {{< card link="admission/" title="Admission and Ranking" icon="filter" subtitle="13 checks in four tiers, scorers, strict and weighted tiers, and selection." >}}
   {{< card link="quotas/" title="Quota Accounting" icon="scale" subtitle="Pools and namespace shares, headroom, reservation, settlement and the reaper." >}}
   {{< card link="agents/" title="Agents and Pools" icon="chip" subtitle="Agent startup, the mTLS session, placement, containerd and the grace period." >}}

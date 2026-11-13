@@ -42,7 +42,7 @@ func (s *Server) resume(ctx context.Context, d *execution.Dispatch) {
 	s.track(d.ID, cancel)
 
 	logger := s.logger.With("dispatch", d.ID, "job", d.Job, "version", d.JobVersion, "namespace", d.Namespace)
-	logger.InfoContext(ctx, "dispatch resumed", "previous_owner", d.Owner)
+	logger.InfoContext(ctx, "dispatch resumed", "epoch", d.Epoch)
 
 	go func() {
 		defer s.untrack(d.ID)

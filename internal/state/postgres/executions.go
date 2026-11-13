@@ -3,9 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// One row per attempt. Every write is one statement under the same serializable
-// retry as the ledger, and an update is conditional on the state the caller
-// read, so a resumed server and the dispatcher cannot overwrite each other.
+// One row per attempt, written only under its dispatch's lease. Each write is
+// one statement under the ledger's serializable retry and carries the whole
+// record, so repeating one changes nothing.
 // -------------------------------------------------------------------------------
 
 package postgres
@@ -26,28 +26,64 @@ import (
 )
 
 // -------------------------------------------------------------------------
-// RECORDS
+// WRITES
 // -------------------------------------------------------------------------
 
-// Create records a new execution. The ID is the primary key, so recording one
-// twice fails rather than overwriting.
-func (s *Store) Create(ctx context.Context, r *execution.Record) error {
+// Create records a new execution while its dispatch is held under lease.
+// Recording an ID twice fails; a lease no longer held is execution.ErrStale.
+func (s *Store) Create(ctx context.Context, r *execution.Record, lease execution.Lease) error {
 	row := rowOf(r)
 
+	params := db.CreateExecutionParams{
+		ID:            row.ID,
+		Namespace:     row.Namespace,
+		Job:           row.Job,
+		JobVersion:    row.JobVersion,
+		Task:          row.Task,
+		Provider:      row.Provider,
+		Attempt:       row.Attempt,
+		PreviousID:    row.PreviousID,
+		State:         row.State,
+		ProviderID:    row.ProviderID,
+		Failure:       row.Failure,
+		CreatedAt:     row.CreatedAt,
+		StartedAt:     row.StartedAt,
+		EndedAt:       row.EndedAt,
+		UpdatedAt:     row.UpdatedAt,
+		ExitCode:      row.ExitCode,
+		DurationMs:    row.DurationMs,
+		BilledCpu:     row.BilledCpu,
+		BilledMemory:  row.BilledMemory,
+		BilledMs:      row.BilledMs,
+		LogsTruncated: row.LogsTruncated,
+		DispatchID:    row.DispatchID,
+		Cpu:           row.Cpu,
+		Memory:        row.Memory,
+		ReleasedAt:    row.ReleasedAt,
+		Reason:        row.Reason,
+		LogsStart:     row.LogsStart,
+		LogsAt:        row.LogsAt,
+		TimeoutMs:     row.TimeoutMs,
+		Owner:         lease.Owner,
+		Epoch:         lease.Epoch,
+	}
+
 	return s.serializable(ctx, func(q *db.Queries) error {
-		if err := q.CreateExecution(ctx, db.CreateExecutionParams(row)); err != nil {
+		created, err := q.CreateExecution(ctx, params)
+		if err != nil {
 			return fmt.Errorf("create execution %s: %w", r.ID, err)
 		}
 
-		return nil
+		return heldWrite(created, r.ID)
 	})
 }
 
-// Update writes r over the stored record if it is still in from.
-func (s *Store) Update(ctx context.Context, r *execution.Record, from execution.State) error {
+// Save writes r over the stored record while r's dispatch is still held under
+// lease, whatever state the stored record is in.
+func (s *Store) Save(ctx context.Context, r *execution.Record, lease execution.Lease) error {
 	row := rowOf(r)
 
-	params := db.UpdateExecutionParams{
+	params := db.SaveExecutionParams{
 		State:         row.State,
 		ProviderID:    row.ProviderID,
 		Failure:       row.Failure,
@@ -63,23 +99,35 @@ func (s *Store) Update(ctx context.Context, r *execution.Record, from execution.
 		Reason:        row.Reason,
 		LogsStart:     row.LogsStart,
 		LogsAt:        row.LogsAt,
+		ReleasedAt:    row.ReleasedAt,
 		ID:            row.ID,
-		FromState:     string(from),
+		Owner:         lease.Owner,
+		Epoch:         lease.Epoch,
 	}
 
 	return s.serializable(ctx, func(q *db.Queries) error {
-		updated, err := q.UpdateExecution(ctx, params)
+		saved, err := q.SaveExecution(ctx, params)
 		if err != nil {
-			return fmt.Errorf("update execution %s: %w", r.ID, err)
+			return fmt.Errorf("save execution %s: %w", r.ID, err)
 		}
 
-		if updated == 0 {
-			return fmt.Errorf("%w: %s", execution.ErrStale, r.ID)
-		}
-
-		return nil
+		return heldWrite(saved, r.ID)
 	})
 }
+
+// heldWrite turns a write that changed nothing into execution.ErrStale: the
+// dispatch is no longer held under the caller's lease.
+func heldWrite(changed int64, id execution.ID) error {
+	if changed == 0 {
+		return fmt.Errorf("%w: %s is no longer held under this lease", execution.ErrStale, id)
+	}
+
+	return nil
+}
+
+// -------------------------------------------------------------------------
+// READS
+// -------------------------------------------------------------------------
 
 // Get reads the record for id.
 func (s *Store) Get(ctx context.Context, id execution.ID) (*execution.Record, error) {
@@ -108,28 +156,6 @@ func (s *Store) JobExecutions(ctx context.Context, namespace, job string, limit 
 	}
 
 	return recordsOf(rows)
-}
-
-// Unreleased returns the records not yet released and unchanged since before,
-// oldest first.
-func (s *Store) Unreleased(ctx context.Context, before time.Time) ([]*execution.Record, error) {
-	rows, err := s.queries.ListUnreleasedExecutions(ctx, before)
-	if err != nil {
-		return nil, fmt.Errorf("list unreleased executions: %w", err)
-	}
-
-	return recordsOf(rows)
-}
-
-// MarkReleased records that id's leftovers were released at at.
-func (s *Store) MarkReleased(ctx context.Context, id execution.ID, at time.Time) error {
-	return s.serializable(ctx, func(q *db.Queries) error {
-		if err := q.MarkExecutionReleased(ctx, db.MarkExecutionReleasedParams{ReleasedAt: &at, ID: id.String()}); err != nil {
-			return fmt.Errorf("mark execution %s released: %w", id, err)
-		}
-
-		return nil
-	})
 }
 
 // DispatchExecutions returns every execution of one dispatch, oldest first.
@@ -175,6 +201,7 @@ func rowOf(r *execution.Record) db.Execution {
 		Attempt:       int64(r.Attempt),
 		Cpu:           int64(r.CPU),
 		Memory:        int64(r.Memory),
+		TimeoutMs:     r.Timeout.Milliseconds(),
 		State:         string(r.State),
 		ProviderID:    r.ProviderID,
 		Failure:       r.Failure,
@@ -240,6 +267,7 @@ func recordOf(row *db.Execution) (*execution.Record, error) {
 		Attempt:    int(row.Attempt),
 		CPU:        int(row.Cpu),
 		Memory:     int(row.Memory),
+		Timeout:    time.Duration(row.TimeoutMs) * time.Millisecond,
 		Failure:    row.Failure,
 		Released:   ptr.Deref(row.ReleasedAt),
 

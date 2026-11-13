@@ -5,17 +5,19 @@
 //
 // Two separate schedules that are easy to confuse: poll intervals govern how
 // often a running execution is asked about, retry backoff governs the pause
-// before trying a different provider.
+// before trying a different provider. Then the bound on one provider call.
 // -------------------------------------------------------------------------------
 
 package dispatch
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/afreidah/vagabond/internal/job"
+	"github.com/afreidah/vagabond/internal/plugin"
 )
 
 // -------------------------------------------------------------------------
@@ -191,5 +193,46 @@ func TestSleepContextWaits(t *testing.T) {
 
 	if elapsed := time.Since(start); elapsed < 10*time.Millisecond {
 		t.Errorf("returned after %s, want at least 10ms", elapsed)
+	}
+}
+
+// -------------------------------------------------------------------------
+// CALL TIMEOUT
+// -------------------------------------------------------------------------
+
+// A bounded call gets a deadline no later than callTimeout from now.
+func TestBoundedSetsTheDeadline(t *testing.T) {
+	t.Parallel()
+
+	latest := time.Now().Add(callTimeout)
+
+	err := boundedErr(t.Context(), func(ctx context.Context) error {
+		if deadline, ok := ctx.Deadline(); !ok || deadline.After(latest.Add(time.Second)) {
+			return fmt.Errorf("deadline %s, %t", deadline, ok)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+// A call that ran out of time is a provider that failed to answer, so it may
+// be rerouted; one whose caller's own deadline passed keeps that error.
+func TestBoundedClassifiesItsOwnTimeout(t *testing.T) {
+	t.Parallel()
+
+	timedOut := func(context.Context) error { return fmt.Errorf("get: %w", context.DeadlineExceeded) }
+
+	if err := boundedErr(t.Context(), timedOut); !plugin.Reroutable(err) {
+		t.Errorf("boundedErr() = %v, want a reroutable failure", err)
+	}
+
+	expired, cancel := context.WithDeadline(t.Context(), time.Now())
+	defer cancel()
+
+	if err := boundedErr(expired, timedOut); plugin.Reroutable(err) {
+		t.Errorf("boundedErr() = %v, want the caller's own timeout as it was", err)
 	}
 }

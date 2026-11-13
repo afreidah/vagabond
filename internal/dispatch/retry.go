@@ -96,16 +96,7 @@ func (p policy) backoff(attempt int) time.Duration {
 		return 0
 	}
 
-	wait := p.initial
-	for range attempt - 1 {
-		wait *= 2
-
-		if wait >= p.max {
-			return p.max
-		}
-	}
-
-	return wait
+	return doubling(p.initial, p.max, attempt-1)
 }
 
 // -------------------------------------------------------------------------

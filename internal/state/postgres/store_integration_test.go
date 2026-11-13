@@ -82,8 +82,6 @@ func fnReservation(t *testing.T, created time.Time, compute int64) *ledger.Reser
 	return &ledger.Reservation{
 		ID:       newID(t),
 		Provider: "fn",
-		CPU:      1000,
-		Memory:   1024,
 		Created:  created,
 		Charges: []ledger.Charge{
 			{Pool: "requests", Period: "2026-09", Amount: 1, Limit: 10},
@@ -452,9 +450,9 @@ func TestReadUsage_NoPeriodsIsNotAQuery(t *testing.T) {
 // REAP
 // -------------------------------------------------------------------------
 
-// Only reservations older than the cutoff are offered, each whole, and only
-// those the callback accepts are settled.
-func TestReap_SettlesWhatTheCallbackAccepts(t *testing.T) {
+// Only reservations older than the cutoff are offered, each once however many
+// pools it charged, and only those the callback accepts are dropped.
+func TestReap_DropsWhatTheCallbackAccepts(t *testing.T) {
 	for _, e := range engines() {
 		t.Run(e.Name, func(t *testing.T) {
 			ctx := context.Background()
@@ -471,28 +469,23 @@ func TestReap_SettlesWhatTheCallbackAccepts(t *testing.T) {
 				mustReserve(ctx, t, store, r)
 			}
 
-			offered := map[execution.ID]ledger.Held{}
+			offered := map[execution.ID]int{}
 
-			reaped, err := store.Reap(ctx, now.Add(-time.Hour),
-				func(_ context.Context, h ledger.Held) (map[ledger.PoolRef]int64, bool) {
-					offered[h.ID] = h
+			reaped, err := store.Reap(ctx, now.Add(-time.Hour), func(_ context.Context, id execution.ID) bool {
+				offered[id]++
 
-					return nil, h.ID == dropped.ID
-				})
+				return id == dropped.ID
+			})
 			if err != nil {
 				t.Fatalf("Reap() = %v", err)
 			}
 
 			if reaped != 1 {
-				t.Errorf("Reap() settled %d, want 1", reaped)
+				t.Errorf("Reap() dropped %d, want 1", reaped)
 			}
 
-			if _, ok := offered[fresh.ID]; ok || len(offered) != 2 {
-				t.Errorf("offered %d reservations, want the two old ones", len(offered))
-			}
-
-			if h := offered[kept.ID]; h.CPU != 1000 || h.Memory != 1024 || h.Amounts[totalPool("compute")] != 400*gbSeconds {
-				t.Errorf("held = %+v, want the reservation's shape and amounts", h)
+			if offered[fresh.ID] != 0 || offered[dropped.ID] != 1 || offered[kept.ID] != 1 {
+				t.Errorf("offered %v, want each old reservation once and the fresh one never", offered)
 			}
 
 			usage := readSeptember(ctx, t, store)

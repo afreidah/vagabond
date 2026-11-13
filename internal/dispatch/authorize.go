@@ -41,15 +41,20 @@ func authorized[T any](ctx context.Context, d *Dispatcher, provider plugin.Provi
 	return call()
 }
 
-// status asks provider about id, through authorized, since every loop that
-// follows an execution starts here.
+// status asks provider about id, through authorized and within callTimeout,
+// since every loop that follows an execution starts here.
 func (d *Dispatcher) status(ctx context.Context, provider plugin.Provider, id execution.ID) (execution.Status, error) {
-	return authorized(ctx, d, provider, func() (execution.Status, error) { return provider.Status(ctx, id) })
+	return bounded(ctx, func(ctx context.Context) (execution.Status, error) {
+		return authorized(ctx, d, provider, func() (execution.Status, error) { return provider.Status(ctx, id) })
+	})
 }
 
-// result fetches what id produced from provider, through authorized.
+// result fetches what id produced from provider, through authorized and
+// within callTimeout.
 func (d *Dispatcher) result(ctx context.Context, provider plugin.Provider, id execution.ID) (*execution.Result, error) {
-	return authorized(ctx, d, provider, func() (*execution.Result, error) { return provider.Result(ctx, id) })
+	return bounded(ctx, func(ctx context.Context) (*execution.Result, error) {
+		return authorized(ctx, d, provider, func() (*execution.Result, error) { return provider.Result(ctx, id) })
+	})
 }
 
 // authorizedErr is authorized for a call that returns only an error.

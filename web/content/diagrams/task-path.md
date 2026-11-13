@@ -1,11 +1,11 @@
 ---
 title: "Task Path"
 linkTitle: "Task Path"
-description: "Interactive diagram of one run of a job, from the request through admission, ranking, quota reservation, submission, watching, release, settlement and rerouting."
+description: "Interactive diagram of one run of a job, from the request through admission, ranking, quota reservation, the execution runner's submission, watching, settlement and release, and rerouting."
 weight: 2
 ---
 
-One run of a job, from the request to the dispatch's ending. Tasks run one at a time in declaration order, and each is admitted, ranked, reserved, submitted and watched on its own; an `infrastructure` failure moves the task to the next ranked provider within its retry budget. **Hover over any component** for implementation details.
+One run of a job, from the request to the dispatch's ending. Tasks run one at a time in declaration order, and each is admitted, ranked and reserved, then handed to an execution runner that submits and watches it; an `infrastructure` failure moves the task to the next ranked provider within its retry budget. The task takes the runner's first answer, the runner settles and releases after, and the dispatch is done once every runner is. **Hover over any component** for implementation details.
 
 {{< diagram >}}
 
@@ -32,21 +32,26 @@ window.vagabondDiagram = {
     '    CAND -->|budget or ranking spent| EXHAUSTED[ErrExhausted]:::reject',
     '    RESERVE -->|refused, no budget spent| NEXTCAND',
     '    RESERVE -->|reserved| PENDING[Record execution<br>pending]:::storage',
-    '    PENDING -->|first submission| SUBMIT',
+    '    PENDING -->|first submission| RUNNER',
     '    PENDING -->|later submission| BACKOFF[Retry backoff<br>5s doubling to 30s]:::process',
-    '    BACKOFF --> SUBMIT[Submit<br>fresh execution ID]:::process',
+    '    BACKOFF --> RUNNER[Execution runner<br>under the lease]:::process',
+    '    RUNNER --> SUBMIT[Submit<br>fresh execution ID]:::process',
     '',
     '    SUBMIT -->|Submit fails| CLASSIFY',
     '    SUBMIT --> SYNC{Synchronous?}:::decision',
     '    SYNC -->|no| WATCH[Watch<br>poll 2s to 15s]:::process',
-    '    SYNC -->|yes| RELEASE',
+    '    SYNC -->|yes| COLLECT',
     '    WATCH -->|Status fails, lost| CLASSIFY',
-    '    WATCH -->|dispatch cancelled| STOP',
-    '    WATCH -->|terminal| RESULT[Fetch result]:::process',
-    '    RESULT -->|Result fails| CLASSIFY',
-    '    RESULT --> RELEASE[Release<br>leftovers]:::background',
-    '    RELEASE --> SETTLE[Settle quota<br>ledger]:::storage',
-    '    SETTLE --> VERDICT{Provider<br>verdict}:::decision',
+    '    WATCH -->|dispatch cancelled| CANCEL[Cancel<br>at the provider]:::process',
+    '    WATCH -->|terminal| COLLECT[Collect<br>result, then output]:::process',
+    '    CANCEL --> COLLECT',
+    '    COLLECT --> VERDICT{Provider<br>verdict}:::decision',
+    '    COLLECT -->|Result fails| CLASSIFY',
+    '    COLLECT -->|cancelled by Vagabond| STOP',
+    '    COLLECT -.->|runner continues| SETTLE[Settle quota<br>ledger]:::storage',
+    '    SUBMIT -.->|failed, runner continues| SETTLE',
+    '    SETTLE -.-> RELEASE[Release<br>retried until gone]:::background',
+    '    RELEASE -.->|every execution released| DONE',
     '    VERDICT -->|succeeded, last task| DSUCC([Dispatch<br>succeeded]):::success',
     '    VERDICT -->|succeeded, tasks remain| NEXTTASK([Next task<br>back to the top]):::process',
     '    VERDICT -->|failed| DFAIL([Dispatch<br>failed]):::reject',
@@ -58,6 +63,9 @@ window.vagabondDiagram = {
     '    NOCAND --> DUNANS([Dispatch<br>unanswered]):::reject',
     '    EXHAUSTED --> DUNANS',
     '    STOP --> DUNANS',
+    '    DSUCC --> DONE',
+    '    DFAIL --> DONE',
+    '    DUNANS --> DONE[Dispatch done<br>lease ends]:::storage',
   ].join('\n'),
 
   info: {
@@ -84,17 +92,17 @@ window.vagabondDiagram = {
     BEGIN: {
       title: 'Begin',
       badge: 'storage', badgeText: 'dispatch record',
-      body: '<p><code>Dispatcher.Begin</code> mints a UUIDv7 dispatch ID and writes the dispatch record as <code>running</code>, owned by <code>server:&lt;hostname&gt;:&lt;pid&gt;</code> and leased for 60s. It is written before anything is reserved, so a run that never reaches a provider still has a record saying why.</p><p>A goroutine renews the lease every 20s. The request returns the dispatch ID here; the tasks run in a background goroutine on a context detached from the request.</p><p class="dg-metric">Log: dispatch started</p>'
+      body: '<p><code>Dispatcher.Begin</code> mints a UUIDv7 dispatch ID and writes the dispatch record as <code>running</code>, owned by <code>server:&lt;hostname&gt;:&lt;pid&gt;</code> under epoch 1 and leased for 60s. It is written before anything is reserved, so a run that never reaches a provider still has a record saying why.</p><p>A goroutine renews the lease every 20s until the dispatch is done, and each renewal returns any cancel another server requested. The request returns the dispatch ID here; the tasks run in a background goroutine on a context detached from the request.</p><p class="dg-metric">Log: dispatch started</p>'
     },
     TASK: {
       title: 'Next Task',
       badge: 'decision', badgeText: 'job order',
-      body: '<p><code>Dispatcher.Run</code> takes the tasks one at a time, in declaration order. There is no dependency graph: the first task that fails or gets no answer ends the job, and later tasks are not run.</p><p>Before each task it checks that the lease is still held.</p><p><a href="../../docs/dispatch/#job-execution-order">Dispatch: job execution order &rarr;</a></p>'
+      body: '<p><code>Dispatcher.Run</code> takes the tasks one at a time, in declaration order. There is no dependency graph: the first task that fails or gets no answer ends the job, and later tasks are not run.</p><p>Before each task it checks that the lease is still held and no cancel was requested. A requested cancel ends the run <code>unanswered</code> with <code>the dispatch was cancelled</code>.</p><p><a href="../../docs/dispatch/#job-execution-order">Dispatch: job execution order &rarr;</a></p>'
     },
     LEASELOST: {
       title: 'ErrLeaseLost',
       badge: 'reject', badgeText: 'taken over',
-      body: '<p>A renewal found the dispatch ended or held by another owner: another server claimed it after the lease lapsed. This server finishes the task in flight, starts no further task (<code>dispatch was taken over by another process</code>) and writes no ending.</p><p>The new owner resumes the dispatch and records how it ended.</p><p><a href="../execution-states/">Execution states diagram &rarr;</a></p>'
+      body: '<p>A renewal or a write under the lease was refused: another server claimed the dispatch after the lease lapsed, under the next epoch. Every runner under the lease stops without cancelling or releasing its execution, this server starts no further task (<code>dispatch was taken over by another process</code>), and it writes no ending.</p><p>The new owner restores a runner for every execution not yet done and records how the dispatch ended.</p><p><a href="../execution-states/">Execution states diagram &rarr;</a></p>'
     },
     ADMIT: {
       title: 'Admission',
@@ -124,42 +132,52 @@ window.vagabondDiagram = {
     PENDING: {
       title: 'Record Execution Pending',
       badge: 'storage', badgeText: 'execution record',
-      body: '<p><code>prepare</code> writes the execution record in <code>pending</code> after the reservation and before <code>Submit</code>, with its task, provider, <code>Attempt</code> (counting submissions only) and <code>PreviousID</code>, the task&rsquo;s attempt before it. The execution ID is the submission&rsquo;s idempotency key, so it exists durably first.</p><p>This is the one write that must land: a failure stops the task (<code>recording execution &lt;id&gt;</code>). Every later write is best effort, on its own context with a 10s timeout.</p>'
+      body: '<p><code>prepare</code> writes the execution record in <code>pending</code> after the reservation and before <code>Submit</code>, with its task, provider, <code>Attempt</code> (counting submissions only), <code>PreviousID</code>, the task&rsquo;s attempt before it, and the declared CPU, memory and timeout. The insert applies only under the dispatch&rsquo;s lease. The execution ID is the submission&rsquo;s idempotency key, so it exists durably first.</p><p>A failure stops the task (<code>recording execution &lt;id&gt;</code>); its reservation has no record, and the reaper drops it after an hour. Every later write to the record is the runner&rsquo;s.</p>'
     },
     BACKOFF: {
       title: 'Retry Backoff',
       badge: 'process', badgeText: 'wait',
-      body: '<p>Every submission after the first waits, with its reservation held and its record already <code>pending</code>: <code>backoff.initial</code> (default 5s), doubling to <code>backoff.max</code> (default 30s). With the defaults the second submission waits 5s, the third 10s, the fourth 20s, then 30s each.</p><p>A duration that does not parse at dispatch falls back to the default. A dispatch cancelled during the wait stops here; the record stays <code>pending</code> and its reservation is left to the reaper.</p>'
+      body: '<p>Every submission after the first waits, with its reservation held and its record already <code>pending</code>: <code>backoff.initial</code> (default 5s), doubling to <code>backoff.max</code> (default 30s). With the defaults the second submission waits 5s, the third 10s, the fourth 20s, then 30s each.</p><p>A duration that does not parse at dispatch falls back to the default. A dispatch cancelled during the wait stops here, before a runner starts: the record stays <code>pending</code> and keeps its reservation.</p>'
+    },
+    RUNNER: {
+      title: 'Execution Runner',
+      badge: 'process', badgeText: 'per execution',
+      body: '<p>One goroutine per execution, started under the dispatch&rsquo;s lease and the only writer of its record. It takes the execution through submit, watch, collect, settle and release, and each step leaves a mark on the record: a state past <code>pending</code>, the terminal state with <code>logs_at</code>, no reservation, <code>released_at</code>. A runner restored after a claim starts at the first step not done.</p><p>The attempt waits for the runner&rsquo;s first answer: once the execution is terminal and collected, lost, or failed to submit. Settling and releasing follow, so a reroute does not wait on them.</p><p>Every write the runner makes applies only while the dispatch&rsquo;s owner and epoch match and it is not done. A refused write means another server claimed the dispatch: the runner stops and makes no further provider call. Any other store failure is retried, 250ms doubling to 10s, until the write lands; the runner does not move on before it does.</p><p class="dg-metric">Log (warn): store write failed, retrying</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
     },
     SUBMIT: {
       title: 'Submit',
       badge: 'process', badgeText: 'providers/*',
-      body: '<p>Hands the task to the plugin under the execution ID: <code>SubmitTo</code> with the members admission passed, for a provider made of members such as a <code>pool</code> of agent nodes, otherwise <code>Submit</code>. A call rejected as unauthorized has its credential resolved again and is made once more.</p><p>Success records <code>submitted</code> and the provider ID, then the state <code>Submit</code> reported. A submission may report only <code>accepted</code>, <code>running</code>, <code>succeeded</code> or <code>failed</code>, and a terminal state only with a result; one that breaks this is an <code>internal</code> failure. A failed <code>Submit</code> records the attempt <code>failed</code> with its failure class.</p><p><a href="../agents/">Agents and pools diagram &rarr;</a></p>'
+      body: '<p>The runner hands the task to the plugin under the execution ID: <code>SubmitTo</code> with the members admission passed, for a provider made of members such as a <code>pool</code> of agent nodes, otherwise <code>Submit</code>. A call rejected as unauthorized has its credential resolved again and is made once more.</p><p>Success records the provider ID and the state <code>Submit</code> reported, by way of <code>submitted</code>, in one write. A submission may report only <code>accepted</code>, <code>running</code>, <code>succeeded</code> or <code>failed</code>, and a terminal state only with a result; one that breaks this is an <code>internal</code> failure.</p><p>A failed <code>Submit</code> records the attempt <code>failed</code> with its failure class and answers at once. One classified <code>internal</code> ran nothing, and its reservation is dropped. Any other may have left a run behind: the runner asks the provider to <code>Cancel</code>, then asks <code>Status</code> once. A provider that never heard of it is charged nothing, one that gives times is charged for them, and one that cannot be asked is charged as reserved.</p><p><a href="../agents/">Agents and pools diagram &rarr;</a></p>'
     },
     SYNC: {
       title: 'Synchronous?',
       badge: 'decision', badgeText: 'synchronous',
-      body: '<p>A function or worker finishes inside <code>Submit</code> and returns its result with it, as an AWS Lambda invocation does. There is nothing to poll: the record goes from <code>submitted</code> straight to the terminal state with the result, and the execution is released at once.</p><p>Everything else, such as a Cloud Run Job or a pool workload, reports <code>accepted</code> or <code>running</code> and is watched.</p>'
+      body: '<p>A function or worker finishes inside <code>Submit</code> and returns its result with it, as an AWS Lambda invocation does. There is nothing to poll: the execution is written <code>submitted</code> as <code>Submit</code> returns, and the runner collects with the result <code>Submit</code> carried, writing the terminal state with it.</p><p>Everything else, such as a Cloud Run Job or a pool workload, reports <code>accepted</code> or <code>running</code> and is watched.</p>'
     },
     WATCH: {
       title: 'Watch',
       badge: 'process', badgeText: 'status poll',
-      body: '<p><code>watch</code> sleeps, then calls <code>Status</code>: 2s doubling to a 15s ceiling, so polls land 2s, 6s, 14s and 29s after submission, then every 15s. A state is written only when it changes. Dispatch sets no deadline of its own; the provider enforces the task&rsquo;s timeout and reports <code>failed</code>.</p><p>A failed <code>Status</code> call records the execution <code>lost</code> with its failure class. The work may still be running, so it is not cancelled and its reservation stands. A cancelled dispatch asks the provider to <code>Cancel</code> (30s timeout, error ignored) and records <code>cancelled</code>.</p><p>Dispatch never streams output; a client follows it from the provider through the server.</p><p><a href="../execution-states/">Execution states diagram &rarr;</a><br><a href="../live-output/">Live output diagram &rarr;</a></p>'
+      body: '<p><code>watch</code> sleeps, then calls <code>Status</code>: 2s doubling to a 15s ceiling, so polls land 2s, 6s, 14s and 29s after submission, then every 15s. A state is written only when it changes, and the terminal one by collect, with the output. Each call has a 30s timeout; one that runs out is an <code>infrastructure</code> failure. Dispatch sets no deadline on the run itself; the provider enforces the task&rsquo;s timeout and reports <code>failed</code>.</p><p>A failed <code>Status</code> call records the execution <code>lost</code> with its failure class and answers the attempt at once, so the task can reroute. The work may still be running, so it is not cancelled: the runner keeps polling until a terminal state, which is collected with its result. One the provider no longer knows, an unknown not classified <code>infrastructure</code>, is <code>failed</code> at once and charged for the time it was seen running. One whose <code>Status</code> still fails after 24 hours lost (<code>LostGracePeriod</code>) is <code>failed</code> and charged as reserved. A <code>Status</code> that itself reports <code>lost</code>, as a pool does for a node gone less than 5 minutes, is recorded without answering; the first <code>Status</code> failure after it answers.</p><p>Dispatch never streams output; a client follows it from the provider through the server.</p><p><a href="../execution-states/">Execution states diagram &rarr;</a><br><a href="../live-output/">Live output diagram &rarr;</a></p>'
     },
-    RESULT: {
-      title: 'Fetch Result',
-      badge: 'process', badgeText: 'result',
-      body: '<p>Once <code>Status</code> reports a terminal state, <code>Result</code> fetches the exit code, duration, any billed amount and the platform&rsquo;s reason for ending it. The output is then captured into <code>execution_logs</code>, from <code>ReadLogs</code> or the output the answer carried, in 256 KiB chunks up to <code>max_log_mib</code>, the end kept, and only then is the terminal state written with the result, so a client that sees the result finds the output there.</p><p>A capture never fails the attempt: what could not be read leaves <code>LogsTruncated</code> set. When <code>Result</code> fails, the output is still captured and the terminal state written, without a result. The attempt ends with that error; nothing is released or settled, and the reservation is left to the reaper.</p><p><a href="../../docs/dispatch/#output">Dispatch output &rarr;</a></p>'
+    CANCEL: {
+      title: 'Cancel',
+      badge: 'process', badgeText: 'dispatch cancelled',
+      body: '<p>Reached when the dispatch is cancelled: <code>DELETE /v1/execution/{id}</code> on the server running it, or a cancel request another server recorded on the dispatch, which the owner sees at its next lease renewal. A write first confirms the lease; a lease another server took stops the runner here, with nothing cancelled.</p><p>The provider is asked to <code>Cancel</code> (30s timeout, error ignored), then <code>Status</code> once for its own start and end times, and the execution is marked <code>cancelled</code> with them, so the run is charged for what it ran; a provider that no longer knows it, as Cloud Run and Code Engine after their <code>Cancel</code>, leaves the time it was seen running. Its output is still collected and the execution released; the attempt ends with the cancel and the task stops.</p><p><a href="../execution-states/">Execution states diagram &rarr;</a></p>'
     },
-    RELEASE: {
-      title: 'Release',
-      badge: 'background', badgeText: 'cleanup',
-      body: '<p>For a provider implementing <code>plugin.Releaser</code>, <code>Release</code> deletes what the execution left behind: the Cloud Run Job resource, the Code Engine job run and its pod, or the pool workload&rsquo;s task, container, snapshot and log file on its node. Called after <code>Result</code>, because releasing may delete what the result reads, and as soon as <code>Submit</code> returns for a synchronous submission.</p><p>Own context, 30s timeout. Success, or an unknown execution, sets <code>released_at</code>; a failed release does not fail the execution. Endings that skip this step, and releases that failed, are left to the provider release loop.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
+    COLLECT: {
+      title: 'Collect',
+      badge: 'process', badgeText: 'result and output',
+      body: '<p>Once the state is terminal, <code>Result</code> fetches the exit code, duration, any billed amount and the platform&rsquo;s reason for ending it, unless <code>Submit</code> carried the result, the runner cancelled the run, or the execution failed without an answer. The output is then captured into <code>execution_logs</code>, from <code>ReadLogs</code> or the output the answer carried, in 256 KiB chunks up to <code>max_log_mib</code>, the end kept, each chunk written under the lease. One write then records the terminal state, the result and <code>logs_at</code>, so a client that sees the execution end finds the output there.</p><p>A capture never fails the attempt: what could not be read leaves <code>LogsTruncated</code> set. When <code>Result</code> fails, the output is still captured and the record written without a result, and the attempt ends with that error.</p><p>The runner answers the attempt here, then settles and releases.</p><p><a href="../../docs/dispatch/#output">Dispatch output &rarr;</a></p>'
     },
     SETTLE: {
       title: 'Settle Quota',
       badge: 'storage', badgeText: 'ledger',
-      body: '<p><code>charge</code> replaces the reservation with what the result says the run used: the platform&rsquo;s billed amount when the result carries one (AWS Lambda), otherwise the declared CPU and memory over the measured duration. It runs when the attempt returns, after the release.</p><p>Only a result settles. An attempt without one keeps its reservation at the declared worst case until the reaper resolves it, once it is over an hour old; so does a settle write that failed.</p><p><a href="../quotas/">Quota accounting diagram &rarr;</a></p>'
+      body: '<p>The runner&rsquo;s step after its answer, taken only while the execution still holds a reservation (<code>Ledger.Reserved</code>), so a restored runner never settles twice. The reservation is replaced with what the run cost, the first that applies:</p><p><b>Nothing ran</b> (a <code>Submit</code> refused as <code>internal</code>, or one the provider never heard of that was never seen running): dropped, charged nothing.<br><b>A result</b>: the platform&rsquo;s billed amount when it carries one (AWS Lambda), otherwise the declared CPU and memory over its duration.<br><b>Never answered</b> (still lost after 24 hours, or a failed <code>Submit</code> or a cancel after which <code>Status</code> cannot be asked and the record never saw a start): the declared shape over the declared timeout, as reserved.<br><b>Otherwise</b>: the declared shape over the time it was seen running, <code>StartedAt</code> to <code>EndedAt</code>; for a cancelled run, the times the provider gave, when it still knows the run.</p><p>The write is retried until the store takes it.</p><p><a href="../quotas/">Quota accounting diagram &rarr;</a></p>'
+    },
+    RELEASE: {
+      title: 'Release',
+      badge: 'background', badgeText: 'cleanup',
+      body: '<p>The runner&rsquo;s last step, for every ending: a result, a failure, a cancel, a lost execution once it ends. For a provider implementing <code>plugin.Releaser</code>, <code>Release</code> deletes what the execution left behind: the Cloud Run Job resource, the Code Engine job run and its pod, or the pool workload&rsquo;s task, container, snapshot and log file on its node. It comes after the output is captured, since releasing may delete it.</p><p>Retried 250ms doubling to 10s until it succeeds or the provider no longer knows the execution, then <code>released_at</code> is set. A provider without <code>Release</code> is marked released with no call. A lease lost between tries stops it.</p><p class="dg-metric">Log (warn): releasing provider leftovers, with execution and error, per failed try</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
     },
     VERDICT: {
       title: 'Provider Verdict',
@@ -194,7 +212,7 @@ window.vagabondDiagram = {
     DSUCC: {
       title: 'Dispatch Succeeded',
       badge: 'success', badgeText: 'dispatch state',
-      body: '<p>Every task ended <code>succeeded</code> with a result. <code>Finish</code> stops the lease renewal and writes the ending, which applies only while the dispatch is <code>running</code> and held by this server, so it is written once.</p><p class="dg-metric">Log: dispatch finished, with tasks and succeeded</p>'
+      body: '<p>Every task ended <code>succeeded</code> with a result. <code>Finish</code> writes the ending, which applies only while the dispatch is <code>running</code> and held under this server&rsquo;s owner and epoch, so it is written once.</p><p class="dg-metric">Log: dispatch finished, with tasks and succeeded</p>'
     },
     DFAIL: {
       title: 'Dispatch Failed',
@@ -204,7 +222,12 @@ window.vagabondDiagram = {
     DUNANS: {
       title: 'Dispatch Unanswered',
       badge: 'reject', badgeText: 'dispatch state',
-      body: '<p>A task returned an error, so the run has no verdict. <code>Error</code> records it prefixed with the task: <code>task "build": every attempt failed: &lt;last failure&gt;</code>.</p><p>An execution it left <code>lost</code> is reconciled later by the provider release loop, which does not change the dispatch.</p><p class="dg-metric">Log (warn): dispatch finished without an answer</p>'
+      body: '<p>A task returned an error, so the run has no verdict. <code>Error</code> records it prefixed with the task: <code>task "build": every attempt failed: &lt;last failure&gt;</code>.</p><p>An execution it left <code>lost</code> is still followed by its runner; the dispatch is not done until that execution ends, and its ending does not change.</p><p class="dg-metric">Log (warn): dispatch finished without an answer</p>'
+    },
+    DONE: {
+      title: 'Dispatch Done',
+      badge: 'storage', badgeText: 'done_at',
+      body: '<p>Once the ending is written, <code>Finish</code> waits for every execution runner of the dispatch to finish through release, then <code>CloseDispatch</code> sets <code>done_at</code> and lease renewal stops. An execution still <code>lost</code> holds this until it ends or fails 24 hours later.</p><p>Until then the dispatch keeps its lease, so a server that dies while an execution is settling or releasing leaves it to the next claim. The <code>dispatch finished</code> log line is written here.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
     }
   }
 };

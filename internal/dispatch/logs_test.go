@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/plugin"
@@ -80,7 +79,7 @@ func stored(t *testing.T, reg *fakeRegistry, id execution.ID) string {
 func runOnce(t *testing.T, d *Dispatcher) *TaskOutcome {
 	t.Helper()
 
-	outcome, err := d.RunTask(t.Context(), origin, containerTask(t, nil), nil, nil)
+	outcome, err := d.runTaskIn(t, containerTask(t, nil), nil, nil)
 	if err != nil {
 		t.Fatalf("RunTask() = %v", err)
 	}
@@ -207,38 +206,44 @@ func TestCapture_MarksAFailedReadTruncated(t *testing.T) {
 func TestCapture_StoreDown(t *testing.T) {
 	t.Parallel()
 
-	d := &Dispatcher{executions: failingStore{}, now: time.Now, maxLogBytes: execution.DefaultMaxLogBytes}
-	rec := &execution.Record{}
+	d, store := flaky(newRegistry())
+	store.failLogs = true
 
-	d.capture(t.Context(), &scriptedProvider{name: "a"}, rec, &execution.Result{Logs: []byte("output")})
+	rec := &execution.Record{}
+	d.capture(t.Context(), &scriptedProvider{name: "a"}, rec, &execution.Result{Logs: []byte("output")}, execution.Lease{})
 
 	if !rec.LogsTruncated || rec.LogsAt.IsZero() {
 		t.Errorf("record truncated %t at %s, want truncated and captured", rec.LogsTruncated, rec.LogsAt)
 	}
 }
 
-// A cancelled run's output, which dispatch never read, is captured by the
-// release loop before the provider is released.
-func TestReleaseLoop_CapturesOutputNobodyRead(t *testing.T) {
+// A cancelled run has no result to read, but its output is still captured,
+// before the provider is released.
+func TestCapture_CancelledRunBeforeTheRelease(t *testing.T) {
 	t.Parallel()
 
 	p, reg := reading(writes("cancelled output\n"))
+	p.pollsToFinish = 100
+
 	releaser := &readingReleaser{readingProvider: p}
 	reg.providers["a"] = releaser
 
-	id := leftover(t, reg, "a", time.Hour)
+	ctx, cancel := context.WithCancel(t.Context())
+	d := over(reg, cancelling(&p.scriptedProvider, cancel))
 
-	if released, err := releaseLoop(t, reg); err != nil || released != 1 {
-		t.Fatalf("ReleaseLeftovers() = %d, %v; want 1", released, err)
-	}
+	o := begin(t, d)
+	outcome, err := d.RunTask(ctx, o, containerTask(t, nil), nil, nil)
+	d.Finish(t.Context(), o, nil, err)
+
+	id := outcome.Attempts[0].ID
 
 	if got := stored(t, reg, id); got != "cancelled output\n" || releaser.releasedAfterReads != 1 {
 		t.Errorf("stored %q, released after %d reads; want the output read before the release",
 			got, releaser.releasedAfterReads)
 	}
 
-	if rec := record(t, reg, id); rec.LogsAt.IsZero() || rec.Released.IsZero() {
-		t.Errorf("record captured at %s, released at %s; want both", rec.LogsAt, rec.Released)
+	if rec := record(t, reg, id); rec.State != execution.StateCancelled || rec.LogsAt.IsZero() || rec.Released.IsZero() {
+		t.Errorf("record = %+v, want cancelled, captured and released", rec)
 	}
 }
 

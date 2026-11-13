@@ -7,9 +7,10 @@
 //
 // The store cut out from under a running server, through a proxy the test
 // controls. New work is refused, plans still answer, and a run already in
-// flight finishes on its provider. What the outage kept from being written is
-// repaired once the store returns, by the server claiming its own lapsed
-// dispatch and resuming it.
+// flight finishes on its provider. What the outage kept from being written
+// lands once the store returns: retried by the run's own runner, or, once its
+// lease lapsed, by the runner the server restores when it claims the
+// dispatch back.
 // -------------------------------------------------------------------------------
 
 package integration
@@ -23,7 +24,6 @@ import (
 
 	"github.com/afreidah/vagabond/internal/api"
 	"github.com/afreidah/vagabond/internal/execution"
-	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/server"
 	"github.com/afreidah/vagabond/internal/state/postgres/pgtest"
 )
@@ -105,11 +105,8 @@ func TestStoreOutage_RefusesNewWorkAndRecovers(t *testing.T) {
 		t.Errorf("Plan() during the outage = %v, want an answer from the snapshot", err)
 	}
 
-	p, _ := h.registry.Provider("box")
-	box := p.(*plugin.FakeContainerProvider)
-
 	for _, next := range []execution.State{execution.StateRunning, execution.StateSucceeded} {
-		if err := box.Advance(id, next); err != nil {
+		if err := h.box().Advance(id, next); err != nil {
 			t.Fatalf("Advance(%s) = %v", next, err)
 		}
 	}

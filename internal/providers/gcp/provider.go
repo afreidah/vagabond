@@ -233,8 +233,8 @@ func (p *Provider) Cancel(ctx context.Context, id execution.ID) error {
 }
 
 // Release deletes the Job a finished execution left behind, which otherwise
-// counts against a per-region quota. Dispatch calls it after the result, and
-// the release loop for every other ending.
+// counts against a per-region quota. The execution's runner calls it last,
+// however the execution ended.
 func (p *Provider) Release(ctx context.Context, id execution.ID) error {
 	return p.Cancel(ctx, id)
 }

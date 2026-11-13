@@ -379,7 +379,7 @@ to finish. The job is not registered. The server makes the same selection
 | Line | When |
 |---|---|
 | `==> dispatch <dispatch-id> of "<job>"` | The server accepted the run |
-| `==> <task> <state> on <provider>` | An execution changed state: `pending`, `submitted`, `accepted`, `running`, or `failed`, `cancelled` or `lost` when it ended without a result |
+| `==> <task> <state> on <provider>` | An execution changed state: `pending`, `submitted`, `accepted`, `running`, `lost`, or `failed` or `cancelled` when it ended without a result |
 | `... (attempt <n>)` | Appended from the second attempt on |
 | `... (<class> failure)` | Appended when the execution failed without a result (`infrastructure`, `internal`) |
 | `==> <task> succeeded on <provider> in <duration>` | The task exited 0 |

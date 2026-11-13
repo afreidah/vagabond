@@ -459,21 +459,24 @@ minutes in testing, until the run is deleted.
 
 | Mechanism | When | Effect |
 |---|---|---|
-| `Release` | After every `Result` and `ReadLogs`, by dispatch, 30s timeout | Deletes the run and its pod |
-| `Release` | Every other ending, by the [provider release](../background-services.md#provider-release) loop | Deletes the run and its pod |
-| `Cancel` | When the dispatching caller gives up, or `DELETE /v1/execution/{id}` for an execution no local dispatch is running | Deletes the run, stopping it |
+| `Release` | Last step of every execution, by its runner, after `Result`, `ReadLogs` and the settle; retried until it succeeds | Deletes the run and its pod |
+| `Cancel` | When the execution's dispatch is cancelled, or after a `Submit` that failed as `infrastructure` | Deletes the run, stopping it |
 
 **Cancel destroys the result.** Code Engine has no way to stop a run except
 deleting it, and deleting it removes its pod, with the exit code and output.
 `Result` after `Cancel` fails with `ErrUnknownExecution`, and `ReadLogs` with
-the pod gone. Dispatch always reads both before `Release`; a run cancelled
-before it ended has no output to capture.
+the pod gone. The `Status` call that follows a cancel also finds the run
+unknown, so a cancelled execution is charged for the time Vagabond saw it
+running, and nothing if it never reached `running`. The runner always reads
+`Result` and `ReadLogs` before `Release`; a run cancelled before it ended has
+no output to capture.
 
 A project holds 100 job runs before old ones must be removed, so leftover runs
-eventually stop new submissions. The release loop deletes a run dispatch never
-released once its record has gone 10 minutes unchanged, `Status` reports the
-execution over and any quota reservation is settled. Code Engine itself deletes
-completed runs after about a week.
+eventually stop new submissions. A run outlives its execution until its runner
+reaches `Release`: while the execution is `lost`, which lasts until Code
+Engine answers or 24 hours pass, or while its dispatch waits to be claimed
+after its server died. Code Engine itself deletes completed runs after about a
+week.
 
 ## Failure classification
 
@@ -585,11 +588,13 @@ those figures. Vagabond ships no defaults.
   `ContainerExitedCode<N>`, the exit code is nil. Dispatch judges success from
   the state, so it fails as `failed`.
 - **Deleted outside Vagabond:** a run deleted from the console or CLI while
-  running reports `ErrUnknownExecution` on the next poll, and the quota reaper
-  drops its reservation.
+  running reports `ErrUnknownExecution`, classified internal, on the next
+  poll. The execution is `failed` at once, which stops the task, and charged
+  for the time it was seen running
+  ([Lost executions](../dispatch.md#lost-executions)).
 - **Restart during an execution:** the run keeps going. The server that resumes
-  the dispatch polls it by name and collects its result; see
-  [Dispatch](../dispatch.md).
+  the dispatch polls it by name, collects its result and releases it; see
+  [Resuming](../dispatch.md#resuming).
 
 ## Testing against a real project
 
