@@ -13,11 +13,15 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -47,6 +51,32 @@ type fakeExecutor struct {
 	cancelled map[string]bool
 	exitCode  int
 	output    string
+}
+
+// flakyListener fails its first failures accepts as a process out of file
+// descriptors does, and closes the next drops connections it accepts, as a
+// session cut off before it got going is; then it accepts as the listener it
+// wraps.
+type flakyListener struct {
+	net.Listener
+
+	failures atomic.Int32
+	drops    atomic.Int32
+}
+
+// Accept fails while failures remain, then hands back closed connections
+// while drops remain, then accepts.
+func (l *flakyListener) Accept() (net.Conn, error) {
+	if l.failures.Add(-1) >= 0 {
+		return nil, &net.OpError{Op: "accept", Net: "tcp", Err: syscall.EMFILE}
+	}
+
+	conn, err := l.Listener.Accept()
+	if err == nil && l.drops.Add(-1) >= 0 {
+		_ = conn.Close()
+	}
+
+	return conn, err
 }
 
 // newFakeExecutor returns an executor holding nothing, whose workloads exit 0
@@ -151,10 +181,17 @@ type agentHarness struct {
 func newAgentHarness(t *testing.T) *agentHarness {
 	t.Helper()
 
-	reg, led := fixtures(t)
-	srv := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler))
+	return serveAgents(t, newAgentServer(t), nil)
+}
 
-	return serveAgents(t, srv, nil)
+// newAgentServer builds a server over the test fixtures and memory stores,
+// for a test to serve agents from.
+func newAgentServer(t *testing.T) *Server {
+	t.Helper()
+
+	reg, led := fixtures(t)
+
+	return New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler))
 }
 
 // serveAgents serves srv's agent listener on a free loopback port, over TLS
@@ -173,6 +210,13 @@ func serveAgents(t *testing.T, srv *Server, tlsConfig *tls.Config) *agentHarness
 		listener = tls.NewListener(listener, tlsConfig)
 	}
 
+	return serveOn(t, srv, listener)
+}
+
+// serveOn serves srv's agents on listener, and its API, until the test ends.
+func serveOn(t *testing.T, srv *Server, listener net.Listener) *agentHarness {
+	t.Helper()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 
@@ -190,6 +234,25 @@ func serveAgents(t *testing.T, srv *Server, tlsConfig *tls.Config) *agentHarness
 	})
 
 	return &agentHarness{srv: srv, address: listener.Addr().String(), api: httpServer.URL}
+}
+
+// flakyLoopback opens a loopback listener on a free port that fails failures
+// accepts and drops drops sessions, then accepts as any listener.
+func flakyLoopback(t *testing.T, failures, drops int32) *flakyListener {
+	t.Helper()
+
+	var lc net.ListenConfig
+
+	inner, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	listener := &flakyListener{Listener: inner}
+	listener.failures.Store(failures)
+	listener.drops.Store(drops)
+
+	return listener
 }
 
 // connect runs an agent named name against the harness until the returned
@@ -255,6 +318,71 @@ func (h *agentHarness) node(t *testing.T, name string) *nodes.Conn {
 // -------------------------------------------------------------------------
 // TESTS
 // -------------------------------------------------------------------------
+
+// Accepts that fail, as when the process runs out of file descriptors, are
+// retried, so an agent still registers once they pass.
+func TestServeAgents_RetriesFailedAccepts(t *testing.T) {
+	h := serveOn(t, newAgentServer(t), flakyLoopback(t, 3, 0))
+	h.connect(t, "box1", newFakeExecutor())
+	h.node(t, "box1")
+}
+
+// A server shutting down while accepts keep failing stops cleanly, from the
+// wait between them.
+func TestServeAgents_StopsDuringTheRetryWait(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+
+	if err := newAgentServer(t).ServeAgents(ctx, flakyLoopback(t, math.MaxInt32, 0)); err != nil {
+		t.Errorf("ServeAgents() = %v, want nil once ctx ended", err)
+	}
+}
+
+// An agent whose session is cut off before it got going dials again after
+// its backoff, and registers.
+func TestAgent_DialsAgainAfterAFailedSession(t *testing.T) {
+	h := serveOn(t, newAgentServer(t), flakyLoopback(t, 0, 1))
+	h.connect(t, "box1", newFakeExecutor())
+	h.node(t, "box1")
+}
+
+// An agent whose registered session the server drops reconnects and
+// registers again.
+func TestAgent_ReconnectsAfterTheServerDropsIt(t *testing.T) {
+	h := newAgentHarness(t)
+	h.connect(t, "box1", newFakeExecutor())
+	h.node(t, "box1")
+
+	h.srv.nodeConns.CloseAll()
+
+	await(t, "box1 to leave", func() bool {
+		conn, _ := h.srv.nodeConns.Get("box1")
+
+		return conn == nil
+	})
+
+	h.node(t, "box1")
+}
+
+// A listener closed while serving is an error, since no agent could connect
+// again; ctx ending is not.
+func TestServeAgents_ClosedListenerIsAnError(t *testing.T) {
+	srv := newAgentServer(t)
+
+	closed := flakyLoopback(t, 0, 0)
+	_ = closed.Close()
+
+	if err := srv.ServeAgents(t.Context(), closed); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("ServeAgents() on a closed listener = %v, want net.ErrClosed", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if err := srv.ServeAgents(ctx, flakyLoopback(t, 0, 0)); err != nil {
+		t.Errorf("ServeAgents() after ctx ended = %v, want nil", err)
+	}
+}
 
 // An agent registers its node with what it reported, including the workloads
 // it already holds.

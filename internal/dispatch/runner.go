@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/afreidah/vagabond/internal/backoff"
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
@@ -459,7 +460,7 @@ func (r *runner) release(work context.Context) error {
 
 			r.d.logger.WarnContext(work, "releasing provider leftovers", "execution", r.rec.ID, "error", err)
 
-			if err := r.d.sleep(work, doubling(persistRetry, persistRetryMax, n)); err != nil {
+			if err := r.d.sleep(work, backoff.Exponential(persistRetry, persistRetryMax, n)); err != nil {
 				return err
 			}
 		}

@@ -12,6 +12,7 @@ package dispatch
 import (
 	"time"
 
+	"github.com/afreidah/vagabond/internal/backoff"
 	"github.com/afreidah/vagabond/internal/job"
 )
 
@@ -90,13 +91,13 @@ func (p policy) budget() int {
 }
 
 // backoff returns how long to wait before attempt n, counting from zero: none
-// for the first, then doubling from initial up to max.
+// for the first, then doubling from initial, every wait capped at max.
 func (p policy) backoff(attempt int) time.Duration {
 	if attempt < 1 {
 		return 0
 	}
 
-	return doubling(p.initial, p.max, attempt-1)
+	return backoff.Exponential(p.initial, p.max, attempt-1)
 }
 
 // -------------------------------------------------------------------------

@@ -370,7 +370,7 @@ time=2026-09-28T14:03:12.540Z level=INFO msg="dispatch started" dispatch=... job
 |---|---|
 | `debug` | Every API request: `method`, `path`, `status`, `duration` |
 | `info` | `serving`, `serving agents`, `stopped`, `node registered`, `dispatch started`, `dispatch finished`, `dispatch resumed`, `resumed dispatch finished`, `resolved abandoned quota reservations`, `pruned stored output` |
-| `warn` | `dispatch finished without an answer`, `store unreachable`, `store write failed, retrying`, `node disconnected`, `agent connection`, `refreshing provider capabilities`, `refreshing quota usage`, `resolving abandoned quota reservations`, `releasing provider leftovers`, `claiming abandoned dispatches`, `resuming dispatch`, `pruning stored output`, `reading stored output ended early`, `log stream ended early` |
+| `warn` | `dispatch finished without an answer`, `store unreachable`, `store write failed, retrying`, `node disconnected`, `agent connection`, `accepting agent connections failed, retrying`, `refreshing provider capabilities`, `refreshing quota usage`, `resolving abandoned quota reservations`, `releasing provider leftovers`, `claiming abandoned dispatches`, `resuming dispatch`, `pruning stored output`, `reading stored output ended early`, `log stream ended early` |
 | `error` | `request failed`: an API request that answered 500 |
 
 Startup errors, configuration diagnostics, and the `Some providers did not

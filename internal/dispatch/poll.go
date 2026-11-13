@@ -17,6 +17,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/afreidah/vagabond/internal/backoff"
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
@@ -53,23 +54,10 @@ var DefaultPoll = Poll{
 	Max:     15 * time.Second,
 }
 
-// interval returns how long to wait before the nth status call.
+// interval returns how long to wait before the nth status call, counting from
+// zero.
 func (p Poll) interval(n int) time.Duration {
-	return doubling(p.Initial, p.Max, n)
-}
-
-// doubling is initial doubled n times, never more than ceiling.
-func doubling(initial, ceiling time.Duration, n int) time.Duration {
-	wait := initial
-	for range n {
-		wait *= 2
-
-		if wait >= ceiling {
-			return ceiling
-		}
-	}
-
-	return wait
+	return backoff.Exponential(p.Initial, p.Max, n)
 }
 
 // bounded makes call on a context that ends after callTimeout. A call that
@@ -92,24 +80,6 @@ func boundedErr(ctx context.Context, call func(ctx context.Context) error) error
 	_, err := bounded(ctx, func(ctx context.Context) (struct{}, error) { return struct{}{}, call(ctx) })
 
 	return err
-}
-
-// sleepContext waits, or gives up when the caller does.
-func sleepContext(ctx context.Context, d time.Duration) error {
-	if d <= 0 {
-		return ctx.Err()
-	}
-
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-
-	case <-timer.C:
-		return nil
-	}
 }
 
 // -------------------------------------------------------------------------

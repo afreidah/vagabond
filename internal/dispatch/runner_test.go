@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/afreidah/vagabond/internal/backoff"
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
@@ -925,7 +926,7 @@ func TestLease_CancelRequestStopsTheRun(t *testing.T) {
 	reg := newRegistry(p)
 
 	d := over(reg, WithLease(time.Minute, 5*time.Millisecond),
-		WithSleeper(func(ctx context.Context, _ time.Duration) error { return sleepContext(ctx, time.Millisecond) }))
+		WithSleeper(func(ctx context.Context, _ time.Duration) error { return backoff.Sleep(ctx, time.Millisecond) }))
 
 	o := begin(t, d)
 

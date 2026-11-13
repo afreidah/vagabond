@@ -15,12 +15,14 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"time"
 
 	"google.golang.org/grpc"
 
 	"github.com/afreidah/vagabond/internal/agentrpc"
+	"github.com/afreidah/vagabond/internal/backoff"
 	"github.com/afreidah/vagabond/internal/nodes"
 )
 
@@ -31,12 +33,21 @@ import (
 // handshakeTimeout bounds an agent's TLS handshake.
 const handshakeTimeout = 10 * time.Second
 
+// How long a failed accept waits before the next, doubling up to the maximum
+// while accepts keep failing.
+const (
+	acceptRetry    = 5 * time.Millisecond
+	acceptRetryMax = time.Second
+)
+
 // -------------------------------------------------------------------------
 // SERVING
 // -------------------------------------------------------------------------
 
 // ServeAgents accepts agent connections on listener until ctx is done, then
-// closes every session.
+// closes every session. A failed accept, such as one out of file
+// descriptors, is retried; the listener closing while ctx is live is the
+// only error, since no agent could connect again.
 func (s *Server) ServeAgents(ctx context.Context, listener net.Listener) error {
 	go func() {
 		<-ctx.Done()
@@ -46,18 +57,31 @@ func (s *Server) ServeAgents(ctx context.Context, listener net.Listener) error {
 
 	s.logger.InfoContext(ctx, "serving agents", "address", listener.Addr().String())
 
+	failures := 0
+
 	for {
 		conn, err := listener.Accept()
-		if err != nil {
-			// Closed on purpose when ctx ends; anything else is a real failure.
-			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
-				return nil
-			}
 
-			return err
+		switch {
+		case err == nil:
+			failures = 0
+
+			go s.handleAgent(ctx, conn)
+
+			continue
+		case ctx.Err() != nil:
+			return nil
+		case errors.Is(err, net.ErrClosed):
+			return fmt.Errorf("agent listener closed: %w", err)
 		}
 
-		go s.handleAgent(ctx, conn)
+		s.logger.WarnContext(ctx, "accepting agent connections failed, retrying", "error", err)
+
+		if backoff.Sleep(ctx, backoff.Exponential(acceptRetry, acceptRetryMax, failures)) != nil {
+			return nil
+		}
+
+		failures++
 	}
 }
 

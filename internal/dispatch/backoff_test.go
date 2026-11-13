@@ -6,6 +6,7 @@
 // Two separate schedules that are easy to confuse: poll intervals govern how
 // often a running execution is asked about, retry backoff governs the pause
 // before trying a different provider. Then the bound on one provider call.
+// The doubling itself is the backoff package's, tested there.
 // -------------------------------------------------------------------------------
 
 package dispatch
@@ -45,17 +46,6 @@ func TestPollIntervalDoublesToACeiling(t *testing.T) {
 	}
 }
 
-// A ceiling below the first interval is still a ceiling.
-func TestPollIntervalRespectsALowCeiling(t *testing.T) {
-	t.Parallel()
-
-	p := Poll{Initial: 10 * time.Second, Max: 3 * time.Second}
-
-	if got := p.interval(1); got != 3*time.Second {
-		t.Errorf("interval(1) = %s, want the ceiling", got)
-	}
-}
-
 // -------------------------------------------------------------------------
 // RETRY BACKOFF
 // -------------------------------------------------------------------------
@@ -79,6 +69,21 @@ func TestRetryBackoff(t *testing.T) {
 		if got := p.backoff(attempt); got != expected {
 			t.Errorf("backoff(%d) = %s, want %s", attempt, got, expected)
 		}
+	}
+}
+
+// An initial wait above max is capped like every later one, as when initial
+// is set and max is left at its default.
+func TestRetryBackoffCapsTheFirstWait(t *testing.T) {
+	t.Parallel()
+
+	p := retryPolicy(&job.Task{
+		Name:  "test",
+		Retry: &job.Retry{Backoff: &job.Backoff{Initial: new(job.Duration("1m"))}},
+	})
+
+	if got := p.backoff(1); got != defaultBackoffMax {
+		t.Errorf("backoff(1) = %s, want the default max %s", got, defaultBackoffMax)
 	}
 }
 
@@ -162,37 +167,6 @@ func TestRetryPolicyIgnoresZeroAttempts(t *testing.T) {
 
 	if p.attempts != 1 {
 		t.Errorf("attempts = %d, want 1", p.attempts)
-	}
-}
-
-// -------------------------------------------------------------------------
-// SLEEPING
-// -------------------------------------------------------------------------
-
-// A cancelled context ends the sleep with an error.
-func TestSleepContextReturnsWhenCancelled(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-
-	if err := sleepContext(ctx, time.Hour); err == nil {
-		t.Error("a cancelled context slept anyway")
-	}
-}
-
-// A live context sleeps for at least the requested duration.
-func TestSleepContextWaits(t *testing.T) {
-	t.Parallel()
-
-	start := time.Now()
-
-	if err := sleepContext(t.Context(), 10*time.Millisecond); err != nil {
-		t.Fatalf("sleepContext failed: %v", err)
-	}
-
-	if elapsed := time.Since(start); elapsed < 10*time.Millisecond {
-		t.Errorf("returned after %s, want at least 10ms", elapsed)
 	}
 }
 

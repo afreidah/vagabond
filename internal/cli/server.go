@@ -14,6 +14,7 @@ package cli
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -171,13 +172,39 @@ func (c *ServerCommand) Run(args []string) int {
 		return c.Errorf("%s", err)
 	}
 
-	go func() { _ = srv.ServeAgents(ctx, agents) }()
-
-	if err := srv.Serve(ctx, cfg.Server.Address(), tlsConfig); err != nil {
+	if err := runServer(ctx, srv, agents, cfg.Server.Address(), tlsConfig); err != nil {
 		return c.Errorf("%s", err)
 	}
 
 	return ExitSuccess
+}
+
+// runServer serves the API on addr and agents on their listener until ctx
+// ends, and returns once both have stopped. Either stopping on its own stops
+// the other, so the server never answers while no agent can connect.
+func runServer(
+	ctx context.Context, srv *server.Server, agents net.Listener, addr string, tlsConfig *tls.Config,
+) error {
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
+
+	stopped := make(chan error, 1)
+
+	go func() {
+		stopped <- srv.ServeAgents(ctx, agents)
+
+		stop()
+	}()
+
+	err := srv.Serve(ctx, addr, tlsConfig)
+
+	stop()
+
+	if agentsErr := <-stopped; agentsErr != nil {
+		err = errors.Join(err, fmt.Errorf("serving agents: %w", agentsErr))
+	}
+
+	return err
 }
 
 // -------------------------------------------------------------------------

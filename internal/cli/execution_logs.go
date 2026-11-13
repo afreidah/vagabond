@@ -17,9 +17,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/afreidah/vagabond/internal/api"
+	"github.com/afreidah/vagabond/internal/backoff"
 )
 
 // ExecutionLogsCommand implements `vagabond execution logs`.
@@ -109,10 +109,8 @@ func (c *ExecutionLogsCommand) follow(client *api.Client, id string) int {
 
 		f.watch(ctx, e)
 
-		select {
-		case <-ctx.Done():
+		if backoff.Sleep(ctx, pollInterval) != nil {
 			return ExitSuccess
-		case <-time.After(pollInterval):
 		}
 	}
 }
