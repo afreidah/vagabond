@@ -23,6 +23,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/agent/fingerprint"
 	"github.com/afreidah/vagabond/internal/agentrpc"
+	"github.com/afreidah/vagabond/internal/backoff"
 )
 
 // -------------------------------------------------------------------------
@@ -77,29 +78,27 @@ func New(cfg *Config, node fingerprint.Node, exec agentExecutor, logger *slog.Lo
 // Run stays connected to the server until ctx is done, dialling again with
 // backoff whenever the connection drops or cannot be made.
 func (a *Agent) Run(ctx context.Context) error {
-	wait := reconnectMin
-
-	for {
+	for failures := 0; ; failures++ {
 		err := a.connect(ctx)
-
-		switch {
-		case ctx.Err() != nil:
+		if ctx.Err() != nil {
 			return nil
-		case err != nil:
-			a.logger.WarnContext(ctx, "connecting to the server", "server", a.cfg.Server, "error", err, "retry", wait)
-		default:
-			// A session that got going and then dropped starts the backoff over.
+		}
+
+		// A session that got going and then dropped starts the backoff over
+		if err == nil {
 			a.logger.WarnContext(ctx, "lost the server", "server", a.cfg.Server)
-			wait = reconnectMin
+			failures = 0
 		}
 
-		select {
-		case <-ctx.Done():
+		wait := backoff.Exponential(reconnectMin, reconnectMax, failures)
+
+		if err != nil {
+			a.logger.WarnContext(ctx, "connecting to the server", "server", a.cfg.Server, "error", err, "retry", wait)
+		}
+
+		if backoff.Sleep(ctx, wait) != nil {
 			return nil
-		case <-time.After(wait):
 		}
-
-		wait = min(wait*2, reconnectMax)
 	}
 }
 

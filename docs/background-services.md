@@ -292,12 +292,18 @@ session ([agent](agent.md)).
   node is removed and its departure time recorded for the
   [pool](#pool-reservations) grace period.
 - An agent reconnecting under the same name replaces its old session.
+- A failed accept, such as one out of file descriptors, is retried, waiting
+  5ms doubling to 1s while accepts keep failing.
+- The listener closing while the server runs stops the server, API included,
+  with `serving agents: agent listener closed`, since no agent could connect
+  again.
 - On shutdown the listener closes and every session is closed.
 
 **Logs:** info `serving agents` with `address`; info `node registered` with
 `node`, `pool`, `address`, `cpu`, `memory` and `held`, only when the node was
 not already connected; warn `node disconnected` with `node`; warn `agent
-connection` when a session cannot be opened.
+connection` when a session cannot be opened; warn `accepting agent connections
+failed, retrying` with `error` for each failed accept.
 
 ### Store health
 

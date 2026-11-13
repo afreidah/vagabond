@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/afreidah/vagabond/internal/api"
+	"github.com/afreidah/vagabond/internal/backoff"
 )
 
 // -------------------------------------------------------------------------
@@ -101,10 +102,8 @@ func (m *Meta) follow(ctx context.Context, client *api.Client, started *api.Disp
 			return f.finished(d)
 		}
 
-		select {
-		case <-ctx.Done():
+		if backoff.Sleep(ctx, pollInterval) != nil {
 			return f.interrupted(started.Job, last)
-		case <-time.After(pollInterval):
 		}
 	}
 }

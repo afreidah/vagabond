@@ -21,6 +21,7 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 
+	"github.com/afreidah/vagabond/internal/backoff"
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/ledger"
@@ -168,7 +169,7 @@ func New(registry Registry, ledger Ledger, executions Executions, opts ...Option
 		leaseRenew: LeaseRenew,
 		now:        time.Now,
 		poll:       DefaultPoll,
-		sleep:      sleepContext,
+		sleep:      backoff.Sleep,
 
 		maxLogBytes: execution.DefaultMaxLogBytes,
 	}
@@ -519,7 +520,7 @@ func (d *Dispatcher) persist(ctx context.Context, write func(ctx context.Context
 
 		d.logger.WarnContext(ctx, "store write failed, retrying", "error", err)
 
-		if err := d.sleep(ctx, doubling(persistRetry, persistRetryMax, n)); err != nil {
+		if err := d.sleep(ctx, backoff.Exponential(persistRetry, persistRetryMax, n)); err != nil {
 			return err
 		}
 	}

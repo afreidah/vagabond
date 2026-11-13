@@ -29,6 +29,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver, for goose
 	"github.com/pressly/goose/v3"
 
+	"github.com/afreidah/vagabond/internal/backoff"
 	"github.com/afreidah/vagabond/internal/state"
 	db "github.com/afreidah/vagabond/internal/state/postgres/sqlc"
 )
@@ -153,10 +154,8 @@ func (s *Store) serializable(ctx context.Context, fn func(*db.Queries) error) er
 
 	for attempt := range serializationAttempts {
 		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(retryDelay(attempt)):
+			if err := backoff.Sleep(ctx, retryDelay(attempt)); err != nil {
+				return err
 			}
 		}
 
@@ -190,7 +189,7 @@ func unavailable(err error) error {
 // retryDelay is a random wait up to the attempt's exponential ceiling. Full
 // jitter, so transactions that failed together do not retry together.
 func retryDelay(attempt int) time.Duration {
-	ceiling := min(serializationBackoff<<attempt, serializationBackoffMax)
+	ceiling := backoff.Exponential(serializationBackoff, serializationBackoffMax, attempt)
 
 	return rand.N(ceiling) + 1 //nolint:gosec // jitter, not a secret
 }

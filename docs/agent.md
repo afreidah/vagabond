@@ -832,7 +832,9 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab \
 
 Server-side log lines: `serving agents address=...` at start,
 `node registered ...` per arrival, `node disconnected node=...` per departure,
-`agent connection from=... error=...` when a session cannot be set up.
+`agent connection from=... error=...` when a session cannot be set up, and
+`accepting agent connections failed, retrying error=...` per failed accept,
+which is retried 5ms doubling to 1s.
 
 ## Testing
 
