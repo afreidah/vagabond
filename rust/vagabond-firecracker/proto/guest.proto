@@ -1,0 +1,49 @@
+// -----------------------------------------------------------------------------
+// Guest Protocol
+//
+// Author: Alex Freidah
+//
+// What vagabond-firecracker says to vagabond-init, PID 1 inside each microVM,
+// over ttRPC on vsock. The init runs one workload and serves it until told to
+// shut down, so the daemon can come back for its output and exit after a
+// restart of its own.
+// -----------------------------------------------------------------------------
+
+syntax = "proto3";
+
+package vagabond.guest.v1;
+
+import "internal/agentrpc/agent.proto";
+import "internal/agentrpc/executor.proto";
+
+service Guest {
+  // Start runs the process, once; a second call starts nothing.
+  rpc Start(vagabond.agent.v1.Process) returns (vagabond.agent.v1.Empty);
+
+  // Read returns the next output the process wrote, up to max bytes, waiting
+  // until there is some; ended once all of it has been read.
+  rpc Read(ReadRequest) returns (vagabond.agent.v1.Output);
+
+  // Wait returns the process's exit, waiting until it exits.
+  rpc Wait(vagabond.agent.v1.Empty) returns (Exit);
+
+  // Signal sends a signal to the process.
+  rpc Signal(SignalRequest) returns (vagabond.agent.v1.Empty);
+
+  // Shutdown powers the microVM off.
+  rpc Shutdown(vagabond.agent.v1.Empty) returns (vagabond.agent.v1.Empty);
+}
+
+message ReadRequest {
+  uint32 max = 1;
+}
+
+// Exit is the process's exit status, 128 plus the signal for one killed by a
+// signal, as a shell reports it.
+message Exit {
+  int32 code = 1;
+}
+
+message SignalRequest {
+  int32 signal = 1;
+}

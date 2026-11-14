@@ -1,0 +1,61 @@
+// -----------------------------------------------------------------------------
+// Executor Protocol
+//
+// Author: Alex Freidah
+//
+// What an agent and an executor daemon on its node say to each other, over
+// ttRPC on a Unix socket only the agent can open. The daemon runs the workloads
+// the agent hands it under the cgroup the agent gives it. Messages are the agent
+// protocol's wherever they mean the same thing.
+// -----------------------------------------------------------------------------
+
+syntax = "proto3";
+
+package vagabond.agent.v1;
+
+option go_package = "github.com/afreidah/vagabond/internal/agentrpc";
+
+import "google/protobuf/duration.proto";
+import "internal/agentrpc/agent.proto";
+
+service Executor {
+  rpc Submit(ExecutorSubmitRequest) returns (Submission);
+  rpc Status(ExecutionRequest) returns (ExecutionStatus);
+  rpc Result(ExecutionRequest) returns (ExecutionResult);
+  rpc Cancel(ExecutionRequest) returns (Empty);
+  rpc Release(ExecutionRequest) returns (Empty);
+  rpc ReadLogs(LogsRequest) returns (Output);
+  rpc Held(Empty) returns (HeldList);
+}
+
+// ExecutorSubmitRequest is a workload as the node resolved it: the process to
+// run, already merged with the image's entrypoint, command and environment, and
+// root_drive, the block device or file holding the image's filesystem. cgroup is
+// the parent the workload's cgroup is created under.
+message ExecutorSubmitRequest {
+  string execution_id = 1;
+  Process process = 2;
+  Resources resources = 3;
+  google.protobuf.Duration timeout = 4;
+  string root_drive = 5;
+  string cgroup = 6;
+}
+
+// Process is what runs: its arguments, the first the program, its environment
+// and the directory it starts in.
+message Process {
+  repeated string args = 1;
+  map<string, string> env = 2;
+  string working_dir = 3;
+}
+
+// Output is a workload's output from the offset asked for, and whether it has
+// ended with all of it read.
+message Output {
+  bytes data = 1;
+  bool ended = 2;
+}
+
+message HeldList {
+  repeated Held held = 1;
+}

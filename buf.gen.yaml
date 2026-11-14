@@ -4,7 +4,8 @@
 # Author: Alex Freidah
 #
 # Generates the agent protocol's Go bindings beside the proto. The plugins run
-# through `go tool`, so their versions are pinned by go.mod.
+# through `go tool`, so their versions are pinned by go.mod. The executor
+# protocol is ttRPC and only Rust speaks it so far, so it is left out here.
 # -------------------------------------------------------------------------------
 
 version: v2
@@ -19,3 +20,5 @@ inputs:
   - directory: .
     paths:
       - internal/agentrpc
+    exclude_paths:
+      - internal/agentrpc/executor.proto

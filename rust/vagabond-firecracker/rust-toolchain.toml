@@ -1,0 +1,14 @@
+# -------------------------------------------------------------------------------
+# Rust Toolchain
+#
+# Author: Alex Freidah
+#
+# Pins the compiler cargo uses in this crate, so every build and CI run gets the
+# same one. rustup installs it on first use. The musl target builds
+# vagabond-init as a static binary, which is what runs as PID 1 in a microVM.
+# -------------------------------------------------------------------------------
+
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
+targets = ["x86_64-unknown-linux-musl"]

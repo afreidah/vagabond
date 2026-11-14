@@ -1,0 +1,33 @@
+# -------------------------------------------------------------------------------
+# vagabond-firecracker
+#
+# Author: Alex Freidah
+#
+# Runs workloads in Firecracker microVMs for the agent on a KVM node. Two
+# programs share this crate: vagabond-firecracker, the daemon on the host, and
+# vagabond-init, PID 1 inside each microVM.
+# -------------------------------------------------------------------------------
+
+[package]
+name = "vagabond-firecracker"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1"
+clap = { version = "4", features = ["derive"] }
+ipnet = { version = "2", features = ["serde"] }
+nix = { version = "0.31", features = ["fs", "mount", "process", "reboot", "signal", "term"] }
+protobuf = "3.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+ttrpc = { version = "0.10", features = ["async"] }
+
+[dev-dependencies]
+nix = { version = "0.31", features = ["sched"] }
+tempfile = "3"
+
+[build-dependencies]
+ttrpc-codegen = "0.7"

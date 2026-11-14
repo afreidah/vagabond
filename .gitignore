@@ -4,7 +4,12 @@
 coverage.out
 integration-coverage.out
 containerd-coverage.out
+rust-coverage.lcov
+firecracker-coverage.lcov
 dist/
+
+# Rust build output
+/rust/*/target/
 
 # Hugo build output and caches
 /web/public/

@@ -227,6 +227,7 @@ Details: [architecture.md](docs/architecture.md).
 | Postgres, CockroachDB, migrations, schema | [database.md](docs/database.md) |
 | Periodic loops in the server and agent | [background-services.md](docs/background-services.md) |
 | Running workloads on your own nodes | [agent.md](docs/agent.md) |
+| Workloads in Firecracker microVMs | [firecracker.md](docs/firecracker.md) |
 | Google Cloud Run Jobs | [providers/cloud-run.md](docs/providers/cloud-run.md) |
 | IBM Code Engine Jobs | [providers/code-engine.md](docs/providers/code-engine.md) |
 | AWS Lambda | [providers/lambda.md](docs/providers/lambda.md) |

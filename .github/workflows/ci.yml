@@ -4,10 +4,10 @@
 # Author: Alex Freidah
 #
 # Runs on push to main and on pull requests. Formatting, vet, lint, and tests
-# are the same gates `make check` runs locally, plus the integration suite and
-# the containerd executor tests, so a change that passes locally passes here.
-# The golangci-lint version is pinned to match the Makefile; a mismatch would
-# mean local lint and CI lint disagree.
+# are the same gates `make check` runs locally, plus the integration suite, the
+# containerd executor tests and the microVM tests, so a change that passes
+# locally passes here. Tool versions are pinned to match the Makefile; a
+# mismatch would mean local and CI results disagree.
 # -------------------------------------------------------------------------------
 
 name: CI
@@ -26,6 +26,8 @@ permissions:
 
 env:
   GOLANGCI_VERSION: v2.14.0
+  CARGO_AUDIT_VERSION: 0.23.0
+  CARGO_LLVM_COV_VERSION: 0.9.1
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -173,6 +175,84 @@ jobs:
           path: containerd-coverage.out
 
   # ---------------------------------------------------------------------------
+  # RUST
+  #
+  # vagabond-firecracker's gates. rustup on the runner installs the toolchain
+  # rust-toolchain.toml pins on first use, and the tools come prebuilt.
+  # ---------------------------------------------------------------------------
+  rust-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-audit@${{ env.CARGO_AUDIT_VERSION }}
+
+      - name: Format check
+        run: make rust-fmt-check
+
+      - name: Lint
+        run: make rust-lint
+
+      - name: Audit
+        run: make rust-audit
+
+  rust-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
+
+      - name: Test
+        run: make rust-coverage
+
+      - name: Upload Rust coverage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: rust-coverage
+          path: rust-coverage.lcov
+
+  # ---------------------------------------------------------------------------
+  # FIRECRACKER
+  #
+  # The microVM tests on the runner's KVM, which GitHub's Linux runners expose
+  # though nested virtualization is not officially supported. They need root,
+  # so they are built as the runner user and run with sudo, as `make
+  # firecracker-coverage` does locally.
+  # ---------------------------------------------------------------------------
+  firecracker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
+
+      # Without KVM every test fails at boot; this says why up front.
+      - name: Check KVM
+        run: test -c /dev/kvm
+
+      - name: Install the initramfs, root drive and firewall tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cpio e2fsprogs nftables
+
+      - name: Firecracker test
+        run: make firecracker-coverage
+
+      - name: Upload Firecracker coverage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: firecracker-coverage
+          path: firecracker-coverage.lcov
+
+  # ---------------------------------------------------------------------------
   # VULNERABILITY SCANNING
   #
   # govulncheck is pinned by the tool directive in go.mod, so this runs the
@@ -213,22 +293,24 @@ jobs:
   # ---------------------------------------------------------------------------
   # SONARCLOUD
   #
-  # Combines the unit, integration and containerd coverage the test jobs
-  # uploaded. Runs on every pull request and every push to main, so main is
-  # re-analysed with fresh coverage. A test job that failed uploaded no
-  # profile, and scanning without it would report a drop that is really a
-  # missing file, so the scan is skipped then.
+  # Combines the Go unit, integration and containerd coverage and the Rust unit
+  # and microVM coverage the test jobs uploaded. Runs on every pull request and
+  # every push to main, so main is re-analysed with fresh coverage. A test job
+  # that failed uploaded no profile, and scanning without it would report a
+  # drop that is really a missing file, so the scan is skipped then.
   # ---------------------------------------------------------------------------
   sonarqube:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [test, integration, containerd]
+    needs: [test, integration, containerd, rust-test, firecracker]
     if: >-
       always()
       && github.actor != 'dependabot[bot]'
       && !contains(fromJSON('["failure", "cancelled"]'), needs.test.result)
       && !contains(fromJSON('["failure", "cancelled"]'), needs.integration.result)
       && !contains(fromJSON('["failure", "cancelled"]'), needs.containerd.result)
+      && !contains(fromJSON('["failure", "cancelled"]'), needs.rust-test.result)
+      && !contains(fromJSON('["failure", "cancelled"]'), needs.firecracker.result)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
@@ -250,6 +332,18 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: containerd-coverage
+        continue-on-error: true
+
+      - name: Download Rust coverage
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: rust-coverage
+        continue-on-error: true
+
+      - name: Download Firecracker coverage
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: firecracker-coverage
         continue-on-error: true
 
       - name: SonarCloud scan
