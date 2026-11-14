@@ -101,6 +101,7 @@ Every package under `internal/`. `cmd/vagabond` only calls `cli.Run`.
 | `ptr` | Helpers for reading optional specification fields |
 | `quota` | Pool budgets, meters and periods, and arithmetic over usage |
 | `registry` | Builds providers from configuration and holds their capability snapshots; resolves a provider's credential again after a 401 or 403 |
+| `rest` | The one JSON-over-HTTP request path, for the API client, Cloud Run, Code Engine and IBM IAM: a refusal kept with its status and body for the caller to classify, told apart from no answer |
 | `scheduler` | Admission and ranking |
 | `server` | HTTP routes, live output streams, agent connections, dispatches in the background, upkeep timers, lifecycle |
 | `state` | Errors shared by every store |

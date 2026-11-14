@@ -16,9 +16,10 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/afreidah/vagabond/internal/rest"
 )
 
 // -------------------------------------------------------------------------
@@ -208,13 +209,27 @@ func ClassifyHTTP(status int, retryAfter time.Duration, err error) *Error {
 	}
 }
 
-// RetryAfter reads how long a platform asked the caller to wait, in seconds.
-// Zero, the common case, leaves the backoff to the dispatcher.
-func RetryAfter(resp *http.Response) time.Duration {
-	seconds, err := strconv.Atoi(resp.Header.Get("Retry-After"))
-	if err != nil || seconds < 0 {
-		return 0
+// ClassifyResponse classifies a failed rest call, so every plugin maps them
+// the same way. An error already classified, as a refused credential from a
+// token source is, passes through; a refusal goes to refused; a call that got
+// no answer is infrastructure; and anything else, a request that could not
+// be built or an answer that could not be decoded, is internal.
+func ClassifyResponse(err error, refused func(r *rest.Refusal) error) error {
+	if err == nil {
+		return nil
 	}
 
-	return time.Duration(seconds) * time.Second
+	if classified, ok := errors.AsType[*Error](err); ok {
+		return classified
+	}
+
+	if r, ok := errors.AsType[*rest.Refusal](err); ok {
+		return refused(r)
+	}
+
+	if errors.Is(err, rest.ErrUnreachable) {
+		return Infrastructure(err)
+	}
+
+	return Internal(err)
 }

@@ -6,19 +6,21 @@
 // The parts of following a run that a real server cannot be made to produce on
 // demand: a stream that cannot resume, a stored copy missing its front, cut by
 // the provider or unreadable,
-// an execution that ends with no result, and a platform's reason for ending
-// one. A stub answers the logs route.
+// an execution that ends with no result, a platform's reason for ending one,
+// and a server that stops answering mid-run. A stub answers the routes.
 // -------------------------------------------------------------------------------
 
 package cli
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,7 +38,7 @@ import (
 func stubLogs(t *testing.T, answer func(offset string) (int, string)) *api.Client {
 	t.Helper()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return stubServer(t, func(w http.ResponseWriter, r *http.Request) {
 		status, body := answer(r.URL.Query().Get("offset"))
 
 		if status != http.StatusOK {
@@ -45,7 +47,15 @@ func stubLogs(t *testing.T, answer func(offset string) (int, string)) *api.Clien
 
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
-	}))
+	})
+}
+
+// stubServer is a client for a server answering every request with handler,
+// until the test ends.
+func stubServer(t *testing.T, handler http.HandlerFunc) *api.Client {
+	t.Helper()
+
+	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
 	client, err := api.NewClient(server.URL, nil)
@@ -54,6 +64,34 @@ func stubLogs(t *testing.T, answer func(offset string) (int, string)) *api.Clien
 	}
 
 	return client
+}
+
+// quickRetries shortens a follow's retries until the test ends.
+func quickRetries(t *testing.T) {
+	t.Helper()
+
+	saved := followRetries
+	followRetries = api.Retries{Wait: time.Millisecond, MaxWait: 2 * time.Millisecond, Attempts: 3}
+
+	t.Cleanup(func() { followRetries = saved })
+}
+
+// failFirst answers the first n requests with status and the rest with body,
+// as JSON.
+func failFirst(n int32, status int, body string) http.HandlerFunc {
+	var served atomic.Int32
+
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if served.Add(1) <= n {
+			w.WriteHeader(status)
+
+			return
+		}
+
+		_, _ = io.WriteString(w, body)
+	}
 }
 
 // -------------------------------------------------------------------------
@@ -176,6 +214,136 @@ func TestFollower_Watch(t *testing.T) {
 
 	if !ended {
 		t.Error("a follow was not told its execution ended")
+	}
+}
+
+// -------------------------------------------------------------------------
+// OUTAGES
+// -------------------------------------------------------------------------
+
+// A server that stops answering for a few polls does not end the follow: the
+// run's own end is reported, after a notice that the server went quiet.
+func TestFollow_RidesOutAnOutage(t *testing.T) {
+	quickRetries(t)
+
+	client := stubServer(t, failFirst(2, http.StatusServiceUnavailable, `{"DispatchID":"d-1","Job":"ci","State":"succeeded"}`))
+	ui := cli.NewMockUi()
+
+	code := (&Meta{Ui: ui}).follow(t.Context(), client, &api.DispatchResponse{DispatchID: "d-1", Job: "ci"}, true)
+
+	if code != ExitSuccess || !strings.Contains(ui.ErrorWriter.String(), "Lost contact with the server at http://") {
+		t.Errorf("exit %d, stderr:\n%s\nwant success after the notice", code, ui.ErrorWriter.String())
+	}
+}
+
+// A server gone past the retries ends the follow, not the run: the error,
+// then that the run may still be going and where to look.
+func TestFollow_ServerGoneTooLong(t *testing.T) {
+	quickRetries(t)
+
+	running := `{"DispatchID":"d-1","Job":"ci","State":"running","Executions":[{"ID":"e-1","Task":"build","State":"running"}]}`
+
+	var served atomic.Int32
+
+	client := stubServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		if served.Add(1) == 1 {
+			_, _ = io.WriteString(w, running)
+
+			return
+		}
+
+		w.WriteHeader(http.StatusBadGateway)
+	})
+
+	ui := cli.NewMockUi()
+
+	code := (&Meta{Ui: ui}).follow(t.Context(), client, &api.DispatchResponse{DispatchID: "d-1", Job: "ci"}, true)
+
+	want := "Dispatch d-1 may still be running. Check it with vagabond execution status e-1."
+	if code != ExitFailure || !strings.Contains(ui.ErrorWriter.String(), want) {
+		t.Errorf("exit %d, stderr:\n%s\nwant failure saying %q", code, ui.ErrorWriter.String(), want)
+	}
+}
+
+// A dispatch the server does not know is an answer that will not change: one
+// read, and no suggestion that the run goes on.
+func TestFollow_UnknownDispatchFailsAtOnce(t *testing.T) {
+	quickRetries(t)
+
+	var served atomic.Int32
+
+	client := stubServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		served.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"Error":"dispatch d-1 not found"}`)
+	})
+
+	ui := cli.NewMockUi()
+
+	code := (&Meta{Ui: ui}).follow(t.Context(), client, &api.DispatchResponse{DispatchID: "d-1", Job: "ci"}, true)
+
+	if code != ExitFailure || served.Load() != 1 || strings.Contains(ui.ErrorWriter.String(), "may still be running") {
+		t.Errorf("exit %d after %d reads, stderr:\n%s\nwant one read and a plain failure", code, served.Load(), ui.ErrorWriter.String())
+	}
+}
+
+// Following an execution's output gives up the same way, naming it.
+func TestExecutionLogsFollow_ServerGoneTooLong(t *testing.T) {
+	quickRetries(t)
+
+	client := stubServer(t, failFirst(100, http.StatusServiceUnavailable, ""))
+	ui := cli.NewMockUi()
+
+	code := (&ExecutionLogsCommand{Meta: &Meta{Ui: ui}}).follow(t.Context(), client, "e-1")
+
+	want := "Execution e-1 may still be running. Check it with vagabond execution status e-1."
+	if code != ExitFailure || !strings.Contains(ui.ErrorWriter.String(), want) {
+		t.Errorf("exit %d, stderr:\n%s\nwant failure saying %q", code, ui.ErrorWriter.String(), want)
+	}
+}
+
+// An interrupt while following stops the run's unfinished execution and
+// exits 2; following an execution's output, it stops following only.
+func TestFollow_Interrupted(t *testing.T) {
+	running := `{"DispatchID":"d-1","Job":"ci","State":"running","Executions":[{"ID":"e-1","Task":"build","State":"running"}]}`
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	var reads, cancels atomic.Int32
+
+	client := stubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			cancels.Add(1)
+		} else {
+			reads.Add(1)
+		}
+
+		_, _ = io.WriteString(w, running)
+	})
+
+	// The interrupt arrives while the poll waits for its second read
+	go func() {
+		for reads.Load() == 0 {
+			time.Sleep(time.Millisecond)
+		}
+
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	ui := cli.NewMockUi()
+
+	code := (&Meta{Ui: ui}).follow(ctx, client, &api.DispatchResponse{DispatchID: "d-1", Job: "ci"}, true)
+	if code != ExitNoCapacity || cancels.Load() != 1 {
+		t.Errorf("exit %d after %d cancels, want 2 after one", code, cancels.Load())
+	}
+
+	logs, stop := context.WithCancel(t.Context())
+	stop()
+
+	if code := (&ExecutionLogsCommand{Meta: &Meta{Ui: ui}}).follow(logs, client, "e-1"); code != ExitSuccess {
+		t.Errorf("execution logs -f exit %d after an interrupt, want 0", code)
 	}
 }
 

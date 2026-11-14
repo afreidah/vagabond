@@ -986,6 +986,26 @@ The client does not read environment variables. The CLI passes `-address` and
 the `-tls-*` flags, defaulting to `$VAGABOND_ADDR` and `$VAGABOND_TLS_*`; see
 [CLI](cli.md#connecting-to-the-server).
 
+**Retrying:** `client.Retrying(api.Retries)` returns a copy that retries a GET
+the server did not answer, or answered `429`, `502`, `503` or `504`, through
+`go-retryablehttp`. Every other method is sent once, so nothing is submitted
+twice. `job run`, `job dispatch` and `execution logs -f` retry their polls this
+way.
+
+| `Retries` field | Meaning |
+|---|---|
+| `Wait` | First wait, doubling per retry |
+| `MaxWait` | Ceiling on every wait |
+| `Attempts` | Retries after the first try |
+| `Retrying` | Called before a request's first retry, when set |
+
+`api.DefaultRetries` is 1s doubling to 15s, 10 retries: about two minutes.
+Transport errors a retry cannot change are not retried: an untrusted
+certificate, a bad scheme or header, too many redirects. The last answer comes
+back as any answer would, so a final `503` is still a `*ResponseError`.
+`api.Unanswered(err)` reports whether an error is one of those a retrying
+client retries: a connection failure, or one of those four statuses.
+
 **Methods:**
 
 | Method | Route |
@@ -1005,8 +1025,10 @@ the `-tls-*` flags, defaulting to `$VAGABOND_ADDR` and `$VAGABOND_TLS_*`; see
 | `Nodes(ctx)` | `GET /v1/nodes` |
 | `Providers(ctx)` | `GET /v1/providers` |
 | `Health(ctx)` | `GET /v1/health` |
+| `Address()` | The server's address, as the client parsed it |
 
 An empty `namespace` sends no `?namespace=`, so the server applies its default.
+A method that fails returns a nil result beside the error.
 
 **Errors:**
 
@@ -1015,4 +1037,4 @@ An empty `namespace` sends no `?namespace=`, so the server applies its default.
 | Non-2xx response | `*api.ResponseError` with `Status` and the decoded `Body` (`api.Error`, diagnostics included). `Error()` returns `Body.Error`. A body that is not the JSON error, such as a router 404 or 405, gives `Body.Error` as the status line, e.g. `405 Method Not Allowed` |
 | Connection failure | `contacting the server at <address>: <error>` |
 | Undecodable 2xx body | `<METHOD> <path>: decoding the answer: <error>` |
-| `Health` with 503 | Returns the decoded `*Health` and a `*ResponseError` whose `Body.Error` is `StoreError` |
+| `Health` with 503 | Returns the decoded `*Health` and a `*ResponseError` whose `Body.Error` is `StoreError`. A 503 whose body is not a health report, as from a proxy, is a plain `*ResponseError` |
