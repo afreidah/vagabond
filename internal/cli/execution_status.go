@@ -76,6 +76,7 @@ func record(e *api.Execution) string {
 		{"Dispatch", e.DispatchID},
 		{"Task", e.Task},
 		{"Provider", e.Provider},
+		{"Node", e.Node},
 		{"Attempt", fmt.Sprintf("%d", e.Attempt)},
 		{"Previous", e.PreviousID},
 		{"State", e.State},

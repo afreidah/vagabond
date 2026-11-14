@@ -4,8 +4,9 @@
 // Author: Alex Freidah
 //
 // A real agent dialling a real server over TCP, with a fake executor behind
-// the agent: registration, calling executions back down the session, node
-// listing, and a node leaving when its agent stops.
+// the agent: registration, the workloads a node is told to release, calling
+// executions back down the session, node listing, and a node leaving when its
+// agent stops.
 // -------------------------------------------------------------------------------
 
 package server
@@ -14,12 +15,10 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"io"
 	"log/slog"
 	"math"
 	"net"
 	"net/http/httptest"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -31,6 +30,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/agent"
 	"github.com/afreidah/vagabond/internal/agent/executor"
+	"github.com/afreidah/vagabond/internal/agent/executor/executortest"
 	"github.com/afreidah/vagabond/internal/agent/fingerprint"
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/api"
@@ -42,16 +42,6 @@ import (
 // -------------------------------------------------------------------------
 // DOUBLES
 // -------------------------------------------------------------------------
-
-// fakeExecutor holds workloads in memory: each finishes the moment it is
-// submitted, exiting with exitCode and printing output.
-type fakeExecutor struct {
-	mu        sync.Mutex
-	workloads map[string]*executor.Spec
-	cancelled map[string]bool
-	exitCode  int
-	output    string
-}
 
 // flakyListener fails its first failures accepts as a process out of file
 // descriptors does, and closes the next drops connections it accepts, as a
@@ -79,91 +69,10 @@ func (l *flakyListener) Accept() (net.Conn, error) {
 	return conn, err
 }
 
-// newFakeExecutor returns an executor holding nothing, whose workloads exit 0
-// printing hello.
-func newFakeExecutor() *fakeExecutor {
-	return &fakeExecutor{workloads: map[string]*executor.Spec{}, cancelled: map[string]bool{}, output: "hello\n"}
+// finishing is an executor whose workloads end at once, printing hello.
+func finishing() *executortest.Fake {
+	return &executortest.Fake{Finish: true, Output: "hello\n"}
 }
-
-// Submit records the workload under id.
-func (f *fakeExecutor) Submit(_ context.Context, id string, spec *executor.Spec) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.workloads[id] = spec
-
-	return nil
-}
-
-// Status reports a held workload succeeded, or cancelled once Cancel was
-// called on it.
-func (f *fakeExecutor) Status(_ context.Context, id string) (execution.Status, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if _, ok := f.workloads[id]; !ok {
-		return execution.Status{}, executor.ErrUnknown
-	}
-
-	state := execution.StateSucceeded
-	if f.cancelled[id] {
-		state = execution.StateCancelled
-	}
-
-	return execution.Status{State: state, ProviderID: id}, nil
-}
-
-// Result returns a held workload's exit code.
-func (f *fakeExecutor) Result(ctx context.Context, id string) (*execution.Result, error) {
-	if _, err := f.Status(ctx, id); err != nil {
-		return nil, err
-	}
-
-	return &execution.Result{ExitCode: new(f.exitCode), Duration: time.Second}, nil
-}
-
-// Cancel marks the workload cancelled.
-func (f *fakeExecutor) Cancel(_ context.Context, id string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.cancelled[id] = true
-
-	return nil
-}
-
-// Release forgets the workload.
-func (f *fakeExecutor) Release(_ context.Context, id string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	delete(f.workloads, id)
-
-	return nil
-}
-
-// Logs writes the output from offset on.
-func (f *fakeExecutor) Logs(_ context.Context, _ string, offset int64, w io.Writer) error {
-	_, err := io.WriteString(w, f.output[min(offset, int64(len(f.output))):])
-
-	return err
-}
-
-// Held reports every workload as finished, since each finishes on submit.
-func (f *fakeExecutor) Held(context.Context) ([]executor.Held, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	held := make([]executor.Held, 0, len(f.workloads))
-	for id, spec := range f.workloads {
-		held = append(held, executor.Held{ID: id, CPU: spec.CPU, Memory: spec.Memory})
-	}
-
-	return held, nil
-}
-
-// Runtimes advertises the default runtime.
-func (f *fakeExecutor) Runtimes() []string { return []string{executor.DefaultRuntime} }
 
 // -------------------------------------------------------------------------
 // HELPERS
@@ -257,7 +166,7 @@ func flakyLoopback(t *testing.T, failures, drops int32) *flakyListener {
 
 // connect runs an agent named name against the harness until the returned
 // function stops it.
-func (h *agentHarness) connect(t *testing.T, name string, exec *fakeExecutor) func() {
+func (h *agentHarness) connect(t *testing.T, name string, exec *executortest.Fake) func() {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -315,15 +224,49 @@ func (h *agentHarness) node(t *testing.T, name string) *nodes.Conn {
 	return found
 }
 
+// recordExecution stores an execution under a running dispatch, released or
+// not, and returns its ID.
+func (h *agentHarness) recordExecution(t *testing.T, released bool) string {
+	t.Helper()
+
+	ids := [2]execution.ID{}
+	for i := range ids {
+		id, err := execution.NewID()
+		if err != nil {
+			t.Fatalf("NewID() = %v", err)
+		}
+
+		ids[i] = id
+	}
+
+	d := &execution.Dispatch{
+		ID: ids[0], State: execution.DispatchRunning, Owner: "test", Epoch: 1, LeaseUntil: time.Now().Add(time.Hour),
+	}
+	if err := h.srv.executions.CreateDispatch(t.Context(), d); err != nil {
+		t.Fatalf("CreateDispatch() = %v", err)
+	}
+
+	rec := &execution.Record{ID: ids[1], State: execution.StateRunning, Dispatch: d.ID}
+	if released {
+		rec.Released = time.Now()
+	}
+
+	if err := h.srv.executions.Create(t.Context(), rec, d.Lease()); err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+
+	return rec.ID.String()
+}
+
 // -------------------------------------------------------------------------
-// TESTS
+// SERVING
 // -------------------------------------------------------------------------
 
 // Accepts that fail, as when the process runs out of file descriptors, are
 // retried, so an agent still registers once they pass.
 func TestServeAgents_RetriesFailedAccepts(t *testing.T) {
 	h := serveOn(t, newAgentServer(t), flakyLoopback(t, 3, 0))
-	h.connect(t, "box1", newFakeExecutor())
+	h.connect(t, "box1", finishing())
 	h.node(t, "box1")
 }
 
@@ -342,7 +285,7 @@ func TestServeAgents_StopsDuringTheRetryWait(t *testing.T) {
 // its backoff, and registers.
 func TestAgent_DialsAgainAfterAFailedSession(t *testing.T) {
 	h := serveOn(t, newAgentServer(t), flakyLoopback(t, 0, 1))
-	h.connect(t, "box1", newFakeExecutor())
+	h.connect(t, "box1", finishing())
 	h.node(t, "box1")
 }
 
@@ -350,7 +293,7 @@ func TestAgent_DialsAgainAfterAFailedSession(t *testing.T) {
 // registers again.
 func TestAgent_ReconnectsAfterTheServerDropsIt(t *testing.T) {
 	h := newAgentHarness(t)
-	h.connect(t, "box1", newFakeExecutor())
+	h.connect(t, "box1", finishing())
 	h.node(t, "box1")
 
 	h.srv.nodeConns.CloseAll()
@@ -384,39 +327,72 @@ func TestServeAgents_ClosedListenerIsAnError(t *testing.T) {
 	}
 }
 
-// An agent registers its node with what it reported, including the workloads
-// it already holds.
+// -------------------------------------------------------------------------
+// REGISTRATION
+// -------------------------------------------------------------------------
+
+// An agent registers its node with what it reported.
 func TestAgent_Registers(t *testing.T) {
 	h := newAgentHarness(t)
-	exec := newFakeExecutor()
-	exec.workloads["held-before"] = &executor.Spec{CPU: 500, Memory: 256}
 
-	h.connect(t, "box1", exec)
+	h.connect(t, "box1", finishing())
 	node := h.node(t, "box1").Node
 
 	if node.GetPool() != "homelab" || node.GetCapacity().GetCpu() != 4000 || node.GetLabels()["gpu"] != "no" {
 		t.Errorf("registered = %+v", node)
 	}
+}
 
-	held := node.GetHeld()
-	if len(held) != 1 || held[0].GetExecutionId() != "held-before" || held[0].GetResources().GetMemory() != 256 {
-		t.Errorf("held = %v, want the held workload with its resources", held)
+// A node registering is told to release what no execution needs: a workload
+// whose execution was released, one never recorded, and one that is no
+// execution's. One whose execution is still live it keeps.
+func TestAgent_ReleasesWhatNoExecutionNeeds(t *testing.T) {
+	h := newAgentHarness(t)
+
+	live := h.recordExecution(t, false)
+	released := h.recordExecution(t, true)
+
+	unrecorded, err := execution.NewID()
+	if err != nil {
+		t.Fatalf("NewID() = %v", err)
+	}
+
+	exec := finishing()
+	for _, id := range []string{live, released, unrecorded.String(), "not-an-id"} {
+		_ = exec.Submit(t.Context(), id, &executor.Spec{})
+	}
+
+	h.connect(t, "box1", exec)
+
+	for _, id := range []string{released, unrecorded.String(), "not-an-id"} {
+		await(t, id+" to be released", func() bool { return exec.Workload(id) == nil })
+	}
+
+	if exec.Workload(live) == nil {
+		t.Error("the workload of a live execution was released")
 	}
 }
+
+// -------------------------------------------------------------------------
+// EXECUTIONS
+// -------------------------------------------------------------------------
 
 // The server calls a node's executions back down its session: submit, read,
 // stream output, cancel, release, and NotFound for what it does not hold.
 func TestAgent_ExecutionsAreCalledBack(t *testing.T) {
 	h := newAgentHarness(t)
-	exec := newFakeExecutor()
-	exec.exitCode = 3
+	exec := finishing()
+	exec.ExitCode = 3
 
 	h.connect(t, "box1", exec)
 	calls := h.node(t, "box1").Executions
 	ctx := t.Context()
 
+	// Live in the store, so registering does not release it mid-test
+	run := h.recordExecution(t, false)
+
 	sub, err := calls.Submit(ctx, &agentrpc.SubmitRequest{
-		ExecutionId: "run-1",
+		ExecutionId: run,
 		Workload: &agentrpc.Workload{
 			Image: "alpine:3.20", Args: []string{"echo", "hi"},
 			Resources: &agentrpc.Resources{Cpu: 1000, Memory: 512},
@@ -426,16 +402,16 @@ func TestAgent_ExecutionsAreCalledBack(t *testing.T) {
 		t.Fatalf("Submit() = %+v, %v", sub, err)
 	}
 
-	if exec.workloads["run-1"].Image != "alpine:3.20" {
-		t.Errorf("the executor got %+v", exec.workloads["run-1"])
+	if spec := exec.Workload(run); spec == nil || spec.Image != "alpine:3.20" {
+		t.Errorf("the executor got %+v", spec)
 	}
 
-	res, err := calls.Result(ctx, &agentrpc.ExecutionRequest{ExecutionId: "run-1"})
+	res, err := calls.Result(ctx, &agentrpc.ExecutionRequest{ExecutionId: run})
 	if err != nil || res.GetExitCode() != 3 {
 		t.Errorf("Result() = %+v, %v; want exit 3", res, err)
 	}
 
-	stream, err := calls.StreamLogs(ctx, &agentrpc.LogsRequest{ExecutionId: "run-1", Offset: 2})
+	stream, err := calls.StreamLogs(ctx, &agentrpc.LogsRequest{ExecutionId: run, Offset: 2})
 	if err != nil {
 		t.Fatalf("StreamLogs() = %v", err)
 	}
@@ -445,20 +421,20 @@ func TestAgent_ExecutionsAreCalledBack(t *testing.T) {
 		t.Errorf("first chunk from offset 2 = %q, %v", chunk.GetData(), err)
 	}
 
-	if _, err := calls.Cancel(ctx, &agentrpc.ExecutionRequest{ExecutionId: "run-1"}); err != nil {
+	if _, err := calls.Cancel(ctx, &agentrpc.ExecutionRequest{ExecutionId: run}); err != nil {
 		t.Errorf("Cancel() = %v", err)
 	}
 
-	st, err := calls.Status(ctx, &agentrpc.ExecutionRequest{ExecutionId: "run-1"})
+	st, err := calls.Status(ctx, &agentrpc.ExecutionRequest{ExecutionId: run})
 	if err != nil || st.GetState() != string(execution.StateCancelled) {
 		t.Errorf("Status() after cancel = %+v, %v", st, err)
 	}
 
-	if _, err := calls.Release(ctx, &agentrpc.ExecutionRequest{ExecutionId: "run-1"}); err != nil {
+	if _, err := calls.Release(ctx, &agentrpc.ExecutionRequest{ExecutionId: run}); err != nil {
 		t.Errorf("Release() = %v", err)
 	}
 
-	_, err = calls.Status(ctx, &agentrpc.ExecutionRequest{ExecutionId: "run-1"})
+	_, err = calls.Status(ctx, &agentrpc.ExecutionRequest{ExecutionId: run})
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("Status() after release = %v, want NotFound", err)
 	}
@@ -468,7 +444,7 @@ func TestAgent_ExecutionsAreCalledBack(t *testing.T) {
 func TestAgent_RefusesWhatDoesNotFit(t *testing.T) {
 	h := newAgentHarness(t)
 
-	h.connect(t, "box1", newFakeExecutor())
+	h.connect(t, "box1", finishing())
 	calls := h.node(t, "box1").Executions
 
 	_, err := calls.Submit(t.Context(), &agentrpc.SubmitRequest{
@@ -480,12 +456,16 @@ func TestAgent_RefusesWhatDoesNotFit(t *testing.T) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// NODES
+// -------------------------------------------------------------------------
+
 // GET /v1/nodes lists connected nodes, and a node whose agent stops leaves the
 // list.
 func TestAgent_NodesListAndLeave(t *testing.T) {
 	h := newAgentHarness(t)
-	stop := h.connect(t, "box1", newFakeExecutor())
-	h.connect(t, "box2", newFakeExecutor())
+	stop := h.connect(t, "box1", finishing())
+	h.connect(t, "box2", finishing())
 
 	h.node(t, "box1")
 	h.node(t, "box2")
@@ -502,11 +482,7 @@ func TestAgent_NodesListAndLeave(t *testing.T) {
 
 	stop()
 
-	await(t, "box1 to leave", func() bool { return len(h.srv.connectedNodes()) == 1 })
-
-	if _, ok := h.srv.nodeConns.LeftAt("box1"); !ok {
-		t.Error("box1 left without its departure recorded")
-	}
+	await(t, "box1 to leave", func() bool { return len(h.srv.nodeConns.All()) == 1 })
 }
 
 // An agent reconnecting under its name replaces its old connection rather than
@@ -514,16 +490,16 @@ func TestAgent_NodesListAndLeave(t *testing.T) {
 func TestAgent_ReconnectReplaces(t *testing.T) {
 	h := newAgentHarness(t)
 
-	stop := h.connect(t, "box1", newFakeExecutor())
+	stop := h.connect(t, "box1", finishing())
 	first := h.node(t, "box1")
 
 	stop()
-	await(t, "box1 to leave", func() bool { return len(h.srv.connectedNodes()) == 0 })
+	await(t, "box1 to leave", func() bool { return len(h.srv.nodeConns.All()) == 0 })
 
-	h.connect(t, "box1", newFakeExecutor())
+	h.connect(t, "box1", finishing())
 
 	await(t, "box1 to return", func() bool {
-		connected := h.srv.connectedNodes()
+		connected := h.srv.nodeConns.All()
 
 		return len(connected) == 1 && connected[0] != first
 	})

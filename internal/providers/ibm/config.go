@@ -19,7 +19,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/gohcl"
+
+	"github.com/afreidah/vagabond/internal/plugin"
 )
 
 // -------------------------------------------------------------------------
@@ -55,50 +56,25 @@ type Config struct {
 // DECODING
 // -------------------------------------------------------------------------
 
-// decodeConfig reads the provider's own block. A missing block is one
-// diagnostic rather than two about absent attributes, since its fix differs.
+// decodeConfig reads the provider's own block.
 func decodeConfig(name string, body hcl.Body) (*Config, hcl.Diagnostics) {
-	if body == nil {
-		return nil, hcl.Diagnostics{{
-			Severity: hcl.DiagError,
-			Summary:  "Missing provider configuration",
-			Detail: fmt.Sprintf("Provider %q is a %s provider and declares no config "+
-				"block. It needs region and project_id.", name, Type),
-		}}
-	}
-
-	var cfg Config
-
-	diags := gohcl.DecodeBody(body, nil, &cfg)
-	if diags.HasErrors() {
+	cfg, diags := plugin.DecodeConfig[Config](name, Type, body, "region and project_id")
+	if cfg == nil {
 		return nil, diags
 	}
 
-	return &cfg, append(diags, cfg.validate(name)...)
+	return cfg, append(diags, cfg.validate(name)...)
 }
 
 // validate reports configuration that decoded but cannot be used, and warns
 // about a region Code Engine is not known to run in.
 func (c *Config) validate(name string) hcl.Diagnostics {
-	var diags hcl.Diagnostics
-
-	fields := []struct{ label, value string }{
-		{"region", c.Region},
-		{"project_id", c.ProjectID},
-	}
+	settings := map[string]string{"region": c.Region, "project_id": c.ProjectID}
 	if c.ImageSecret != nil {
-		fields = append(fields, struct{ label, value string }{"image_secret", *c.ImageSecret})
+		settings["image_secret"] = *c.ImageSecret
 	}
 
-	for _, field := range fields {
-		if strings.TrimSpace(field.value) == "" {
-			diags = append(diags, &hcl.Diagnostic{
-				Severity: hcl.DiagError,
-				Summary:  "Empty provider setting",
-				Detail:   fmt.Sprintf("Provider %q sets %s to an empty string.", name, field.label),
-			})
-		}
-	}
+	diags := plugin.EmptySettings(name, settings)
 
 	if c.ProjectID != "" {
 		if _, err := uuid.Parse(c.ProjectID); err != nil {

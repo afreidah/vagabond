@@ -62,24 +62,14 @@ func Admit(req *Request, inputs []Input) Result {
 	rules := checkers()
 
 	for i := range inputs {
-		in := &inputs[i]
-
-		members, rejection := admitProvider(req, in, rules)
+		candidates, rejection := admitProvider(req, &inputs[i], rules)
 		if rejection != nil {
 			result.Rejections = append(result.Rejections, *rejection)
 
 			continue
 		}
 
-		// Cloned, since the registry reuses its snapshots across plans
-		admitted := *in
-		admitted.Capabilities = in.Capabilities.Clone()
-
-		result.Candidates = append(result.Candidates, Candidate{
-			Input:         admitted,
-			EstimatedCost: in.Capabilities.EstimatedCost,
-			Members:       members,
-		})
+		result.Candidates = append(result.Candidates, candidates...)
 	}
 
 	result.Sort()
@@ -87,31 +77,34 @@ func Admit(req *Request, inputs []Input) Result {
 	return result
 }
 
-// admitProvider admits one provider. A pool is admitted when a member passes
-// every check on its own, since its properties are spread across its nodes,
-// and returns the members that passed; otherwise the rejection is from the
-// member that failed the fewest checks.
-func admitProvider(req *Request, in *Input, rules []Checker) ([]string, *Rejection) {
+// admitProvider admits one provider, or each node of a provider made of
+// nodes, since its properties are spread across them. With no node passing,
+// the rejection is from the node that failed the fewest checks.
+func admitProvider(req *Request, in *Input, rules []Checker) ([]Candidate, *Rejection) {
 	if len(in.Capabilities.Members) == 0 {
-		return nil, admitOne(req, in, rules)
+		if rejection := admitOne(req, in, rules); rejection != nil {
+			return nil, rejection
+		}
+
+		return []Candidate{candidateOf(in, "")}, nil
 	}
 
 	var (
-		passed  []string
+		passed  []Candidate
 		closest *Rejection
 	)
 
 	for i := range in.Capabilities.Members {
 		member := &in.Capabilities.Members[i]
 
-		// The member's snapshot and labels, with the pool's quota, tags and health
+		// The node's snapshot and labels, with the provider's quota, tags and health
 		as := *in
 		as.Capabilities = member.Capabilities
 		as.Labels = member.Labels
 
 		rejection := admitOne(req, &as, rules)
 		if rejection == nil {
-			passed = append(passed, member.Name)
+			passed = append(passed, candidateOf(&as, member.Name))
 
 			continue
 		}
@@ -127,6 +120,16 @@ func admitProvider(req *Request, in *Input, rules []Checker) ([]string, *Rejecti
 	}
 
 	return nil, closest
+}
+
+// candidateOf is in admitted as it stood, on node when it is one. Its
+// capabilities are cloned, since the registry reuses its snapshots across
+// plans.
+func candidateOf(in *Input, node string) Candidate {
+	admitted := *in
+	admitted.Capabilities = in.Capabilities.Clone()
+
+	return Candidate{Input: admitted, EstimatedCost: in.Capabilities.EstimatedCost, Node: node}
 }
 
 // admitOne runs every checker against one provider, or returns nil if it can

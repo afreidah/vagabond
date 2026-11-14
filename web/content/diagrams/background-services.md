@@ -25,7 +25,7 @@ window.vagabondDiagram = {
     '    DISPATCH[Dispatch<br>run]:::process',
     '    LEASE[Lease<br>renewal 20s]:::process',
     '    RUNNER[Execution<br>runner]:::process',
-    '    POOLRES[Pool<br>reservations]:::filter',
+    '    POOLRES[Node<br>reservations]:::filter',
     '    REGSNAP[(Capability<br>snapshots)]:::storage',
     '    LEDSNAP[(Usage<br>snapshot)]:::storage',
     '    PROVIDERS[Providers]:::data',
@@ -53,7 +53,8 @@ window.vagabondDiagram = {
     '    DISPATCH --> LEASE',
     '    DISPATCH -->|per attempt| RUNNER',
     '    LEASE -->|cancel, lease lost| RUNNER',
-    '    RUNNER --> POOLRES',
+    '    DISPATCH -->|reserve| POOLRES',
+    '    RUNNER -->|give back| POOLRES',
     '',
     '    CAPS --> PROVIDERS',
     '    CAPS --> REGSNAP',
@@ -95,7 +96,7 @@ window.vagabondDiagram = {
     CAPS: {
       title: 'Capability refresh',
       badge: 'background', badgeText: 'every 1 min',
-      body: '<p><code>registry.Refresh</code> asks every enabled provider for <code>Capabilities</code> in parallel, each under a 30s timeout, and applies every answer at once.</p><p><b>At startup:</b> once while loading configuration, before the server is built.<br><b>Skips:</b> disabled providers, and <code>pool</code> providers, whose capabilities are built from connected nodes on every read.</p><p>A provider that answers is marked healthy and its snapshot replaced. One that fails is marked unhealthy and keeps its last snapshot; admission rejects it with <code>provider-unhealthy</code> until a refresh succeeds. Errors from every provider are collected and joined.</p><p class="dg-metric">Logs: warn <code>refreshing provider capabilities</code>. At startup the CLI prints <code>Some providers did not answer: ...</code> instead, and the server still starts.</p><p><a href="../../docs/background-services/#capability-refresh">Reference &rarr;</a></p>'
+      body: '<p><code>registry.Refresh</code> asks every enabled provider for <code>Capabilities</code> in parallel, each under a 30s timeout, and applies every answer at once.</p><p><b>At startup:</b> once while loading configuration, before the server is built.<br><b>Skips:</b> disabled providers, and <code>containerd</code> providers, whose capabilities are built from connected nodes on every read.</p><p>A provider that answers is marked healthy and its snapshot replaced. One that fails is marked unhealthy and keeps its last snapshot; admission rejects it with <code>provider-unhealthy</code> until a refresh succeeds. Errors from every provider are collected and joined.</p><p class="dg-metric">Logs: warn <code>refreshing provider capabilities</code>. At startup the CLI prints <code>Some providers did not answer: ...</code> instead, and the server still starts.</p><p><a href="../../docs/background-services/#capability-refresh">Reference &rarr;</a></p>'
     },
     USAGE: {
       title: 'Usage snapshot refresh',
@@ -133,14 +134,14 @@ window.vagabondDiagram = {
       body: '<p>One goroutine per execution, under its dispatch&rsquo;s lease and the only writer of its record: submit, watch, collect, settle, release. Each step leaves a mark on the record, so a runner restored after a claim starts at the first step not done. The attempt takes the runner&rsquo;s first answer, once the execution is terminal, lost or failed to submit; settling and releasing follow.</p><p><b>Watch:</b> <code>Status</code> polls back off from 2s to 15s. A failed poll makes the execution <code>lost</code>, and polling goes on; one the provider no longer knows, or still failing after 24h lost, is <code>failed</code>.<br><b>Cancel:</b> the provider&rsquo;s <code>Cancel</code>, then one <code>Status</code> for the times it ran.<br><b>Release:</b> retried 250ms doubling to 10s until it succeeds or the provider no longer knows the execution.<br>Every <code>Status</code>, <code>Result</code>, <code>Cancel</code> and <code>Release</code> call has a 30s timeout.</p><p>Every write is checked against the lease. A refused one means another server claimed the dispatch: the runner stops and calls the provider no further. Any other store failure is retried, 250ms doubling to 10s with a 10s timeout per try, until the write lands.</p><p class="dg-metric">Logs: warn <code>releasing provider leftovers</code> with <code>execution</code> and <code>error</code>, per failed release; warn <code>store write failed, retrying</code> with <code>error</code></p><p><a href="../task-path/">Task path diagram &rarr;</a> &middot; <a href="../execution-states/">Execution states diagram &rarr;</a></p>'
     },
     POOLRES: {
-      title: 'Pool reservations',
+      title: 'Node reservations',
       badge: 'filter', badgeText: 'checked on read',
-      body: '<p>Not a loop. A <code>pool</code> provider holds room on a node between submitting a workload and the node reporting it, so two dispatches on this server cannot both take the last room. Reservations are in memory, per server process.</p><p><b>Covers:</b> 2m, or until the node reports the workload.<br><b>Removed:</b> on <code>Release</code>, or when <code>Submit</code> to the node fails.<br><b>Departed node grace:</b> 5m, during which its executions report <code>lost</code>.<br><b>After the pool is built:</b> 5m during which an execution no node has reported is <code>lost</code>, not unknown.</p><p>An expired reservation stops counting against the node but stays in memory until its execution is released. Both grace periods are compared against the clock when a status is read.</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
+      body: '<p>Not a loop. <code>nodes.Conns</code> holds room on a node between placing a workload and the node reporting it, so two dispatches on this server cannot both take the last room. Counted once per node, whatever providers draw on it. In memory, per server process.</p><p><b>Taken:</b> by dispatch, after the quota reservation and before the execution is recorded. A node without room, or not connected, is refused with <code>plugin.ErrNoRoom</code>, and dispatch goes on to the next candidate.<br><b>Dropped:</b> when the node&rsquo;s report includes the workload, after 2m, when the task does not translate or <code>Submit</code> fails, and on <code>Release</code>.</p><p>The 2m is compared against the clock when a node&rsquo;s room is read, and a reservation past it is dropped then.</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
     },
     LISTENER: {
       title: 'Agent listener',
       badge: 'process', badgeText: 'long-running',
-      body: '<p><code>Server.ServeAgents</code> accepts agent connections on <code>agent_bind</code> and runs one goroutine per session: on an <code>agent_tls</code> listener a TLS handshake within 10s, then a yamux session serving the <code>Node</code> gRPC endpoint.</p><p>A node is registered while its session holds. yamux sends a keepalive every 30s on both sides and closes a session whose keepalive fails, which is how a dead peer is detected. When the session ends, the node is removed and its departure time recorded for the pool grace period. An agent reconnecting under the same name replaces and closes its old session. A failed accept, such as one out of file descriptors, is retried, 5ms doubling to 1s; the listener closing while the server runs stops the server, API included. On shutdown the listener closes and every session is closed.</p><p class="dg-metric">Logs: info <code>serving agents</code>; info <code>node registered</code>, only for a node not already connected; warn <code>node disconnected</code>; warn <code>agent connection</code> when a session cannot be opened; warn <code>accepting agent connections failed, retrying</code> per failed accept</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
+      body: '<p><code>Server.ServeAgents</code> runs <code>nodes.Conns.Serve</code> (<code>internal/nodes/serve.go</code>), which accepts agent connections on <code>agent_bind</code> and runs one goroutine per session: on an <code>agent_tls</code> listener a TLS handshake within 10s, then a yamux session serving the <code>Node</code> gRPC endpoint. Every registration is answered with the held workloads the server has no use for, from each one&rsquo;s execution record.</p><p>A node is registered while its session holds. yamux sends a keepalive every 30s on both sides and closes a session whose keepalive fails, which is how a dead peer is detected. When the session ends, the node is removed. An agent reconnecting under the same name replaces and closes its old session. A failed accept, such as one out of file descriptors, is retried, 5ms doubling to 1s; the listener closing while the server runs stops the server, API included. On shutdown the listener closes and every session is closed.</p><p class="dg-metric">Logs: info <code>serving agents</code>; info <code>node registered</code>, only for a node not already connected; warn <code>node disconnected</code>; warn <code>agent connection</code> when a session cannot be opened; warn <code>accepting agent connections failed, retrying</code> per failed accept</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
     },
     HEALTH: {
       title: 'Store health',
@@ -150,7 +151,7 @@ window.vagabondDiagram = {
     FOLLOW: {
       title: 'Live output follow',
       badge: 'process', badgeText: 'per request',
-      body: '<p><code>Server.follow</code>, one per open <code>?follow=true</code> request on an execution that has not ended, whose provider is a <code>LogStreamer</code> (<code>cloud-run</code>, <code>code-engine</code>, <code>pool</code>). Copies <code>StreamLogs</code> output to the client, flushing every write.</p><p>A second goroutine re-reads the execution record every 1s; once it has ended, the stream ends 5s later, since some providers&rsquo; logs trail the work. A record that cannot be read is retried. It ends at once when the client goes or shutdown begins.</p><p class="dg-metric">Logs: warn <code>log stream ended early</code> when the provider stream breaks</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
+      body: '<p><code>Server.follow</code>, one per open <code>?follow=true</code> request on an execution that has not ended, whose provider is a <code>LogStreamer</code> (<code>cloud-run</code>, <code>code-engine</code>, <code>containerd</code>). Copies <code>StreamLogs</code> output to the client, flushing every write.</p><p>A second goroutine re-reads the execution record every 1s; once it has ended, the stream ends 5s later, since some providers&rsquo; logs trail the work. A record that cannot be read is retried. It ends at once when the client goes or shutdown begins.</p><p class="dg-metric">Logs: warn <code>log stream ended early</code> when the provider stream breaks</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
     },
     AGENT: {
       title: 'vagabond agent',
@@ -165,7 +166,7 @@ window.vagabondDiagram = {
     REPORT: {
       title: 'Workload report',
       badge: 'background', badgeText: 'every 10 s',
-      body: '<p>Re-registers the node through <code>Node.Register</code> with every workload containerd holds, each with its declared CPU and memory and whether it is still running. The server sizes the node&rsquo;s free room from these reports.</p><p><b>Interval:</b> 10s, which catches a workload finishing on its own.<br><b>Also:</b> on connecting, after a <code>Submit</code> that started a workload, and after every <code>Cancel</code> or <code>Release</code>.</p><p>Change signals coalesce: one pending signal covers any number of changes. A failed report is not fatal; the next one carries everything, and a connection that is really gone ends through the session closing.</p><p class="dg-metric">Logs: warn <code>reporting workloads</code> with <code>error</code></p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
+      body: '<p>Re-registers the node through <code>Node.Register</code> with every workload containerd holds, each with its declared CPU and memory and whether it is still running. The server sizes the node&rsquo;s free room from these reports.</p><p><b>Interval:</b> 10s, which catches a workload finishing on its own.<br><b>Also:</b> on connecting, after a <code>Submit</code> that started a workload, and after every <code>Cancel</code> or <code>Release</code>.</p><p>Change signals coalesce: one pending signal covers any number of changes. A failed report is not fatal; the next one carries everything, and a connection that is really gone ends through the session closing.</p><p>Each report is answered with the held workloads the server has no use for: released, never recorded, or not an execution ID. The agent releases each through its own <code>Release</code>; a failed one is answered again on the next report.</p><p class="dg-metric">Logs: warn <code>reporting workloads</code> with <code>error</code>; info <code>released a workload the server has no use for</code> with <code>execution</code>; warn <code>releasing a workload the server has no use for</code> with <code>execution</code> and <code>error</code></p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
     },
     TIMEOUT: {
       title: 'Timeout watcher',
@@ -180,12 +181,12 @@ window.vagabondDiagram = {
     PROVIDERS: {
       title: 'Providers',
       badge: 'data', badgeText: 'external',
-      body: '<p>The configured plugins and the platforms behind them: <code>cloud-run</code>, <code>code-engine</code>, <code>lambda</code> and <code>pool</code>. The capability refresh calls <code>Capabilities</code> (pools excepted); execution runners call <code>Submit</code>, <code>Status</code>, <code>Cancel</code>, <code>Result</code>, <code>ReadLogs</code> and <code>Release</code>; live output calls <code>StreamLogs</code>. The reaper calls none.</p><p>A call made through dispatch that the platform rejects as unauthorized has the provider&rsquo;s credential resolved again from its source, at most once a minute, and is made once more.</p>'
+      body: '<p>The configured plugins and the platforms behind them: <code>cloud-run</code>, <code>code-engine</code>, <code>lambda</code> and <code>containerd</code>. The capability refresh calls <code>Capabilities</code> (<code>containerd</code> providers excepted); execution runners call <code>Submit</code>, <code>Status</code>, <code>Cancel</code>, <code>Result</code>, <code>ReadLogs</code> and <code>Release</code>; live output calls <code>StreamLogs</code>. The reaper calls none.</p><p>A call made through dispatch that the platform rejects as unauthorized has the provider&rsquo;s credential resolved again from its source, at most once a minute, and is made once more.</p>'
     },
     REGSNAP: {
       title: 'Capability snapshots',
       badge: 'storage', badgeText: 'server memory',
-      body: '<p>Held by the registry: each provider&rsquo;s capabilities with their observation time, and whether it answered its last refresh. Admission reads them on every plan and dispatch without calling anything.</p><p>Not persisted; rebuilt by the startup refresh. A <code>pool</code> provider&rsquo;s capabilities are built from connected nodes on every read instead.</p>'
+      body: '<p>Held by the registry: each provider&rsquo;s capabilities with their observation time, and whether it answered its last refresh. Admission reads them on every plan and dispatch without calling anything.</p><p>Not persisted; rebuilt by the startup refresh. A <code>containerd</code> provider&rsquo;s capabilities are built from connected nodes on every read instead.</p>'
     },
     LEDSNAP: {
       title: 'Usage snapshot',
@@ -195,7 +196,7 @@ window.vagabondDiagram = {
     NODES: {
       title: 'Connected nodes',
       badge: 'storage', badgeText: 'server memory',
-      body: '<p><code>nodes.Conns</code>: each connected node with its last report and session, and when each departed node left. Filled by the agent listener, read by the pool providers and <code>GET /v1/nodes</code>.</p><p>Not persisted. After a server restart, agents reconnect with backoff and report again.</p>'
+      body: '<p><code>nodes.Conns</code>: each connected node with its last report and session, and the room reserved on each. Filled by the agent listener, read and reserved on by the <code>containerd</code> providers, read by <code>GET /v1/nodes</code>.</p><p>Not persisted. After a server restart, agents reconnect with backoff and report again.</p>'
     },
     CONTAINERD: {
       title: 'containerd',
@@ -229,7 +230,7 @@ window.vagabondDiagram = {
 | Dispatch run | Server | Per dispatch | | `Dispatcher.Run`, `Dispatcher.Resume` |
 | Execution runner | Server | Per execution, `Status` every 2s to 15s | | `runner.run` |
 | Lease renewal | Server | 20s per dispatch, until it is done | | `Dispatcher.hold` |
-| Agent listener | Server | Long-running | Yes | `Server.ServeAgents` |
+| Agent listener | Server | Long-running | Yes | `Server.ServeAgents`, `Conns.Serve` |
 | Live output follow | Server | Per request, record re-read every 1s | | `Server.follow` |
 | Server connection | Agent | Backoff 1s to 30s | Yes | `Agent.Run` |
 | Workload report | Agent | 10s, and on every change | On connecting | `Agent.connect` |

@@ -504,6 +504,7 @@ Response, `Plan`:
       "Candidates": [
         {
           "Provider": "cloud-run",
+          "Node": "",
           "Tier": 0,
           "Score": 82,
           "Scores": [ { "Name": "headroom", "Value": 0.82 } ],
@@ -531,7 +532,8 @@ Response, `Plan`:
 |---|---|
 | `Tasks` | One entry per task, in job order |
 | `Driver` | The task's driver |
-| `Candidates` | Admitted providers, best first. `[]` when none |
+| `Candidates` | Admitted providers, and nodes of a `containerd` provider, best first. `[]` when none |
+| `Candidates[].Node` | The node, for a `containerd` provider's candidate; empty otherwise |
 | `Candidates[].Tier` | The provider's configured [tier](configuration.md#tiers) |
 | `Candidates[].Score` | Overall score as a percentage, 0 to 100 |
 | `Candidates[].Scores` | Each scorer's contribution in `[0,1]`: `headroom`, `affinity`, `tier` (see [scorers](scheduling.md#scorers)) |
@@ -569,6 +571,7 @@ and `JobStatus`.
   "DispatchID": "0192a4c8-7f3e-7b21-9c4d-5e6f7a8b9c0d",
   "Task": "compile",
   "Provider": "cloud-run",
+  "Node": "",
   "Attempt": 1,
   "PreviousID": "",
   "State": "succeeded",
@@ -594,6 +597,7 @@ and `JobStatus`.
 | `DispatchID` | Owning dispatch |
 | `Task` | Task name |
 | `Provider` | Provider name from configuration |
+| `Node` | The agent node it runs on, for a `containerd` provider; empty otherwise |
 | `Attempt` | 1 for the first attempt; increments on retry or reroute |
 | `PreviousID` | The attempt this one follows; empty on attempt 1 |
 | `State` | See table below |

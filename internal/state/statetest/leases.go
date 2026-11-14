@@ -59,11 +59,11 @@ func holderWrites(t *testing.T, s Store) {
 	d := dispatched(t, s, held())
 	r := recorded(t, s, d, time.Time{})
 
-	r.ProviderID = "box-1"
+	r.ProviderID = "c-1"
 	saveUnder(t, s, r, d.Lease())
 
-	if got := get(t, s, r.ID); got.ProviderID != "box-1" {
-		t.Errorf("ProviderID = %q, want the saved one", got.ProviderID)
+	if got := get(t, s, r.ID); got.ProviderID != "c-1" || got.Node != "box-1" {
+		t.Errorf("ProviderID, Node = %q, %q; want the saved and created ones", got.ProviderID, got.Node)
 	}
 
 	if err := s.AppendLog(t.Context(), r.ID, 0, []byte("out"), 0, d.Lease()); err != nil {

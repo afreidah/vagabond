@@ -10,11 +10,9 @@
 package aws
 
 import (
-	"fmt"
-	"strings"
-
 	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/gohcl"
+
+	"github.com/afreidah/vagabond/internal/plugin"
 )
 
 // Type is what a provider block names to select this plugin.
@@ -25,31 +23,12 @@ type Config struct {
 	Region string `hcl:"region"`
 }
 
-// decodeConfig reads the provider's own block.
+// decodeConfig reads the provider's own block, refusing an empty region.
 func decodeConfig(name string, body hcl.Body) (*Config, hcl.Diagnostics) {
-	if body == nil {
-		return nil, hcl.Diagnostics{{
-			Severity: hcl.DiagError,
-			Summary:  "Missing provider configuration",
-			Detail: fmt.Sprintf("Provider %q is a %s provider and declares no config "+
-				"block. It needs region.", name, Type),
-		}}
-	}
-
-	var cfg Config
-
-	diags := gohcl.DecodeBody(body, nil, &cfg)
-	if diags.HasErrors() {
+	cfg, diags := plugin.DecodeConfig[Config](name, Type, body, "region")
+	if cfg == nil {
 		return nil, diags
 	}
 
-	if strings.TrimSpace(cfg.Region) == "" {
-		diags = append(diags, &hcl.Diagnostic{
-			Severity: hcl.DiagError,
-			Summary:  "Empty provider setting",
-			Detail:   fmt.Sprintf("Provider %q sets region to an empty string.", name),
-		})
-	}
-
-	return &cfg, diags
+	return cfg, append(diags, plugin.EmptySettings(name, map[string]string{"region": cfg.Region})...)
 }

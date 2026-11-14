@@ -86,18 +86,12 @@ func boundedErr(ctx context.Context, call func(ctx context.Context) error) error
 // SUBMISSION
 // -------------------------------------------------------------------------
 
-// submit hands the task to provider: to the members admission passed, for a
-// provider made of members, or plainly otherwise. The execution ID is the
-// submission's idempotency key, so retrying it on a refreshed credential is
-// safe.
+// submit hands the task to provider. The execution ID is the submission's
+// idempotency key, so retrying it on a refreshed credential is safe.
 func (d *Dispatcher) submit(
-	ctx context.Context, provider plugin.Provider, id execution.ID, task *job.Task, members []string,
+	ctx context.Context, provider plugin.Provider, id execution.ID, task *job.Task,
 ) (plugin.Submission, error) {
 	return authorized(ctx, d, provider, func() (plugin.Submission, error) {
-		if ms, ok := provider.(plugin.MemberSubmitter); ok && len(members) > 0 {
-			return ms.SubmitTo(ctx, id, task, members)
-		}
-
 		return provider.Submit(ctx, id, task)
 	})
 }
