@@ -82,8 +82,8 @@ type options struct {
 	nodes *nodes.Conns
 }
 
-// WithNodes gives pool providers the server's connected agent nodes, which
-// they are made of. Without it, a pool is a configuration error.
+// WithNodes gives containerd providers the server's connected agent nodes,
+// which they are made of. Without it, one is a configuration error.
 func WithNodes(conns *nodes.Conns) Option {
 	return func(o *options) { o.nodes = conns }
 }

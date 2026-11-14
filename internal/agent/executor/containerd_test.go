@@ -146,10 +146,10 @@ func TestContainerd_RunsAWorkload(t *testing.T) {
 	found := false
 
 	for _, h := range held {
-		if h.ID == id {
+		if h.GetExecutionId() == id {
 			found = true
 
-			if h.Running || h.CPU != 250 || h.Memory != 64 {
+			if h.GetRunning() || h.GetResources().GetCpu() != 250 || h.GetResources().GetMemory() != 64 {
 				t.Errorf("held = %+v, want finished with 250 millicores and 64 MiB", h)
 			}
 		}

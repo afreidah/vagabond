@@ -15,7 +15,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,125 +24,22 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/afreidah/vagabond/internal/agent/executor"
+	"github.com/afreidah/vagabond/internal/agent/executor/executortest"
 	"github.com/afreidah/vagabond/internal/agentrpc"
-	"github.com/afreidah/vagabond/internal/execution"
 )
 
 // -------------------------------------------------------------------------
-// FAKES
+// FIXTURES
 // -------------------------------------------------------------------------
 
 // signalTimeout bounds channel waits so tests fail cleanly without flaking
 // under the race detector.
 const signalTimeout = 2 * time.Second
 
-// fakeExecutor keeps workloads in memory, with hooks before and after one
-// enters held so a test can pause mid-pull or while Submit still reserves it.
-type fakeExecutor struct {
-	mu         sync.Mutex
-	held       []executor.Held
-	statuses   map[string]execution.Status
-	beforeHold func(ctx context.Context, id string, spec *executor.Spec) error
-	afterHold  func(ctx context.Context, id string, spec *executor.Spec)
-}
-
-// Submit leaves an already-held execution untouched, otherwise runs beforeHold,
-// records the workload as running, and runs afterHold before returning.
-func (f *fakeExecutor) Submit(ctx context.Context, id string, spec *executor.Spec) error {
-	f.mu.Lock()
-	for _, existing := range f.held {
-		if existing.ID == id {
-			f.mu.Unlock()
-			return nil
-		}
-	}
-	f.mu.Unlock()
-
-	if f.beforeHold != nil {
-		if err := f.beforeHold(ctx, id, spec); err != nil {
-			return err
-		}
-	}
-
-	f.mu.Lock()
-	f.held = append(f.held, executor.Held{
-		ID:      id,
-		Running: true,
-		CPU:     spec.CPU,
-		Memory:  spec.Memory,
-	})
-	if f.statuses == nil {
-		f.statuses = make(map[string]execution.Status)
-	}
-	f.statuses[id] = execution.Status{State: execution.StateRunning, ProviderID: "container-" + id}
-	f.mu.Unlock()
-
-	if f.afterHold != nil {
-		f.afterHold(ctx, id, spec)
-	}
-
-	return nil
-}
-
-// Status returns the recorded status for id, or executor.ErrUnknown.
-func (f *fakeExecutor) Status(_ context.Context, id string) (execution.Status, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	st, ok := f.statuses[id]
-	if !ok {
-		return execution.Status{}, executor.ErrUnknown
-	}
-
-	return st, nil
-}
-
-// Result reports executor.ErrUnknown for fake workloads.
-func (f *fakeExecutor) Result(_ context.Context, _ string) (*execution.Result, error) {
-	return nil, executor.ErrUnknown
-}
-
-// Cancel is a no-op stub satisfying agentExecutor.
-func (f *fakeExecutor) Cancel(_ context.Context, _ string) error {
-	return nil
-}
-
-// Release is a no-op stub satisfying agentExecutor.
-func (f *fakeExecutor) Release(_ context.Context, _ string) error {
-	return nil
-}
-
-// Logs is a no-op stub satisfying agentExecutor.
-func (f *fakeExecutor) Logs(_ context.Context, _ string, _ int64, _ io.Writer) error {
-	return nil
-}
-
-// Held returns a snapshot copy of the workloads currently recorded.
-func (f *fakeExecutor) Held(_ context.Context) ([]executor.Held, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	out := make([]executor.Held, len(f.held))
-	copy(out, f.held)
-
-	return out, nil
-}
-
-// Runtimes advertises a single container runtime.
-func (f *fakeExecutor) Runtimes() []string {
-	return []string{"runc"}
-}
-
-// newTestEndpoint builds an executions endpoint with an initialized reservation
-// map and buffered change channel.
+// newTestEndpoint builds an executions endpoint over exec with the given room
+// and a buffered change channel.
 func newTestEndpoint(exec agentExecutor, cpu, memory int64) *executions {
-	return &executions{
-		exec:     exec,
-		capacity: &agentrpc.Resources{Cpu: cpu, Memory: memory},
-		changed:  make(chan struct{}, 32),
-		reserved: make(map[string]*reservation),
-	}
+	return newExecutions(exec, &agentrpc.Resources{Cpu: cpu, Memory: memory}, make(chan struct{}, 32))
 }
 
 // submitRequest builds an AgentExecutions SubmitRequest with the given size.
@@ -168,6 +64,18 @@ func waitSignal(t *testing.T, ch <-chan struct{}, timeout time.Duration, msg str
 	}
 }
 
+// pausing is a fake whose pull of id signals started, then waits for release.
+func pausing(id string, started, release chan struct{}) *executortest.Fake {
+	return &executortest.Fake{Pull: func(_ context.Context, pulled string) error {
+		if pulled == id {
+			close(started)
+			<-release
+		}
+
+		return nil
+	}}
+}
+
 // -------------------------------------------------------------------------
 // TESTS
 // -------------------------------------------------------------------------
@@ -179,17 +87,7 @@ func TestSubmit_CachedWorkloadStartsWhilePullInProgress(t *testing.T) {
 
 	pullStarted := make(chan struct{})
 	pullRelease := make(chan struct{})
-	fake := &fakeExecutor{
-		beforeHold: func(_ context.Context, id string, _ *executor.Spec) error {
-			if id == "slow-pull" {
-				close(pullStarted)
-				<-pullRelease
-			}
-			return nil
-		},
-	}
-
-	ep := newTestEndpoint(fake, 2000, 2048)
+	ep := newTestEndpoint(pausing("slow-pull", pullStarted, pullRelease), 2000, 2048)
 
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -208,8 +106,8 @@ func TestSubmit_CachedWorkloadStartsWhilePullInProgress(t *testing.T) {
 			t.Errorf("cached Submit() = %v", err)
 			return
 		}
-		if sub.GetProviderId() != "container-cached" {
-			t.Errorf("ProviderId = %q, want %q", sub.GetProviderId(), "container-cached")
+		if sub.GetProviderId() != "cached" {
+			t.Errorf("ProviderId = %q, want %q", sub.GetProviderId(), "cached")
 		}
 	})
 
@@ -226,16 +124,7 @@ func TestSubmit_InflightReservationBlocksOvercommit(t *testing.T) {
 
 	pullStarted := make(chan struct{})
 	pullRelease := make(chan struct{})
-	fake := &fakeExecutor{
-		beforeHold: func(_ context.Context, id string, _ *executor.Spec) error {
-			if id == "sub-1" {
-				close(pullStarted)
-				<-pullRelease
-			}
-			return nil
-		},
-	}
-
+	fake := pausing("sub-1", pullStarted, pullRelease)
 	ep := newTestEndpoint(fake, 1000, 1024)
 
 	var wg sync.WaitGroup
@@ -253,6 +142,7 @@ func TestSubmit_InflightReservationBlocksOvercommit(t *testing.T) {
 	close(pullRelease)
 	wg.Wait()
 
+	// sub-1 now runs on the node, so only what it left is free
 	if _, err := ep.Submit(t.Context(), submitRequest("sub-3", "image-3:latest", 200, 200)); err != nil {
 		t.Fatalf("sub-3 Submit() = %v, want nil", err)
 	}
@@ -265,8 +155,7 @@ func TestSubmit_ConcurrentRaceAdmitsExactlyOne(t *testing.T) {
 
 	const racers = 16
 
-	fake := &fakeExecutor{}
-	ep := newTestEndpoint(fake, 1000, 1024)
+	ep := newTestEndpoint(&executortest.Fake{}, 1000, 1024)
 
 	start := make(chan struct{})
 	var admitted, exhausted, unexpected atomic.Int32
@@ -306,14 +195,12 @@ func TestSubmit_HandoffDoesNotDoubleCountHeldReservation(t *testing.T) {
 
 	handoffReached := make(chan struct{})
 	handoffRelease := make(chan struct{})
-	fake := &fakeExecutor{
-		afterHold: func(_ context.Context, id string, _ *executor.Spec) {
-			if id == "sub-1" {
-				close(handoffReached)
-				<-handoffRelease
-			}
-		},
-	}
+	fake := &executortest.Fake{Started: func(id string) {
+		if id == "sub-1" {
+			close(handoffReached)
+			<-handoffRelease
+		}
+	}}
 
 	ep := newTestEndpoint(fake, 1000, 1000)
 
@@ -347,13 +234,11 @@ func TestSubmit_SameIDWaitsForInflightAndSucceeds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var pulls atomic.Int32
 		pullRelease := make(chan struct{})
-		fake := &fakeExecutor{
-			beforeHold: func(_ context.Context, _ string, _ *executor.Spec) error {
-				pulls.Add(1)
-				<-pullRelease
-				return nil
-			},
-		}
+		fake := &executortest.Fake{Pull: func(context.Context, string) error {
+			pulls.Add(1)
+			<-pullRelease
+			return nil
+		}}
 
 		ep := newTestEndpoint(fake, 1000, 1024)
 
@@ -374,8 +259,8 @@ func TestSubmit_SameIDWaitsForInflightAndSucceeds(t *testing.T) {
 				t.Errorf("duplicate Submit() = %v", err)
 				return
 			}
-			if sub.GetProviderId() != "container-dup-1" {
-				t.Errorf("ProviderId = %q, want %q", sub.GetProviderId(), "container-dup-1")
+			if sub.GetProviderId() != "dup-1" {
+				t.Errorf("ProviderId = %q, want %q", sub.GetProviderId(), "dup-1")
 			}
 		})
 
@@ -403,15 +288,7 @@ func TestSubmit_SameIDContextDoneWhileWaiting(t *testing.T) {
 
 	pullStarted := make(chan struct{})
 	pullRelease := make(chan struct{})
-	fake := &fakeExecutor{
-		beforeHold: func(_ context.Context, _ string, _ *executor.Spec) error {
-			close(pullStarted)
-			<-pullRelease
-			return nil
-		},
-	}
-
-	ep := newTestEndpoint(fake, 1000, 1024)
+	ep := newTestEndpoint(pausing("dup-ctx", pullStarted, pullRelease), 1000, 1024)
 
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -444,14 +321,12 @@ func TestSubmit_SameIDContextDoneWhileWaiting(t *testing.T) {
 func TestSubmit_FailedPullReleasesReservedCapacity(t *testing.T) {
 	t.Parallel()
 
-	fake := &fakeExecutor{
-		beforeHold: func(_ context.Context, id string, _ *executor.Spec) error {
-			if id == "broken-pull" {
-				return errors.New("pull failed")
-			}
-			return nil
-		},
-	}
+	fake := &executortest.Fake{Pull: func(_ context.Context, id string) error {
+		if id == "broken-pull" {
+			return errors.New("pull failed")
+		}
+		return nil
+	}}
 
 	ep := newTestEndpoint(fake, 1000, 1024)
 

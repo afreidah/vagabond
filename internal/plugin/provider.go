@@ -119,18 +119,35 @@ type LogReader interface {
 }
 
 // Live is implemented by providers whose capabilities change between
-// refreshes and cost nothing to read, as a pool's do as nodes join and fill.
+// refreshes and cost nothing to read, as agent nodes' do as they join and fill.
 // The registry reads them on every plan instead of from the last refresh; an
 // error marks the provider unhealthy.
 type Live interface {
 	LiveCapabilities() (Capabilities, error)
 }
 
-// MemberSubmitter is implemented by providers made of members, as a pool is.
-// Dispatch passes the members admission passed, so work only goes to a member
-// it was judged to fit.
-type MemberSubmitter interface {
-	SubmitTo(ctx context.Context, id execution.ID, task *job.Task, members []string) (Submission, error)
+// Nodes is implemented by providers made of agent nodes, each of which
+// admission judges and ranking places as a candidate of its own. On returns
+// the provider for the executions on one node.
+type Nodes interface {
+	On(node string) Provider
+}
+
+// Reserver is implemented by a node's provider, which holds room on the node
+// for an execution before it is recorded. A node with too little left is
+// ErrNoRoom, which tries the next candidate without spending an attempt.
+type Reserver interface {
+	Reserve(id execution.ID, task *job.Task) error
+}
+
+// On returns the provider for executions on node: the node's own for a
+// provider made of nodes, p itself otherwise.
+func On(p Provider, node string) Provider {
+	if nodes, ok := p.(Nodes); ok {
+		return nodes.On(node)
+	}
+
+	return p
 }
 
 // Releaser is implemented by providers that leave a resource behind, as Cloud
@@ -165,6 +182,10 @@ var ErrInvalidSubmission = errors.New("invalid submission")
 // nothing left to free. Wrap it only when the platform says so, never for a
 // lookup that merely failed.
 var ErrUnknownExecution = errors.New("unknown execution")
+
+// ErrNoRoom reports a node with too little room left for a task, so nothing
+// was placed on it.
+var ErrNoRoom = errors.New("no room on the node")
 
 // ErrNoResume reports a log stream that cannot be placed at an offset, so a
 // caller resuming one finishes from the stored output instead.

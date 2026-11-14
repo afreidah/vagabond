@@ -8,7 +8,8 @@ weight: 510
 `vagabond agent` runs on a node you own, apart from the server. It dials the
 server's `agent_bind` address, registers the node into a named pool, and runs
 the workloads the server sends it as containers on the node's containerd. The
-server schedules onto the pool through a provider of type `pool`.
+server schedules onto the pool's nodes through a provider of type
+`containerd`, each node a candidate of its own.
 `vagabond node status` lists the nodes connected now and how much of each is
 in use.
 
@@ -41,7 +42,7 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=no -memory 12288 \
 | Flag | Default | Description |
 |---|---|---|
 | `-server <addr>` | `127.0.0.1:4748` | The server's `agent_bind` address, `host:port`. |
-| `-pool <name>` | `default` | Pool the node joins. Must match the name of a `pool` provider on the server to receive work. |
+| `-pool <name>` | `default` | Pool the node joins. Must match the `pool` of a `containerd` provider on the server to receive work. |
 | `-name <name>` | the certificate's common name with TLS, else the hostname | Node name. Unique per server: an agent registering under a name already connected replaces that connection. With TLS it must match the certificate. |
 | `-tls-ca <path>` | none | CA file, or directory of them, the server's certificate chains to. `-tls-ca`, `-tls-cert` and `-tls-key` are all set or none. See [Security](#security). |
 | `-tls-cert <path>` | none | This agent's certificate. Its common name is the node's name. |
@@ -300,7 +301,9 @@ node with `Node.Register`, and re-sends the same full report:
 
 Signals are coalesced: several changes while a report is pending send one
 report. A failed periodic report is logged as `reporting workloads` and not
-retried; the next carries everything.
+retried; the next carries everything. The server answers every report with
+the held workloads it has no use for, which the agent releases; see
+[Releasing what nothing needs](#releasing-what-nothing-needs).
 
 The connection closing is the only liveness signal; there is no heartbeat of
 Vagabond's own. yamux runs with its defaults on both sides: each pings the
@@ -340,30 +343,44 @@ Agent reporting is one of the loops listed in
 
 ![A task needing amd64 and 4 GiB is admitted against each node of the homelab pool on its own. box2 is arm64 and is rejected. box1 and box3 are admitted, and the task is placed on box3, which has the most free memory.](assets/pool.svg)
 
-### Declaring a pool
+### Declaring a provider
 
-A pool is a provider of type `pool` on the server. The provider name is the
-pool name agents join with `-pool`.
+A provider of type `containerd` on the server runs work on the nodes that
+joined its pool.
 
 ```hcl
 provider "homelab" {
-  type = "pool"
+  type = "containerd"
+
+  config {
+    pool      = "homelab"
+    placement = "spread"
+  }
 }
 ```
 
-- A pool reads no `config` and no `credentials`: a `config` block is ignored,
-  and `credentials` are resolved but unused. It accepts the provider-level
-  settings every provider does, such as quota `pool` blocks and `meta`; see
+| Setting | Default | Meaning |
+|---|---|---|
+| `pool` | The provider's label | The agents it draws on: those started with `-pool <pool>` |
+| `placement` | `spread` | How its nodes are ordered among equally scored candidates: `spread` puts the most free memory first, `pack` the least |
+
+- The `config` block is optional. `credentials` are resolved but unused. It
+  accepts the provider-level settings every provider does, such as quota
+  `pool` blocks and `meta`; see
   [`provider` block](configuration.md#provider-block).
-- Only `vagabond server` can build a pool. Loading one elsewhere fails with
-  the diagnostic `Pool without a server`:
-  `Provider "<name>" is a pool, which only vagabond server can run.`
-- A pool with no connected nodes is unhealthy
-  (`no nodes have joined pool "<name>"`) and admission rejects it with
+- Any other `placement` fails with the diagnostic `Unknown placement`:
+  `Provider "<name>" sets placement to "<value>"; it is "spread" or "pack".`
+- Only `vagabond server` can build one. Loading one elsewhere fails with the
+  diagnostic `Agent nodes without a server`:
+  `Provider "<name>" runs on agent nodes, which only vagabond server can reach.`
+- With no connected nodes in its pool the provider is unhealthy
+  (`no nodes have joined pool "<pool>"`) and admission rejects it with
   `provider-unhealthy`. At server start this appears as
   `Some providers did not answer: ...`, which does not stop the server.
-- An agent whose `-pool` names no `pool` provider still connects and appears in
+- An agent whose `-pool` no provider draws on still connects and appears in
   `node status`, but receives no work.
+- Two providers may draw on one pool. A node's room is counted once, whichever
+  provider places work on it.
 
 ### Joining
 
@@ -378,7 +395,7 @@ its connection closes.
 
 ### Node attributes
 
-Each node is one member of the pool, with its own capability snapshot:
+Each node is one member of the provider, with its own capability snapshot:
 
 | Attribute | Value |
 |---|---|
@@ -393,7 +410,7 @@ Each node is one member of the pool, with its own capability snapshot:
 | `node.label.<key>` | Each `-label` |
 
 No `provider.max_duration` is published: a node sets no duration limit.
-Provider `meta` tags and quota are the pool's, shared by every node.
+Provider `meta` tags and quota are the provider's, shared by every node.
 
 ```hcl
 constraint {
@@ -407,30 +424,40 @@ See [Attributes](job-specification.md#attributes).
 ### Admission
 
 Each node is judged on its own, as if it were the whole provider, with its
-own snapshot and labels plus the pool's quota, `meta`, health and the job's
-allowlist. The pool is admitted when at least one node passes every check,
-and the nodes that passed are carried to placement. A task needing `arm64`
-and 8 GiB is not admitted because one node is `arm64` and another has 8 GiB
-free.
+own snapshot and labels plus the provider's quota, `meta`, health and the
+job's allowlist. Every node that passes every check is a candidate of its
+own. A task needing `arm64` and 8 GiB is not admitted because one node is
+`arm64` and another has 8 GiB free.
 
-When no node passes, the pool is rejected with the reason code of the node
-that failed the fewest checks, ties to the first by name, its detail prefixed `closest node <name>: `.
+When no node passes, the provider is rejected with the reason code of the
+node that failed the fewest checks, ties to the first by name, its detail
+prefixed `closest node <name>: `.
 
 See [Admission](scheduling.md#admission) and
 [Reason codes](scheduling.md#reason-codes).
 
 ### Placement
 
-1. Size the workload: the task's `resources`, with **1000 millicores** for an
-   unset or zero `cpu` and **1024 MiB** for an unset or zero `memory`.
-2. Among the nodes admission passed, skip any already tried for this
-   submission and any whose room is below the workload's size.
-3. Pick the node with the most free memory. Ties go to the first by name.
-4. Reserve the workload's size on that node, in the same locked step as
-   choosing it.
-5. Send `Submit` to the node.
+Ranking scores each node with its own labels, so a `node.label.*` affinity
+puts the nodes carrying the label first ([Ranking](scheduling.md#ranking)).
+Among equally scored candidates a provider's nodes keep its `placement`
+order, ties to the first by name. `job plan` lists each node as
+`<provider>/<node>`.
 
-The node name is the execution's provider ID.
+Dispatch takes the candidates in rank order. For a node:
+
+1. Reserve the task's quota on the provider.
+2. Reserve room on the node, in one locked step against the node's room,
+   sized from the task's `resources` with **1000 millicores** for an unset or
+   zero `cpu` and **1024 MiB** for an unset or zero `memory`. A node with too
+   little room left, or no longer connected, is refused: the quota is given
+   back, nothing is recorded, no attempt is spent, and dispatch goes on to the
+   next candidate, another node or another provider.
+3. Record the execution with its node.
+4. Send `Submit` to the node.
+
+Every later call for the execution goes to the node its record names, after a
+server restart as before it.
 
 ### Room
 
@@ -445,6 +472,7 @@ capacity - sum(declared size of running workloads) - sum(unexpired reservations 
 - A workload whose task has stopped still holds a container until released,
   but no longer counts.
 - A container with no task yet counts as running.
+- The agent and the server count room the same way, from the same reports.
 
 ### Reservations
 
@@ -453,9 +481,9 @@ it, so two dispatches on the same server cannot both take the last room.
 
 | Event | Effect |
 |---|---|
-| Node reports holding the execution | Reservation no longer counted (the node's report covers it) |
-| 2 minutes pass | Reservation no longer counted |
-| Node refuses, or `Submit` fails | Reservation dropped |
+| Node reports holding the execution | Reservation dropped (the node's report covers it) |
+| 2 minutes pass | Reservation dropped |
+| Task does not translate, node refuses, or `Submit` fails | Reservation dropped |
 | Execution released | Reservation dropped |
 
 Reservations are in memory, per server process.
@@ -470,15 +498,17 @@ submission for the same execution waits for the in-flight one to finish; a
 resubmission of an execution the agent already holds always fits and starts
 nothing new.
 
-| Agent answer | Pool does |
+| Answer | Server does |
 |---|---|
-| `ResourceExhausted` (`the node has <cpu> millicores and <mem> MiB free; the workload needs <cpu> and <mem>`) | Drops the reservation, marks the node tried, and places again on the next node. |
-| Any other error (`submitting to node <name>: ...`) | Drops the reservation and returns an infrastructure failure. No other node is tried. |
-| Node disconnected between choosing and sending | Infrastructure failure `node <name> left before the workload reached it`. |
-| Task names no `image`, or its `env` or `timeout` does not evaluate | Internal failure `task "<name>" names no image`, `task "<name>" env: ...` or `task "<name>" timeout: ...`, before any node is chosen. Not sent to another provider. |
-| No untried node has room | Infrastructure failure `no node in pool "<pool>" has room for <cpu> millicores and <mem> MiB`. |
+| `ResourceExhausted` (`the node has <cpu> millicores and <mem> MiB free; the workload needs <cpu> and <mem>`) | Drops the reservation; infrastructure failure `node <name>: rpc error: code = ResourceExhausted desc = ...`. |
+| Any other error | Drops the reservation; infrastructure failure `node <name>: ...`. |
+| Node disconnected between reserving and sending | Drops the reservation; infrastructure failure `node <name> is not connected`. |
+| Task names no `image`, or its `env` or `timeout` does not evaluate | Drops the reservation; internal failure `task "<name>" names no image`, `task "<name>" env: ...` or `task "<name>" timeout: ...`, before anything is sent. Not sent anywhere else. |
 
-An infrastructure failure sends dispatch to the next ranked provider; see
+The server's own room count normally refuses first, at
+[Placement](#placement), without spending an attempt. An infrastructure
+failure from `Submit` is a spent attempt: dispatch goes on to the next
+candidate only when the task's `retry` block allows rerouting; see
 [Dispatch](dispatch.md).
 
 **Sizing in admission:** each node publishes the 1000 millicore / 1024 MiB
@@ -488,34 +518,34 @@ is rejected with `resources-exceeded`.
 
 ### Node leaving mid-run
 
-When a node's connection closes, the server records when it left. For the
-executions it holds:
+While a node is not connected, its executions cannot be asked about:
 
-| Call | Within 5 minutes of leaving | After 5 minutes |
-|---|---|---|
-| Status | `lost` | Infrastructure failure `node <name> holding <id> is gone` |
-| Result, Cancel, Release, StreamLogs | Infrastructure failure `the node holding <id> is not connected` | Infrastructure failure `node <name> holding <id> is gone` |
+| Call | While the node is not connected |
+|---|---|
+| Status, Result, Cancel, StreamLogs | Infrastructure failure `node <name> is not connected` |
+| Release | Succeeds without calling the node, which is told when it returns |
 
-`lost` is not terminal: the execution's runner keeps polling. A node that
-reconnects within the grace period reports its workloads, and they finish
-normally. After it, Status fails: the attempt ends, so the task can reroute,
-and the execution stays `lost`. A node that
-comes back later still reports it, and the server records its real outcome
-and releases it ([Lost executions](dispatch.md#lost-executions)); one that
-never does is `failed` 24 hours after it became `lost`, charged as reserved,
-and its release is retried until the node returns.
+The runner records the failed Status as `lost` and answers the attempt, so
+the task can reroute. `lost` is not terminal: the runner keeps polling, and
+the execution keeps its charge and stays unreleased for as long as the node is
+away, after a server restart as before it, since the record names the node. A
+node that reconnects reports its workloads, and they finish normally. One that
+never does is `failed` 24 hours after it became `lost`, charged as reserved
+([Lost executions](dispatch.md#lost-executions)), and released.
 
-**After a server restart**, the server has no record of which node holds an
-execution until a node reports it. For the first 5 minutes after the pool
-provider is built, Status answers `lost` for an execution no connected node
-reports, and Result, Cancel, Release and StreamLogs fail
-`the node holding <id> is not connected`. After that it is an unknown
-execution: the next Status records it `failed` at once, charged for the time
-it was seen running, and Release counts it released without reaching the
-node. A node that reconnects after that keeps the
-container, its snapshot and `<data-dir>/logs/<id>.log`; remove them on the
-node with `ctr -n vagabond tasks rm -f <id>` and
-`ctr -n vagabond containers rm <id>`.
+### Releasing what nothing needs
+
+Every report is answered with the held workloads the server has no use for,
+and the agent releases each as [Release](#release) does:
+
+- one whose execution is released
+- one no execution was recorded under, or whose ID is no execution's
+
+A workload whose record the store cannot read is kept, so a server that
+cannot reach its store releases nothing. The agent logs
+`released a workload the server has no use for execution=<id>`; a failed one
+warns `releasing a workload the server has no use for` and is answered again on
+the next report.
 
 ## Workloads
 
@@ -573,7 +603,7 @@ State lives on the container as labels, so it survives the agent:
 | Task stopped, exit 0 | `succeeded` |
 | Task stopped, non-zero exit | `failed` |
 
-`Submit` answers with the state the workload reached. The pool records a
+`Submit` answers with the state the workload reached. The server records a
 terminal answer as `running`; the next status poll reports the terminal state
 with its result.
 
@@ -585,7 +615,7 @@ with its result.
   server reads its whole output through `AgentExecutions.StreamLogs` from
   offset 0, before `Release` deletes the file, and stores it
   ([Dispatch](dispatch.md#output)).
-- While the workload runs, the pool streams its output through
+- While the workload runs, the server streams its output through
   `AgentExecutions.StreamLogs`, from the byte offset the client asks for, so a
   `?follow=true` request ([API](api.md#read-execution-logs)) shows it live and
   a reopened stream resumes where the last one stopped.
@@ -617,19 +647,19 @@ also sets the label, so its state becomes `cancelled` whatever it exited with.
 snapshot, and its log file. Releasing an execution the node does not hold
 succeeds. The execution's runner releases it last, after its output is
 captured, however it ended ([Release](dispatch.md#release)). While the node is
-offline the release fails and is retried, 250ms doubling to 10s, until the
-node reconnects. After a server restart this holds only for the pool's first 5
-minutes; see [Node leaving mid-run](#node-leaving-mid-run).
+offline the server records the execution released without calling it, and
+the node releases the workload when it returns; see
+[Releasing what nothing needs](#releasing-what-nothing-needs).
 
 ### Agent restarts
 
 On startup the agent lists every container in the `vagabond` namespace and
 re-arms each timeout from its labels, with the time remaining since
 `vagabond.started`; one already past is stopped at once. Its first report to
-the server lists every container held, which is how the server finds its
-executions again. Every container in the `vagabond` namespace is reported as
-held; one without `vagabond.cpu` and `vagabond.memory` labels counts as zero
-size.
+the server lists every container held, so the server counts their room again
+and answers with any it has no use for. Every container in the `vagabond`
+namespace is reported as held; one without `vagabond.cpu` and
+`vagabond.memory` labels counts as zero size.
 
 ## Node status
 
@@ -646,12 +676,12 @@ box3  homelab  10.0.0.23:40112  arm64  0/8000m     0/15872MiB     0          202
 | Column | Meaning |
 |---|---|
 | `ADDRESS` | Where the agent connected from |
-| `CPU USED`, `MEMORY USED` | Declared size of running workloads / capacity |
+| `CPU USED`, `MEMORY USED` | Declared size of running workloads and the server's reservations / capacity |
 | `WORKLOADS` | Running workloads |
 | `CONNECTED` | When this connection registered, UTC |
 
 With no nodes it prints `No agent nodes are connected.`. Used figures are as
-of the node's last report, and do not include the server's reservations. The
+of the node's last report, plus the server's reservations not yet in it. The
 server is read from `-address`, then `$VAGABOND_ADDR`, then
 `http://127.0.0.1:4747`.
 
@@ -700,7 +730,7 @@ regenerate with `make generate`.
 
 | RPC | Request | Response |
 |---|---|---|
-| `Node.Register` | `name`, `pool`, `labels`, `architecture`, `capacity` (cpu, memory), `runtimes`, `version`, `held[]` (execution ID, declared resources, running) | empty |
+| `Node.Register` | `name`, `pool`, `labels`, `architecture`, `capacity` (cpu, memory), `runtimes`, `version`, `held[]` (execution ID, declared resources, running) | `release[]`: held execution IDs to release, empty when the server cannot tell |
 | `AgentExecutions.Submit` | `execution_id`, `workload`: `image`, `command`, `args`, `env`, `working_dir`, `resources`, `timeout`, `runtime` | `state`, `provider_id` |
 | `AgentExecutions.Status` | `execution_id` | `state`, `provider_id`, `started_at`, `ended_at` |
 | `AgentExecutions.Result` | `execution_id` | `exit_code` (unset if never exited), `duration`. Fields 3 and 4, which carried a tail of the output, are reserved |
@@ -714,8 +744,10 @@ An agent that predates `offset` reads the request as an `execution_id` alone
 and streams from the start; a reopened stream from such an agent repeats output
 the client already has. Upgrade the server before its agents: an agent from
 this release no longer sends output in `Result`, which an older server reads
-it from, while a newer server reads any agent's output through `StreamLogs`. `provider_id` from the agent is the container ID, which
-is the execution ID; the pool ignores it and uses the node name.
+it from, while a newer server reads any agent's output through `StreamLogs`.
+`provider_id` from the agent is the container ID, which is the execution ID,
+and is recorded as the execution's provider ID; the node is recorded apart. An
+agent that predates `release` ignores it and keeps what it holds.
 
 ### Status codes
 
@@ -817,7 +849,7 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab \
 |---|---|---|
 | `connecting to the server ... error="dialing <addr>: ... connection refused"` repeating | Server not listening there, or `agent_bind` still loopback | Set `agent_bind` to a reachable address; check `-server`. |
 | Node absent from `node status` | Agent not connected; see its log | |
-| Node listed, jobs never placed on it; plan shows `provider-unhealthy` or no pool | `-pool` does not match a `pool` provider name | Match the names. |
+| Node listed, jobs never placed on it; plan shows `provider-unhealthy` or no node | `-pool` does not match a `containerd` provider's `pool` | Match the names. |
 | `closest node <name>: ...` in plan | No node passes admission | Read the reason; check `node.label.*` constraints and free room. |
 | Dispatch reports `no node in pool "<pool>" has room for ...` | Every admitted node full, or reservations pending | Wait for work to finish or add capacity. Reservations expire after 2 minutes. |
 | Two agents alternate in `node status`, both logging `lost the server` | Same `-name` on two hosts. The server logs nothing while they alternate. | Give each a unique `-name`. |
@@ -827,7 +859,7 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab \
 | `the agent's cgroup is the root` at startup | Container without `--cgroupns=host` | Add it, or pass `-cgroup-parent`. |
 | Workloads die when the agent restarts under systemd | `KillMode=control-group` kills the unit's subtree | `KillMode=process`. |
 | Result has no output from a containerised agent | `-data-dir` path differs inside and outside the container | Mount it at the same path. |
-| Executions still `lost` more than 5 minutes after a node went away | Node did not reconnect within the grace period | Check the agent starts on boot and can reach the server. |
+| Executions still `lost` after a node went away | The node has not reconnected; they wait for it up to 24 hours | Check the agent starts on boot and can reach the server. |
 | `Internal ... pulling <image>` | Image unreachable or private | The agent pulls from the registry on every new submission, without credentials; use an image the node can pull anonymously. |
 
 Server-side log lines: `serving agents address=...` at start,

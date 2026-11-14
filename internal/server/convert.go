@@ -83,6 +83,7 @@ func executionOf(r *execution.Record) api.Execution {
 		JobVersion: r.JobVersion,
 		Task:       r.Task,
 		Provider:   r.Provider,
+		Node:       r.Node,
 		Attempt:    r.Attempt,
 		State:      string(r.State),
 		ProviderID: r.ProviderID,
@@ -159,11 +160,12 @@ func taskPlanOf(jobName string, task *job.Task, plan scheduler.Plan) api.TaskPla
 	return out
 }
 
-// candidateOf converts an admitted provider, with each scorer's contribution
-// and when its capabilities were observed.
+// candidateOf converts an admitted provider or node, with each scorer's
+// contribution and when its capabilities were observed.
 func candidateOf(c *scheduler.ScoredCandidate) api.Candidate {
 	out := api.Candidate{
 		Provider: c.Provider,
+		Node:     c.Node,
 		Tier:     c.Tier,
 		Score:    c.Percent(),
 		Observed: c.Capabilities.ObservedAt.UTC(),

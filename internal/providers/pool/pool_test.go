@@ -1,11 +1,12 @@
 // -------------------------------------------------------------------------------
-// Pool Provider Tests
+// containerd Provider Tests
 //
 // Author: Alex Freidah
 //
-// Real agents over TCP, with fake executors, registered into a node set the
-// pool reads: capabilities following the nodes, placement by room, the room a
-// reservation holds, a node that leaves mid-run, and output streamed back.
+// Real agents over TCP, with fake executors, served by the node set the
+// provider reads: capabilities following the nodes in placement order, the
+// room a reservation holds, a node that leaves mid-run, workloads a returning
+// node is told to release, and output streamed back.
 // -------------------------------------------------------------------------------
 
 package pool
@@ -16,17 +17,17 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
-	"google.golang.org/grpc"
 
 	"github.com/afreidah/vagabond/internal/agent"
 	"github.com/afreidah/vagabond/internal/agent/executor"
+	"github.com/afreidah/vagabond/internal/agent/executor/executortest"
 	"github.com/afreidah/vagabond/internal/agent/fingerprint"
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/execution"
@@ -36,118 +37,20 @@ import (
 )
 
 // -------------------------------------------------------------------------
-// DOUBLES
-// -------------------------------------------------------------------------
-
-// fakeExecutor holds workloads in memory, each running until released.
-type fakeExecutor struct {
-	mu        sync.Mutex
-	workloads map[string]*executor.Spec
-}
-
-// newFakeExecutor returns an executor holding nothing.
-func newFakeExecutor() *fakeExecutor {
-	return &fakeExecutor{workloads: map[string]*executor.Spec{}}
-}
-
-// Submit holds the workload until it is released.
-func (f *fakeExecutor) Submit(_ context.Context, id string, spec *executor.Spec) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.workloads[id] = spec
-
-	return nil
-}
-
-// Status reports a held workload as running and any other as unknown.
-func (f *fakeExecutor) Status(_ context.Context, id string) (execution.Status, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if _, ok := f.workloads[id]; !ok {
-		return execution.Status{}, executor.ErrUnknown
-	}
-
-	return execution.Status{State: execution.StateRunning, ProviderID: id}, nil
-}
-
-// Result fails, since no workload here ever finishes.
-func (f *fakeExecutor) Result(context.Context, string) (*execution.Result, error) {
-	return nil, errors.New("still running")
-}
-
-// Cancel accepts and does nothing.
-func (f *fakeExecutor) Cancel(context.Context, string) error { return nil }
-
-// Release forgets the workload.
-func (f *fakeExecutor) Release(_ context.Context, id string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	delete(f.workloads, id)
-
-	return nil
-}
-
-// Logs writes one line naming a held workload from offset on, as one that
-// printed it and ended.
-func (f *fakeExecutor) Logs(ctx context.Context, id string, offset int64, w io.Writer) error {
-	if _, err := f.Status(ctx, id); err != nil {
-		return err
-	}
-
-	line := "output of " + id + "\n"
-	_, err := io.WriteString(w, line[min(offset, int64(len(line))):])
-
-	return err
-}
-
-// Held reports every workload as running with what it declared.
-func (f *fakeExecutor) Held(context.Context) ([]executor.Held, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	held := make([]executor.Held, 0, len(f.workloads))
-	for id, spec := range f.workloads {
-		held = append(held, executor.Held{ID: id, CPU: spec.CPU, Memory: spec.Memory, Running: true})
-	}
-
-	return held, nil
-}
-
-// Runtimes offers only the default runtime.
-func (f *fakeExecutor) Runtimes() []string { return []string{executor.DefaultRuntime} }
-
-// -------------------------------------------------------------------------
 // HARNESS
 // -------------------------------------------------------------------------
 
-// harness is a listener registering agents into conns, as a server does, and
-// the pool over them.
+// harness is a node set serving agents on a real port, and a provider over
+// them named homelab.
 type harness struct {
 	conns   *nodes.Conns
 	pool    *Provider
 	address string
 }
 
-// registrar records a session's registrations into conns.
-type registrar struct {
-	agentrpc.UnimplementedNodeServer
-
-	conns   *nodes.Conns
-	session *agentrpc.Session
-}
-
-// Register records the node's report against its session.
-func (r *registrar) Register(_ context.Context, req *agentrpc.NodeRegisterRequest) (*agentrpc.NodeRegisterResponse, error) {
-	r.conns.Report(req, r.session)
-
-	return &agentrpc.NodeRegisterResponse{}, nil
-}
-
-// newHarness accepts agents on a real port into a pool named homelab.
-func newHarness(t *testing.T) *harness {
+// newHarness serves agents into a node set, answering each registration with
+// what unwanted says to release.
+func newHarness(t *testing.T, unwanted nodes.Unwanted) *harness {
 	t.Helper()
 
 	var lc net.ListenConfig
@@ -159,42 +62,38 @@ func newHarness(t *testing.T) *harness {
 
 	conns := nodes.New()
 
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
+	go func() { _ = conns.Serve(t.Context(), listener, unwanted, slog.New(slog.DiscardHandler)) }()
 
-			go func() {
-				session, err := agentrpc.Accept(t.Context(), conn)
-				if err != nil {
-					return
-				}
+	return &harness{conns: conns, pool: provider(t, "", conns), address: listener.Addr().String()}
+}
 
-				srv := grpc.NewServer()
-				agentrpc.RegisterNodeServer(srv, &registrar{conns: conns, session: session})
+// provider builds homelab over conns from a config block's source, which may
+// be empty.
+func provider(t *testing.T, src string, conns *nodes.Conns) *Provider {
+	t.Helper()
 
-				go func() { _ = session.Serve(srv) }()
+	var body hcl.Body
 
-				<-session.Done()
-				srv.Stop()
-				conns.Remove(session)
-			}()
+	if src != "" {
+		f, diags := hclsyntax.ParseConfig([]byte(src), "test.hcl", hcl.InitialPos)
+		if diags.HasErrors() {
+			t.Fatalf("parsing config failed: %s", diags.Error())
 		}
-	}()
 
-	t.Cleanup(func() {
-		_ = listener.Close()
-		conns.CloseAll()
-	})
+		body = f.Body
+	}
 
-	return &harness{conns: conns, pool: New("homelab", conns), address: listener.Addr().String()}
+	p, diags := New("homelab", body, conns)
+	if diags.HasErrors() {
+		t.Fatalf("New() = %s", diags.Error())
+	}
+
+	return p
 }
 
 // join runs an agent named name with the given memory in the pool until the
 // returned function stops it.
-func (h *harness) join(t *testing.T, name string, memory int64, exec *fakeExecutor) func() {
+func (h *harness) join(t *testing.T, name string, memory int64, exec *executortest.Fake) func() {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -245,28 +144,55 @@ func await(t *testing.T, what string, cond func() bool) {
 func task(t *testing.T, memory int) *job.Task {
 	t.Helper()
 
-	return &job.Task{
-		Name:      "work",
-		Driver:    job.DriverContainer,
-		Config:    rawBlock(t, `image = "alpine:3.20"`),
-		Resources: &job.Resources{CPU: new(500), Memory: new(memory)},
-	}
-}
-
-// rawBlock parses a driver config the way the job parser leaves it: decoded as
-// a block, with its attributes still expressions.
-func rawBlock(t *testing.T, src string) *job.RawBlock {
-	t.Helper()
-
-	f, diags := hclsyntax.ParseConfig([]byte(src), "test.hcl", hcl.InitialPos)
+	f, diags := hclsyntax.ParseConfig([]byte(`image = "alpine:3.20"`), "test.hcl", hcl.InitialPos)
 	if diags.HasErrors() {
 		t.Fatalf("parsing config failed: %s", diags.Error())
 	}
 
-	return &job.RawBlock{Body: f.Body}
+	return &job.Task{
+		Name:      "work",
+		Driver:    job.DriverContainer,
+		Config:    &job.RawBlock{Body: f.Body},
+		Resources: &job.Resources{CPU: new(500), Memory: new(memory)},
+	}
 }
 
-// freeMemory is a member's free memory in the pool's live capabilities.
+// place reserves room on node and submits the task there, as dispatch does.
+func (h *harness) place(t *testing.T, node string, memory int) execution.ID {
+	t.Helper()
+
+	id := newExecutionID(t)
+	on := h.pool.On(node)
+
+	if err := on.(plugin.Reserver).Reserve(id, task(t, memory)); err != nil {
+		t.Fatalf("Reserve() = %v", err)
+	}
+
+	if _, err := on.Submit(t.Context(), id, task(t, memory)); err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+
+	return id
+}
+
+// members is the provider's live members by name, in order.
+func (h *harness) members(t *testing.T) []string {
+	t.Helper()
+
+	caps, err := h.pool.LiveCapabilities()
+	if err != nil {
+		t.Fatalf("LiveCapabilities() = %v", err)
+	}
+
+	names := make([]string, 0, len(caps.Members))
+	for i := range caps.Members {
+		names = append(names, caps.Members[i].Name)
+	}
+
+	return names
+}
+
+// freeMemory is a node's free memory as admission sees it.
 func (h *harness) freeMemory(t *testing.T, name string) int {
 	t.Helper()
 
@@ -299,23 +225,46 @@ func newExecutionID(t *testing.T) execution.ID {
 }
 
 // -------------------------------------------------------------------------
-// TESTS
+// CONFIGURATION
+// -------------------------------------------------------------------------
+
+// The block is optional: the pool defaults to the label and placement to
+// spread, and an unknown placement is refused.
+func TestNew_Config(t *testing.T) {
+	if p := provider(t, "", nodes.New()); p.cfg.Pool != "homelab" || p.cfg.Placement != PlacementSpread {
+		t.Errorf("defaults = %+v, want pool homelab and spread", p.cfg)
+	}
+
+	if p := provider(t, "pool = \"lab\"\nplacement = \"pack\"", nodes.New()); p.cfg.Pool != "lab" || p.cfg.Placement != PlacementPack {
+		t.Errorf("config = %+v, want pool lab and pack", p.cfg)
+	}
+
+	for _, src := range []string{`placement = "random"`, `colour = "red"`} {
+		f, _ := hclsyntax.ParseConfig([]byte(src), "test.hcl", hcl.InitialPos)
+		if p, diags := New("homelab", f.Body, nodes.New()); p != nil || !diags.HasErrors() {
+			t.Errorf("New(%s) = %v, %s; want refused", src, p, diags.Error())
+		}
+	}
+}
+
+// -------------------------------------------------------------------------
+// CAPABILITIES
 // -------------------------------------------------------------------------
 
 // An empty pool is an error, which marks it unhealthy; a node joining makes it
 // a member at once.
 func TestPool_CapabilitiesFollowNodes(t *testing.T) {
-	h := newHarness(t)
+	h := newHarness(t, nil)
 
 	if _, err := h.pool.LiveCapabilities(); err == nil {
 		t.Error("an empty pool reported capabilities")
 	}
 
-	h.join(t, "box1", 4096, newFakeExecutor())
+	h.join(t, "box1", 4096, &executortest.Fake{})
 
-	caps, err := h.pool.LiveCapabilities()
-	if err != nil || len(caps.Members) != 1 || caps.Members[0].Name != "box1" {
-		t.Fatalf("LiveCapabilities() = %+v, %v; want box1 as a member", caps, err)
+	caps, err := h.pool.Capabilities(t.Context())
+	if err != nil || len(caps.Members) != 1 || caps.Members[0].Name != "box1" || h.pool.Name() != "homelab" {
+		t.Fatalf("Capabilities() of %s = %+v, %v; want box1 as a member", h.pool.Name(), caps, err)
 	}
 
 	member := &caps.Members[0].Capabilities
@@ -329,15 +278,30 @@ func TestPool_CapabilitiesFollowNodes(t *testing.T) {
 	}
 }
 
+// Members are listed most free memory first under spread, least under pack.
+func TestPool_PlacementOrdersNodes(t *testing.T) {
+	h := newHarness(t, nil)
+	h.join(t, "small", 2048, &executortest.Fake{})
+	h.join(t, "big", 8192, &executortest.Fake{})
+
+	if got := h.members(t); !slices.Equal(got, []string{"big", "small"}) {
+		t.Errorf("spread members = %v, want big first", got)
+	}
+
+	h.pool.cfg.Placement = PlacementPack
+
+	if got := h.members(t); !slices.Equal(got, []string{"small", "big"}) {
+		t.Errorf("pack members = %v, want small first", got)
+	}
+}
+
 // A full node publishes zero room, a limit admission enforces, not an absent
 // one it would read as unlimited.
 func TestPool_FullNodePublishesZeroRoom(t *testing.T) {
-	h := newHarness(t)
-	h.join(t, "box1", 4096, newFakeExecutor())
+	h := newHarness(t, nil)
+	h.join(t, "box1", 4096, &executortest.Fake{})
 
-	if _, err := h.pool.Submit(t.Context(), newExecutionID(t), task(t, 4096)); err != nil {
-		t.Fatalf("Submit() = %v", err)
-	}
+	h.place(t, "box1", 4096)
 
 	caps, err := h.pool.LiveCapabilities()
 	if err != nil {
@@ -350,130 +314,202 @@ func TestPool_FullNodePublishesZeroRoom(t *testing.T) {
 	}
 }
 
-// Work goes to the node with the most room, and only to members admission
-// passed.
-func TestPool_PlacesOnMostRoom(t *testing.T) {
-	h := newHarness(t)
-	h.join(t, "small", 2048, newFakeExecutor())
-	h.join(t, "big", 8192, newFakeExecutor())
+// -------------------------------------------------------------------------
+// ROOM
+// -------------------------------------------------------------------------
 
-	sub, err := h.pool.Submit(t.Context(), newExecutionID(t), task(t, 1024))
-	if err != nil || sub.ProviderID != "big" {
-		t.Errorf("Submit() = %+v, %v; want it on big", sub, err)
-	}
-
-	sub, err = h.pool.SubmitTo(t.Context(), newExecutionID(t), task(t, 1024), []string{"small"})
-	if err != nil || sub.ProviderID != "small" {
-		t.Errorf("SubmitTo(small) = %+v, %v; want it on small", sub, err)
-	}
-}
-
-// Placed work takes its room until released, and a pool with no room left is
-// an infrastructure failure, so dispatch tries elsewhere.
+// A reservation takes room until the node reports the workload, which then
+// takes it until released; a node without the room, or not connected, is
+// ErrNoRoom.
 func TestPool_RoomIsTakenAndReturned(t *testing.T) {
-	h := newHarness(t)
-	h.join(t, "box1", 4096, newFakeExecutor())
+	h := newHarness(t, nil)
+	h.join(t, "box1", 4096, &executortest.Fake{})
 
-	id := newExecutionID(t)
-
-	if _, err := h.pool.Submit(t.Context(), id, task(t, 3072)); err != nil {
-		t.Fatalf("Submit() = %v", err)
-	}
+	id := h.place(t, "box1", 3072)
 
 	if free := h.freeMemory(t, "box1"); free != 1024 {
 		t.Errorf("free after placing = %d MiB, want 1024", free)
 	}
 
-	_, err := h.pool.Submit(t.Context(), newExecutionID(t), task(t, 2048))
-	if !plugin.Reroutable(err) {
-		t.Errorf("Submit() with no room = %v, want an infrastructure failure", err)
+	refused := []string{"box1", "gone"}
+	for _, node := range refused {
+		if err := h.pool.On(node).(plugin.Reserver).Reserve(newExecutionID(t), task(t, 2048)); !errors.Is(err, plugin.ErrNoRoom) {
+			t.Errorf("Reserve() on %s = %v, want ErrNoRoom", node, err)
+		}
 	}
 
-	if err := h.pool.Release(t.Context(), id); err != nil {
+	if err := h.pool.On("box1").(plugin.Releaser).Release(t.Context(), id); err != nil {
 		t.Fatalf("Release() = %v", err)
 	}
 
 	await(t, "the room to come back", func() bool { return h.freeMemory(t, "box1") == 4096 })
 }
 
-// A node that leaves mid-run is lost within the grace period, and gone after.
-func TestPool_NodeLeavingMidRun(t *testing.T) {
-	h := newHarness(t)
-	stop := h.join(t, "box1", 4096, newFakeExecutor())
+// A node that refuses a submission, here for room its own count lacks, gives
+// the reservation back, and so does a task that names no image, which fails
+// as internal before anything is sent.
+func TestPool_RefusedSubmissionUnreserves(t *testing.T) {
+	h := newHarness(t, nil)
+	h.join(t, "box1", 4096, &executortest.Fake{})
 
-	id := newExecutionID(t)
+	on := h.pool.On("box1")
 
-	if _, err := h.pool.Submit(t.Context(), id, task(t, 1024)); err != nil {
-		t.Fatalf("Submit() = %v", err)
+	noImage := task(t, 1024)
+	noImage.Config = &job.RawBlock{Body: hcl.EmptyBody()}
+
+	submissions := map[string]struct {
+		task     *job.Task
+		internal bool
+	}{
+		"past the node's size": {task(t, 8192), false},
+		"with no image":        {noImage, true},
 	}
 
-	st, err := h.pool.Status(t.Context(), id)
-	if err != nil || st.State != execution.StateRunning || st.ProviderID != "box1" {
-		t.Fatalf("Status() = %+v, %v; want running on box1", st, err)
+	for name, s := range submissions {
+		id := newExecutionID(t)
+
+		if err := on.(plugin.Reserver).Reserve(id, task(t, 1024)); err != nil {
+			t.Fatalf("Reserve() = %v", err)
+		}
+
+		_, err := on.Submit(t.Context(), id, s.task)
+		if err == nil || plugin.Reroutable(err) == s.internal {
+			t.Errorf("Submit() %s = %v, want internal %t", name, err, s.internal)
+		}
+
+		if free := h.freeMemory(t, "box1"); free != 4096 {
+			t.Errorf("free after the submission %s = %d MiB, want all of it", name, free)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------
+// EXECUTIONS
+// -------------------------------------------------------------------------
+
+// A node that leaves mid-run cannot answer for its executions, which leaves
+// them lost to the runner; releasing one waits for the node to return.
+func TestPool_NodeLeavingMidRun(t *testing.T) {
+	h := newHarness(t, nil)
+	stop := h.join(t, "box1", 4096, &executortest.Fake{})
+
+	id := h.place(t, "box1", 1024)
+	on := h.pool.On("box1")
+
+	st, err := on.Status(t.Context(), id)
+	if err != nil || st.State != execution.StateRunning || st.ProviderID != id.String() {
+		t.Fatalf("Status() = %+v, %v; want running", st, err)
 	}
 
 	stop()
 	await(t, "box1 to leave", func() bool { _, ok := h.conns.Get("box1"); return !ok })
 
-	if st, err := h.pool.Status(t.Context(), id); err != nil || st.State != execution.StateLost {
-		t.Errorf("Status() within the grace = %+v, %v; want lost", st, err)
+	if _, err := on.Status(t.Context(), id); !plugin.Reroutable(err) {
+		t.Errorf("Status() of a gone node = %v, want an infrastructure failure", err)
 	}
 
-	// Past the grace, the node is given up on.
-	h.pool.now = func() time.Time { return time.Now().Add(leftGrace + time.Minute) }
+	if _, err := on.Result(t.Context(), id); !plugin.Reroutable(err) {
+		t.Errorf("Result() of a gone node = %v, want an infrastructure failure", err)
+	}
 
-	if _, err := h.pool.Status(t.Context(), id); !plugin.Reroutable(err) {
-		t.Errorf("Status() after the grace = %v, want an infrastructure failure", err)
+	if err := on.Cancel(t.Context(), id); !plugin.Reroutable(err) {
+		t.Errorf("Cancel() of a gone node = %v, want an infrastructure failure", err)
+	}
+
+	if err := on.(plugin.Releaser).Release(t.Context(), id); err != nil {
+		t.Errorf("Release() of a gone node = %v, want it left to the node", err)
 	}
 }
 
-// Output streams from the node holding the execution and ends with it, and
-// reading it whole is the stream from the start. A node that no longer holds
-// it answers unknown, and a writer that fails is internal.
-func TestPool_StreamLogs(t *testing.T) {
-	h := newHarness(t)
-	exec := newFakeExecutor()
+// A node registering with workloads the server has no use for is told to
+// release them, and does; the rest it keeps.
+func TestPool_UnwantedWorkloadsAreReleased(t *testing.T) {
+	unwanted := func(_ context.Context, held []*agentrpc.Held) []string {
+		var out []string
+
+		for _, h := range held {
+			if strings.HasPrefix(h.GetExecutionId(), "old-") {
+				out = append(out, h.GetExecutionId())
+			}
+		}
+
+		return out
+	}
+
+	h := newHarness(t, unwanted)
+	exec := &executortest.Fake{}
+
+	for _, id := range []string{"old-1", "kept"} {
+		_ = exec.Submit(t.Context(), id, &executor.Spec{})
+	}
+
 	h.join(t, "box1", 4096, exec)
 
-	id := newExecutionID(t)
+	await(t, "old-1 to be released", func() bool { return exec.Workload("old-1") == nil })
 
-	if _, err := h.pool.Submit(t.Context(), id, task(t, 1024)); err != nil {
-		t.Fatalf("Submit() = %v", err)
+	if exec.Workload("kept") == nil {
+		t.Error("a wanted workload was released")
 	}
+}
+
+// Results and cancellation reach the node; output streams from it and ends
+// with the workload, and reading it whole is the stream from the start. A
+// node that no longer holds the execution answers unknown, and a writer that
+// fails is internal.
+func TestPool_Executions(t *testing.T) {
+	h := newHarness(t, nil)
+	exec := &executortest.Fake{Output: "hello world\n"}
+	h.join(t, "box1", 4096, exec)
+
+	id := h.place(t, "box1", 1024)
+	on := h.pool.On("box1")
+
+	if err := on.Cancel(t.Context(), id); err != nil {
+		t.Fatalf("Cancel() = %v", err)
+	}
+
+	if res, err := on.Result(t.Context(), id); err != nil || res.ExitCode == nil || *res.ExitCode != 0 {
+		t.Errorf("Result() = %+v, %v; want exit code 0", res, err)
+	}
+
+	streamer := on.(plugin.LogStreamer)
 
 	var out strings.Builder
 
-	if err := h.pool.StreamLogs(t.Context(), id, 0, &out); err != nil || out.String() != "output of "+id.String()+"\n" {
+	if err := streamer.StreamLogs(t.Context(), id, 0, &out); err != nil || out.String() != "hello world\n" {
 		t.Errorf("StreamLogs() = %q, %v; want the node's output", out.String(), err)
 	}
 
 	var rest strings.Builder
 
-	if err := h.pool.StreamLogs(t.Context(), id, int64(len("output of ")), &rest); err != nil || rest.String() != id.String()+"\n" {
+	if err := streamer.StreamLogs(t.Context(), id, int64(len("hello ")), &rest); err != nil || rest.String() != "world\n" {
 		t.Errorf("StreamLogs() from an offset = %q, %v; want the rest of the line", rest.String(), err)
 	}
 
 	var whole strings.Builder
 
-	if err := h.pool.ReadLogs(t.Context(), id, &whole); err != nil || whole.String() != out.String() {
+	if err := on.(plugin.LogReader).ReadLogs(t.Context(), id, &whole); err != nil || whole.String() != out.String() {
 		t.Errorf("ReadLogs() = %q, %v; want the node's whole output", whole.String(), err)
 	}
 
-	err := h.pool.StreamLogs(t.Context(), id, 0, failingWriter{})
+	err := streamer.StreamLogs(t.Context(), id, 0, failingWriter{})
 	if failure, ok := errors.AsType[*plugin.Error](err); !ok || failure.Class != plugin.ClassInternal {
 		t.Errorf("StreamLogs() into a failing writer = %v, want an internal failure", err)
 	}
 
-	// The node lets the workload go while this process still places it there.
+	// The node lets the workload go while its record still names the node.
 	_ = exec.Release(t.Context(), id.String())
 
-	if err := h.pool.StreamLogs(t.Context(), id, 0, io.Discard); !errors.Is(err, plugin.ErrUnknownExecution) {
+	if err := streamer.StreamLogs(t.Context(), id, 0, io.Discard); !errors.Is(err, plugin.ErrUnknownExecution) {
 		t.Errorf("StreamLogs() of a released workload = %v, want ErrUnknownExecution", err)
 	}
 
-	// One no node has reported yet may still be about to, so it is not unknown
-	if err := h.pool.StreamLogs(t.Context(), newExecutionID(t), 0, io.Discard); !plugin.Reroutable(err) {
-		t.Errorf("StreamLogs() of one no node holds = %v, want an infrastructure failure", err)
+	if _, err := on.Status(t.Context(), id); !errors.Is(err, plugin.ErrUnknownExecution) {
+		t.Errorf("Status() of a released workload = %v, want ErrUnknownExecution", err)
+	}
+
+	if err := h.pool.On("gone").(plugin.LogStreamer).StreamLogs(t.Context(), id, 0, io.Discard); !plugin.Reroutable(err) {
+		t.Errorf("StreamLogs() on a node not connected = %v, want an infrastructure failure", err)
 	}
 }
 

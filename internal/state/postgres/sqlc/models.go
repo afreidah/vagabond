@@ -55,6 +55,7 @@ type Execution struct {
 	LogsStart     int64
 	LogsAt        *time.Time
 	TimeoutMs     int64
+	Node          string
 }
 
 type ExecutionLog struct {

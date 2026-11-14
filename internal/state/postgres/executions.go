@@ -64,6 +64,7 @@ func (s *Store) Create(ctx context.Context, r *execution.Record, lease execution
 		LogsStart:     row.LogsStart,
 		LogsAt:        row.LogsAt,
 		TimeoutMs:     row.TimeoutMs,
+		Node:          row.Node,
 		Owner:         lease.Owner,
 		Epoch:         lease.Epoch,
 	}
@@ -198,6 +199,7 @@ func rowOf(r *execution.Record) db.Execution {
 		JobVersion:    r.JobVersion,
 		Task:          r.Task,
 		Provider:      r.Provider,
+		Node:          r.Node,
 		Attempt:       int64(r.Attempt),
 		Cpu:           int64(r.CPU),
 		Memory:        int64(r.Memory),
@@ -264,6 +266,7 @@ func recordOf(row *db.Execution) (*execution.Record, error) {
 		JobVersion: row.JobVersion,
 		Task:       row.Task,
 		Provider:   row.Provider,
+		Node:       row.Node,
 		Attempt:    int(row.Attempt),
 		CPU:        int(row.Cpu),
 		Memory:     int(row.Memory),

@@ -254,8 +254,12 @@ func (x *Resources) GetMemory() int64 {
 	return 0
 }
 
+// NodeRegisterResponse's release lists the held workloads the server has no
+// unreleased execution for, which the agent deletes. Empty when the server
+// cannot tell, so a server that cannot read its records never empties a node.
 type NodeRegisterResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	Release       []string               `protobuf:"bytes,1,rep,name=release,proto3" json:"release,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -288,6 +292,13 @@ func (x *NodeRegisterResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use NodeRegisterResponse.ProtoReflect.Descriptor instead.
 func (*NodeRegisterResponse) Descriptor() ([]byte, []int) {
 	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *NodeRegisterResponse) GetRelease() []string {
+	if x != nil {
+		return x.Release
+	}
+	return nil
 }
 
 // Workload is a task already translated to what a container needs: the server
@@ -822,8 +833,9 @@ const file_internal_agentrpc_agent_proto_rawDesc = "" +
 	"\arunning\x18\x03 \x01(\bR\arunning\"5\n" +
 	"\tResources\x12\x10\n" +
 	"\x03cpu\x18\x01 \x01(\x03R\x03cpu\x12\x16\n" +
-	"\x06memory\x18\x02 \x01(\x03R\x06memory\"\x16\n" +
-	"\x14NodeRegisterResponse\"\xea\x02\n" +
+	"\x06memory\x18\x02 \x01(\x03R\x06memory\"0\n" +
+	"\x14NodeRegisterResponse\x12\x18\n" +
+	"\arelease\x18\x01 \x03(\tR\arelease\"\xea\x02\n" +
 	"\bWorkload\x12\x14\n" +
 	"\x05image\x18\x01 \x01(\tR\x05image\x12\x18\n" +
 	"\acommand\x18\x02 \x03(\tR\acommand\x12\x12\n" +

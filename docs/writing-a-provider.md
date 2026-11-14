@@ -19,7 +19,7 @@ time.
 | Cloud Run Jobs | `internal/providers/gcp` | Asynchronous family, a paged `LogReader`, a `LogStreamer` that lists what was logged before its tail, `Releaser`, `Recredentialer`, raw HTTP against `httptest` |
 | Code Engine Jobs | `internal/providers/ibm` | Asynchronous family, `LogReader` and `LogStreamer` over one log, `Releaser`, a `Recredentialer` whose token refusals are unauthorized, a fixed size table, two APIs behind one token |
 | AWS Lambda | `internal/providers/aws` | Synchronous family, the `NotSupported` embeds, `Result.Billed`, output in `Result.Logs`, `Recredentialer`, a cloud SDK against `httptest` |
-| Pool | `internal/providers/pool` | `Live`, `MemberSubmitter`, `LogStreamer` with `offset` and `LogReader` on top of it, `Releaser`, `Capabilities.Members` |
+| containerd | `internal/providers/pool` | `Live`, `Nodes` and `Reserver`, `LogStreamer` with `offset` and `LogReader` on top of it, `Releaser`, `Capabilities.Members`, an optional config block |
 | Fakes | `internal/plugin/fake.go` | The smallest implementations of both families |
 
 ## Package boundaries
@@ -242,9 +242,10 @@ is absent.
 | `LogStreamer` | `StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error` | Server | While a client follows a running execution's output |
 | `LogReader` | `ReadLogs(ctx context.Context, id execution.ID, w io.Writer) error` | Execution runner | Once the execution ends, however it ended, after `Result` and before the result is recorded and `Release`; not after a failed `Submit` |
 | `Releaser` | `Release(ctx context.Context, id execution.ID) error` | Execution runner | Last, for every ending: after `Result`, `ReadLogs` and the settle |
-| `Recredentialer` | `Recredential(ctx context.Context, credential []byte) error` | Registry, for the execution runner | After a runner call (`Submit`, `SubmitTo`, `Status`, `Result`, `ReadLogs`, `Cancel`, `Release`) failed with `ErrUnauthorized`, when the provider block has a `credentials` block; at most once a minute per provider |
+| `Recredentialer` | `Recredential(ctx context.Context, credential []byte) error` | Registry, for the execution runner | After a runner call (`Submit`, `Status`, `Result`, `ReadLogs`, `Cancel`, `Release`) failed with `ErrUnauthorized`, when the provider block has a `credentials` block; at most once a minute per provider |
 | `Live` | `LiveCapabilities() (Capabilities, error)` | Registry | On every plan, in place of the refreshed snapshot |
-| `MemberSubmitter` | `SubmitTo(ctx context.Context, id execution.ID, task *job.Task, members []string) (Submission, error)` | Dispatch | In place of `Submit`, when admission passed specific members |
+| `Nodes` | `On(node string) Provider` | Dispatch, server | For every call on an execution whose candidate or record names a node |
+| `Reserver` | `Reserve(id execution.ID, task *job.Task) error` | Dispatch | On the provider `On` returned, after quota is reserved and before the execution is recorded |
 
 ### `LogStreamer`
 
@@ -329,12 +330,19 @@ is absent.
 - It must not do I/O or block: the registry calls it under its read lock while
   building admission inputs.
 
-### `MemberSubmitter`
+### `Nodes` and `Reserver`
 
-- For a provider made of members, each advertised in `Capabilities.Members` and
-  judged by admission on its own.
-- `members` is the `Member.Name` values admission passed for this task. When
-  it is empty dispatch calls `Submit` instead.
+- For a provider made of nodes, each advertised in `Capabilities.Members`,
+  judged by admission and ranked as a candidate of its own, in the order the
+  provider lists them.
+- `On` returns the provider for one node's executions; the execution record
+  keeps the node, so a restored runner reaches the same one. `plugin.On(p,
+  node)` returns `p` itself for a provider that does not implement `Nodes`.
+- `Reserve` holds the task's room on the node and fails with
+  `plugin.ErrNoRoom` when there is too little left. Dispatch counts that as a
+  refusal: the quota reservation is dropped, nothing is recorded, and no
+  attempt is spent. A later `Submit` that fails, or `Release`, gives the room
+  back.
 
 ## Capabilities
 
@@ -354,14 +362,14 @@ decides without calling the provider.
 | `ArbitraryImages` | `bool` | `provider.arbitrary_images` | `image-unsupported` for a task naming `image` | Runs only its own images |
 | `EstimatedCost` | `job.Cost` | `provider.estimated_cost` | `cost-policy` | Free |
 | `ObservedAt` | `time.Time` | none | Shown in plans | Never observed |
-| `Members` | `[]plugin.Member` | none | Each member judged separately | Not a pooled provider |
+| `Members` | `[]plugin.Member` | none | Each member judged separately, and a candidate of its own | Not a provider made of nodes |
 
 Reason codes are listed in [Scheduling](scheduling.md#reason-codes).
 
 - **Units:** CPU in millicores (1000 = 1 vCPU), memory in MiB, matching
   `job.Resources`.
 - **Limits:** a nil `MaxResources.CPU` or `MaxResources.Memory` advertises no
-  limit; `0` is a real limit that admits nothing, as a full pool node reports.
+  limit; `0` is a real limit that admits nothing, as a full node reports.
   A zero `MaxDuration` advertises no limit. A platform that derives CPU from
   memory advertises the CPU its largest tier implies rather than nil, as Lambda
   advertises 6000.
@@ -478,12 +486,15 @@ the `hcl.Body` in `registry.Settings.Config`, so plugin fields never appear in
 func decodeConfig(name string, body hcl.Body) (*Config, hcl.Diagnostics)
 ```
 
-- **Nil body:** the provider block has no `config` block. Return one
-  diagnostic naming the block and the attributes it needs, not one per missing
-  attribute.
-- **Decode with `gohcl.DecodeBody(body, nil, &cfg)`.** It reports missing and
-  unknown attributes against source ranges.
-- **Validate present-but-empty strings** separately; `gohcl` accepts `""`.
+- **Decode with `plugin.DecodeConfig[Config](name, Type, body, needs)`.** A
+  nil body, no `config` block, is one `Missing provider configuration`
+  diagnostic listing `needs`, not one per missing attribute; with `needs`
+  empty the block is optional and a missing one decodes to a zero `Config`.
+  Decoding is `gohcl.DecodeBody`, which reports missing and unknown
+  attributes against source ranges.
+- **Refuse present-but-empty strings** with
+  `plugin.EmptySettings(name, map[string]string{"region": cfg.Region})`;
+  `gohcl` accepts `""`.
 - **Return `hcl.Diagnostics`, never `error`,** so the CLI prints the file and
   line.
 
@@ -598,7 +609,6 @@ import (
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/gohcl"
 
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
@@ -630,16 +640,12 @@ type Provider struct {
 
 // New decodes the config block and checks the credential.
 func New(_ context.Context, name string, body hcl.Body, credentials []byte) (*Provider, hcl.Diagnostics) {
-	if body == nil {
-		return nil, hcl.Diagnostics{{
-			Severity: hcl.DiagError,
-			Summary:  "Missing provider configuration",
-			Detail:   fmt.Sprintf("Provider %q is an %s provider and declares no config block.", name, Type),
-		}}
+	cfg, diags := plugin.DecodeConfig[Config](name, Type, body, "endpoint")
+	if cfg == nil {
+		return nil, diags
 	}
 
-	var cfg Config
-	if diags := gohcl.DecodeBody(body, nil, &cfg); diags.HasErrors() {
+	if diags = append(diags, plugin.EmptySettings(name, map[string]string{"endpoint": cfg.Endpoint})...); diags.HasErrors() {
 		return nil, diags
 	}
 

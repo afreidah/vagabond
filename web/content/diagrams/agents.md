@@ -1,11 +1,11 @@
 ---
 title: "Agents and Pools"
 linkTitle: "Agents and Pools"
-description: "Interactive diagram of an agent node from startup to running workloads, and the pool provider that admits, places and tracks work on it."
+description: "Interactive diagram of an agent node from startup to running workloads, and the containerd provider that admits, places and tracks work on it."
 weight: 5
 ---
 
-How an agent node joins a pool and runs workloads: startup and capacity, the connection to the server, live pool membership and per-node admission, placement, the `AgentExecutions` calls down to containerd, and what happens when a node drops. **Hover over any component** for implementation details.
+How an agent node joins a pool and runs workloads: startup and capacity, the connection to the server, live pool membership and per-node admission, ranking and the room reserved on a node, the `AgentExecutions` calls down to containerd, what happens when a node drops, and the workloads the server tells a node to release. **Hover over any component** for implementation details.
 
 {{< diagram >}}
 
@@ -41,21 +41,30 @@ window.vagabondDiagram = {
     '    subgraph SERVERSIDE [Server]',
     '        LISTEN[Agent listener:<br>agent_bind]:::process --> NODEEP{"Node.Register:<br>name = cert CN?"}:::filter',
     '        NODEEP -->|no| PERMDENIED[PermissionDenied]:::reject',
-    '        NODEEP -->|yes| CONNS[(nodes.Conns:<br>connected nodes)]:::storage',
+    '        NODEEP -->|yes| CONNS[(nodes.Conns:<br>nodes and their room)]:::storage',
+    '        NODEEP -->|yes, answer| UNWANTED["release[]:<br>workloads nothing needs"]:::process',
     '        CONNS --> NODESTATUS["node status<br>GET /v1/nodes"]:::process',
-    '        CONNS --> POOLCAPS[Pool live capabilities:<br>one member per node]:::process',
-    '        DISPATCH([Dispatch]):::entry --> ADMIT{Admission<br>per member}:::filter',
+    '        CONNS --> POOLCAPS[containerd provider:<br>one member per node]:::process',
+    '        DISPATCH([Dispatch]):::entry --> ADMIT{Admission<br>per node}:::filter',
     '        POOLCAPS --> ADMIT',
-    '        ADMIT -->|members passed| PLACE[Placement:<br>most free memory]:::process',
-    '        DISPATCH -->|"Status, Result,<br>Cancel, Release"| POOLEXEC[Pool executions:<br>find the holder]:::process',
+    '        ADMIT -->|each passing node| PLACE[Ranked candidates:<br>labels, then placement]:::process',
+    '        PLACE -->|in rank order| RESERVE{"Room on<br>the node?"}:::filter',
+    '        CONNS -->|Reserve| RESERVE',
+    '        RESERVE -->|"ErrNoRoom:<br>next candidate"| PLACE',
+    '        RESERVE -->|"held: recorded<br>with its node"| RECORD[("Execution record:<br>node")]:::storage',
+    '        UNWANTED -->|Get each| RECORD',
+    '        DISPATCH -->|"Status, Result,<br>Cancel, Release"| POOLEXEC[Node executions:<br>the node on the record]:::process',
+    '        RECORD -->|node| POOLEXEC',
     '        POOLEXEC --> GRACE{Node<br>connected?}:::decision',
-    '        GRACE -->|"gone"| LOST[lost, then<br>node is gone]:::reject',
+    '        GRACE -->|no| LOST[lost until the node<br>returns, or 24 h]:::reject',
     '    end',
     '',
     '    DIAL -->|one TCP connection| LISTEN',
     '    REPORT -->|Node.Register| NODEEP',
-    '    PLACE -->|AgentExecutions.Submit| EXECEP',
-    '    REXH -->|try the next node| PLACE',
+    '    UNWANTED -->|"answer: release[]"| REPORT',
+    '    REPORT -->|release each| EXECEP',
+    '    RESERVE -->|AgentExecutions.Submit| EXECEP',
+    '    REXH -->|"infrastructure:<br>reroute if allowed"| PLACE',
     '    GRACE -->|connected| EXECEP',
   ].join('\n'),
 
@@ -93,22 +102,22 @@ window.vagabondDiagram = {
     REPORT: {
       title: 'Node.Register: Workload Report',
       badge: 'background', badgeText: 'agent loop',
-      body: '<p>Sends <code>name</code>, <code>pool</code>, <code>labels</code>, <code>architecture</code>, <code>capacity</code>, <code>runtimes</code>, <code>version</code> and <code>held[]</code>: every container in the namespace, with its declared CPU and memory from its labels and whether its task still runs.</p><p>Sent on connecting, after a <code>Submit</code> starts a workload, after every <code>Cancel</code> or <code>Release</code>, and every 10 s, which catches a workload finishing on its own. One pending signal covers any number of changes. A failed first registration ends the session; a failed later one logs <code>reporting workloads</code> and the next report carries everything.</p><p>The first report after an agent or server restart lists every workload still held, which is how the server finds its executions again.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
+      body: '<p>Sends <code>name</code>, <code>pool</code>, <code>labels</code>, <code>architecture</code>, <code>capacity</code>, <code>runtimes</code>, <code>version</code> and <code>held[]</code>: every container in the namespace, with its declared CPU and memory from its labels and whether its task still runs.</p><p>Sent on connecting, after a <code>Submit</code> starts a workload, after every <code>Cancel</code> or <code>Release</code>, and every 10 s, which catches a workload finishing on its own. One pending signal covers any number of changes. A failed first registration ends the session; a failed later one logs <code>reporting workloads</code> and the next report carries everything.</p><p>Each report is answered with <code>release[]</code>, the held workloads the server has no use for. The agent releases each through its own <code>Release</code> and logs <code>released a workload the server has no use for</code>; a failed one warns <code>releasing a workload the server has no use for</code> and is answered again on the next report.</p><p>The first report after an agent or server restart lists every workload still held, so the node&rsquo;s room counts them at once.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
     },
     EXECEP: {
       title: 'AgentExecutions Endpoint',
       badge: 'process', badgeText: 'agent',
-      body: '<p>Served by the agent on the session it opened (<code>internal/agent/executions_endpoint.go</code>): <code>Submit</code>, <code>Status</code>, <code>Result</code>, <code>Cancel</code>, <code>Release</code> and <code>StreamLogs</code>, each translated to the executor.</p><p><code>Submit</code> carries the workload the server already decoded: <code>image</code>, <code>command</code>, <code>args</code>, <code>env</code>, <code>working_dir</code>, <code>resources</code>, <code>timeout</code>, and an empty <code>runtime</code> that defaults to <code>io.containerd.runc.v2</code>. It answers with the state reached and the provider ID.</p><p>A container the node does not hold is <code>NotFound</code>, which the pool reads as an unknown execution. Any other executor error is <code>Internal</code>, an infrastructure failure on the server.</p><p><a href="../../docs/agent/#rpcs">Agent RPCs &rarr;</a></p>'
+      body: '<p>Served by the agent on the session it opened (<code>internal/agent/executions_endpoint.go</code>): <code>Submit</code>, <code>Status</code>, <code>Result</code>, <code>Cancel</code>, <code>Release</code> and <code>StreamLogs</code>, each translated to the executor.</p><p><code>Submit</code> carries the workload the server already decoded: <code>image</code>, <code>command</code>, <code>args</code>, <code>env</code>, <code>working_dir</code>, <code>resources</code>, <code>timeout</code>, and an empty <code>runtime</code> that defaults to <code>io.containerd.runc.v2</code>. It answers with the state reached and the provider ID.</p><p>A container the node does not hold is <code>NotFound</code>, which the server reads as an unknown execution. Any other executor error is <code>Internal</code>, an infrastructure failure on the server.</p><p><a href="../../docs/agent/#rpcs">Agent RPCs &rarr;</a></p>'
     },
     FITS: {
       title: 'Fits the Node Room?',
       badge: 'filter', badgeText: 'room check',
-      body: '<p>The agent checks room itself, since its count can be tighter than the server&rsquo;s. Under a lock it sums the declared CPU and memory of its running workloads and in-flight submissions, adds the new one, and compares with capacity.</p><p>The in-flight reservation is recorded before the lock is released, so the image pull runs outside it, and dropped when <code>Submit</code> returns. A concurrent submission for the same execution waits for the one in flight.</p><p>An execution already held under the same ID is a resubmission: it always fits and starts nothing new. A finished workload keeps its container until released but no longer counts.</p>'
+      body: '<p>The agent checks room itself, since its count can be tighter than the server&rsquo;s. Under a lock it computes what is free with <code>agentrpc.Free</code>, the function the server counts room with: capacity, less the declared CPU and memory of its running workloads, less in-flight submissions it does not report running. The new workload must fit what is left.</p><p>The in-flight reservation is recorded before the lock is released, so the image pull runs outside it, and dropped when <code>Submit</code> returns. A concurrent submission for the same execution waits for the one in flight.</p><p>An execution already held under the same ID is a resubmission: it always fits and starts nothing new. A finished workload keeps its container until released but no longer counts.</p>'
     },
     REXH: {
       title: 'ResourceExhausted',
       badge: 'reject', badgeText: 'node full',
-      body: '<p><code>the node has &lt;cpu&gt; millicores and &lt;mem&gt; MiB free; the workload needs &lt;cpu&gt; and &lt;mem&gt;</code></p><p>The pool drops its reservation, marks the node tried, and places again on the next node with room. Any other <code>Submit</code> error drops the reservation and is an infrastructure failure, with no other node tried.</p>'
+      body: '<p><code>the node has &lt;cpu&gt; millicores and &lt;mem&gt; MiB free; the workload needs &lt;cpu&gt; and &lt;mem&gt;</code></p><p>The server drops its reservation on the node, and the attempt fails as infrastructure: <code>node &lt;name&gt;: rpc error: code = ResourceExhausted desc = ...</code>. Dispatch tries another candidate only when the task&rsquo;s <code>retry</code> block allows rerouting. Any other <code>Submit</code> error is handled the same way, as <code>node &lt;name&gt;: ...</code>.</p><p>The server&rsquo;s own room count normally refuses first, before anything is recorded, without spending an attempt.</p><p><a href="../../docs/agent/#refusal-and-retry">Refusal and retry &rarr;</a></p>'
     },
     EXECUTOR: {
       title: 'containerd Executor',
@@ -133,17 +142,17 @@ window.vagabondDiagram = {
     STREAMLOGS: {
       title: 'StreamLogs',
       badge: 'process', badgeText: 'live output',
-      body: '<p>Takes <code>execution_id</code> and <code>offset</code>, the bytes the server already has. <code>Containerd.Logs</code> opens the log file, seeks to <code>offset</code>, and sends what is there as <code>LogChunk</code>s, reading the workload&rsquo;s state between copies and waiting 250 ms while it runs.</p><p>Once the workload is terminal, or released mid-stream, it sends whatever the file still holds and ends the stream. No log file is <code>Internal</code>. An agent that predates <code>offset</code> streams from the start.</p><p>The pool&rsquo;s <code>ReadLogs</code> is this stream from offset 0, which ends once the workload has, so the server captures a workload&rsquo;s whole output through it before releasing.</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
+      body: '<p>Takes <code>execution_id</code> and <code>offset</code>, the bytes the server already has. <code>Containerd.Logs</code> opens the log file, seeks to <code>offset</code>, and sends what is there as <code>LogChunk</code>s, reading the workload&rsquo;s state between copies and waiting 250 ms while it runs.</p><p>Once the workload is terminal, or released mid-stream, it sends whatever the file still holds and ends the stream. No log file is <code>Internal</code>. An agent that predates <code>offset</code> streams from the start.</p><p>The provider&rsquo;s <code>ReadLogs</code> is this stream from offset 0, which ends once the workload has, so the server captures a workload&rsquo;s whole output through it before releasing.</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
     },
     LISTEN: {
       title: 'Agent Listener',
       badge: 'process', badgeText: 'server',
-      body: '<p><code>Server.ServeAgents</code> accepts on <code>agent_bind</code> (default <code>127.0.0.1:4748</code>). A bind beyond loopback without an <code>agent_tls</code> block stops the server at start; with one, every agent must present a certificate signed by <code>agent_tls.ca</code>.</p><p><code>handleAgent</code> gives the TLS handshake 10 s, wraps the connection in a yamux session (<code>agentrpc.Accept</code>), takes the peer&rsquo;s identity from its certificate&rsquo;s common name, and serves <code>Node</code> on it. A session that cannot be set up logs <code>agent connection</code>.</p><p>When the session closes, every node registered on it is removed and its departure time kept (<code>node disconnected</code>). Shutdown closes the listener and every session.</p><p><a href="../architecture/">Architecture diagram &rarr;</a></p>'
+      body: '<p><code>Server.ServeAgents</code> runs <code>nodes.Conns.Serve</code> (<code>internal/nodes/serve.go</code>), which accepts on <code>agent_bind</code> (default <code>127.0.0.1:4748</code>). A bind beyond loopback without an <code>agent_tls</code> block stops the server at start; with one, every agent must present a certificate signed by <code>agent_tls.ca</code>.</p><p>Each connection gets 10 s for the TLS handshake, is wrapped in a yamux session (<code>agentrpc.Accept</code>), takes the peer&rsquo;s identity from its certificate&rsquo;s common name, and is served <code>Node</code> on it. A session that cannot be set up logs <code>agent connection</code>.</p><p>When the session closes, every node registered on it is removed (<code>node disconnected</code>). Shutdown closes the listener and every session.</p><p><a href="../architecture/">Architecture diagram &rarr;</a></p>'
     },
     NODEEP: {
       title: 'Node.Register: Name Check',
       badge: 'filter', badgeText: 'identity',
-      body: '<p><code>nodeEndpoint.Register</code>, served on the agent&rsquo;s own session. On a TLS session the reported <code>name</code> must be the certificate&rsquo;s common name, so only the holder of a node&rsquo;s certificate can register as that node, and so replace it.</p><p>A plain session on loopback has no identity, and any name is accepted.</p>'
+      body: '<p><code>Register</code> on the <code>Node</code> endpoint in <code>internal/nodes/serve.go</code>, served on the agent&rsquo;s own session. On a TLS session the reported <code>name</code> must be the certificate&rsquo;s common name, so only the holder of a node&rsquo;s certificate can register as that node, and so replace it.</p><p>A plain session on loopback has no identity, and any name is accepted.</p><p>An accepted report is recorded in <code>nodes.Conns</code> and answered with the held workloads to release.</p>'
     },
     PERMDENIED: {
       title: 'PermissionDenied',
@@ -153,47 +162,62 @@ window.vagabondDiagram = {
     CONNS: {
       title: 'nodes.Conns',
       badge: 'storage', badgeText: 'in memory',
-      body: '<p>Every connected node by name: its last report, an <code>AgentExecutions</code> client on its session, the address it connected from, and when that session registered. Per server process.</p><p><code>Report</code>: a first report adds the node, which the server logs as <code>node registered</code> with <code>held=&lt;n&gt;</code>; a later one on the same session replaces what it reported; one under the same name on a new session closes the old session and replaces it.</p><p><code>Remove</code> on session close records when each node left, which <code>LeftAt</code> returns for the pool&rsquo;s grace period. A node that already reconnected is not removed when its old session closes.</p>'
+      body: '<p>Every connected node by name: its last report, an <code>AgentExecutions</code> client on its session, the address it connected from, and when that session registered; and the room reserved on each node, by execution ID. Per server process.</p><p><code>Report</code>: a first report adds the node, which the server logs as <code>node registered</code> with <code>held=&lt;n&gt;</code>; a later one on the same session replaces what it reported; one under the same name on a new session closes the old session and replaces it. A report drops the reservation of every workload it lists.</p><p>Room is counted here once per node, whatever providers draw on it. <code>Free</code> is capacity, less the declared size of running workloads, less reservations the node does not report running, through <code>agentrpc.Free</code>, the function the agent checks with. <code>Reserve</code> checks and holds in one locked step; <code>Unreserve</code> gives the room back.</p><p><code>Remove</code> on session close forgets the nodes registered on it. A node that already reconnected is not removed when its old session closes.</p>'
     },
     NODESTATUS: {
       title: 'node status / GET /v1/nodes',
       badge: 'process', badgeText: 'read',
-      body: '<p><code>vagabond node status</code> and <code>GET /v1/nodes</code> list the connected nodes by name: pool, address, labels, architecture, capacity, used CPU and memory, runtimes, version, running workloads, and when the session registered, in UTC.</p><p>Used figures are the declared sizes of running workloads as of the node&rsquo;s last report, without the pool&rsquo;s reservations.</p><p><a href="../../docs/agent/#node-status">Node status &rarr;</a></p>'
+      body: '<p><code>vagabond node status</code> and <code>GET /v1/nodes</code> list the connected nodes by name: pool, address, labels, architecture, capacity, used CPU and memory, runtimes, version, running workloads, and when the session registered, in UTC.</p><p>Used figures are capacity less <code>nodes.Conns.Free</code>: the declared sizes of running workloads as of the node&rsquo;s last report, plus this server&rsquo;s reservations on the node that it does not report running yet.</p><p><a href="../../docs/agent/#node-status">Node status &rarr;</a></p>'
     },
     POOLCAPS: {
-      title: 'Pool Live Capabilities',
-      badge: 'process', badgeText: 'pool provider',
-      body: '<p><code>pool.Provider.LiveCapabilities</code> builds the pool from <code>Conns.InPool</code> on every plan (<code>plugin.Live</code>), not from the periodic refresh, so a node is schedulable once it registers and gone once its session closes. No node is an error, <code>no nodes have joined pool "&lt;name&gt;"</code>, and the pool is unhealthy.</p><p>Each node is one member with its own snapshot: driver <code>container</code>, its architecture, <code>max_cpu</code> and <code>max_memory</code> as the room it has left (0 when full), internet, private network and arbitrary images, a default size of 1000 millicores / 1024 MiB, and its labels as <code>node.label.&lt;key&gt;</code>.</p><p>Room is capacity, less what its running workloads declared, less this server&rsquo;s unexpired reservations the node has not reported yet.</p><p><a href="../../docs/agent/#node-attributes">Node attributes &rarr;</a></p>'
+      title: 'containerd Provider: Live Capabilities',
+      badge: 'process', badgeText: 'containerd provider',
+      body: '<p><code>pool.Provider.LiveCapabilities</code> builds the provider from <code>Conns.InPool</code> on every plan (<code>plugin.Live</code>), not from the periodic refresh, so a node is schedulable once it registers and gone once its session closes. The pool is the <code>config</code> block&rsquo;s <code>pool</code>, default the provider&rsquo;s label. No node is an error, <code>no nodes have joined pool "&lt;pool&gt;"</code>, and the provider is unhealthy.</p><p>Each node is one member with its own snapshot: driver <code>container</code>, its architecture, <code>max_cpu</code> and <code>max_memory</code> as the room <code>Conns.Free</code> says it has left (0 when full), internet, private network and arbitrary images, a default size of 1000 millicores / 1024 MiB, and its labels as <code>node.label.&lt;key&gt;</code>.</p><p>Members are in <code>placement</code> order: <code>spread</code> (default) puts the most free memory first, <code>pack</code> the least, ties by name. Two providers may draw on one pool; a node&rsquo;s room is counted once.</p><p><a href="../../docs/agent/#node-attributes">Node attributes &rarr;</a></p>'
     },
     DISPATCH: {
       title: 'Dispatch',
       badge: 'entry', badgeText: 'server',
-      body: '<p>The dispatcher runs one attempt against the pool. A provider made of members (<code>plugin.MemberSubmitter</code>) gets <code>SubmitTo</code> with the members admission passed, so work only goes to a node it was judged to fit.</p><p>The attempt&rsquo;s execution runner then polls <code>Status</code> (2 s doubling to 15 s), reads <code>Result</code> once the state is terminal, captures the output, settles, and calls <code>Release</code>. An infrastructure failure moves the task to the next ranked provider, as far as the retry budget allows.</p><p><a href="../task-path/">Task path diagram &rarr;</a></p>'
+      body: '<p>The dispatcher walks the ranked candidates. For a node it reserves quota, then room on the node through <code>plugin.Reserver</code> on <code>plugin.On(provider, node)</code>, records the execution with its node, and starts a runner on the node&rsquo;s view of the provider (<code>plugin.Nodes.On</code>).</p><p>The runner sends <code>Submit</code>, then polls <code>Status</code> (2 s doubling to 15 s), reads <code>Result</code> once the state is terminal, captures the output, settles, and calls <code>Release</code>. An infrastructure failure moves the task to the next ranked candidate, as far as the retry budget allows.</p><p><a href="../task-path/">Task path diagram &rarr;</a></p>'
     },
     ADMIT: {
-      title: 'Admission per Member',
+      title: 'Admission per Node',
       badge: 'filter', badgeText: 'admission',
-      body: '<p><code>scheduler.admitProvider</code> runs all 13 checks against each member as if it were the whole provider: its own snapshot and labels, with the pool&rsquo;s quota, <code>meta</code> tags, health and the job&rsquo;s allowlist.</p><p>At least one passes: the pool is a candidate carrying the members that passed. None passes: the pool is rejected with the closest node&rsquo;s rejection, the one with the fewest failed checks, its detail prefixed <code>closest node &lt;name&gt;: </code>.</p><p>A node&rsquo;s maximums are its free room, so a busy or full node is rejected with <code>resources-exceeded</code>.</p><p><a href="../admission/">Admission diagram &rarr;</a></p>'
+      body: '<p><code>scheduler.admitProvider</code> runs all 13 checks against each member as if it were the whole provider: its own snapshot and labels, with the provider&rsquo;s quota, <code>meta</code> tags, health and the job&rsquo;s allowlist.</p><p>Every node that passes is a candidate of its own (<code>scheduler.Candidate.Node</code>). None passes: the provider is rejected with the closest node&rsquo;s rejection, the one with the fewest failed checks, its detail prefixed <code>closest node &lt;name&gt;: </code>.</p><p>A node&rsquo;s maximums are its free room, so a busy or full node is rejected with <code>resources-exceeded</code>.</p><p><a href="../admission/">Admission diagram &rarr;</a></p>'
     },
     PLACE: {
-      title: 'Placement and Reservation',
-      badge: 'process', badgeText: 'pool provider',
-      body: '<p><code>SubmitTo</code> sizes the workload from the task&rsquo;s <code>resources</code>, 1000 millicores and 1024 MiB for unset or zero. <code>reserve</code> then, in one locked step, picks among the admitted members not yet tried the node with the most free memory that fits both dimensions (ties to the first by name) and reserves the size there.</p><p>A reservation stops counting once the node reports the execution, or after 2 minutes. It is dropped when the node refuses, <code>Submit</code> fails, or the execution is released. The node name becomes the provider ID.</p><p>No untried node with room: <code>no node in pool "&lt;pool&gt;" has room for &lt;cpu&gt; millicores and &lt;mem&gt; MiB</code>. A node gone before the call: <code>node &lt;name&gt; left before the workload reached it</code>. Both are infrastructure failures.</p>'
+      title: 'Ranked Candidates',
+      badge: 'process', badgeText: 'ranking',
+      body: '<p>Ranking scores each node with its own <code>node.label.*</code> attributes, so a label affinity puts the nodes carrying the label first; the rest of its score is its provider&rsquo;s. Among equal scores a provider&rsquo;s nodes keep its <code>placement</code> order, ties by name.</p><p><code>job plan</code> lists each node as <code>&lt;provider&gt;/&lt;node&gt;</code>. Dispatch takes the candidates in rank order, each at most once.</p><p><a href="../../docs/agent/#placement">Placement &rarr;</a></p>'
+    },
+    RESERVE: {
+      title: 'Room on the Node?',
+      badge: 'filter', badgeText: 'node room',
+      body: '<p>After the candidate&rsquo;s quota is reserved, <code>Provider.Reserve</code> calls <code>Conns.Reserve</code>, which checks and holds the task&rsquo;s size on the node in one locked step: its <code>resources</code>, 1000 millicores and 1024 MiB for unset or zero.</p><p><b>No room, or not connected</b>: <code>plugin.ErrNoRoom</code>, <code>no room on the node: node &lt;name&gt; has &lt;cpu&gt; millicores and &lt;mem&gt; MiB free; the task needs &lt;cpu&gt; and &lt;mem&gt;</code> or <code>no room on the node: node &lt;name&gt; is not connected</code>. A refusal: the quota reservation is dropped, nothing is recorded, no attempt is spent, and dispatch goes on to the next candidate.</p><p><b>Held</b>: the execution is recorded with its node, then <code>Submit</code> is sent to it. The reservation is dropped when the node&rsquo;s report includes the workload, after 2 minutes, when the task does not translate or <code>Submit</code> fails, and on <code>Release</code>.</p><p><a href="../../docs/agent/#reservations">Reservations &rarr;</a></p>'
+    },
+    RECORD: {
+      title: 'Execution Record: Node',
+      badge: 'storage', badgeText: 'store',
+      body: '<p><code>execution.Record.Node</code>, column <code>node</code> in <code>executions</code>: the node the execution was placed on, written with the <code>pending</code> record before <code>Submit</code>.</p><p>Every later call for the execution goes to that node through <code>plugin.On(provider, node)</code>: from its runner, from a runner restored after a claim, and from a live output stream. A server restart changes nothing, since the node is on the record.</p><p>The answer to <code>Node.Register</code> reads each held workload&rsquo;s record to decide what to release.</p><p><a href="../database-schema/">Database schema diagram &rarr;</a></p>'
+    },
+    UNWANTED: {
+      title: 'Answer: release[]',
+      badge: 'process', badgeText: 'cleanup',
+      body: '<p>Every <code>Node.Register</code> is answered with <code>NodeRegisterResponse.release</code>: the held workloads whose execution is released, was never recorded, or whose ID is not an execution ID. The server reads each held execution&rsquo;s record with the store&rsquo;s <code>Get</code>.</p><p>A record it cannot read is kept, so a server that cannot reach its store releases nothing.</p><p>The agent releases each through its own <code>Release</code>: the task killed, the container, snapshot and log file deleted. It logs <code>released a workload the server has no use for</code>. An agent that predates <code>release</code> ignores it and keeps what it holds.</p><p><a href="../../docs/agent/#releasing-what-nothing-needs">Releasing what nothing needs &rarr;</a></p>'
     },
     POOLEXEC: {
-      title: 'Pool Executions',
-      badge: 'process', badgeText: 'pool provider',
-      body: '<p><code>Status</code>, <code>Result</code>, <code>Cancel</code>, <code>Release</code> and <code>StreamLogs</code> each go to the node holding the execution (<code>internal/providers/pool/executions.go</code>).</p><p>The holder is this process&rsquo;s own placement first, then whichever node in the pool reports the execution in <code>held</code>, so it survives a server restart without being stored. <code>Release</code> forgets the placement and drops any reservation.</p>'
+      title: 'Node Executions',
+      badge: 'process', badgeText: 'containerd provider',
+      body: '<p><code>Status</code>, <code>Result</code>, <code>Cancel</code>, <code>Release</code> and <code>StreamLogs</code> each go to the node the execution&rsquo;s record names, through the provider <code>plugin.On</code> returns for that node (<code>internal/providers/pool/executions.go</code>), after a server restart as before it.</p><p><code>Release</code> drops any reservation first. A <code>NotFound</code> from the node is an unknown execution; any other error is infrastructure, <code>node &lt;name&gt;: ...</code>.</p>'
     },
     GRACE: {
       title: 'Node Connected?',
-      badge: 'decision', badgeText: 'grace period',
-      body: '<p><b>Connected</b>: the call goes to the node.</p><p><b>Left within 5 minutes</b>: <code>Status</code> answers <code>lost</code>, which is not terminal, so the runner keeps polling and a node that reconnects in time finishes normally. <code>Result</code>, <code>Cancel</code>, <code>Release</code> and <code>StreamLogs</code> fail <code>the node holding &lt;id&gt; is not connected</code>.</p><p><b>After 5 minutes</b>: every call fails <code>node &lt;name&gt; holding &lt;id&gt; is gone</code>.</p><p>For the first 5 minutes after the pool is built, an execution no node has reported is <code>lost</code> too, since nodes may still be reconnecting after a server restart; after that it is unknown.</p>'
+      badge: 'decision', badgeText: 'connected',
+      body: '<p><b>Connected</b>: the call goes to the node.</p><p><b>Not connected</b>: <code>Status</code>, <code>Result</code>, <code>Cancel</code> and <code>StreamLogs</code> fail as infrastructure, <code>node &lt;name&gt; is not connected</code>. <code>Release</code> succeeds without calling the node; the node releases the workload when it returns, from the answer to its report.</p><p><a href="../../docs/agent/#node-leaving-mid-run">Node leaving mid-run &rarr;</a></p>'
     },
     LOST: {
-      title: 'lost, then Node Is Gone',
-      badge: 'reject', badgeText: 'node gone',
-      body: '<p>Within the grace period <code>Status</code> answers <code>lost</code>: the runner records it and keeps polling for an agent that is usually only restarting, and the attempt waits. A node that reconnects in time reports the execution, and it finishes normally.</p><p>Past it, <code>Status</code> fails, which answers the attempt so the task can reroute. The record stays <code>lost</code> and the runner keeps polling; once the execution has been <code>lost</code> for 24 hours with <code>Status</code> still failing, it is recorded <code>failed</code>, charged as reserved. A node that comes back before then still reports the execution, and its real end is recorded. <code>Release</code> needs the node, so it is retried until the node returns, and the dispatch is not done until then.</p><p>After a server restart the window is the pool&rsquo;s first 5 minutes. Past it the pool no longer knows the execution: <code>Status</code> records it <code>failed</code> at once, charged for the time it was seen running, and <code>Release</code> counts as done without reaching the node, which keeps the container if it returns.</p><p><a href="../execution-states/">Execution states diagram &rarr;</a></p>'
+      title: 'lost Until the Node Returns',
+      badge: 'reject', badgeText: 'node away',
+      body: '<p>The runner records the failed <code>Status</code> as <code>lost</code> and answers the attempt, so the task can reroute. <code>lost</code> is not terminal: the runner keeps polling, and the execution keeps its charge and stays unreleased while the node is away, after a server restart as before it, since the record names the node.</p><p>A node that reconnects reports its workloads, and they finish normally. Once the execution has been <code>lost</code> for 24 hours (<code>LostGracePeriod</code>) with <code>Status</code> still failing, it is recorded <code>failed</code>, charged as reserved, and released.</p><p><a href="../execution-states/">Execution states diagram &rarr;</a></p>'
     }
   }
 };
@@ -207,7 +231,7 @@ window.vagabondDiagram = {
 | <span class="dg-swatch dg-process"></span> | Processing step |
 | <span class="dg-swatch dg-decision"></span> | Decision / branch |
 | <span class="dg-swatch dg-filter"></span> | Check: identity, room, admission |
-| <span class="dg-swatch dg-storage"></span> | State: connected nodes, log file |
+| <span class="dg-swatch dg-storage"></span> | State: connected nodes and their room, execution record, log file |
 | <span class="dg-swatch dg-success"></span> | Running workload |
 | <span class="dg-swatch dg-background"></span> | Agent loops |
 | <span class="dg-swatch dg-reject"></span> | Refusal / failure |

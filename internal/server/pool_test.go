@@ -52,7 +52,7 @@ job "local" {
 func TestPool_RunsAJobOnANode(t *testing.T) {
 	ctx := t.Context()
 
-	cfg, diags := config.Load("test.hcl", []byte(`provider "homelab" { type = "pool" }`))
+	cfg, diags := config.Load("test.hcl", []byte(`provider "homelab" { type = "containerd" }`))
 	if diags.HasErrors() {
 		t.Fatalf("config: %s", diags.Error())
 	}
@@ -89,7 +89,7 @@ func TestPool_RunsAJobOnANode(t *testing.T) {
 	t.Cleanup(httpServer.Close)
 
 	agents := &agentHarness{srv: srv, address: listener.Addr().String(), api: httpServer.URL}
-	agents.connect(t, "box1", newFakeExecutor())
+	agents.connect(t, "box1", finishing())
 	agents.node(t, "box1")
 
 	h := &harness{url: httpServer.URL}
@@ -100,7 +100,7 @@ func TestPool_RunsAJobOnANode(t *testing.T) {
 	}
 
 	e := h.awaitExecution(t, started.DispatchID, string(execution.StateSucceeded))
-	if e.Provider != "homelab" || e.ProviderID != "box1" {
-		t.Errorf("execution ran on %s/%s, want homelab/box1", e.Provider, e.ProviderID)
+	if e.Provider != "homelab" || e.Node != "box1" {
+		t.Errorf("execution ran on %s/%s, want homelab/box1", e.Provider, e.Node)
 	}
 }

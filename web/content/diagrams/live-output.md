@@ -5,7 +5,7 @@ description: "Interactive diagram of a running execution's output from the provi
 weight: 6
 ---
 
-How a running execution's output reaches the terminal: the CLI follower, the server's follow route, the pool, Cloud Run and Code Engine streams behind it, and the stored copy that finishes what did not stream. Every stream starts at the first byte the task printed, so a byte count is a position in all of them. **Hover over any component** for implementation details.
+How a running execution's output reaches the terminal: the CLI follower, the server's follow route, the containerd, Cloud Run and Code Engine streams behind it, and the stored copy that finishes what did not stream. Every stream starts at the first byte the task printed, so a byte count is a position in all of them. **Hover over any component** for implementation details.
 
 {{< diagram >}}
 
@@ -36,8 +36,8 @@ window.vagabondDiagram = {
     '        R416[416 Range Not<br>Satisfiable]:::reject',
     '    end',
     '',
-    '    subgraph POOLSIDE [Pool provider and agent]',
-    '        POOLSL[Pool StreamLogs]:::process -->|"StreamLogs<br>with offset"| AGENTSL["Agent: seek offset,<br>poll 250 ms"]:::process',
+    '    subgraph POOLSIDE [containerd provider and agent]',
+    '        POOLSL["containerd StreamLogs:<br>the node on the record"]:::process -->|"StreamLogs<br>with offset"| AGENTSL["Agent: seek offset,<br>poll 250 ms"]:::process',
     '        AGENTSL --> LOGFILE[(Workload<br>log file)]:::storage',
     '    end',
     '',
@@ -57,7 +57,7 @@ window.vagabondDiagram = {
     '',
     '    FOLLOWER -->|"follow=true,<br>offset=N"| ROUTE',
     '    REST -->|"offset=N"| ROUTE',
-    '    FOLLOW -->|pool| POOLSL',
+    '    FOLLOW -->|containerd| POOLSL',
     '    FOLLOW -->|Cloud Run| TAIL',
     '    FOLLOW -->|Code Engine| CESL',
     '    NORESUME --> R416',
@@ -107,7 +107,7 @@ window.vagabondDiagram = {
     STREAMSEL: {
       title: 'Stream or Stored?',
       badge: 'decision', badgeText: 'streamer',
-      body: '<p><code>Server.streamer</code> streams only when the request has <code>follow=true</code>, the record is not terminal, the provider it ran on is still configured, and that provider implements <code>plugin.LogStreamer</code>: pools, Cloud Run and Code Engine.</p><p>Anything else gets the stored copy, so a client can always ask to follow. A <code>lost</code> execution is not terminal, so it is still streamed.</p><p><a href="../../docs/writing-a-provider/#logstreamer">LogStreamer &rarr;</a></p>'
+      body: '<p><code>Server.streamer</code> streams only when the request has <code>follow=true</code>, the record is not terminal, the provider it ran on is still configured, and that provider, on the record&rsquo;s node for a <code>containerd</code> one (<code>plugin.On</code>), implements <code>plugin.LogStreamer</code>: <code>containerd</code>, Cloud Run and Code Engine.</p><p>Anything else gets the stored copy, so a client can always ask to follow. A <code>lost</code> execution is not terminal, so it is still streamed.</p><p><a href="../../docs/writing-a-provider/#logstreamer">LogStreamer &rarr;</a></p>'
     },
     STORED: {
       title: 'Stored Copy from Offset',
@@ -132,7 +132,7 @@ window.vagabondDiagram = {
     ENDFOLLOW: {
       title: 'End of Follow',
       badge: 'background', badgeText: 'per stream',
-      body: '<p><code>Server.endFollow</code> runs beside each stream. It re-reads the execution record every second, retrying a read that fails. Once the record is terminal it waits 5 s more and cancels the stream, because some providers&rsquo; logs trail the work: Cloud Logging runs seconds behind the container.</p><p>A Cloud Run tail never ends by itself, so this is what ends it. A pool stream usually ends first, when the agent sees the workload exit, and a Code Engine stream when its container exits.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
+      body: '<p><code>Server.endFollow</code> runs beside each stream. It re-reads the execution record every second, retrying a read that fails. Once the record is terminal it waits 5 s more and cancels the stream, because some providers&rsquo; logs trail the work: Cloud Logging runs seconds behind the container.</p><p>A Cloud Run tail never ends by itself, so this is what ends it. A <code>containerd</code> stream usually ends first, when the agent sees the workload exit, and a Code Engine stream when its container exits.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
     },
     SHUTDOWN: {
       title: 'Shutdown: endStreams',
@@ -145,9 +145,9 @@ window.vagabondDiagram = {
       body: '<p><code>this provider&#39;s log stream cannot resume from an offset</code>, as the JSON error body, sent only when nothing has been written yet.</p><p>The CLI follow stops streaming that execution and does not reopen it. Once the execution has a result, the rest is read from the stored copy with <code>?offset=</code> set to the bytes streamed, which places it exactly.</p>'
     },
     POOLSL: {
-      title: 'Pool StreamLogs',
-      badge: 'process', badgeText: 'pool provider',
-      body: '<p><code>pool.Provider.StreamLogs</code> finds the node holding the execution; one that is not connected fails <code>the node holding &lt;id&gt; is not connected</code> within 5 minutes of leaving and <code>node &lt;name&gt; holding &lt;id&gt; is gone</code> after, which ends the response early. Otherwise it opens <code>AgentExecutions.StreamLogs</code> with <code>execution_id</code> and <code>offset</code> down the agent&rsquo;s session and writes each <code>LogChunk</code> to the response until the agent ends the stream.</p><p>The pool honours <code>offset</code>, so a reopened stream resumes exactly where the last one stopped. Its <code>ReadLogs</code> is the same stream from offset 0, which ends once the workload has.</p><p><a href="../agents/">Agents and pools diagram &rarr;</a></p>'
+      title: 'containerd StreamLogs',
+      badge: 'process', badgeText: 'containerd provider',
+      body: '<p><code>pool.Provider.StreamLogs</code> goes to the node the execution&rsquo;s record names. One that is not connected fails <code>node &lt;name&gt; is not connected</code>, which ends the response early. Otherwise it opens <code>AgentExecutions.StreamLogs</code> with <code>execution_id</code> and <code>offset</code> down the agent&rsquo;s session and writes each <code>LogChunk</code> to the response until the agent ends the stream.</p><p>The provider honours <code>offset</code>, so a reopened stream resumes exactly where the last one stopped. Its <code>ReadLogs</code> is the same stream from offset 0, which ends once the workload has.</p><p><a href="../agents/">Agents and pools diagram &rarr;</a></p>'
     },
     AGENTSL: {
       title: 'Agent: Seek Offset, Poll 250 ms',

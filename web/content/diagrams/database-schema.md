@@ -111,6 +111,7 @@ window.vagabondDiagram = {
         '<tr><td>job_version</td><td>BIGINT</td><td>As on the dispatch</td></tr>' +
         '<tr><td>task</td><td>TEXT</td><td>Task name</td></tr>' +
         '<tr><td>provider</td><td>TEXT</td><td>Provider the attempt was submitted to</td></tr>' +
+        '<tr><td>node</td><td>TEXT</td><td>The agent node it runs on, for a <code>containerd</code> provider; <code>\'\'</code> otherwise</td></tr>' +
         '<tr><td>attempt</td><td>BIGINT</td><td>1 for a task\'s first submission</td></tr>' +
         '<tr><td class="fk">previous_id</td><td>TEXT</td><td>The <code>id</code> of the attempt before this one on the same task; <code>\'\'</code> on the first</td></tr>' +
         '<tr><td>state</td><td>TEXT</td><td><code>pending</code>, <code>submitted</code>, <code>accepted</code>, <code>running</code>, <code>succeeded</code>, <code>failed</code>, <code>cancelled</code>, <code>lost</code></td></tr>' +

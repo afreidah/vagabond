@@ -31,6 +31,7 @@ import (
 	"github.com/distribution/reference"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 
+	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/execution"
 )
 
@@ -76,15 +77,6 @@ type Spec struct {
 	Memory     int64
 	Timeout    time.Duration
 	Runtime    string
-}
-
-// Held is one workload the executor holds: what it declared, in millicores and
-// MiB, and whether it is still running and so still using that much.
-type Held struct {
-	ID      string
-	CPU     int64
-	Memory  int64
-	Running bool
 }
 
 // Config is where the executor runs workloads. Cgroup is the parent every
@@ -441,13 +433,13 @@ func (c *Containerd) Logs(ctx context.Context, id string, offset int64, w io.Wri
 
 // Held returns every workload the executor holds, with what it declared and
 // whether it is still using it: running, or created and about to.
-func (c *Containerd) Held(ctx context.Context) ([]Held, error) {
+func (c *Containerd) Held(ctx context.Context) ([]*agentrpc.Held, error) {
 	containers, err := c.client.Containers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing containers: %w", err)
 	}
 
-	held := make([]Held, 0, len(containers))
+	held := make([]*agentrpc.Held, 0, len(containers))
 
 	for _, container := range containers {
 		labels, err := container.Labels(ctx)
@@ -455,9 +447,9 @@ func (c *Containerd) Held(ctx context.Context) ([]Held, error) {
 			return nil, fmt.Errorf("reading labels of %s: %w", container.ID(), err)
 		}
 
-		h := Held{ID: container.ID(), Running: true}
-		h.CPU, _ = strconv.ParseInt(labels[labelCPU], 10, 64)
-		h.Memory, _ = strconv.ParseInt(labels[labelMemory], 10, 64)
+		h := &agentrpc.Held{ExecutionId: container.ID(), Resources: &agentrpc.Resources{}, Running: true}
+		h.Resources.Cpu, _ = strconv.ParseInt(labels[labelCPU], 10, 64)
+		h.Resources.Memory, _ = strconv.ParseInt(labels[labelMemory], 10, 64)
 
 		if task, err := container.Task(ctx, nil); err == nil {
 			if status, err := task.Status(ctx); err == nil && status.Status == client.Stopped {

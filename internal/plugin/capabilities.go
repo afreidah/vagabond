@@ -64,11 +64,11 @@ type Capabilities struct {
 
 	ObservedAt time.Time
 
-	Members []Member // a pool's nodes, each judged on its own; empty otherwise
+	Members []Member // a provider's nodes, each judged and placed on its own; empty otherwise
 }
 
-// Member is one node of a pool: its name, what it alone can do, and the labels
-// its agent was started with.
+// Member is one node of a provider made of nodes: its name, what it alone can
+// do, and the labels its agent was started with.
 type Member struct {
 	Name         string
 	Capabilities Capabilities

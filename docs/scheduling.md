@@ -71,7 +71,8 @@ Per-check behavior:
   every job.
 - **healthy**: a provider starts healthy and becomes unhealthy when a refresh
   fails; it keeps its last snapshot. A disabled provider is never refreshed, so
-  its snapshot is empty. A pool with no connected nodes is unhealthy.
+  its snapshot is empty. A `containerd` provider with no connected nodes is
+  unhealthy.
 - **arch**: a task with no `architecture` passes everywhere.
 - **image**: a task with no image passes everywhere.
 - **network**: only an explicit `true` is a requirement. An absent value or
@@ -142,22 +143,22 @@ other reason requires a change to the job or the configuration.
 
 ### Pools
 
-A [pool](agent.md#pools) provider is judged node by node. Each connected node
-runs all 13 checks as if it were the whole provider, with its own capability
-snapshot and `node.label.*` attributes, and the pool's allowlist, `enabled`,
-health, tags and quota.
+A [`containerd`](agent.md#pools) provider is judged node by node. Each
+connected node in its pool runs all 13 checks as if it were the whole
+provider, with its own capability snapshot and `node.label.*` attributes, and
+the provider's allowlist, `enabled`, health, tags and quota.
 
-- At least one node passes: the pool is admitted. Its candidate carries the
-  passing nodes, and the pool places the task on one of them (the one with the
-  most free memory).
-- No node passes: the pool is rejected with the rejection of the closest node,
-  the one with the fewest failed checks (the first such node on a tie). The
-  detail is prefixed `closest node <name>: `.
+- Every node that passes is a candidate of its own, ranked with its own
+  labels, in the provider's `placement` order (`spread`: most free memory
+  first). A plan lists each as `<provider>/<node>`.
+- No node passes: the provider is rejected with the rejection of the closest
+  node, the one with the fewest failed checks (the first such node on a tie).
+  The detail is prefixed `closest node <name>: `.
 
 A node's resource maximums are its free capacity, not its size, so a busy node
 is rejected with `resources-exceeded` for a task that would fit it idle.
 
-Judging the pool as a whole would combine properties no single node has: an
+Judging the nodes as a whole would combine properties no single node has: an
 arm64 node and a 16 GiB node would admit a task that needs both.
 
 ### Unknown attributes
@@ -173,9 +174,9 @@ never fails this check; it is a backstop.
 Exempt, and never checked:
 
 - `provider.meta.*`: the provider's `meta` block.
-- `node.label.*`: a pool node's labels, from the agent's `-label` flags.
-  Present only while a pool's node is judged; on any other provider the
-  attribute is absent.
+- `node.label.*`: a node's labels, from the agent's `-label` flags. Present
+  only while a node is judged and ranked; on any other provider the attribute
+  is absent.
 
 Without this check a misspelled attribute would match no provider and read as a
 capacity problem.
@@ -199,16 +200,19 @@ unset or 0.
 
 ### Output ordering
 
-Candidates and rejections are sorted by provider name before ranking, so a plan
-of the same inputs is byte-identical apart from observation times and can be
-diffed in CI.
+Candidates and rejections are sorted by provider name before ranking, a
+provider's nodes kept in its placement order, so a plan of the same inputs is
+byte-identical apart from observation times and can be diffed in CI.
 
 ## Ranking
 
-Ranking scores every candidate and orders them best first. The full ordering is
-kept: dispatch tries candidates in ranked order, moving to the next when a
+Ranking scores every candidate, a provider or one node of a `containerd`
+provider, and orders them best first. The full ordering is kept: dispatch
+tries candidates in ranked order, moving to the next when a quota or node
 reservation is refused, or when a provider fails with `infrastructure` and the
-task's retry budget allows rerouting (see [Dispatch](dispatch.md)).
+task's retry budget allows rerouting (see [Dispatch](dispatch.md)). A node's
+candidate scores with its own `node.label.*` attributes; the rest of its
+scores are its provider's.
 
 ### Scorers
 
@@ -310,7 +314,8 @@ rank the same.
 
 - Under `strict` tiers candidates are sorted by tier, ascending, then by score,
   descending; under `weighted`, by score alone. The sort is stable and
-  admission already ordered candidates by provider name, so ties rank by name.
+  admission already ordered candidates by provider name, and a provider's
+  nodes by its `placement`, so ties rank in that order.
 - The selected provider is the first in the ranking. With no candidates,
   nothing is selected.
 - The printed score is `round(score * 100)`.
@@ -328,7 +333,7 @@ table: candidates in ranked order, then rejections in provider name order.
 
 | Row | Columns |
 |---|---|
-| Candidate | provider, `admitted`, `tier <n>`, `score <n>`, `observed <UTC time>` (or `never observed`) |
+| Candidate | provider, or `<provider>/<node>` for a node, `admitted`, `tier <n>`, `score <n>`, `observed <UTC time>` (or `never observed`) |
 | Rejection | provider, `rejected`, reason code, detail |
 
 `-verbose` adds, under each candidate, one line per scorer (`<name> <value>`

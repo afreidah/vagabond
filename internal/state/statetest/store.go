@@ -107,6 +107,7 @@ func recorded(t *testing.T, s Store, d *execution.Dispatch, ended time.Time) *ex
 		Dispatch:  d.ID,
 		Task:      "test",
 		Provider:  "box",
+		Node:      "box-1",
 		Attempt:   1,
 	}
 

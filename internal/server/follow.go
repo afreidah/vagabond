@@ -48,7 +48,7 @@ func (s *Server) streamer(r *http.Request, rec *execution.Record) (plugin.LogStr
 		return nil, false
 	}
 
-	streamer, ok := provider.(plugin.LogStreamer)
+	streamer, ok := plugin.On(provider, rec.Node).(plugin.LogStreamer)
 
 	return streamer, ok
 }

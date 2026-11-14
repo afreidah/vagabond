@@ -406,7 +406,7 @@ A constraint or affinity can name three kinds of attribute:
 |---|---|---|
 | `provider.<name>` | Published by Vagabond from the provider's capabilities, quota and tier | Yes, against the table below |
 | `provider.meta.<key>` | The `meta` block of the provider's configuration block | No |
-| `node.label.<key>` | An agent's `-label` flags, present only while a pool's node is judged | No |
+| `node.label.<key>` | An agent's `-label` flags, present only while a node is judged and ranked | No |
 
 Published attributes:
 
@@ -455,11 +455,12 @@ constraint {
 }
 ```
 
-**`node.label.*`:** a [pool](agent.md) provider judges each connected node
-separately, and while it does, that node's labels are published under
-`node.label.`. A node failing a constraint is left out of the pool's
-candidates. On any provider other than a pool the attribute is absent, so `=`
-fails and `!=` and `is_not_set` hold.
+**`node.label.*`:** a [`containerd`](agent.md) provider judges and ranks each
+connected node separately, and while it does, that node's labels are
+published under `node.label.`. A node failing a constraint is not a
+candidate, and an affinity ranks the nodes it matches first. On any other
+provider the attribute is absent, so `=` fails and `!=` and `is_not_set`
+hold.
 
 ```hcl
 constraint {
@@ -494,7 +495,7 @@ task "test" {
 |---|---|---|---|---|
 | label | string | yes | - | Task name, unique within the job |
 | `driver` | string | yes | - | Execution contract: `container`, `function` or `worker` |
-| `working_directory` | string | no | image default | Directory the command runs in. Applied by the pool provider only |
+| `working_directory` | string | no | image default | Directory the command runs in. Applied by the `containerd` provider only |
 | `timeout` | duration | no | none | Maximum runtime. See [`timeout`](#timeout) |
 | `config` | block | depends on driver | - | Driver configuration |
 | `env` | block | no | - | Environment variables |
@@ -553,7 +554,7 @@ rejected with `image-unsupported`. A non-string `image` fails admission with
 
 #### `container` driver
 
-Read by the Cloud Run and pool providers.
+Read by the Cloud Run and `containerd` providers.
 
 ```hcl
 config {
@@ -683,8 +684,8 @@ resources {
 
 **Admission:** a value above the provider's `provider.max_cpu` or
 `provider.max_memory` is rejected with `resources-exceeded`. An omitted value
-is checked at the provider's default size where it publishes one (a pool sizes
-it at 1000 millicores / 1024 MiB), and passes any provider that publishes none.
+is checked at the provider's default size where it publishes one (a
+`containerd` provider sizes it at 1000 millicores / 1024 MiB), and passes any provider that publishes none.
 
 **Quota:** the declared values (0 when omitted) are what the task charges
 against CPU- and memory-metered pools. See [quotas](quotas.md).
@@ -773,8 +774,8 @@ execution {
 | `architecture` | string | no | any | `amd64` or `arm64`. A provider not offering it is rejected with `arch-unsupported` |
 | `privileged` | bool | no | - | Accepted and stored. No provider or admission check reads it |
 
-Architectures offered: Cloud Run `amd64`; Lambda `amd64`, `arm64`; a pool the
-union of its connected nodes' architectures.
+Architectures offered: Cloud Run `amd64`; Lambda `amd64`, `arm64`; a
+`containerd` provider each connected node's own.
 
 **Validation:** `Unknown architecture in "<job>" task "<task>"`
 (`Architecture "x86_64" is not one Vagabond schedules against. Valid architectures are amd64, arm64.`).

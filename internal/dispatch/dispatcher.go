@@ -367,7 +367,8 @@ func (d *Dispatcher) attempt(
 	)
 
 	for i := 0; i < len(ranking) && tried < budget; i++ {
-		name := ranking[i].Provider
+		cand := &ranking[i]
+		name := cand.Provider
 
 		provider, ok := d.registry.Provider(name)
 		if !ok {
@@ -380,8 +381,9 @@ func (d *Dispatcher) attempt(
 		}
 
 		waited = tried
+		target := plugin.On(provider, cand.Node)
 
-		rec, err := d.prepare(ctx, origin, req, name, tried+1, previous)
+		rec, err := d.prepare(ctx, origin, req, cand, target, tried+1, previous)
 		if refused(err) {
 			outcome.Attempts = append(outcome.Attempts, Attempt{
 				Provider: name, ID: rec.ID, Err: err, Refused: true,
@@ -398,8 +400,8 @@ func (d *Dispatcher) attempt(
 		previous = rec.ID
 		tried++
 
-		run := d.newRunner(provider, origin.lease, rec)
-		run.task, run.members = req.Task, ranking[i].Members
+		run := d.newRunner(target, origin.lease, rec)
+		run.task = req.Task
 
 		ended := run.start(ctx).wait()
 
@@ -430,13 +432,16 @@ func (d *Dispatcher) attempt(
 	return outcome, fmt.Errorf("%w: %w", ErrExhausted, lastErr)
 }
 
-// prepare mints an execution ID, reserves name's quota for it, and records it
-// as pending under the dispatch's lease; a refusal returns the
-// *ledger.Refusal alongside the record. The ID is per attempt because it is
-// the submission idempotency key.
+// prepare mints an execution ID, reserves the candidate's quota for it, and
+// room on its node when it is one, then records it as pending under the
+// dispatch's lease. A refusal of either returns alongside the record. The ID
+// is per attempt because it is the submission idempotency key.
 func (d *Dispatcher) prepare(
-	ctx context.Context, origin Origin, req *scheduler.Request, name string, attempt int, previous execution.ID,
+	ctx context.Context, origin Origin, req *scheduler.Request, cand *scheduler.ScoredCandidate,
+	target plugin.Provider, attempt int, previous execution.ID,
 ) (*execution.Record, error) {
+	name := cand.Provider
+
 	id, err := execution.NewID()
 	if err != nil {
 		return nil, plugin.Internal(fmt.Errorf("generating an execution id: %w", err))
@@ -452,6 +457,7 @@ func (d *Dispatcher) prepare(
 		Dispatch:   origin.Dispatch,
 		Task:       req.Task.Name,
 		Provider:   name,
+		Node:       cand.Node,
 		Attempt:    attempt,
 		Previous:   previous,
 		CPU:        req.Execution.CPU,
@@ -466,6 +472,15 @@ func (d *Dispatcher) prepare(
 		}
 
 		return nil, fmt.Errorf("reserving quota on %s: %w", name, err)
+	}
+
+	// A full node spends no attempt; its charge is dropped, or reaped unrecorded
+	if reserver, ok := target.(plugin.Reserver); ok {
+		if err := reserver.Reserve(id, req.Task); err != nil {
+			_ = d.ledger.Drop(ctx, id)
+
+			return rec, err
+		}
 	}
 
 	if err := d.executions.Create(ctx, rec, origin.lease.key); err != nil {
@@ -490,11 +505,12 @@ func (d *Dispatcher) pause(ctx context.Context, p policy, tried, waited int) err
 	return d.sleep(ctx, p.backoff(tried))
 }
 
-// refused reports whether err is the ledger turning a reservation down.
+// refused reports whether err is the ledger or a node turning a reservation
+// down.
 func refused(err error) bool {
 	var refusal *ledger.Refusal
 
-	return errors.As(err, &refusal)
+	return errors.As(err, &refusal) || errors.Is(err, plugin.ErrNoRoom)
 }
 
 // -------------------------------------------------------------------------
