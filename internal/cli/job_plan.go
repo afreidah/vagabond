@@ -182,14 +182,19 @@ func table(t *api.TaskPlan, verbose bool) string {
 	})
 }
 
-// candidateRows writes one row per admitted provider, each followed by its
-// scorers' contributions when verbose.
+// candidateRows writes one row per admitted provider, or per node as
+// provider/node, each followed by its scorers' contributions when verbose.
 func candidateRows(w io.Writer, candidates []api.Candidate, verbose bool) {
 	for i := range candidates {
 		cand := &candidates[i]
 
+		where := cand.Provider
+		if cand.Node != "" {
+			where += "/" + cand.Node
+		}
+
 		_, _ = fmt.Fprintf(w, "%s\tadmitted\ttier %d\tscore %d\t%s\n",
-			cand.Provider, cand.Tier, cand.Score, observed(cand))
+			where, cand.Tier, cand.Score, observed(cand))
 
 		if verbose {
 			for _, s := range cand.Scores {

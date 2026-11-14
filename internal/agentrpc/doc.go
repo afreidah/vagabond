@@ -1,6 +1,6 @@
 // Package agentrpc is the protocol between a server and its agents: the
-// generated gRPC bindings for agent.proto, and the session both sides run them
-// over.
+// generated gRPC bindings for agent.proto, the session both sides run them
+// over, and the conversions and room count both sides share.
 //
 // The agent dials, since a node's network may allow connections only outward.
 // One TCP connection is multiplexed with yamux, and each side serves gRPC on

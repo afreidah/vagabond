@@ -1,4 +1,5 @@
-// Package nodes holds the agent nodes connected to a server: the server adds
-// and removes them as agents connect and drop, and pool providers read them to
-// decide what they can run and where.
+// Package nodes holds the agent nodes connected to a server and the room each
+// has left: it serves the agents' connections, adds and removes nodes as they
+// connect and drop, and counts room once per node, so every provider drawing
+// on a node places against the same count.
 package nodes

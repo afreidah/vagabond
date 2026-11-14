@@ -123,10 +123,11 @@ type TaskPlan struct {
 	Tiers         string // the tier mode the candidates were ordered under
 }
 
-// Candidate is an admitted provider and why it ranked where it did. Score is
-// the percentage a plan prints.
+// Candidate is an admitted provider, or one of its nodes, and why it ranked
+// where it did. Score is the percentage a plan prints.
 type Candidate struct {
 	Provider string
+	Node     string // empty for a provider not made of nodes
 	Tier     int
 	Score    int
 	Scores   []Score
@@ -165,6 +166,7 @@ type Execution struct {
 	DispatchID string
 	Task       string
 	Provider   string
+	Node       string // empty for a provider not made of nodes
 	Attempt    int
 	PreviousID string
 	State      string

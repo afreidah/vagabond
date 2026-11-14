@@ -31,7 +31,8 @@ var ErrStale = errors.New("execution changed since it was read")
 // CPU, Memory and Timeout are the task's declared shape, which a result
 // without a bill is charged at, and a run that never answered is charged as
 // reserved at. Released is when what the provider left behind for this
-// execution was cleaned up, zero until then.
+// execution was cleaned up, zero until then. Node is the agent node it runs
+// on, for a provider made of nodes.
 //
 // The output is stored apart from the record. LogsAt is when it was captured,
 // zero until then. LogsStart is the first byte of it still stored, above zero
@@ -46,6 +47,7 @@ type Record struct {
 	Dispatch   ID
 	Task       string
 	Provider   string
+	Node       string
 	Attempt    int
 	Previous   ID
 	CPU        int

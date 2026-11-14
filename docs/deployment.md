@@ -216,8 +216,8 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab \
 
 Certificates: [agent](agent.md#certificates).
 
-The server needs a `provider "homelab" { type = "pool" }` block for anything
-to schedule there. Requirements, systemd unit, capacity and flags:
+The server needs a `provider "homelab" { type = "containerd" }` block for
+anything to schedule there. Requirements, systemd unit, capacity and flags:
 [agent](agent.md).
 
 ## Sizing
@@ -229,7 +229,8 @@ configured providers, not with registered jobs.
 |---|---|---|
 | Lease renewal | Dispatch not yet done | One `UPDATE` every 20s, until every execution is released |
 | Execution polling | Running or `lost` execution on an asynchronous provider | One provider `Status` call, interval doubling from 2s to 15s |
-| Capability refresh | Enabled non-pool provider | One provider call per minute, 30s timeout |
+| Capability refresh | Enabled provider not made of agent nodes | One provider call per minute, 30s timeout |
+| Agent report | Connected node, every 10s and on change | One execution record read per workload it holds |
 | Usage refresh | Server | One read of current-period quota rows every 15s |
 | Lease claim | Server | One `UPDATE ... RETURNING` every 30s |
 | Reaper | Server | One locking read of reservations older than 1 hour every 5 minutes, plus one execution record read per stale reservation |
@@ -249,8 +250,8 @@ configured providers, not with registered jobs.
   execution ends. See [database](database.md#retention).
 - Request bodies are capped at 1 MiB. Request headers must arrive within 10
   seconds.
-- A `pool` provider holds a reservation on a node for up to 2 minutes after
-  placing a workload, until the agent's report accounts for it.
+- A reservation holds room on a node for up to 2 minutes after placing a
+  workload, until the agent's report accounts for it.
 
 The full list of periodic loops: [background services](background-services.md).
 
@@ -281,13 +282,12 @@ Not safe, or not shared:
   `failed`, charges them for the time they were seen running, and marks them
   released without a provider call.
 - **Agents belong to one server.** An agent dials one `-server` address, and
-  a `pool` provider sees only the agents connected to its own server. The same
-  pool name on two servers is two disjoint sets of nodes. When a server dies,
-  another server that claims its pool dispatches cannot reach those nodes:
-  their executions are `lost` for the pool's first 5 minutes, then `failed`
-  as unknown, charged for the time they were seen running, and count as
-  released without reaching the node, while the workload may still be running
-  there ([Agent](agent.md#node-leaving-mid-run)).
+  a `containerd` provider sees only the agents connected to its own server.
+  The same pool name on two servers is two disjoint sets of nodes. When a
+  server dies, another server that claims its dispatches cannot reach those
+  nodes: their executions stay `lost`, charged and unreleased, until the
+  nodes connect to it or 24 hours pass
+  ([Agent](agent.md#node-leaving-mid-run)).
 - **Owners need distinct hostnames.** A lease owner is
   `server:<hostname>:<pid>`. Two servers with the same hostname and PID, such
   as containers both running as PID 1 under one hostname, share an owner and

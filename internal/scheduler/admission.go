@@ -40,7 +40,7 @@ type Input struct {
 	Share        quota.Limits
 	ShareUsage   quota.PoolUsage
 	Tags         map[string]string // the operator's labels, matched as provider.meta.*
-	Labels       map[string]string // a pool node's labels, set while that node is judged
+	Labels       map[string]string // a node's labels, set while that node is judged
 	Tier         int               // the operator's preference, lower first
 	Enabled      bool
 	Healthy      bool
@@ -77,14 +77,15 @@ func (in *Input) Attributes(e quota.Execution) map[string]string {
 // OUTPUTS
 // -------------------------------------------------------------------------
 
-// Candidate is a provider that can run the task. It embeds the input it was
-// admitted from because scoring needs the quota snapshot and tags admission
-// already holds. EstimatedCost is the provider's advertised price for one
-// execution, zero for every current provider.
+// Candidate is a provider that can run the task, or one node of a provider
+// made of nodes. It embeds the input it was admitted from because scoring
+// needs the quota snapshot, tags and node labels admission already holds.
+// EstimatedCost is the provider's advertised price for one execution, zero for
+// every current provider.
 type Candidate struct {
 	Input
 	EstimatedCost job.Cost
-	Members       []string // for a pool, the nodes that passed; placement picks among them
+	Node          string // empty for a provider not made of nodes
 }
 
 // Rejection is a provider that cannot run the task, and why: Reason for a
@@ -129,9 +130,10 @@ func (r *Result) Retryable() bool {
 }
 
 // Sort orders candidates and rejections by provider name, so output does not
-// depend on the order providers were evaluated in.
+// depend on the order providers were evaluated in. A provider's nodes keep
+// the order it listed them in, which is its placement.
 func (r *Result) Sort() {
-	slices.SortFunc(r.Candidates, func(a, b Candidate) int {
+	slices.SortStableFunc(r.Candidates, func(a, b Candidate) int {
 		return strings.Compare(a.Provider, b.Provider)
 	})
 

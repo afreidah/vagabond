@@ -21,8 +21,8 @@ import (
 )
 
 // defaultResources is what a task that declares no CPU or memory is sized at.
-// Published in the pool's capabilities, so admission checks the same size the
-// workload is placed and run at.
+// Published in every node's capabilities, so admission checks the same size
+// the workload is placed and run at.
 var defaultResources = plugin.Resources{CPU: 1000, Memory: 1024}
 
 // workloadOf translates a task into the workload an agent runs. A task with no

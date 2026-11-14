@@ -85,7 +85,7 @@ server under a supervisor that restarts it.
 | Source | `internal/state/postgres/migrations/*.sql`, embedded in the binary |
 | Applied | At every `vagabond server` start, pending ones only |
 | Version table | `goose_db_version`, created by goose |
-| Expected version | `10` in this release (`SchemaVersion`) |
+| Expected version | `11` in this release (`SchemaVersion`) |
 | Connection | A separate `database/sql` connection opened from the DSN as written and closed after; the 5s `connect_timeout` default does not apply to it |
 
 After migrating, the server reads `MAX(version_id)` from `goose_db_version`
@@ -118,6 +118,7 @@ for:
 | 8 | `00008_execution_reason.sql` | `executions.reason`, `''` for existing rows |
 | 9 | `00009_execution_logs.sql` | `execution_logs`, holding each existing row's output as chunk 0; `executions.logs_start` and `logs_at`, backfilled for rows with a result; `executions.logs` dropped |
 | 10 | `00010_dispatch_ownership.sql` | `dispatches.epoch` (`1` for existing rows), `cancel_requested_at` and `done_at`, the last backfilled for ended dispatches whose executions are all released, so one with an unreleased execution is claimed and finished; `executions.timeout_ms`, `0` for existing rows; executions with no dispatch marked released; `quota_reservations.cpu` and `memory` dropped; index `dispatches_lease` rebuilt as `(lease_until) WHERE done_at IS NULL`; index `executions_unreleased` dropped |
+| 11 | `00011_execution_node.sql` | `executions.node`, `''` for existing rows |
 
 ## Schema
 
@@ -175,6 +176,7 @@ that increments `epoch`. See [dispatch](dispatch.md#leases).
 |---|---|
 | `dispatch_id` | The run it belongs to |
 | `task`, `provider`, `attempt` | What ran where; attempts count from 1 |
+| `node` | The agent node it runs on, for a `containerd` provider; `''` otherwise |
 | `previous_id` | The attempt this one rerouted from; `''` on the first |
 | `state` | `pending`, `submitted`, `accepted`, `running`, `succeeded`, `failed`, `cancelled`, `lost` |
 | `provider_id` | The provider's own identifier for the run |

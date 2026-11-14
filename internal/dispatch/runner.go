@@ -47,7 +47,6 @@ type runner struct {
 	lease    *lease
 	rec      execution.Record
 	task     *job.Task
-	members  []string
 
 	submitted  *execution.Result // the answer Submit carried, from a synchronous provider
 	ranNothing bool              // the provider turned the work down or never got it
@@ -159,7 +158,7 @@ func (r *runner) submit(ctx, work context.Context) (bool, error) {
 		return false, r.save(work)
 	}
 
-	sub, err := r.d.submit(ctx, r.provider, r.rec.ID, r.task, r.members)
+	sub, err := r.d.submit(ctx, r.provider, r.rec.ID, r.task)
 	if err == nil {
 		if invalid := sub.Validate(); invalid != nil {
 			err = plugin.Internal(invalid)

@@ -1,13 +1,12 @@
 // -------------------------------------------------------------------------------
-// Pool Executions
+// Node Executions
 //
 // Author: Alex Freidah
 //
-// Status, results, live output, cancellation and release, each sent to the node
-// holding the execution. Which node that is comes from this process's own
-// placements, or from what the nodes report holding, so it survives a server
-// restart without being stored. A node that drops is given a grace period to
-// come back before its executions are given up on.
+// Status, results, live output, cancellation and release, each sent to the
+// node an execution is on. A node that is not connected cannot answer, which
+// leaves its executions lost until it returns or the runner gives up on them;
+// releasing one is left to the node, which is told when it next registers.
 // -------------------------------------------------------------------------------
 
 package pool
@@ -17,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -29,108 +27,67 @@ import (
 )
 
 // -------------------------------------------------------------------------
-// CONSTANTS
-// -------------------------------------------------------------------------
-
-// leftGrace is how long a node may be gone before its executions are given up
-// on. Its executions report lost meanwhile, which keeps a run waiting for an
-// agent that is only restarting.
-const leftGrace = 5 * time.Minute
-
-// -------------------------------------------------------------------------
 // EXECUTIONS
 // -------------------------------------------------------------------------
 
-// Status reports where an execution stands on its node. While the node is gone
-// within the grace period it is lost; after, the provider no longer answers.
+// Status reports where an execution stands on its node.
 func (p *Provider) Status(ctx context.Context, id execution.ID) (execution.Status, error) {
-	conn, gone, err := p.holder(id)
-
-	switch {
-	case err != nil:
+	conn, err := p.connected()
+	if err != nil {
 		return execution.Status{}, err
-	case gone:
-		return execution.Status{ID: id, State: execution.StateLost, UpdatedAt: p.now()}, nil
 	}
 
-	st, err := conn.Executions.Status(ctx, &agentrpc.ExecutionRequest{ExecutionId: id.String()})
+	st, err := conn.Executions.Status(ctx, request(id))
 	if err != nil {
 		return execution.Status{}, p.failure(id, err)
 	}
 
-	out := execution.Status{
-		ID:         id,
-		State:      execution.State(st.GetState()),
-		ProviderID: conn.Node.GetName(),
-		UpdatedAt:  p.now(),
-	}
-
-	if st.GetStartedAt() != nil {
-		out.StartedAt = st.GetStartedAt().AsTime()
-	}
-
-	if st.GetEndedAt() != nil {
-		out.EndedAt = st.GetEndedAt().AsTime()
-	}
-
-	return out, nil
+	return st.Execution(id, p.now()), nil
 }
 
 // Result returns a finished execution's exit code and run time from its node.
 // The output is read apart, by ReadLogs.
 func (p *Provider) Result(ctx context.Context, id execution.ID) (*execution.Result, error) {
-	conn, err := p.connected(id)
+	conn, err := p.connected()
 	if err != nil {
 		return nil, err
 	}
 
-	res, err := conn.Executions.Result(ctx, &agentrpc.ExecutionRequest{ExecutionId: id.String()})
+	res, err := conn.Executions.Result(ctx, request(id))
 	if err != nil {
 		return nil, p.failure(id, err)
 	}
 
-	out := &execution.Result{
-		ID:       id,
-		Duration: res.GetDuration().AsDuration(),
-	}
-
-	// Unset means the workload never exited, which is not the same as zero.
-	if res.ExitCode != nil {
-		out.ExitCode = new(int(res.GetExitCode()))
-	}
-
-	return out, nil
+	return res.Execution(id), nil
 }
 
 // Cancel stops an execution on its node.
 func (p *Provider) Cancel(ctx context.Context, id execution.ID) error {
-	conn, err := p.connected(id)
+	conn, err := p.connected()
 	if err != nil {
 		return err
 	}
 
-	if _, err := conn.Executions.Cancel(ctx, &agentrpc.ExecutionRequest{ExecutionId: id.String()}); err != nil {
+	if _, err := conn.Executions.Cancel(ctx, request(id)); err != nil {
 		return p.failure(id, err)
 	}
 
 	return nil
 }
 
-// Release deletes a finished execution from its node and forgets where it was.
+// Release deletes a finished execution from its node. A node not connected
+// is told to when it next registers, since its execution is released by then.
 func (p *Provider) Release(ctx context.Context, id execution.ID) error {
-	conn, err := p.connected(id)
-	if err != nil {
-		return err
+	p.conns.Unreserve(id.String())
+
+	conn, ok := p.conns.Get(p.node)
+	if !ok {
+		return nil
 	}
 
-	if _, err := conn.Executions.Release(ctx, &agentrpc.ExecutionRequest{ExecutionId: id.String()}); err != nil {
+	if _, err := conn.Executions.Release(ctx, request(id)); err != nil {
 		return p.failure(id, err)
 	}
-
-	p.mu.Lock()
-	delete(p.placed, id.String())
-	delete(p.reserved, id.String())
-	p.mu.Unlock()
 
 	return nil
 }
@@ -138,7 +95,7 @@ func (p *Provider) Release(ctx context.Context, id execution.ID) error {
 // StreamLogs copies an execution's output from byte offset on, from its node to
 // w as it is written, until the workload ends or ctx does.
 func (p *Provider) StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error {
-	conn, err := p.connected(id)
+	conn, err := p.connected()
 	if err != nil {
 		return err
 	}
@@ -178,71 +135,18 @@ func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w io.Writer) e
 }
 
 // -------------------------------------------------------------------------
-// LOCATING
+// HELPERS
 // -------------------------------------------------------------------------
 
-// holder finds the node holding id. gone is a node that left within the grace
-// period, or one not heard from since this process started, which a node may
-// still be about to report. Past either, the execution is unknown or the
-// node's absence is a failure.
-func (p *Provider) holder(id execution.ID) (*nodes.Conn, bool, error) {
-	node, known := p.locate(id.String())
-
-	if !known {
-		// After a server restart, the node holding it may not have reported yet
-		if p.now().Sub(p.created) < leftGrace {
-			return nil, true, nil
-		}
-
-		return nil, false, fmt.Errorf("%w: %s in pool %q", plugin.ErrUnknownExecution, id, p.name)
-	}
-
-	if conn, ok := p.conns.Get(node); ok {
-		return conn, false, nil
-	}
-
-	if left, ok := p.conns.LeftAt(node); ok && p.now().Sub(left) < leftGrace {
-		return nil, true, nil
-	}
-
-	return nil, false, plugin.Infrastructure(fmt.Errorf("node %s holding %s is gone", node, id))
-}
-
-// connected is holder for calls that need the node now: a node that is gone,
-// for however long, cannot be asked.
-func (p *Provider) connected(id execution.ID) (*nodes.Conn, error) {
-	conn, gone, err := p.holder(id)
-
-	switch {
-	case err != nil:
-		return nil, err
-	case gone:
-		return nil, plugin.Infrastructure(fmt.Errorf("the node holding %s is not connected", id))
+// connected is the node's connection, or the node failing to answer while it
+// is not connected.
+func (p *Provider) connected() (*nodes.Conn, error) {
+	conn, ok := p.conns.Get(p.node)
+	if !ok {
+		return nil, plugin.Infrastructure(fmt.Errorf("node %s is not connected", p.node))
 	}
 
 	return conn, nil
-}
-
-// locate returns the node id was placed on: this process's own record first,
-// then whichever node in the pool reports holding it.
-func (p *Provider) locate(id string) (string, bool) {
-	p.mu.Lock()
-	node, ok := p.placed[id]
-	p.mu.Unlock()
-
-	if ok {
-		return node, true
-	}
-
-	for _, conn := range p.conns.InPool(p.name) {
-		for _, h := range conn.Node.GetHeld() {
-			if h.GetExecutionId() == id {
-				return conn.Node.GetName(), true
-			}
-		}
-	}
-
-	return "", false
 }
 
 // failure maps a node's answer to the plugin's errors: a node that does not
@@ -250,8 +154,13 @@ func (p *Provider) locate(id string) (string, bool) {
 // to answer.
 func (p *Provider) failure(id execution.ID, err error) error {
 	if status.Code(err) == codes.NotFound {
-		return fmt.Errorf("%w: %s in pool %q", plugin.ErrUnknownExecution, id, p.name)
+		return fmt.Errorf("%w: %s on node %s", plugin.ErrUnknownExecution, id, p.node)
 	}
 
-	return plugin.Infrastructure(fmt.Errorf("pool %q: %w", p.name, err))
+	return plugin.Infrastructure(fmt.Errorf("node %s: %w", p.node, err))
+}
+
+// request names id to its node.
+func request(id execution.ID) *agentrpc.ExecutionRequest {
+	return &agentrpc.ExecutionRequest{ExecutionId: id.String()}
 }

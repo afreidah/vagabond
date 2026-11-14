@@ -12,10 +12,10 @@ package gcp
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/gohcl"
+
+	"github.com/afreidah/vagabond/internal/plugin"
 )
 
 // -------------------------------------------------------------------------
@@ -37,50 +37,19 @@ type Config struct {
 // DECODING
 // -------------------------------------------------------------------------
 
-// decodeConfig reads the provider's own block. A missing block is one
-// diagnostic rather than three about absent attributes, since its fix differs.
+// decodeConfig reads the provider's own block, refusing a value present but
+// empty, which would build a URL with a hole in it.
 func decodeConfig(name string, body hcl.Body) (*Config, hcl.Diagnostics) {
-	if body == nil {
-		return nil, hcl.Diagnostics{{
-			Severity: hcl.DiagError,
-			Summary:  "Missing provider configuration",
-			Detail: fmt.Sprintf("Provider %q is a %s provider and declares no config "+
-				"block. It needs project, region and runtime_service_account.",
-				name, Type),
-		}}
-	}
-
-	var cfg Config
-
-	diags := gohcl.DecodeBody(body, nil, &cfg)
-	if diags.HasErrors() {
+	cfg, diags := plugin.DecodeConfig[Config](name, Type, body, "project, region and runtime_service_account")
+	if cfg == nil {
 		return nil, diags
 	}
 
-	return &cfg, append(diags, cfg.validate(name)...)
-}
-
-// validate reports configuration that decoded but cannot be used: a value
-// present but empty, which would build a URL with a hole in it.
-func (c *Config) validate(name string) hcl.Diagnostics {
-	var diags hcl.Diagnostics
-
-	for _, field := range []struct{ label, value string }{
-		{"project", c.Project},
-		{"region", c.Region},
-		{"runtime_service_account", c.RuntimeServiceAccount},
-	} {
-		if strings.TrimSpace(field.value) == "" {
-			diags = append(diags, &hcl.Diagnostic{
-				Severity: hcl.DiagError,
-				Summary:  "Empty provider setting",
-				Detail: fmt.Sprintf("Provider %q sets %s to an empty string.",
-					name, field.label),
-			})
-		}
-	}
-
-	return diags
+	return cfg, append(diags, plugin.EmptySettings(name, map[string]string{
+		"project":                 cfg.Project,
+		"region":                  cfg.Region,
+		"runtime_service_account": cfg.RuntimeServiceAccount,
+	})...)
 }
 
 // -------------------------------------------------------------------------

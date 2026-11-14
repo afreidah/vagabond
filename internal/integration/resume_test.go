@@ -67,11 +67,9 @@ func (h *harness) abandon() execution.ID {
 func (h *harness) leave(until time.Time, states ...execution.State) (execution.ID, execution.ID) {
 	h.t.Helper()
 
-	ctx := context.Background()
-	lapsed := time.Now().Add(-time.Hour)
-	dispatchID, id := newID(h.t), newID(h.t)
+	id := newID(h.t)
 
-	if _, err := h.box().Submit(ctx, id, &job.Task{Name: "wait"}); err != nil {
+	if _, err := h.box().Submit(context.Background(), id, &job.Task{Name: "wait"}); err != nil {
 		h.t.Fatalf("Submit() = %v", err)
 	}
 
@@ -80,6 +78,19 @@ func (h *harness) leave(until time.Time, states ...execution.State) (execution.I
 			h.t.Fatalf("Advance(%s) = %v", next, err)
 		}
 	}
+
+	return h.seed(id, "box", "", until), id
+}
+
+// seed records execution id running on provider, on node when it is made of
+// nodes, under a dispatch a dead process left with its lease good until until
+// and the execution's charge held. Returns the dispatch.
+func (h *harness) seed(id execution.ID, provider, node string, until time.Time) execution.ID {
+	h.t.Helper()
+
+	ctx := context.Background()
+	lapsed := time.Now().Add(-time.Hour)
+	dispatchID := newID(h.t)
 
 	d := &execution.Dispatch{
 		ID: dispatchID, Namespace: job.DefaultNamespace, Job: "sleepy", Tasks: 1,
@@ -91,7 +102,7 @@ func (h *harness) leave(until time.Time, states ...execution.State) (execution.I
 	}
 
 	fits, _, err := h.store.Reserve(ctx, &ledger.Reservation{
-		ID: id, Provider: "box", Created: time.Now(),
+		ID: id, Provider: provider, Created: time.Now(),
 		Charges: []ledger.Charge{{
 			Pool: "runtime", Period: quota.PeriodMonthly.Key(time.Now()), Amount: reserved, Limit: 100000 * second,
 		}},
@@ -103,13 +114,13 @@ func (h *harness) leave(until time.Time, states ...execution.State) (execution.I
 	err = h.store.Create(ctx, &execution.Record{
 		ID: id, State: execution.StateRunning, UpdatedAt: lapsed,
 		Namespace: job.DefaultNamespace, Job: "sleepy", Dispatch: dispatchID, Task: "wait",
-		Provider: "box", Attempt: 1, CPU: 1000, Memory: 512,
+		Provider: provider, Node: node, Attempt: 1, CPU: 1000, Memory: 512,
 	}, d.Lease())
 	if err != nil {
 		h.t.Fatalf("Create() = %v", err)
 	}
 
-	return dispatchID, id
+	return dispatchID
 }
 
 // box is the harness's fake container provider.

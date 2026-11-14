@@ -14,13 +14,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"sync"
-	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/afreidah/vagabond/internal/agent/executor"
 	"github.com/afreidah/vagabond/internal/agentrpc"
@@ -40,7 +38,7 @@ type agentExecutor interface {
 	Cancel(ctx context.Context, id string) error
 	Release(ctx context.Context, id string) error
 	Logs(ctx context.Context, id string, offset int64, w io.Writer) error
-	Held(ctx context.Context) ([]executor.Held, error)
+	Held(ctx context.Context) ([]*agentrpc.Held, error)
 	Runtimes() []string
 }
 
@@ -49,24 +47,31 @@ type agentExecutor interface {
 // -------------------------------------------------------------------------
 
 // executions serves the executor to the server. capacity is what the node may
-// use; mu guards checking room and recording in-flight submissions in reserved
-// while image pulls run outside the lock, and changed tells the agent its
-// workloads changed and it should report them.
+// use, and changed tells the agent its workloads changed and it should report
+// them. A submission in flight, its image pulling outside mu, holds its size
+// in reserved and a channel in inflight that closes once it is done.
 type executions struct {
 	agentrpc.UnimplementedAgentExecutionsServer
 
 	exec     agentExecutor
 	capacity *agentrpc.Resources
 	changed  chan<- struct{}
+
 	mu       sync.Mutex
-	reserved map[string]*reservation
+	reserved map[string]*agentrpc.Resources
+	inflight map[string]chan struct{}
 }
 
-// reservation holds a workload's declared size while its start is in flight
-// outside mu, and closes done once the reservation is released.
-type reservation struct {
-	spec *executor.Spec
-	done chan struct{}
+// newExecutions serves exec, which may use capacity, reporting changes on
+// changed.
+func newExecutions(exec agentExecutor, capacity *agentrpc.Resources, changed chan<- struct{}) *executions {
+	return &executions{
+		exec:     exec,
+		capacity: capacity,
+		changed:  changed,
+		reserved: make(map[string]*agentrpc.Resources),
+		inflight: make(map[string]chan struct{}),
+	}
 }
 
 // Submit starts a workload that fits in what the node has left, and answers
@@ -76,7 +81,7 @@ func (e *executions) Submit(ctx context.Context, req *agentrpc.SubmitRequest) (*
 	id, spec := req.GetExecutionId(), specOf(req.GetWorkload())
 
 	// Reserved under the lock, so racing submissions cannot share the last room.
-	release, err := e.reserve(ctx, id, spec)
+	release, err := e.reserve(ctx, id, req.GetWorkload().GetResources())
 	if err != nil {
 		return nil, err
 	}
@@ -99,18 +104,20 @@ func (e *executions) Submit(ctx context.Context, req *agentrpc.SubmitRequest) (*
 
 // reserve claims room for id, waiting when another submission for the same
 // execution is already in flight, and returns a function that releases it.
-func (e *executions) reserve(ctx context.Context, id string, spec *executor.Spec) (func(), error) {
+func (e *executions) reserve(ctx context.Context, id string, need *agentrpc.Resources) (func(), error) {
 	for {
-		res, wait, err := e.tryClaim(ctx, id, spec)
+		done, wait, err := e.tryClaim(ctx, id, need)
 		if err != nil {
 			return nil, err
 		}
-		if res != nil {
+
+		if done != nil {
 			return func() {
 				e.mu.Lock()
 				delete(e.reserved, id)
+				delete(e.inflight, id)
 				e.mu.Unlock()
-				close(res.done)
+				close(done)
 			}, nil
 		}
 
@@ -122,57 +129,48 @@ func (e *executions) reserve(ctx context.Context, id string, spec *executor.Spec
 	}
 }
 
-// tryClaim makes one attempt to reserve room. When another submission for id
-// is in flight, it returns that submission's done channel to wait on.
-func (e *executions) tryClaim(ctx context.Context, id string, spec *executor.Spec) (*reservation, <-chan struct{}, error) {
+// tryClaim makes one attempt to reserve room, returning the channel to close
+// once done. When another submission for id is in flight, it returns that
+// submission's channel to wait on instead.
+func (e *executions) tryClaim(
+	ctx context.Context, id string, need *agentrpc.Resources,
+) (done chan struct{}, wait <-chan struct{}, err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if inflight, busy := e.reserved[id]; busy {
-		return nil, inflight.done, nil
+	if busy, ok := e.inflight[id]; ok {
+		return nil, busy, nil
 	}
 
-	if err := e.fits(ctx, id, spec); err != nil {
+	if err := e.fits(ctx, id, need); err != nil {
 		return nil, nil, err
 	}
 
-	res := &reservation{spec: spec, done: make(chan struct{})}
-	e.reserved[id] = res
+	done = make(chan struct{})
+	e.reserved[id], e.inflight[id] = need, done
 
-	return res, nil, nil
+	return done, nil, nil
 }
 
 // fits refuses a workload the node's running and reserved workloads leave no
 // room for. A workload already held under id is a resubmission and always fits.
-func (e *executions) fits(ctx context.Context, id string, spec *executor.Spec) error {
+func (e *executions) fits(ctx context.Context, id string, need *agentrpc.Resources) error {
 	held, err := e.exec.Held(ctx)
 	if err != nil {
 		return failure(err)
 	}
 
-	var cpu, memory int64
-
-	for _, h := range held {
-		// Submitting the same execution twice starts nothing new.
-		if h.ID == id {
-			return nil
-		}
-
-		// Only running workloads use room; reserved ones are counted below.
-		if _, reserved := e.reserved[h.ID]; h.Running && !reserved {
-			cpu, memory = cpu+h.CPU, memory+h.Memory
-		}
-	}
-
-	for _, r := range e.reserved {
-		cpu, memory = cpu+r.spec.CPU, memory+r.spec.Memory
+	// Submitting the same execution twice starts nothing new.
+	if slices.ContainsFunc(held, func(h *agentrpc.Held) bool { return h.GetExecutionId() == id }) {
+		return nil
 	}
 
 	// Declared sizes, not live usage, since each workload is capped at its own.
-	if cpu+spec.CPU > e.capacity.GetCpu() || memory+spec.Memory > e.capacity.GetMemory() {
+	cpu, memory := agentrpc.Free(e.capacity, held, e.reserved)
+	if need.GetCpu() > cpu || need.GetMemory() > memory {
 		return status.Errorf(codes.ResourceExhausted,
 			"the node has %d millicores and %d MiB free; the workload needs %d and %d",
-			e.capacity.GetCpu()-cpu, e.capacity.GetMemory()-memory, spec.CPU, spec.Memory)
+			cpu, memory, need.GetCpu(), need.GetMemory())
 	}
 
 	return nil
@@ -194,12 +192,7 @@ func (e *executions) Status(ctx context.Context, req *agentrpc.ExecutionRequest)
 		return nil, failure(err)
 	}
 
-	return &agentrpc.ExecutionStatus{
-		State:      string(st.State),
-		ProviderId: st.ProviderID,
-		StartedAt:  timestamp(st.StartedAt),
-		EndedAt:    timestamp(st.EndedAt),
-	}, nil
+	return agentrpc.StatusOf(&st), nil
 }
 
 // Result answers with a finished workload's exit code and run time. Its output
@@ -210,13 +203,7 @@ func (e *executions) Result(ctx context.Context, req *agentrpc.ExecutionRequest)
 		return nil, failure(err)
 	}
 
-	out := &agentrpc.ExecutionResult{Duration: durationpb.New(res.Duration)}
-
-	if res.ExitCode != nil {
-		out.ExitCode = new(int32(*res.ExitCode)) //nolint:gosec // exit codes fit
-	}
-
-	return out, nil
+	return agentrpc.ResultOf(res), nil
 }
 
 // Cancel stops a workload, and has the agent report the room it frees.
@@ -257,15 +244,6 @@ func specOf(w *agentrpc.Workload) *executor.Spec {
 		Timeout:    w.GetTimeout().AsDuration(),
 		Runtime:    w.GetRuntime(),
 	}
-}
-
-// timestamp is nil for the zero time, which the wire reads as unset.
-func timestamp(t time.Time) *timestamppb.Timestamp {
-	if t.IsZero() {
-		return nil
-	}
-
-	return timestamppb.New(t)
 }
 
 // failure maps an executor error to a gRPC status: NotFound for a workload

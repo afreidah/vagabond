@@ -58,7 +58,12 @@ message Resources {
   int64 memory = 2;
 }
 
-message NodeRegisterResponse {}
+// NodeRegisterResponse's release lists the held workloads the server has no
+// unreleased execution for, which the agent deletes. Empty when the server
+// cannot tell, so a server that cannot read its records never empties a node.
+message NodeRegisterResponse {
+  repeated string release = 1;
+}
 
 // -----------------------------------------------------------------------------
 // AGENT EXECUTIONS: server to agent

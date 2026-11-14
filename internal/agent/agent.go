@@ -113,17 +113,17 @@ func (a *Agent) connect(ctx context.Context) error {
 
 	defer func() { _ = session.Close() }()
 
-	capacity := &agentrpc.Resources{Cpu: a.node.CPU, Memory: a.node.Memory}
 	changed := make(chan struct{}, 1)
+	local := newExecutions(a.exec, &agentrpc.Resources{Cpu: a.node.CPU, Memory: a.node.Memory}, changed)
 
 	// The server calls this endpoint down the session the agent opened.
 	srv := grpc.NewServer()
-	agentrpc.RegisterAgentExecutionsServer(srv, &executions{exec: a.exec, capacity: capacity, changed: changed, reserved: make(map[string]*reservation)})
+	agentrpc.RegisterAgentExecutionsServer(srv, local)
 
 	go func() { _ = session.Serve(srv) }()
 	defer srv.Stop()
 
-	if err := a.register(ctx, session, capacity); err != nil {
+	if err := a.register(ctx, session, local); err != nil {
 		return err
 	}
 
@@ -143,42 +143,45 @@ func (a *Agent) connect(ctx context.Context) error {
 		}
 
 		// Not fatal: the next report carries everything; a dead session ends via Done.
-		if err := a.register(ctx, session, capacity); err != nil {
+		if err := a.register(ctx, session, local); err != nil {
 			a.logger.WarnContext(ctx, "reporting workloads", "error", err)
 		}
 	}
 }
 
-// register reports the node and every workload it holds to the server. Sent
-// once on connecting and again on every change, so the server's view of what
-// is placed where, and how much room is left, follows the node's.
-func (a *Agent) register(ctx context.Context, session *agentrpc.Session, capacity *agentrpc.Resources) error {
+// register reports the node and every workload it holds to the server, then
+// releases the workloads the server answers it has no use for. Sent once on
+// connecting and again on every change, so the server's view of what is
+// placed where, and how much room is left, follows the node's.
+func (a *Agent) register(ctx context.Context, session *agentrpc.Session, local *executions) error {
 	held, err := a.exec.Held(ctx)
 	if err != nil {
 		return fmt.Errorf("listing workloads: %w", err)
 	}
 
-	report := make([]*agentrpc.Held, 0, len(held))
-	for _, h := range held {
-		report = append(report, &agentrpc.Held{
-			ExecutionId: h.ID,
-			Resources:   &agentrpc.Resources{Cpu: h.CPU, Memory: h.Memory},
-			Running:     h.Running,
-		})
-	}
-
-	_, err = agentrpc.NewNodeClient(session.Peer()).Register(ctx, &agentrpc.NodeRegisterRequest{
+	answer, err := agentrpc.NewNodeClient(session.Peer()).Register(ctx, &agentrpc.NodeRegisterRequest{
 		Name:         a.cfg.Name,
 		Pool:         a.cfg.Pool,
 		Labels:       a.cfg.Labels,
 		Architecture: a.node.Architecture,
-		Capacity:     capacity,
+		Capacity:     local.capacity,
 		Runtimes:     a.exec.Runtimes(),
 		Version:      a.cfg.Version,
-		Held:         report,
+		Held:         held,
 	})
 	if err != nil {
 		return fmt.Errorf("registering: %w", err)
+	}
+
+	// Released as the server would, so the next report shows the room free.
+	for _, id := range answer.GetRelease() {
+		if _, err := local.Release(ctx, &agentrpc.ExecutionRequest{ExecutionId: id}); err != nil {
+			a.logger.WarnContext(ctx, "releasing a workload the server has no use for", "execution", id, "error", err)
+
+			continue
+		}
+
+		a.logger.InfoContext(ctx, "released a workload the server has no use for", "execution", id)
 	}
 
 	return nil
