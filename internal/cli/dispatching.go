@@ -38,6 +38,10 @@ const reconnectDelay = time.Second
 // cancelTimeout bounds asking the server to stop a run after an interrupt.
 const cancelTimeout = 30 * time.Second
 
+// followRetries is how a command following a run rides out a server that
+// stops answering, a redeploy or a lookup that fails. A test shortens it.
+var followRetries = api.DefaultRetries
+
 // Dispatch states, as the API reports them.
 const (
 	dispatchRunning   = "running"
@@ -77,35 +81,95 @@ func (m *Meta) newFollower(client *api.Client, noLogs bool) *follower {
 }
 
 // follow waits for a started run, reporting as it goes, and returns the exit
-// code for the whole. An interrupt stops the run on the server.
+// code for the whole. An interrupt stops the run on the server; a server that
+// stays unreachable past the retries ends the follow, not the run.
 func (m *Meta) follow(ctx context.Context, client *api.Client, started *api.DispatchResponse, noLogs bool) int {
 	m.Ui.Error(fmt.Sprintf("==> dispatch %s of %q", started.DispatchID, started.Job))
 
 	f := m.newFollower(client, noLogs)
+	reads := m.retrying(client)
 
 	var last *api.Dispatch
 
-	for {
-		d, err := client.DispatchStatus(ctx, started.DispatchID)
-
-		switch {
-		case errors.Is(err, context.Canceled):
-			return f.interrupted(started.Job, last)
-		case err != nil:
-			return m.apiFailure(err)
-		}
-
+	err := poll(ctx, func(ctx context.Context) (*api.Dispatch, error) {
+		return reads.DispatchStatus(ctx, started.DispatchID)
+	}, func(d *api.Dispatch) bool {
 		last = d
 		f.report(ctx, d)
 
-		if d.State != dispatchRunning {
-			return f.finished(d)
+		return d.State != dispatchRunning
+	})
+
+	switch {
+	case errors.Is(err, context.Canceled):
+		return f.interrupted(started.Job, last)
+	case err != nil:
+		return m.lost(err, "Dispatch "+started.DispatchID, latest(last))
+	}
+
+	return f.finished(last)
+}
+
+// poll reads a run every pollInterval, handing each read to step until step
+// reports it over. A read that fails, after the client's own retries, ends it
+// with that error; an interrupt ends it with context.Canceled.
+func poll[T any](ctx context.Context, read func(ctx context.Context) (T, error), step func(T) bool) error {
+	for {
+		got, err := read(ctx)
+		if err != nil {
+			return err
 		}
 
-		if backoff.Sleep(ctx, pollInterval) != nil {
-			return f.interrupted(started.Job, last)
+		if step(got) {
+			return nil
+		}
+
+		if err := backoff.Sleep(ctx, pollInterval); err != nil {
+			return err
 		}
 	}
+}
+
+// retrying returns client retrying its reads as followRetries says, warning
+// once for each read the server leaves unanswered.
+func (m *Meta) retrying(client *api.Client) *api.Client {
+	r := followRetries
+	r.Retrying = func() {
+		m.Ui.Warn(fmt.Sprintf("Lost contact with the server at %s, retrying.", client.Address()))
+	}
+
+	return client.Retrying(r)
+}
+
+// lost reports a follow that ended without the run's end and returns the exit
+// code. When the server stopped answering, the run may carry on without the
+// follow, so it says so and where to look: execution status for the latest
+// execution, when there is one.
+func (m *Meta) lost(err error, run, execution string) int {
+	code := m.apiFailure(err)
+
+	if !api.Unanswered(err) {
+		return code
+	}
+
+	line := run + " may still be running."
+	if execution != "" {
+		line += " Check it with vagabond execution status " + execution + "."
+	}
+
+	m.Ui.Error(line)
+
+	return code
+}
+
+// latest is the ID of the run's most recent execution, empty before it has
+// one.
+func latest(d *api.Dispatch) string {
+	if d == nil || len(d.Executions) == 0 {
+		return ""
+	}
+
+	return d.Executions[len(d.Executions)-1].ID
 }
 
 // report prints every execution's state change, follows each one's output

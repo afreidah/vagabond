@@ -19,7 +19,6 @@ import (
 	"syscall"
 
 	"github.com/afreidah/vagabond/internal/api"
-	"github.com/afreidah/vagabond/internal/backoff"
 )
 
 // ExecutionLogsCommand implements `vagabond execution logs`.
@@ -68,7 +67,10 @@ func (c *ExecutionLogsCommand) Run(args []string) int {
 	}
 
 	if follow {
-		return c.follow(client, ids[0])
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+
+		return c.follow(ctx, client, ids[0])
 	}
 
 	ctx := context.Background()
@@ -84,33 +86,36 @@ func (c *ExecutionLogsCommand) Run(args []string) int {
 }
 
 // follow streams id's output until the execution ends, then prints whatever
-// of its stored copy did not stream. An interrupt stops following only.
-func (c *ExecutionLogsCommand) follow(client *api.Client, id string) int {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
+// of its stored copy did not stream. An interrupt, ctx ending, stops
+// following only, as does a server that stays unreachable past the retries.
+func (c *ExecutionLogsCommand) follow(ctx context.Context, client *api.Client, id string) int {
 	f := c.newFollower(client, false)
+	reads := c.retrying(client)
 
-	for {
-		e, err := client.Execution(ctx, id)
+	var last *api.Execution
 
-		switch {
-		case errors.Is(err, context.Canceled):
-			return ExitSuccess
-		case err != nil:
-			return c.apiFailure(err)
-		}
+	err := poll(ctx, func(ctx context.Context) (*api.Execution, error) {
+		return reads.Execution(ctx, id)
+	}, func(e *api.Execution) bool {
+		last = e
 
 		if e.HasResult || e.Ended != nil {
-			f.rest(ctx, e)
-
-			return ExitSuccess
+			return true
 		}
 
 		f.watch(ctx, e)
 
-		if backoff.Sleep(ctx, pollInterval) != nil {
-			return ExitSuccess
-		}
+		return false
+	})
+
+	switch {
+	case errors.Is(err, context.Canceled):
+		return ExitSuccess
+	case err != nil:
+		return c.lost(err, "Execution "+id, id)
 	}
+
+	f.rest(ctx, last)
+
+	return ExitSuccess
 }

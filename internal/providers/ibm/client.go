@@ -3,21 +3,20 @@
 //
 // Author: Alex Freidah
 //
-// Authentication and JSON plumbing for both of Code Engine's APIs: the regional
-// v2 API and the project's Kubernetes API, which take the same IAM token. IBM's
-// generated SDK is not used: oauth2 handles the token's refresh, and the rest is
-// a handful of calls.
+// Authentication, and what a refusal means, for both of Code Engine's APIs:
+// the regional v2 API and the project's Kubernetes API, which take the same
+// IAM token. Requests go through the shared rest path. IBM's generated SDK is
+// not used: oauth2 handles the token's refresh, and the rest is a handful of
+// calls.
 // -------------------------------------------------------------------------------
 
 package ibm
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"net/http"
 	"net/url"
@@ -28,6 +27,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/rest"
 )
 
 // -------------------------------------------------------------------------
@@ -37,10 +37,6 @@ import (
 // iamEndpoint exchanges an API key for an access token, or for the delegated
 // refresh token the kubeconfig call takes.
 const iamEndpoint = "https://iam.cloud.ibm.com/identity/token"
-
-// mediaJSON is the media type every v2 and IAM call accepts, and the v2 calls
-// send.
-const mediaJSON = "application/json"
 
 // How early a token is replaced, how long an exchange may take, and how much of
 // any response is read.
@@ -145,148 +141,79 @@ func (s *iamSource) exchange(ctx context.Context, extra url.Values, out any) err
 	}
 	maps.Copy(form, extra)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.url, strings.NewReader(form.Encode()))
+	err := rest.Call(ctx, s.http, &rest.Request{
+		Method: http.MethodPost, URL: s.url, Limit: maxResponse,
+		Body: strings.NewReader(form.Encode()), ContentType: "application/x-www-form-urlencoded",
+	}, out)
 	if err != nil {
-		return plugin.Internal(fmt.Errorf("iam: building request: %w", err))
+		err = fmt.Errorf("iam: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", mediaJSON)
-
-	resp, err := s.http.Do(req)
-	if err != nil {
-		return plugin.Infrastructure(fmt.Errorf("iam: %w", err))
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
-	if err != nil {
-		return plugin.Infrastructure(fmt.Errorf("iam: reading response: %w", err))
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return iamRefusal(resp, body)
-	}
-
-	if err := json.Unmarshal(body, out); err != nil {
-		return plugin.Internal(fmt.Errorf("iam: decoding response: %w", err))
-	}
-
-	return nil
+	return plugin.ClassifyResponse(err, iamRefusal)
 }
 
 // -------------------------------------------------------------------------
 // REQUESTS
 // -------------------------------------------------------------------------
 
-// call sends one request and decodes the JSON answer into out, which may be
-// nil.
+// call sends one request and decodes the JSON answer, up to maxResponse, into
+// out, which may be nil. Every failure is classified.
 func (p *Provider) call(ctx context.Context, method, target string, payload, out any) error {
-	body, err := p.fetch(ctx, method, target, nil, payload)
-	if err != nil || out == nil {
-		return err
-	}
+	err := rest.Call(ctx, p.auth.Load().http, &rest.Request{
+		Method: method, URL: target, Payload: payload, Limit: maxResponse,
+	}, out)
 
-	if err := json.Unmarshal(body, out); err != nil {
-		return plugin.Internal(fmt.Errorf("decoding response: %w", err))
-	}
-
-	return nil
+	return plugin.ClassifyResponse(err, p.refused)
 }
 
 // fetch sends one request and returns the raw answer, up to maxResponse.
+// Every failure is classified.
 func (p *Provider) fetch(
 	ctx context.Context, method, target string, header http.Header, payload any,
 ) ([]byte, error) {
-	resp, err := p.open(ctx, method, target, header, payload)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+	body, err := rest.Read(ctx, p.auth.Load().http, &rest.Request{
+		Method: method, URL: target, Header: header, Payload: payload, Limit: maxResponse,
+	})
 
-	received, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
-	if err != nil {
-		return nil, plugin.Infrastructure(fmt.Errorf("reading response: %w", err))
-	}
-
-	return received, nil
+	return body, plugin.ClassifyResponse(err, p.refused)
 }
 
 // open sends one request and returns the response with its body unread, for a
 // caller that streams it. A token refusal arrives already classified and
-// passes through as it is; every non-2xx is classified.
+// passes through as it is; every other failure is classified.
 func (p *Provider) open(
 	ctx context.Context, method, target string, header http.Header, payload any,
 ) (*http.Response, error) {
-	var body io.Reader
+	resp, err := rest.Open(ctx, p.auth.Load().http, &rest.Request{
+		Method: method, URL: target, Header: header, Payload: payload,
+	})
 
-	if payload != nil {
-		encoded, err := json.Marshal(payload)
-		if err != nil {
-			return nil, plugin.Internal(fmt.Errorf("encoding request: %w", err))
-		}
-
-		body = bytes.NewReader(encoded)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, target, body)
-	if err != nil {
-		return nil, plugin.Internal(fmt.Errorf("building request: %w", err))
-	}
-
-	maps.Copy(req.Header, header)
-
-	if req.Header.Get("Accept") == "" {
-		req.Header.Set("Accept", mediaJSON)
-	}
-
-	if payload != nil {
-		req.Header.Set("Content-Type", mediaJSON)
-	}
-
-	resp, err := p.auth.Load().http.Do(req)
-	if err != nil {
-		if classified, ok := errors.AsType[*plugin.Error](err); ok {
-			return nil, classified
-		}
-
-		return nil, plugin.Infrastructure(fmt.Errorf("%s %s: %w", method, req.URL.Path, err))
-	}
-
-	if resp.StatusCode >= http.StatusMultipleChoices {
-		defer resp.Body.Close()
-
-		received, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
-
-		return nil, p.classify(resp, method, received)
-	}
-
-	return resp, nil
+	return resp, plugin.ClassifyResponse(err, p.refused)
 }
 
-// classify turns a non-2xx into a classified failure. Declining codes are
-// infrastructure whatever status carries them, and a 403 names the region and
-// project, since a project outside the region is refused the same way.
-func (p *Provider) classify(resp *http.Response, method string, body []byte) error {
-	codes, message := ibmError(body)
-	cause := fmt.Errorf("%s %s: %s", method, resp.Request.URL.Path, message)
+// refused classifies a non-2xx. Declining codes are infrastructure whatever
+// status carries them, and a 403 names the region and project, since a
+// project outside the region is refused the same way.
+func (p *Provider) refused(r *rest.Refusal) error {
+	codes, message := ibmError(r.Body)
+	cause := fmt.Errorf("%s %s: %s", r.Method, r.URL.Path, message)
 
 	declining := slices.ContainsFunc(codes, func(code string) bool {
 		return slices.Contains(decliningCodes, code)
 	})
 	if declining {
-		e := plugin.Infrastructure(fmt.Errorf("http %d: %w", resp.StatusCode, cause))
-		e.RetryAfter = plugin.RetryAfter(resp)
+		e := plugin.Infrastructure(fmt.Errorf("http %d: %w", r.Status, cause))
+		e.RetryAfter = r.RetryAfter()
 
 		return e
 	}
 
-	if resp.StatusCode == http.StatusForbidden {
+	if r.Status == http.StatusForbidden {
 		cause = fmt.Errorf("%w (region %s, project %s; a project in another region is refused the same way)",
 			cause, p.cfg.Region, p.cfg.ProjectID)
 	}
 
-	return plugin.ClassifyHTTP(resp.StatusCode, plugin.RetryAfter(resp), cause)
+	return plugin.ClassifyHTTP(r.Status, r.RetryAfter(), cause)
 }
 
 // -------------------------------------------------------------------------
@@ -296,14 +223,13 @@ func (p *Provider) classify(resp *http.Response, method string, body []byte) err
 // iamRefusal classifies a non-200 from IAM. IAM answers 400 for a key it does
 // not know, so 400, 401 and 403 are all unauthorized and the credential is
 // resolved again.
-func iamRefusal(resp *http.Response, body []byte) error {
-	switch resp.StatusCode {
+func iamRefusal(r *rest.Refusal) error {
+	switch r.Status {
 	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
 		return plugin.Internal(fmt.Errorf("%w: IAM refused the API key: %s",
-			plugin.ErrUnauthorized, iamError(body)))
+			plugin.ErrUnauthorized, iamError(r.Body)))
 	default:
-		return plugin.ClassifyHTTP(resp.StatusCode, plugin.RetryAfter(resp),
-			fmt.Errorf("iam: %s", iamError(body)))
+		return plugin.ClassifyHTTP(r.Status, r.RetryAfter(), fmt.Errorf("iam: %s", iamError(r.Body)))
 	}
 }
 

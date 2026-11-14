@@ -419,6 +419,22 @@ is the default mapping for HTTP APIs. The error text reads
 
 A platform that uses a status unusually builds the `*Error` directly.
 
+### `ClassifyResponse`
+
+A plugin calling a JSON API sends through `internal/rest`, as Cloud Run and
+Code Engine do, and classifies what failed with
+`plugin.ClassifyResponse(err error, refused func(*rest.Refusal) error) error`:
+
+| `rest` failure | Classified as |
+|---|---|
+| Already a `*plugin.Error`, as a token source's credential refusal | As it is |
+| `*rest.Refusal`: a non-2xx with its method, URL, status, headers and up to 64 KiB of body | Whatever `refused` returns, usually `ClassifyHTTP(r.Status, r.RetryAfter(), <the platform's message from r.Body>)` |
+| `rest.ErrUnreachable`: no answer, or a body cut off | `infrastructure` |
+| Anything else: a payload that does not encode, a URL that does not parse, an answer that does not decode | `internal` |
+
+`r.RetryAfter()` reads a `Retry-After` header in whole seconds, 0 when absent
+or malformed.
+
 ### Sentinels
 
 | Sentinel | Meaning | Who reads it |
@@ -574,12 +590,9 @@ It targets an imaginary JSON API with `POST /runs`, `GET /runs/{name}`,
 package example
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -590,6 +603,7 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/rest"
 )
 
 // Type is what a provider block's type names to select this plugin.
@@ -761,47 +775,14 @@ func runName(id execution.ID) string { return "vagabond-" + id.String() }
 
 // call sends one JSON request and classifies any failure.
 func (p *Provider) call(ctx context.Context, method, path string, payload, out any) error {
-	var body io.Reader
+	err := rest.Call(ctx, p.http, &rest.Request{
+		Method: method, URL: p.baseURL + path, Payload: payload,
+		Header: http.Header{"Authorization": {"Bearer " + p.token}},
+	}, out)
 
-	if payload != nil {
-		encoded, err := json.Marshal(payload)
-		if err != nil {
-			return plugin.Internal(fmt.Errorf("encoding request: %w", err))
-		}
-
-		body = bytes.NewReader(encoded)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, p.baseURL+path, body)
-	if err != nil {
-		return plugin.Internal(fmt.Errorf("building request: %w", err))
-	}
-
-	req.Header.Set("Authorization", "Bearer "+p.token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := p.http.Do(req)
-	if err != nil {
-		// Never reached the platform: its failure, not ours.
-		return plugin.Infrastructure(fmt.Errorf("%s %s: %w", method, path, err))
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= http.StatusMultipleChoices {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-
-		return plugin.ClassifyHTTP(resp.StatusCode, 0, fmt.Errorf("%s %s: %s", method, path, msg))
-	}
-
-	if out == nil {
-		return nil
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return plugin.Internal(fmt.Errorf("decoding response: %w", err))
-	}
-
-	return nil
+	return plugin.ClassifyResponse(err, func(r *rest.Refusal) error {
+		return plugin.ClassifyHTTP(r.Status, r.RetryAfter(), fmt.Errorf("%s %s: %s", method, path, r.Body))
+	})
 }
 ```
 

@@ -5,17 +5,23 @@
 //
 // The reroute decision is the reason this taxonomy exists, so it is asserted as
 // a property of the class rather than only through examples. The HTTP mapping
-// gets status-by-status coverage because every plugin shares it.
+// gets status-by-status coverage because every plugin shares it, and so does
+// the classification of a failed rest call.
 // -------------------------------------------------------------------------------
 
 package plugin
 
 import (
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/afreidah/vagabond/internal/rest"
 )
 
 // errUnderlying stands in for whatever a provider SDK returned.
@@ -294,27 +300,67 @@ func TestClassifyHTTP_CarriesRetryAfter(t *testing.T) {
 	}
 }
 
-// Retry-After is read as whole seconds; an absent, malformed or negative value
-// is zero, leaving the backoff to the dispatcher.
-func TestRetryAfter(t *testing.T) {
-	cases := map[string]time.Duration{
-		"30":   30 * time.Second,
-		"0":    0,
-		"":     0,
-		"soon": 0,
-		"-5":   0,
+// A failed rest call is classified by kind: a refusal by the plugin's own
+// rule, no answer as infrastructure, a request or answer Vagabond got wrong as
+// internal, and an error already classified as it was.
+func TestClassifyResponse(t *testing.T) {
+	refusal := &rest.Refusal{Method: http.MethodGet, URL: &url.URL{Path: "/run"}, Status: http.StatusConflict}
+	refused := func(r *rest.Refusal) error { return Internal(fmt.Errorf("refused with %d", r.Status)) }
+	unauthorized := Internal(ErrUnauthorized)
+
+	tests := []struct {
+		name  string
+		err   error
+		class Class
+	}{
+		{"refusal", fmt.Errorf("call: %w", refusal), ClassInternal},
+		{"no answer", fmt.Errorf("call: %w", unreachable(t)), ClassInfrastructure},
+		{"undecodable answer", errors.New("decoding the answer: unexpected end"), ClassInternal},
+		{"already classified", fmt.Errorf("call: %w", unauthorized), ClassInternal},
 	}
 
-	for header, want := range cases {
-		resp := &http.Response{Header: http.Header{}}
-		if header != "" {
-			resp.Header.Set("Retry-After", header)
-		}
-
-		if got := RetryAfter(resp); got != want {
-			t.Errorf("RetryAfter(%q) = %v, want %v", header, got, want)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := errors.AsType[*Error](ClassifyResponse(tt.err, refused))
+			if !ok || got.Class != tt.class {
+				t.Errorf("ClassifyResponse(%v) = %v, want class %s", tt.err, got, tt.class)
+			}
+		})
 	}
+
+	if err := ClassifyResponse(fmt.Errorf("call: %w", refusal), refused); !strings.Contains(err.Error(), "refused with 409") {
+		t.Errorf("a refusal was classified as %v, not by the plugin's rule", err)
+	}
+
+	if err := ClassifyResponse(unauthorized, refused); !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("ClassifyResponse() = %v, want the classified error as it was", err)
+	}
+
+	if err := ClassifyResponse(nil, refused); err != nil {
+		t.Errorf("ClassifyResponse(nil) = %v", err)
+	}
+}
+
+// unreachable is the error a rest call returns when nothing answers.
+func unreachable(t *testing.T) error {
+	t.Helper()
+
+	var lc net.ListenConfig
+
+	l, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	addr := l.Addr().String()
+	_ = l.Close()
+
+	err = rest.Call(t.Context(), http.DefaultClient, &rest.Request{Method: http.MethodGet, URL: "http://" + addr}, nil)
+	if !errors.Is(err, rest.ErrUnreachable) {
+		t.Fatalf("a call to a closed port = %v, want ErrUnreachable", err)
+	}
+
+	return err
 }
 
 // The message carries the status and the cause stays reachable.

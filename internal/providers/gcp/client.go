@@ -3,26 +3,26 @@
 //
 // Author: Alex Freidah
 //
-// Authentication and JSON plumbing. Google's generated client is not used: the
-// few calls this plugin makes do not justify the dependency, and oauth2 alone
-// handles the part that is fiddly.
+// Authentication, and what a refusal from Google means; requests go through
+// the shared rest path. Google's generated client is not used: the few calls
+// this plugin makes do not justify the dependency, and oauth2 alone handles
+// the part that is fiddly.
 // -------------------------------------------------------------------------------
 
 package gcp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/rest"
 )
 
 // -------------------------------------------------------------------------
@@ -37,9 +37,6 @@ const (
 
 	scope = "https://www.googleapis.com/auth/cloud-platform"
 )
-
-// maxErrorBody is how much of a refusal is read for Google's message.
-const maxErrorBody = 64 << 10
 
 // ErrNoCredential reports a Cloud Run provider configured without one.
 var ErrNoCredential = errors.New("no credential supplied")
@@ -72,70 +69,25 @@ func newHTTPClient(ctx context.Context, credentials []byte) (*http.Client, error
 // -------------------------------------------------------------------------
 
 // call sends one request and decodes the response into out, which may be nil.
+// Every failure is classified.
 func (p *Provider) call(ctx context.Context, method, url string, payload, out any) error {
-	resp, err := p.open(ctx, method, url, payload)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+	err := rest.Call(ctx, p.http.Load(), &rest.Request{Method: method, URL: url, Payload: payload}, out)
 
-	received, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return plugin.Infrastructure(fmt.Errorf("reading response: %w", err))
-	}
-
-	if out == nil {
-		return nil
-	}
-
-	if err := json.Unmarshal(received, out); err != nil {
-		return plugin.Internal(fmt.Errorf("decoding response: %w", err))
-	}
-
-	return nil
+	return plugin.ClassifyResponse(err, refused)
 }
 
 // open sends one request and returns the response with its body unread, for
-// a caller that streams it. Every non-2xx is classified, carrying Google's own
-// message from the body.
+// a caller that streams it. Every failure is classified.
 func (p *Provider) open(ctx context.Context, method, url string, payload any) (*http.Response, error) {
-	var body io.Reader
+	resp, err := rest.Open(ctx, p.http.Load(), &rest.Request{Method: method, URL: url, Payload: payload})
 
-	if payload != nil {
-		encoded, err := json.Marshal(payload)
-		if err != nil {
-			return nil, plugin.Internal(fmt.Errorf("encoding request: %w", err))
-		}
+	return resp, plugin.ClassifyResponse(err, refused)
+}
 
-		body = bytes.NewReader(encoded)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, url, body)
-	if err != nil {
-		return nil, plugin.Internal(fmt.Errorf("building request: %w", err))
-	}
-
-	req.Header.Set("Accept", "application/json")
-
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	resp, err := p.http.Load().Do(req)
-	if err != nil {
-		return nil, plugin.Infrastructure(fmt.Errorf("%s %s: %w", method, url, err))
-	}
-
-	if resp.StatusCode >= http.StatusMultipleChoices {
-		defer resp.Body.Close()
-
-		received, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-
-		return nil, plugin.ClassifyHTTP(resp.StatusCode, plugin.RetryAfter(resp),
-			fmt.Errorf("%s: %s", method, googleError(received)))
-	}
-
-	return resp, nil
+// refused classifies a non-2xx by its status, carrying Google's own message
+// from the body.
+func refused(r *rest.Refusal) error {
+	return plugin.ClassifyHTTP(r.Status, r.RetryAfter(), fmt.Errorf("%s: %s", r.Method, googleError(r.Body)))
 }
 
 // googleError renders whatever Google said went wrong, lifting the message out

@@ -358,6 +358,16 @@ to finish. The job is not registered. The server makes the same selection
   being logged now. Lines logged between the two tails do not stream, and the
   stored copy printed at the end is read from the byte count that streamed, so
   it can repeat or skip some lines.
+- A poll the server does not answer, from a refused or dropped connection, a
+  name that does not resolve, or a `429`, `502`, `503` or `504`, is retried,
+  waiting 1s doubling to 15s, up to 10 more tries: about two minutes, enough
+  for a server to be redeployed. The first retry of a poll prints `Lost
+  contact with the server at <address>, retrying.`; the run itself goes on
+  regardless. A `404`, `400` or `500` is not retried.
+- A server still unreachable after the retries ends the command with the
+  error and exit 1, and says the run may still be going:
+  `Dispatch <id> may still be running. Check it with vagabond execution status <execution-id>.`,
+  naming the latest execution once there is one.
 - Interrupting the command (SIGINT or SIGTERM) cancels the unfinished
   execution on the server, waiting up to 30 seconds for the cancel, then exits
   2.
@@ -371,7 +381,7 @@ to finish. The job is not registered. The server makes the same selection
 | Exit | Meaning |
 |---|---|
 | `0` | Every task ran and exited zero |
-| `1` | A task ran and failed, or the job was invalid or could not be sent |
+| `1` | A task ran and failed, the job was invalid or could not be sent, or the server stayed unreachable past the retries |
 | `2` | The work never ran: nothing was eligible, every provider failed, or the run was interrupted |
 
 **Progress lines:**
@@ -389,6 +399,8 @@ to finish. The job is not registered. The server makes the same selection
 | `The provider gave only part of the output.` | The provider's output could not all be read, or arrived cut, as a function's tail does |
 | `Could not read the output of <id>: <error>` | The stored output could not be fetched after the task finished; the verdict line still follows |
 | `Could not stop <id>: <error>` | After an interrupt, the cancel request failed; the interrupted line still follows |
+| `Lost contact with the server at <address>, retrying.` | A poll got no answer and is being retried |
+| `Dispatch <id> may still be running. Check it with vagabond execution status <execution-id>.` | After `Error: ...`, once the server stayed unreachable past the retries; without the second sentence before the run had an execution |
 | `Job "<job>" did not run: <error>` | The run ended with no answer; followed by `Run vagabond job plan to see where it can run.` |
 | `Job "<job>" was interrupted. The execution was stopped.` | Interrupted |
 
@@ -466,8 +478,8 @@ vagabond job dispatch [options] <name>
 ```
 
 Runs the current version of a registered job and waits for it, with the same
-progress, output, interrupt handling and exit codes as
-[`job run`](#job-run). Every execution records the job version and a dispatch
+progress, output, retries through a server outage, interrupt handling and exit
+codes as [`job run`](#job-run). Every execution records the job version and a dispatch
 ID shared by the run's tasks.
 
 Metadata is checked against the job's `parameterized` block: a job without one
@@ -655,7 +667,10 @@ the first line wherever the task has got to, reopened from the bytes already
 printed when a stream ends early, and finished from the stored copy once the
 execution ends, when the command exits. An execution that has already ended
 prints its stored output. An interrupt stops following and leaves the execution
-running; [`DELETE /v1/execution/{id}`](api.md#cancel-an-execution) stops it.
+running; [`DELETE /v1/execution/{id}`](api.md#cancel-an-execution) stops it. A
+server that stops answering is retried as `job run` retries it; past the
+retries the command exits 1 with
+`Execution <id> may still be running. Check it with vagabond execution status <id>.`
 
 | Flag | Default | Description |
 |---|---|---|
@@ -674,7 +689,7 @@ ok  	example.com/service/store	1.087s
 | Exit | Meaning |
 |---|---|
 | `0` | Printed, or nothing stored; with `-f`, the execution ended or the follow was interrupted |
-| `1` | Not found, server error, or wrong number of arguments |
+| `1` | Not found, server error, wrong number of arguments, or with `-f` the server unreachable past the retries |
 
 ## Node commands
 

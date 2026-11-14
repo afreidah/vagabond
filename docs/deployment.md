@@ -314,6 +314,10 @@ Not safe, or not shared:
 - Dispatches running on a stopped server keep running at the providers and
   are claimed once their lease lapses: up to 60 seconds after the last
   renewal, plus up to 30 seconds until the next claim.
+- A `job run` or `job dispatch` following a run, as in CI, retries its polls
+  for about two minutes while the server is away, then reports the run's real
+  result. One still waiting past that exits 1, naming the dispatch
+  ([CLI](cli.md#job-run)).
 - A server whose binary expects an older schema than the database refuses to
   start: `database schema is at version N, newer than the M this binary
   expects; upgrade vagabond`. A server already running is not rechecked.
