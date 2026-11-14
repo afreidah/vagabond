@@ -42,6 +42,16 @@ func poolInput(members ...plugin.Member) Input {
 	return in
 }
 
+// nodesOf is the node of each candidate, in order.
+func nodesOf(candidates []Candidate) []string {
+	nodes := make([]string, 0, len(candidates))
+	for i := range candidates {
+		nodes = append(nodes, candidates[i].Node)
+	}
+
+	return nodes
+}
+
 // armWithMemory asks for arm64 and 8 GiB together.
 func armWithMemory() *Request {
 	req := baseRequest()
@@ -76,8 +86,7 @@ func TestAdmit_PoolPropertiesDoNotCombine(t *testing.T) {
 	}
 }
 
-// A node that has everything is the only one admitted, and placement is told
-// so.
+// A node that has everything is the only candidate.
 func TestAdmit_PoolAdmitsTheNodesThatFit(t *testing.T) {
 	t.Parallel()
 
@@ -93,9 +102,60 @@ func TestAdmit_PoolAdmitsTheNodesThatFit(t *testing.T) {
 		t.Fatalf("rejected: %+v", result.Rejections)
 	}
 
-	if got := result.Candidates[0].Members; !slices.Equal(got, []string{"arm-big"}) {
-		t.Errorf("members = %v, want only arm-big", got)
+	if got := nodesOf(result.Candidates); !slices.Equal(got, []string{"arm-big"}) {
+		t.Errorf("nodes = %v, want only arm-big", got)
 	}
+}
+
+// Every node that fits is a candidate of its own, in the order the provider
+// listed them, ahead of a provider listed after it.
+func TestAdmit_PoolNodesAreCandidatesInOrder(t *testing.T) {
+	t.Parallel()
+
+	pool := poolInput(
+		member("roomy", job.ArchAMD64, 8192, nil),
+		member("busy", job.ArchAMD64, 2048, nil),
+	)
+	cloud := baseInput()
+	cloud.Provider = "zcloud"
+
+	result := Admit(baseRequest(), []Input{cloud, pool})
+
+	if got := nodesOf(result.Candidates); !slices.Equal(got, []string{"roomy", "busy", ""}) {
+		t.Errorf("nodes = %q, want roomy, busy, then the cloud provider", got)
+	}
+}
+
+// A node label affinity ranks the node carrying it first, and leaves the other
+// a candidate.
+func TestRank_NodeLabelAffinity(t *testing.T) {
+	t.Parallel()
+
+	in := poolInput(
+		member("plain", job.ArchAMD64, 4096, nil),
+		member("ssd", job.ArchAMD64, 4096, map[string]string{"disk": "ssd"}),
+	)
+
+	req := baseRequest()
+	req.Routing = &job.Routing{Affinities: []job.Affinity{{
+		Attribute: plugin.NodeLabelPrefix + "disk", Operator: job.OperatorEqual, Value: "ssd", Weight: new(50),
+	}}}
+
+	ranking := Rank(req, admitOnly(t, req, &in).Candidates)
+
+	if got := nodesOf(candidatesOf(ranking)); !slices.Equal(got, []string{"ssd", "plain"}) {
+		t.Errorf("ranked nodes = %v, want ssd first and plain kept", got)
+	}
+}
+
+// candidatesOf strips a ranking back to its candidates.
+func candidatesOf(ranking Ranking) []Candidate {
+	out := make([]Candidate, 0, len(ranking))
+	for i := range ranking {
+		out = append(out, ranking[i].Candidate)
+	}
+
+	return out
 }
 
 // A node with no room left admits nothing, so a pool whose nodes are all full
@@ -137,7 +197,7 @@ func TestAdmit_PoolUndeclaredSizeUsesTheDefault(t *testing.T) {
 
 	result := admitOnly(t, baseRequest(), new(poolInput(small, big)))
 
-	if !result.Admitted() || !slices.Equal(result.Candidates[0].Members, []string{"big"}) {
+	if !result.Admitted() || !slices.Equal(nodesOf(result.Candidates), []string{"big"}) {
 		t.Errorf("result = %+v, want only the node with room for the default size", result)
 	}
 }
@@ -158,7 +218,7 @@ func TestAdmit_PoolNodeLabels(t *testing.T) {
 
 	result := admitOnly(t, req, &in)
 
-	if !result.Admitted() || !slices.Equal(result.Candidates[0].Members, []string{"gpu"}) {
+	if !result.Admitted() || !slices.Equal(nodesOf(result.Candidates), []string{"gpu"}) {
 		t.Errorf("result = %+v, want only the labelled node", result)
 	}
 }

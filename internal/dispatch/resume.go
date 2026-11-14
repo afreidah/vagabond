@@ -17,6 +17,7 @@ import (
 	"fmt"
 
 	"github.com/afreidah/vagabond/internal/execution"
+	"github.com/afreidah/vagabond/internal/plugin"
 )
 
 // -------------------------------------------------------------------------
@@ -76,12 +77,13 @@ func (d *Dispatcher) Resume(
 	return state, reason, nil
 }
 
-// restore builds a runner for a record of a claimed dispatch. It has no task,
-// so a record still pending is asked about rather than submitted.
+// restore builds a runner for a record of a claimed dispatch, on the node the
+// record names. It has no task, so a record still pending is asked about
+// rather than submitted.
 func (d *Dispatcher) restore(l *lease, rec *execution.Record) *runner {
 	provider, _ := d.registry.Provider(rec.Provider)
 
-	return d.newRunner(provider, l, rec)
+	return d.newRunner(plugin.On(provider, rec.Node), l, rec)
 }
 
 // done reports whether an execution has finished every step: terminal, its

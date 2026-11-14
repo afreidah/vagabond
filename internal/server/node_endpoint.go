@@ -3,55 +3,79 @@
 //
 // Author: Alex Freidah
 //
-// What agents call on the server over their session: registering their node,
-// and GET /v1/nodes, which lists the nodes connected now.
+// The server's side of its agents: serving their connections, telling each
+// node which of its workloads no execution needs any more, and GET /v1/nodes,
+// which lists the nodes connected now.
 // -------------------------------------------------------------------------------
 
 package server
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
-
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/api"
+	"github.com/afreidah/vagabond/internal/execution"
 )
 
-// nodeEndpoint serves one session's Node calls.
-type nodeEndpoint struct {
-	agentrpc.UnimplementedNodeServer
-
-	srv     *Server
-	session *agentrpc.Session
+// ServeAgents accepts agent connections on listener until ctx is done, then
+// closes every session.
+func (s *Server) ServeAgents(ctx context.Context, listener net.Listener) error {
+	return s.nodeConns.Serve(ctx, listener, s.unwanted, s.logger)
 }
 
-// Register records the node on this session, replacing what it registered
-// before. Over TLS the name must be the certificate's, so an agent cannot
-// register as, and so replace, a node it holds no certificate for.
-func (n *nodeEndpoint) Register(
-	ctx context.Context, req *agentrpc.NodeRegisterRequest,
-) (*agentrpc.NodeRegisterResponse, error) {
-	if identity := n.session.Identity(); identity != "" && req.GetName() != identity {
-		return nil, status.Errorf(codes.PermissionDenied,
-			"node %q cannot register as %q: its certificate names %q", identity, req.GetName(), identity)
+// unwanted names the workloads a node holds that nothing will ask for again.
+func (s *Server) unwanted(ctx context.Context, held []*agentrpc.Held) []string {
+	var release []string
+
+	for _, h := range held {
+		if s.releasable(ctx, h.GetExecutionId()) {
+			release = append(release, h.GetExecutionId())
+		}
 	}
 
-	n.srv.addNodeConn(ctx, req, n.session)
+	return release
+}
 
-	return &agentrpc.NodeRegisterResponse{}, nil
+// releasable reports whether the workload id is no execution's, or its
+// execution was released or never recorded. One the store cannot answer for
+// is kept.
+func (s *Server) releasable(ctx context.Context, id string) bool {
+	parsed, err := execution.ParseID(id)
+	if err != nil {
+		return true
+	}
+
+	rec, err := s.executions.Get(ctx, parsed)
+
+	switch {
+	case errors.Is(err, execution.ErrNotFound):
+		return true
+	case err != nil:
+		return false
+	default:
+		return !rec.Released.IsZero()
+	}
 }
 
 // listNodes answers with every connected node, by name.
 func (s *Server) listNodes(_ http.ResponseWriter, _ *http.Request) (any, error) {
-	conns := s.connectedNodes()
+	conns := s.nodeConns.All()
 	out := make([]api.NodeListStub, 0, len(conns))
 
 	for _, conn := range conns {
 		node := conn.Node
-		usedCPU, usedMemory, running := conn.Used()
+		freeCPU, freeMemory := s.nodeConns.Free(node.GetName())
+
+		running := 0
+		for _, h := range node.GetHeld() {
+			if h.GetRunning() {
+				running++
+			}
+		}
 
 		out = append(out, api.NodeListStub{
 			Name:         node.GetName(),
@@ -61,8 +85,8 @@ func (s *Server) listNodes(_ http.ResponseWriter, _ *http.Request) (any, error) 
 			Architecture: node.GetArchitecture(),
 			CPU:          node.GetCapacity().GetCpu(),
 			Memory:       node.GetCapacity().GetMemory(),
-			UsedCPU:      usedCPU,
-			UsedMemory:   usedMemory,
+			UsedCPU:      node.GetCapacity().GetCpu() - freeCPU,
+			UsedMemory:   node.GetCapacity().GetMemory() - freeMemory,
 			Runtimes:     node.GetRuntimes(),
 			Version:      node.GetVersion(),
 			Executions:   running,

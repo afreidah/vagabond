@@ -13,6 +13,7 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -138,6 +139,34 @@ func (p *scriptedProvider) Result(
 // Cancel counts the call and succeeds.
 func (p *scriptedProvider) Cancel(context.Context, execution.ID) error {
 	p.cancels++
+
+	return nil
+}
+
+// nodeProvider is a scripted provider made of nodes, one of them full.
+type nodeProvider struct {
+	*scriptedProvider
+
+	full string
+}
+
+// On returns the provider aimed at node.
+func (p *nodeProvider) On(node string) plugin.Provider {
+	return onNode{nodeProvider: p, node: node}
+}
+
+// onNode is a node provider aimed at one node.
+type onNode struct {
+	*nodeProvider
+
+	node string
+}
+
+// Reserve refuses room on the full node.
+func (o onNode) Reserve(execution.ID, *job.Task) error {
+	if o.node == o.full {
+		return fmt.Errorf("%w: %s", plugin.ErrNoRoom, o.node)
+	}
 
 	return nil
 }
@@ -936,6 +965,44 @@ func TestRefusedProviderDoesNotSpendAnAttempt(t *testing.T) {
 
 	if outcome.Rerouted() {
 		t.Error("a refusal was reported as a reroute")
+	}
+}
+
+// A node with no room left is refused the same way: nothing recorded or
+// charged on it, and the attempt goes to the next node, which the record
+// names.
+func TestFullNodeDoesNotSpendAnAttempt(t *testing.T) {
+	t.Parallel()
+
+	p := &scriptedProvider{name: "homelab", pollsToFinish: 1, finalState: execution.StateSucceeded}
+	reg := newRegistry(p)
+	reg.providers[p.name] = &nodeProvider{scriptedProvider: p, full: "box1"}
+	reg.inputs[0].Capabilities.Members = []plugin.Member{
+		{Name: "box1", Capabilities: plugin.FixtureContainer(time.Now())},
+		{Name: "box2", Capabilities: plugin.FixtureContainer(time.Now())},
+	}
+
+	outcome, err := newDispatcher(t, reg).runTaskIn(t, containerTask(t, nil), nil, nil)
+	if err != nil {
+		t.Fatalf("RunTask failed: %v", err)
+	}
+
+	if len(outcome.Attempts) != 2 || !outcome.Attempts[0].Refused || p.submits != 1 {
+		t.Fatalf("attempts = %+v with %d submits, want box1 refused and one run", outcome.Attempts, p.submits)
+	}
+
+	if rec := record(t, reg, outcome.ID); rec.Node != "box2" {
+		t.Errorf("record node = %q, want box2", rec.Node)
+	}
+
+	refused := outcome.Attempts[0].ID
+
+	if _, err := reg.executions.Get(t.Context(), refused); !errors.Is(err, execution.ErrNotFound) {
+		t.Errorf("Get(refused) = %v, want nothing recorded", err)
+	}
+
+	if held, _ := reg.ledger.Reserved(t.Context(), refused); held {
+		t.Error("the refused node's charge was kept")
 	}
 }
 

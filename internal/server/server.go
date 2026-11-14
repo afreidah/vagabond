@@ -143,7 +143,7 @@ func WithLeases(ttl, renew, claim time.Duration) Option {
 }
 
 // WithNodes shares conns, the agent nodes the server tracks, with whatever else
-// reads them: pool providers, built before the server.
+// reads them: containerd providers, built before the server.
 func WithNodes(conns *nodes.Conns) Option {
 	return func(s *Server) { s.nodeConns = conns }
 }

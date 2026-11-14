@@ -10,13 +10,13 @@ INSERT INTO executions (
     id, namespace, job, job_version, task, provider, attempt, previous_id,
     state, provider_id, failure, created_at, started_at, ended_at, updated_at,
     exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated,
-    dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms
+    dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms, node
 )
 SELECT
     @id, @namespace, @job, @job_version, @task, @provider, @attempt, @previous_id,
     @state, @provider_id, @failure, @created_at, @started_at, @ended_at, @updated_at,
     @exit_code, @duration_ms, @billed_cpu, @billed_memory, @billed_ms, @logs_truncated,
-    @dispatch_id::text, @cpu, @memory, @released_at, @reason, @logs_start, @logs_at, @timeout_ms
+    @dispatch_id::text, @cpu, @memory, @released_at, @reason, @logs_start, @logs_at, @timeout_ms, @node
 WHERE EXISTS (
     SELECT 1 FROM dispatches
     WHERE dispatches.dispatch_id = @dispatch_id::text

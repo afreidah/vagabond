@@ -16,17 +16,17 @@ INSERT INTO executions (
     id, namespace, job, job_version, task, provider, attempt, previous_id,
     state, provider_id, failure, created_at, started_at, ended_at, updated_at,
     exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated,
-    dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms
+    dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms, node
 )
 SELECT
     $1, $2, $3, $4, $5, $6, $7, $8,
     $9, $10, $11, $12, $13, $14, $15,
     $16, $17, $18, $19, $20, $21,
-    $22::text, $23, $24, $25, $26, $27, $28, $29
+    $22::text, $23, $24, $25, $26, $27, $28, $29, $30
 WHERE EXISTS (
     SELECT 1 FROM dispatches
     WHERE dispatches.dispatch_id = $22::text
-      AND dispatches.owner = $30::text AND dispatches.epoch = $31::bigint
+      AND dispatches.owner = $31::text AND dispatches.epoch = $32::bigint
       AND dispatches.done_at IS NULL
 )
 `
@@ -61,6 +61,7 @@ type CreateExecutionParams struct {
 	LogsStart     int64
 	LogsAt        *time.Time
 	TimeoutMs     int64
+	Node          string
 	Owner         string
 	Epoch         int64
 }
@@ -102,6 +103,7 @@ func (q *Queries) CreateExecution(ctx context.Context, arg CreateExecutionParams
 		arg.LogsStart,
 		arg.LogsAt,
 		arg.TimeoutMs,
+		arg.Node,
 		arg.Owner,
 		arg.Epoch,
 	)
@@ -112,7 +114,7 @@ func (q *Queries) CreateExecution(ctx context.Context, arg CreateExecutionParams
 }
 
 const getExecution = `-- name: GetExecution :one
-SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated, dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms FROM executions WHERE id = $1
+SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated, dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms, node FROM executions WHERE id = $1
 `
 
 func (q *Queries) GetExecution(ctx context.Context, id string) (Execution, error) {
@@ -148,6 +150,7 @@ func (q *Queries) GetExecution(ctx context.Context, id string) (Execution, error
 		&i.LogsStart,
 		&i.LogsAt,
 		&i.TimeoutMs,
+		&i.Node,
 	)
 	return i, err
 }
@@ -177,7 +180,7 @@ func (q *Queries) HoldsExecution(ctx context.Context, arg HoldsExecutionParams) 
 }
 
 const listDispatchExecutions = `-- name: ListDispatchExecutions :many
-SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated, dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms FROM executions
+SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated, dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms, node FROM executions
 WHERE dispatch_id = $1
 ORDER BY created_at
 `
@@ -222,6 +225,7 @@ func (q *Queries) ListDispatchExecutions(ctx context.Context, dispatchID string)
 			&i.LogsStart,
 			&i.LogsAt,
 			&i.TimeoutMs,
+			&i.Node,
 		); err != nil {
 			return nil, err
 		}
@@ -234,7 +238,7 @@ func (q *Queries) ListDispatchExecutions(ctx context.Context, dispatchID string)
 }
 
 const listJobExecutions = `-- name: ListJobExecutions :many
-SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated, dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms FROM executions
+SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated, dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms, node FROM executions
 WHERE namespace = $1 AND job = $2
 ORDER BY created_at DESC
 LIMIT $3
@@ -286,6 +290,7 @@ func (q *Queries) ListJobExecutions(ctx context.Context, arg ListJobExecutionsPa
 			&i.LogsStart,
 			&i.LogsAt,
 			&i.TimeoutMs,
+			&i.Node,
 		); err != nil {
 			return nil, err
 		}

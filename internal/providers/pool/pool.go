@@ -1,27 +1,25 @@
 // -------------------------------------------------------------------------------
-// Pool Provider
+// containerd Provider
 //
 // Author: Alex Freidah
 //
-// A provider made of the agent nodes that joined a pool. Its capabilities are
-// its connected nodes, each judged on its own by admission, and built fresh
-// every time they are read, so a node that joins is schedulable at once.
-// Submitting picks the node with the most room among those admission passed,
-// and holds a short reservation there until the node's own report accounts
-// for the workload.
+// A provider made of the agent nodes that joined a pool, each running work on
+// its own containerd. Its capabilities are its connected nodes, each judged on
+// its own by admission and placed as a candidate of its own, in the order its
+// placement setting gives them. On returns the same provider pointed at one
+// node, which every call for an execution on that node goes through.
 // -------------------------------------------------------------------------------
 
 package pool
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
-	"sync"
 	"time"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	"github.com/hashicorp/hcl/v2"
 
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/execution"
@@ -34,12 +32,15 @@ import (
 // CONSTANTS
 // -------------------------------------------------------------------------
 
-// Type is the provider type a pool is declared with.
-const Type = "pool"
+// Type is what a provider block names to select this plugin.
+const Type = "containerd"
 
-// reservationTTL bounds how long a reservation covers for a node that has not
-// reported the workload, so one lost to a failed call cannot hold room forever.
-const reservationTTL = 2 * time.Minute
+// How a provider orders its nodes among equally scored candidates: spread
+// puts the most free memory first, pack the least.
+const (
+	PlacementSpread = "spread"
+	PlacementPack   = "pack"
+)
 
 // -------------------------------------------------------------------------
 // TYPES
@@ -47,81 +48,90 @@ const reservationTTL = 2 * time.Minute
 
 // Compile-time proof the contract is met.
 var (
-	_ plugin.Provider        = (*Provider)(nil)
-	_ plugin.Live            = (*Provider)(nil)
-	_ plugin.MemberSubmitter = (*Provider)(nil)
-	_ plugin.LogStreamer     = (*Provider)(nil)
-	_ plugin.LogReader       = (*Provider)(nil)
-	_ plugin.Releaser        = (*Provider)(nil)
+	_ plugin.Provider    = (*Provider)(nil)
+	_ plugin.Live        = (*Provider)(nil)
+	_ plugin.Nodes       = (*Provider)(nil)
+	_ plugin.Reserver    = (*Provider)(nil)
+	_ plugin.LogStreamer = (*Provider)(nil)
+	_ plugin.LogReader   = (*Provider)(nil)
+	_ plugin.Releaser    = (*Provider)(nil)
 )
 
-// Provider is one declared pool. placed remembers which node this process sent
-// each execution to; reserved holds room on a node between placing work and
-// the node reporting it.
-type Provider struct {
-	name    string
-	conns   *nodes.Conns
-	now     func() time.Time
-	created time.Time
-
-	mu       sync.Mutex
-	placed   map[string]string
-	reserved map[string]reservation
+// Config is the provider's optional block. Pool names the agents it draws
+// on, those started with that -pool, and defaults to the provider's label.
+type Config struct {
+	Pool      string `hcl:"pool,optional"`
+	Placement string `hcl:"placement,optional"`
 }
 
-// reservation is room taken on a node for an execution the node has not yet
-// reported.
-type reservation struct {
-	node   string
-	cpu    int64
-	memory int64
-	at     time.Time
+// Provider is one declared provider over a pool of nodes. node is the node
+// its executions are on, set by On and empty on the provider itself.
+type Provider struct {
+	name  string
+	cfg   Config
+	conns *nodes.Conns
+	node  string
+	now   func() time.Time
 }
 
 // -------------------------------------------------------------------------
 // CONSTRUCTOR
 // -------------------------------------------------------------------------
 
-// New builds the pool named name over the server's connected nodes.
-func New(name string, conns *nodes.Conns) *Provider {
-	now := time.Now
-
-	return &Provider{
-		name:     name,
-		conns:    conns,
-		now:      now,
-		created:  now(),
-		placed:   make(map[string]string),
-		reserved: make(map[string]reservation),
+// New builds the provider named name over the server's connected nodes.
+func New(name string, body hcl.Body, conns *nodes.Conns) (*Provider, hcl.Diagnostics) {
+	cfg, diags := plugin.DecodeConfig[Config](name, Type, body, "")
+	if cfg == nil {
+		return nil, diags
 	}
+
+	cfg.Pool = cmp.Or(cfg.Pool, name)
+	cfg.Placement = cmp.Or(cfg.Placement, PlacementSpread)
+
+	if cfg.Placement != PlacementSpread && cfg.Placement != PlacementPack {
+		return nil, append(diags, &hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Unknown placement",
+			Detail: fmt.Sprintf("Provider %q sets placement to %q; it is %q or %q.",
+				name, cfg.Placement, PlacementSpread, PlacementPack),
+		})
+	}
+
+	return &Provider{name: name, cfg: *cfg, conns: conns, now: time.Now}, diags
 }
 
-// Name returns the pool's name, which agents join it by.
+// Name returns the provider's label.
 func (p *Provider) Name() string {
 	return p.name
+}
+
+// On returns the provider for executions on node.
+func (p *Provider) On(node string) plugin.Provider {
+	on := *p
+	on.node = node
+
+	return &on
 }
 
 // -------------------------------------------------------------------------
 // CAPABILITIES
 // -------------------------------------------------------------------------
 
-// Capabilities returns the pool as it stands now. Reading it calls nothing, so
-// it is also what LiveCapabilities returns.
+// Capabilities returns the provider as it stands now. Reading it calls
+// nothing, so it is also what LiveCapabilities returns.
 func (p *Provider) Capabilities(context.Context) (plugin.Capabilities, error) {
 	return p.LiveCapabilities()
 }
 
-// LiveCapabilities builds the pool from its connected nodes: one member per
-// node, sized by the room it has left, and a pool-wide summary for display. A
-// pool with no nodes is an error, which marks it unhealthy.
+// LiveCapabilities builds the provider from its connected nodes: one member
+// per node, sized by the room it has left and in placement order, and a
+// summary across them for display. No nodes is an error, which marks the
+// provider unhealthy.
 func (p *Provider) LiveCapabilities() (plugin.Capabilities, error) {
-	conns := p.conns.InPool(p.name)
+	conns := p.conns.InPool(p.cfg.Pool)
 	if len(conns) == 0 {
-		return plugin.Capabilities{}, fmt.Errorf("no nodes have joined pool %q", p.name)
+		return plugin.Capabilities{}, fmt.Errorf("no nodes have joined pool %q", p.cfg.Pool)
 	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	out := plugin.Capabilities{
 		ObservedAt:       p.now(),
@@ -142,14 +152,24 @@ func (p *Provider) LiveCapabilities() (plugin.Capabilities, error) {
 		out.InternetEgress, out.PrivateNetwork, out.ArbitraryImages = true, true, true
 	}
 
+	// Stable, so nodes with the same room stay in name order
+	slices.SortStableFunc(out.Members, func(a, b plugin.Member) int {
+		order := cmp.Compare(*b.Capabilities.MaxResources.Memory, *a.Capabilities.MaxResources.Memory)
+		if p.cfg.Placement == PlacementPack {
+			return -order
+		}
+
+		return order
+	})
+
 	return out, nil
 }
 
 // member describes one node as admission sees it. MaxResources is the room it
 // has left, not its size, so a busy node is rejected for a task that would fit
-// it empty, and a full one for any task. Called with mu held.
+// it empty, and a full one for any task.
 func (p *Provider) member(conn *nodes.Conn) plugin.Member {
-	cpu, memory := p.free(conn)
+	cpu, memory := p.conns.Free(conn.Node.GetName())
 
 	return plugin.Member{
 		Name:   conn.Node.GetName(),
@@ -172,144 +192,29 @@ func (p *Provider) member(conn *nodes.Conn) plugin.Member {
 	}
 }
 
-// free is the room a node has left: its capacity, less what its running
-// workloads declared, less reservations it has not yet reported. Called with
-// mu held.
-func (p *Provider) free(conn *nodes.Conn) (cpu, memory int64) {
-	usedCPU, usedMemory, _ := conn.Used()
-	cpu = conn.Node.GetCapacity().GetCpu() - usedCPU
-	memory = conn.Node.GetCapacity().GetMemory() - usedMemory
-
-	reported := make(map[string]bool, len(conn.Node.GetHeld()))
-	for _, h := range conn.Node.GetHeld() {
-		reported[h.GetExecutionId()] = true
-	}
-
-	for id, r := range p.reserved {
-		// A workload the node reported is already in its own numbers.
-		if r.node != conn.Node.GetName() || reported[id] || p.now().Sub(r.at) > reservationTTL {
-			continue
-		}
-
-		cpu, memory = cpu-r.cpu, memory-r.memory
-	}
-
-	return cpu, memory
-}
-
 // -------------------------------------------------------------------------
 // SUBMITTING
 // -------------------------------------------------------------------------
 
-// Submit places a task on any node in the pool with room for it.
+// Reserve holds room on the node for the task, at the size it runs at, until
+// the node reports the workload.
+func (p *Provider) Reserve(id execution.ID, task *job.Task) error {
+	if err := p.conns.Reserve(p.node, id.String(), resourcesOf(task)); err != nil {
+		return fmt.Errorf("%w: %w", plugin.ErrNoRoom, err)
+	}
+
+	return nil
+}
+
+// Submit starts the task on the node. A task that does not translate, or a
+// node that refuses it, gives the reservation back.
 func (p *Provider) Submit(ctx context.Context, id execution.ID, task *job.Task) (plugin.Submission, error) {
-	return p.SubmitTo(ctx, id, task, nil)
-}
-
-// SubmitTo places a task on one of members, the nodes admission passed for it,
-// or on any node when members is empty. Nodes are tried most room first; a node
-// that refuses for lack of room is passed over for the next, and no node left
-// is an infrastructure failure, so dispatch tries another provider.
-func (p *Provider) SubmitTo(
-	ctx context.Context, id execution.ID, task *job.Task, members []string,
-) (plugin.Submission, error) {
-	workload, err := workloadOf(task)
+	sub, err := p.submit(ctx, id, task)
 	if err != nil {
-		return plugin.Submission{}, err
-	}
-
-	var tried []string
-
-	for {
-		node, ok := p.reserve(id.String(), workload.GetResources(), members, tried)
-		if !ok {
-			return plugin.Submission{}, plugin.Infrastructure(
-				fmt.Errorf("no node in pool %q has room for %d millicores and %d MiB",
-					p.name, workload.GetResources().GetCpu(), workload.GetResources().GetMemory()))
-		}
-
-		sub, err := p.send(ctx, node, id, workload)
-		if err == nil {
-			return sub, nil
-		}
-
-		p.unreserve(id.String())
-
-		// The node's own count was tighter than ours: try the next one.
-		if status.Code(err) == codes.ResourceExhausted {
-			tried = append(tried, node)
-
-			continue
-		}
+		p.conns.Unreserve(id.String())
 
 		return plugin.Submission{}, err
 	}
-}
-
-// reserve picks the node with the most free memory that fits resources, among
-// members and not in tried, and holds that room for id. Choosing and reserving
-// are one step under mu, so two submissions cannot take the same last room.
-func (p *Provider) reserve(id string, resources *agentrpc.Resources, members, tried []string) (string, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	var (
-		best     string
-		bestFree int64 = -1
-	)
-
-	for _, conn := range p.conns.InPool(p.name) {
-		name := conn.Node.GetName()
-
-		if (len(members) > 0 && !slices.Contains(members, name)) || slices.Contains(tried, name) {
-			continue
-		}
-
-		cpu, memory := p.free(conn)
-		if cpu < resources.GetCpu() || memory < resources.GetMemory() {
-			continue
-		}
-
-		if memory > bestFree {
-			best, bestFree = name, memory
-		}
-	}
-
-	if best == "" {
-		return "", false
-	}
-
-	p.reserved[id] = reservation{node: best, cpu: resources.GetCpu(), memory: resources.GetMemory(), at: p.now()}
-
-	return best, true
-}
-
-// unreserve releases the room held for id.
-func (p *Provider) unreserve(id string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	delete(p.reserved, id)
-}
-
-// send submits the workload to node and records where it went. A node that
-// refuses for room comes back wrapped, for SubmitTo to recognise.
-func (p *Provider) send(
-	ctx context.Context, node string, id execution.ID, workload *agentrpc.Workload,
-) (plugin.Submission, error) {
-	conn, ok := p.conns.Get(node)
-	if !ok {
-		return plugin.Submission{}, plugin.Infrastructure(fmt.Errorf("node %s left before the workload reached it", node))
-	}
-
-	sub, err := conn.Executions.Submit(ctx, &agentrpc.SubmitRequest{ExecutionId: id.String(), Workload: workload})
-	if err != nil {
-		return plugin.Submission{}, plugin.Infrastructure(fmt.Errorf("submitting to node %s: %w", node, err))
-	}
-
-	p.mu.Lock()
-	p.placed[id.String()] = node
-	p.mu.Unlock()
 
 	// A finished workload reports running, since terminal needs a result
 	state := execution.State(sub.GetState())
@@ -317,7 +222,27 @@ func (p *Provider) send(
 		state = execution.StateRunning
 	}
 
-	return plugin.Submission{ProviderID: node, State: state}, nil
+	return plugin.Submission{ProviderID: sub.GetProviderId(), State: state}, nil
+}
+
+// submit translates the task and sends it to the node.
+func (p *Provider) submit(ctx context.Context, id execution.ID, task *job.Task) (*agentrpc.Submission, error) {
+	workload, err := workloadOf(task)
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := p.connected()
+	if err != nil {
+		return nil, err
+	}
+
+	sub, err := conn.Executions.Submit(ctx, &agentrpc.SubmitRequest{ExecutionId: id.String(), Workload: workload})
+	if err != nil {
+		return nil, p.failure(id, err)
+	}
+
+	return sub, nil
 }
 
 // -------------------------------------------------------------------------

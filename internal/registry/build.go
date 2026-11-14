@@ -66,8 +66,8 @@ func Types() []string {
 // Config is the provider's block still undecoded, so a plugin can report a
 // typo against its line and its field names stay out of internal/config.
 // Credentials is already resolved to bytes, nil for a provider that needs
-// none. Nodes is the server's connected agent nodes, which a pool is made of;
-// nil outside a server.
+// none. Nodes is the server's connected agent nodes, which a containerd
+// provider is made of; nil outside a server.
 type Settings struct {
 	Name        string
 	Config      hcl.Body
@@ -108,16 +108,22 @@ func Build(
 		return p, diags
 
 	case pool.Type:
-		// A pool is made of a server's connected nodes, so only a server has one.
+		// Made of a server's connected nodes, so only a server has one.
 		if settings.Nodes == nil {
 			return nil, hcl.Diagnostics{{
 				Severity: hcl.DiagError,
-				Summary:  "Pool without a server",
-				Detail:   fmt.Sprintf("Provider %q is a pool, which only vagabond server can run.", settings.Name),
+				Summary:  "Agent nodes without a server",
+				Detail: fmt.Sprintf("Provider %q runs on agent nodes, which only vagabond server can reach.",
+					settings.Name),
 			}}
 		}
 
-		return pool.New(settings.Name, settings.Nodes), nil
+		p, diags := pool.New(settings.Name, settings.Config, settings.Nodes)
+		if diags.HasErrors() {
+			return nil, diags
+		}
+
+		return p, diags
 
 	case TypeFakeContainer:
 		return plugin.NewFakeContainerProvider(settings.Name), nil

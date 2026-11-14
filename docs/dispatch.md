@@ -91,7 +91,7 @@ Every transition, with what records it:
 | `succeeded` | yes | The provider reported success |
 | `failed` | yes | The provider reported failure, the submission failed, the provider no longer knows the execution, a `lost` execution was given up on, or its provider is no longer configured |
 | `cancelled` | yes | Stopped by Vagabond or by the provider |
-| `lost` | no | Submitted, then a `Status` call failed, or `Status` reported `lost` (a `pool` whose node has been gone less than 5 minutes). The work may still be running; its runner keeps polling it ([Lost executions](#lost-executions)) |
+| `lost` | no | Submitted, then a `Status` call failed, as it does while a `containerd` provider's node is not connected. The work may still be running; its runner keeps polling it ([Lost executions](#lost-executions)) |
 
 Legal transitions:
 
@@ -205,6 +205,7 @@ the provider is retried or rerouted.
 | Driver config fails to evaluate | Stops the task before admission: `building the request: <diagnostics>` |
 | Provider reports `cancelled` | `infrastructure`: the provider gave no verdict |
 | Quota reservation refused | Provider skipped. Not a submission, no record, no budget spent |
+| Node room refused (`no room on the node: ...`) | Node skipped, its quota reservation dropped. Not a submission, no record, no budget spent |
 | Ranked provider not registered | Stops the task with `ErrNoProvider` |
 
 A `Status` call that fails records the execution `lost` and ends the attempt
@@ -243,8 +244,8 @@ every 15s. A `lost` execution leaves only for a terminal state:
 
 - `Failure` keeps the class that made it `lost` until a terminal state clears
   it.
-- A `lost` that `Status` reports (a `pool` node gone under 5 minutes) does not
-  end the attempt; the first `Status` failure after it does.
+- A `lost` that a provider's `Status` reports itself does not end the
+  attempt; the first `Status` failure after it does.
 - The dispatch's verdict comes from the task's answer; what a `lost`
   execution does afterwards does not change it.
 - The dispatch stays open, its lease renewed, until the execution is resolved,
@@ -280,7 +281,8 @@ task "build" {
 - Each candidate is tried at most once. There is no retry on the same
   provider.
 - Only submissions count against the budget. A provider whose quota
-  reservation is refused is skipped for free.
+  reservation is refused, or a node with too little room left, is skipped for
+  free.
 - Each attempt gets a fresh execution ID, recorded with `PreviousID` pointing
   at the one before. Reusing the ID would ask the provider to resume the run
   that just failed.
@@ -289,7 +291,7 @@ task "build" {
 
 | Error | When |
 |---|---|
-| `ErrNoCandidates` | Admission admitted nothing, or every admitted provider refused the reservation |
+| `ErrNoCandidates` | Admission admitted nothing, or every admitted candidate refused its reservation |
 | `ErrExhausted` | At least one submission was made, none answered, and the budget or the candidates ran out |
 
 ## Backoff and polling
@@ -322,7 +324,7 @@ output, and releasing may destroy it.
 
 | Provider | Where the output comes from |
 |---|---|
-| Implements `plugin.LogReader` (Cloud Run, Code Engine, `pool`) | `ReadLogs`, which writes the whole output |
+| Implements `plugin.LogReader` (Cloud Run, Code Engine, `containerd`) | `ReadLogs`, which writes the whole output |
 | Any other (Lambda) | `Result.Logs`, the output that came with the answer |
 
 - The output is written in 256 KiB chunks as it is read, so a capture holds one
@@ -360,7 +362,7 @@ on providers that implement `plugin.Releaser`:
 |---|---|
 | Cloud Run | Deletes the execution's Job resource |
 | Code Engine | Deletes the execution's job run, and its pod with it |
-| `pool` | Deletes the workload's task, container, snapshot and log file from the node |
+| `containerd` | Deletes the workload's task, container, snapshot and log file from the node; a node not connected is told when it registers again |
 
 - Called after `Result`, the capture and the settle, because releasing may
   delete what `Result` and the capture read.
@@ -371,8 +373,7 @@ on providers that implement `plugin.Releaser`:
 - A provider without `Release` is marked released with no call, as is an
   execution whose provider is no longer configured.
 - A failed release does not fail the execution or change its charge. It holds
-  the dispatch open: a `pool` node that stays offline keeps its dispatch's
-  lease renewed until the node returns.
+  the dispatch open, its lease renewed, until the release succeeds.
 
 ## Cancellation
 

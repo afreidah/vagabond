@@ -22,7 +22,7 @@ Interactive version, with notes on each loop:
 
 | Service | Interval | At startup | Touches | On failure |
 |---|---|---|---|---|
-| [Capability refresh](#capability-refresh) | 1m | Yes, before serving | Every non-pool provider's `Capabilities` | Provider marked unhealthy, warn |
+| [Capability refresh](#capability-refresh) | 1m | Yes, before serving | Every provider's `Capabilities` but a `containerd` one's, read live | Provider marked unhealthy, warn |
 | [Usage snapshot refresh](#usage-snapshot-refresh) | 15s | Yes, required | Store: quota usage and reservations | Last snapshot kept, warn |
 | [Reservation reaper](#reservation-reaper) | 5m | Yes, before serving | Store: reservations over 1h old and their execution records | Reservation kept, warn |
 | [Dispatch claim](#dispatch-claim) | 30s | Yes, before serving | Store: dispatches not done with a lapsed lease | Warn, retried next tick |
@@ -43,8 +43,8 @@ Interactive version, with notes on each loop:
 | [Log stream](#log-stream) | 250ms, per followed workload | Log file; containerd task | Stream ends with an error |
 | [Timeout watcher](#timeout-watcher) | Per workload | containerd task | Workload left running |
 
-**Not loops:** pool reservation expiry and the departed-node grace period are
-checked when read, not swept ([Pool reservations](#pool-reservations)).
+**Not loops:** node reservation expiry is checked when a node's room is read,
+not swept ([Node reservations](#node-reservations)).
 
 ## Server
 
@@ -67,7 +67,7 @@ every plan and dispatch.
 | Interval | 1m |
 | At startup | Once while loading configuration, before the server is built |
 | Timeout | 30s per provider; providers are asked in parallel |
-| Skips | Disabled providers, and `pool` providers, whose capabilities are built from connected nodes on every read |
+| Skips | Disabled providers, and `containerd` providers, whose capabilities are built from connected nodes on every read |
 
 - A provider that answers is marked healthy and its capabilities replaced.
 - A provider that fails is marked unhealthy and keeps its last capabilities.
@@ -289,8 +289,10 @@ session ([agent](agent.md)).
   both sides and closes a session whose keepalive fails, which is how a dead
   peer is detected.
 - A node is registered while its session holds. When the session ends, the
-  node is removed and its departure time recorded for the
-  [pool](#pool-reservations) grace period.
+  node is removed; its executions are `lost` until it returns.
+- Every registration is answered with the held workloads whose execution is
+  released or was never recorded, one execution record read per workload,
+  which the agent releases ([agent](agent.md#releasing-what-nothing-needs)).
 - An agent reconnecting under the same name replaces its old session.
 - A failed accept, such as one out of file descriptors, is retried, waiting
   5ms doubling to 1s while accepts keep failing.
@@ -314,22 +316,18 @@ loop of its own: runners retry their writes until the store takes them, each
 upkeep loop retries on its next tick, and the claim takes dispatches whose
 lease lapsed meanwhile ([Store outage](dispatch.md#store-outage)).
 
-### Pool reservations
+### Node reservations
 
-A `pool` provider holds room on a node between submitting a workload and the
-node reporting it. Nothing sweeps these; they are checked when a node's free
-room is computed.
+Dispatch holds room on a node between reserving it, before the execution is
+recorded, and the node reporting the workload. Nothing sweeps these; they are
+checked when a node's free room is computed.
 
 | | |
 |---|---|
 | Reservation covers | 2m, or until the node reports the workload |
-| Removed | On `Release`, or when sending the workload to the node fails for any reason: the node left, refused it for room, or returned any other error |
-| Departed node grace | 5m: its executions report `lost` while it may reconnect |
-| After server start | 5m during which an execution no node has reported is `lost`, not unknown |
+| Removed | When the node reports the workload, past 2m, on `Release`, or when `Submit` fails for any reason: the task did not translate, the node left, refused it for room, or returned any other error |
 
-An expired reservation stops counting against the node but stays in memory
-until its execution is released. Both grace periods are compared against the
-clock when a status is read.
+Room is counted once per node, whichever provider reserved it.
 
 ## Agent
 
@@ -367,8 +365,12 @@ node's free room from these reports.
 - Change signals coalesce: one pending signal covers any number of changes.
 - The 10s report catches a workload finishing on its own.
 - A failed report is not fatal; the next one carries everything.
+- The server's answer lists workloads to release; each is released as the
+  server's `Release` would be, which signals another report.
 
-**Logs:** warn `reporting workloads` with `error`.
+**Logs:** warn `reporting workloads` with `error`; info `released a workload
+the server has no use for` with `execution`, or warn `releasing a workload the
+server has no use for` with `execution` and `error`.
 
 ### Timeout watcher
 

@@ -23,11 +23,11 @@
 
     <!-- Server -->
     <rect x="280" y="110" width="300" height="280" rx="34" class="core"/>
-    <text x="430" y="156" text-anchor="middle" class="micro">POOL PROVIDER</text>
+    <text x="430" y="156" text-anchor="middle" class="micro">CONTAINERD PROVIDER</text>
     <text x="430" y="194" text-anchor="middle" class="label" style="font-size:25px">homelab</text>
     <g class="small" text-anchor="middle" style="fill:#f8fafc">
-      <text x="430" y="248">admission per node</text>
-      <text x="430" y="280">most free memory wins</text>
+      <text x="430" y="248">each node a candidate</text>
+      <text x="430" y="280">spread: most free first</text>
       <text x="430" y="312">room held until</text>
       <text x="430" y="334">the node reports it</text>
     </g>

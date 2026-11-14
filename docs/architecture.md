@@ -23,7 +23,7 @@ Interactive version, with notes on each component:
 | CLI | `vagabond job ...`, `execution ...`, `node ...`, `provider ...` | Validates job files locally, then calls the server's [API](api.md). Holds no state. See the [CLI reference](cli.md). |
 | Agent | `vagabond agent` | Runs on a node apart from the server. Dials the server, reports the node's architecture, CPU and memory, and runs the tasks placed on it in containerd. See [Agent](agent.md). |
 | Store | Postgres or CockroachDB | Holds registered jobs, dispatches and their leases, executions, and quota usage and reservations. Replaced by in-memory stores under `-dev`. See [Database](database.md). |
-| Providers | `provider` blocks in [configuration](configuration.md) | Plugins that run tasks on a backend: `cloud-run`, `code-engine`, `lambda`, `pool` (agent nodes), and the `fake-container`, `fake-function` and `fake-worker` test providers. |
+| Providers | `provider` blocks in [configuration](configuration.md) | Plugins that run tasks on a backend: `cloud-run`, `code-engine`, `lambda`, `containerd` (agent nodes), and the `fake-container`, `fake-function` and `fake-worker` test providers. |
 
 **Connections:**
 
@@ -92,12 +92,12 @@ Every package under `internal/`. `cmd/vagabond` only calls `cli.Run`.
 | `jobs` | Registered jobs and versions, and the shared loading for run, register and dispatch |
 | `jobspec` | Parses `.vagabond.hcl` files, substitutes metadata, validates |
 | `ledger` | Quota reservations and settlement over a store, and the usage snapshot admission reads |
-| `nodes` | The agent nodes connected to a server, shared by the server and pool providers |
+| `nodes` | The agent nodes connected to a server, each node's room and reservations, and the loop that serves agents |
 | `plugin` | The `Provider` interface, capability model, failure classes, and the fake providers |
 | `providers/aws` | The `lambda` provider: function tasks on AWS Lambda |
 | `providers/gcp` | The `cloud-run` provider: container tasks on Cloud Run Jobs |
 | `providers/ibm` | The `code-engine` provider: container tasks on Code Engine job runs |
-| `providers/pool` | The `pool` provider: container tasks on agent nodes |
+| `providers/pool` | The `containerd` provider: container tasks on a pool of agent nodes |
 | `ptr` | Helpers for reading optional specification fields |
 | `quota` | Pool budgets, meters and periods, and arithmetic over usage |
 | `registry` | Builds providers from configuration and holds their capability snapshots; resolves a provider's credential again after a 401 or 403 |
@@ -144,9 +144,9 @@ result.
 | Input | Source | Refreshed |
 |---|---|---|
 | Capabilities (drivers, architectures, limits, networking, images, cost) | `Provider.Capabilities`, stored in the registry | At server startup, then every minute |
-| Pool capabilities | `plugin.Live.LiveCapabilities`, the connected agent nodes | On every plan and every dispatch |
+| Node capabilities | `plugin.Live.LiveCapabilities`, the connected agent nodes | On every plan and every dispatch |
 | Enabled | `enabled` in the `provider` block | Fixed at startup |
-| Healthy | Whether the provider answered its last refresh; for a pool, whether any node is connected, read on every plan | With capabilities |
+| Healthy | Whether the provider answered its last refresh; for a `containerd` provider, whether any node in its pool is connected, read on every plan | With capabilities |
 | Tags | `meta` in the `provider` block, as `provider.meta.*` | Fixed at startup |
 | Tier | `tier` in the `provider` block | Fixed at startup |
 | Quota limits, provider total and namespace share | `pool` blocks in the `provider` block, `quota` blocks in the `namespace` block | Fixed at startup |
@@ -162,8 +162,8 @@ result.
 - A disabled provider is never refreshed. Its snapshot stays empty, and it is
   rejected with `provider-disabled`.
 - A failed usage read keeps the last snapshot. Admission can therefore see stale
-  usage, but reserving is decided by the store in one statement, so a pool is
-  never over-committed by two dispatches that both saw room.
+  usage, but reserving is decided by the store in one statement, so a quota
+  pool is never over-committed by two dispatches that both saw room.
 - `job plan` reads the usage snapshot as it stands, up to 15 seconds old. A
   dispatch re-reads it before admitting each task.
 - Each candidate in `job plan` output shows its snapshot's observation time.
@@ -202,10 +202,11 @@ Optional interfaces, detected by type assertion:
 
 | Interface | Method | Used for | Implemented by |
 |---|---|---|---|
-| `plugin.LogStreamer` | `StreamLogs` | Output before the execution ends, for `GET /v1/execution/{id}/logs?follow=true` | `cloud-run`, `code-engine`, `pool`, `fake-container` |
-| `plugin.Releaser` | `Release` | Deleting what an execution left behind, last, however it ended | `cloud-run`, `code-engine`, `pool` |
-| `plugin.Live` | `LiveCapabilities` | Capabilities read on every plan instead of on the refresh timer | `pool` |
-| `plugin.MemberSubmitter` | `SubmitTo` | Submitting only to the members admission passed | `pool` |
+| `plugin.LogStreamer` | `StreamLogs` | Output before the execution ends, for `GET /v1/execution/{id}/logs?follow=true` | `cloud-run`, `code-engine`, `containerd`, `fake-container` |
+| `plugin.Releaser` | `Release` | Deleting what an execution left behind, last, however it ended | `cloud-run`, `code-engine`, `containerd` |
+| `plugin.Live` | `LiveCapabilities` | Capabilities read on every plan instead of on the refresh timer | `containerd` |
+| `plugin.Nodes` | `On` | The provider for the executions on one node, which dispatch and log following use for a node candidate or a record naming a node | `containerd` |
+| `plugin.Reserver` | `Reserve` | Holding room on a node before the execution is recorded; `ErrNoRoom` is a refusal that spends no attempt | `containerd` |
 | `plugin.Recredentialer` | `Recredential` | Taking a credential resolved again from its source after the platform answered 401 or 403; the call is then made once more | `cloud-run`, `code-engine`, `lambda` |
 
 See [Writing a provider](writing-a-provider.md).

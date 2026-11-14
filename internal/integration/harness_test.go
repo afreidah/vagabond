@@ -60,11 +60,12 @@ func TestMain(m *testing.M) {
 // -------------------------------------------------------------------------
 
 // harness is the providers a test configured and the store they charge. Servers
-// started from it share both.
+// started from it share both, and serve agents on agents when it is set.
 type harness struct {
 	t        *testing.T
 	registry *registry.Registry
 	store    *postgres.Store
+	agents   net.Listener
 }
 
 // newHarness builds the providers cfg declares, refreshed, and an empty store.
@@ -75,7 +76,7 @@ func newHarness(t *testing.T, cfg string) *harness {
 }
 
 // providers builds the providers cfg declares and refreshes them.
-func providers(t *testing.T, cfg string) *registry.Registry {
+func providers(t *testing.T, cfg string, opts ...registry.Option) *registry.Registry {
 	t.Helper()
 
 	ctx := context.Background()
@@ -85,7 +86,7 @@ func providers(t *testing.T, cfg string) *registry.Registry {
 		t.Fatalf("config: %s", diags.Error())
 	}
 
-	reg, diags := registry.New(ctx, file)
+	reg, diags := registry.New(ctx, file, opts...)
 	if diags.HasErrors() {
 		t.Fatalf("registry: %s", diags.Error())
 	}
@@ -120,6 +121,10 @@ func (h *harness) serve(opts ...server.Option) *api.Client {
 	done := make(chan error, 1)
 
 	go func() { done <- srv.ServeListener(ctx, listener, nil) }()
+
+	if h.agents != nil {
+		go func() { _ = srv.ServeAgents(ctx, h.agents) }()
+	}
 
 	h.t.Cleanup(func() {
 		cancel()

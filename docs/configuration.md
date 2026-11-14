@@ -101,7 +101,7 @@ extensions are ignored.
   00-server.hcl      # server and store
   aws-lambda.hcl     # provider "aws-lambda"
   gcp-cloud-run.hcl  # provider "gcp-cloud-run"
-  homelab.hcl        # provider "homelab" { type = "pool" }
+  homelab.hcl        # provider "homelab" { type = "containerd" }
   namespaces.hcl     # namespace blocks
 ```
 
@@ -190,7 +190,7 @@ and so on. Providers in the same tier are ordered by score. A provider without
 `tier` is in tier 0, so tiering one fallback does not demote the rest.
 
 ```hcl
-provider "homelab"       { type = "pool" }        # tier 0
+provider "homelab"       { type = "containerd" }  # tier 0
 provider "gcp-cloud-run" { type = "cloud-run" }   # tier 0
 provider "aws-lambda" {
   type = "lambda"
@@ -214,7 +214,7 @@ provider "aws-lambda" {
 | `cloud-run` | [Google Cloud Run Jobs](providers/cloud-run.md) | required: `project`, `region`, `runtime_service_account` | required: service account JSON key |
 | `code-engine` | [IBM Code Engine Jobs](providers/code-engine.md) | required: `region`, `project_id`; optional: `image_secret` | required: IAM API key |
 | `lambda` | [AWS Lambda](providers/lambda.md) | required: `region` | optional: `credential_process` JSON; without it, the AWS SDK default chain |
-| `pool` | The [agent](agent.md#pools) nodes connected to this server that joined the pool named by the label | ignored | resolved, unused |
+| `containerd` | The [agent](agent.md#pools) nodes connected to this server that joined its pool | optional: `pool`, `placement` | resolved, unused |
 | `fake-container` | In-memory container provider | ignored | resolved, unused |
 | `fake-function` | In-memory function provider | ignored | resolved, unused |
 | `fake-worker` | In-memory worker provider | ignored | resolved, unused |
@@ -226,14 +226,19 @@ Any other value is `Unknown provider type`, listing the known types.
 The fakes run admission, ranking and dispatch with no cloud account.
 `examples/config.hcl` uses them.
 
-### `pool` provider
+### `containerd` provider
 
-A provider made of the agent nodes that joined the pool with `vagabond agent
--pool <label>`:
+A provider made of the agent nodes that joined a pool with `vagabond agent
+-pool <name>`, each node a candidate of its own:
 
 ```hcl
 provider "homelab" {
-  type = "pool"
+  type = "containerd"
+
+  config {
+    pool      = "homelab"   # default: the label
+    placement = "spread"    # default; or "pack"
+  }
 
   meta {
     site = "basement"
@@ -241,15 +246,22 @@ provider "homelab" {
 }
 ```
 
-- Only `vagabond server` can build a pool. Elsewhere it is `Pool without a
-  server`.
-- `enabled`, `meta` and `pool` quota blocks apply to the pool as a whole.
+| Setting | Default | Description |
+|---|---|---|
+| `pool` | the label | The agents it draws on, those started with `-pool <pool>` |
+| `placement` | `spread` | Order of its nodes among equally scored candidates: `spread` most free memory first, `pack` least |
+
+- Only `vagabond server` can build one. Elsewhere it is `Agent nodes without
+  a server`.
+- `placement` other than `spread` or `pack` is `Unknown placement`.
+- `enabled`, `meta` and `pool` quota blocks apply to the provider as a whole.
 - Its capabilities are read from the connected nodes on every plan, not on the
   one-minute refresh, so a node that joins is schedulable at once.
-- A pool with no connected nodes is unhealthy and rejected as
+- With no connected nodes in its pool it is unhealthy and rejected as
   `provider-unhealthy`.
-- An agent joining a pool name that no `provider` declares connects, but
-  nothing schedules onto it.
+- Two providers may draw on one pool; a node's room is counted once.
+- An agent joining a pool no provider draws on connects, but nothing
+  schedules onto it.
 
 ## `config` block
 
@@ -782,7 +794,7 @@ provider "aws-lambda" {
 }
 
 provider "homelab" {
-  type = "pool"
+  type = "containerd"
 
   meta {
     kind = "homelab"
