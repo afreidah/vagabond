@@ -237,7 +237,8 @@ One that fails to evaluate fails the submission as `internal`.
 
 **Not translated:** `source`, `working_directory`, `network` and `execution`
 blocks are not sent. `network` and `execution.architecture` are enforced by
-admission against the capabilities above.
+admission against the capabilities above. A job run has no working directory
+setting, so a task's command starts in the image's.
 
 ### Command line
 

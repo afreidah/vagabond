@@ -24,8 +24,10 @@ import (
 	"github.com/afreidah/vagabond/internal/config"
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
+	"github.com/afreidah/vagabond/internal/nodes"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/providers/gcp"
+	"github.com/afreidah/vagabond/internal/providers/pool"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/scheduler"
 )
@@ -534,17 +536,33 @@ func TestBuildRealProviderNeedsConfig(t *testing.T) {
 	}
 }
 
-// Changing the slice Types returns does not change the vocabulary.
-func TestTypesIsACopy(t *testing.T) {
+// Both node types build over a server's nodes, and are refused outside one,
+// which has none.
+func TestBuildNodeProviders(t *testing.T) {
 	t.Parallel()
 
-	first := Types()[0]
+	for _, providerType := range []string{pool.TypeContainerd, pool.TypeFirecracker} {
+		t.Run(providerType, func(t *testing.T) {
+			t.Parallel()
 
-	got := Types()
-	got[0] = "clobbered"
+			if p, diags := Build(t.Context(), providerType, Settings{Name: "homelab", Nodes: nodes.New()}); diags.HasErrors() || p.Name() != "homelab" {
+				t.Errorf("Build() over a server's nodes = %v, %s", p, diags.Error())
+			}
 
-	if Types()[0] != first {
-		t.Error("mutating the returned slice changed the vocabulary")
+			if p, diags := Build(t.Context(), providerType, Settings{Name: "homelab"}); p != nil || !diags.HasErrors() {
+				t.Errorf("Build() with no nodes = %v, %s; want refused", p, diags.Error())
+			}
+		})
+	}
+}
+
+// An unknown type is refused, naming the types there are.
+func TestBuildUnknownType(t *testing.T) {
+	t.Parallel()
+
+	_, diags := Build(t.Context(), "kubernetes", Settings{Name: "k8s"})
+	if !diags.HasErrors() || !strings.Contains(diags.Error(), pool.TypeFirecracker) {
+		t.Errorf("Build() of an unknown type = %s; want refused, listing firecracker", diags.Error())
 	}
 }
 

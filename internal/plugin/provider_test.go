@@ -20,6 +20,7 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/ptr"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // All three execution families satisfy one interface.
@@ -34,18 +35,6 @@ var (
 	_ LogReader   = (*FakeContainerProvider)(nil)
 )
 
-// newID returns a fresh execution id, failing the test if one cannot be made.
-func newID(t *testing.T) execution.ID {
-	t.Helper()
-
-	id, err := execution.NewID()
-	if err != nil {
-		t.Fatalf("NewID() returned unexpected error: %v", err)
-	}
-
-	return id
-}
-
 // -------------------------------------------------------------------------
 // ASYNCHRONOUS FAMILY
 // -------------------------------------------------------------------------
@@ -54,7 +43,7 @@ func newID(t *testing.T) execution.ID {
 // result arrives later through ingest.
 func TestProvider_ContainerSubmitIsAsynchronous(t *testing.T) {
 	p := NewFakeContainerProvider("fake-container")
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	sub, err := p.Submit(t.Context(), id, &job.Task{})
 	if err != nil {
@@ -81,7 +70,7 @@ func TestProvider_ContainerSubmitIsAsynchronous(t *testing.T) {
 // Status reports the state a recorded run was advanced to.
 func TestProvider_ContainerStatusTracksTheRun(t *testing.T) {
 	p := NewFakeContainerProvider("fake-container")
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	if _, err := p.Submit(t.Context(), id, &job.Task{}); err != nil {
 		t.Fatalf("Submit returned unexpected error: %v", err)
@@ -105,7 +94,7 @@ func TestProvider_ContainerStatusTracksTheRun(t *testing.T) {
 // it not running, and it is not.
 func TestProvider_CancelAfterTerminalIsNotAnError(t *testing.T) {
 	p := NewFakeContainerProvider("fake-container")
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	if _, err := p.Submit(t.Context(), id, &job.Task{}); err != nil {
 		t.Fatalf("Submit returned unexpected error: %v", err)
@@ -128,7 +117,7 @@ func TestProvider_CancelAfterTerminalIsNotAnError(t *testing.T) {
 // Submission carries an optional result.
 func TestProvider_FunctionSubmitIsSynchronous(t *testing.T) {
 	p := NewFakeFunctionProvider("fake-function")
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	sub, err := p.Submit(t.Context(), id, &job.Task{})
 	if err != nil {
@@ -157,7 +146,7 @@ func TestProvider_FunctionSubmitIsSynchronous(t *testing.T) {
 func TestProvider_WorkerResultHasNoExitCode(t *testing.T) {
 	p := NewFakeWorkerProvider("fake-worker")
 
-	sub, err := p.Submit(t.Context(), newID(t), &job.Task{})
+	sub, err := p.Submit(t.Context(), testkit.NewID(t), &job.Task{})
 	if err != nil {
 		t.Fatalf("Submit returned unexpected error: %v", err)
 	}
@@ -177,7 +166,7 @@ func TestProvider_NonZeroExitFailsTheSubmission(t *testing.T) {
 	p.ExitCode = new(1)
 
 	// A failing build is still a successful submission, so err stays nil
-	sub, err := p.Submit(t.Context(), newID(t), &job.Task{})
+	sub, err := p.Submit(t.Context(), testkit.NewID(t), &job.Task{})
 	if err != nil {
 		t.Fatalf("a non-zero exit produced a Go error: %v", err)
 	}
@@ -195,7 +184,7 @@ func TestProvider_NonZeroExitFailsTheSubmission(t *testing.T) {
 // Submit declares that in two lines instead of two method bodies.
 func TestProvider_SyncProviderRejectsStatusResultAndCancel(t *testing.T) {
 	p := NewFakeWorkerProvider("fake-worker")
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	_, err := p.Status(t.Context(), id)
 	if !errors.Is(err, ErrUnsupported) {
@@ -221,7 +210,7 @@ func TestProvider_SyncProviderRejectsStatusResultAndCancel(t *testing.T) {
 // output is read apart, whole.
 func TestProvider_ContainerResultIsFetched(t *testing.T) {
 	p := NewFakeContainerProvider("fake-container")
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	if _, err := p.Submit(t.Context(), id, &job.Task{Name: "test"}); err != nil {
 		t.Fatalf("Submit returned unexpected error: %v", err)
@@ -246,7 +235,7 @@ func TestProvider_ContainerResultIsFetched(t *testing.T) {
 		t.Errorf("ReadLogs() = %q, %v; want the run's output", logs.String(), err)
 	}
 
-	if err := p.ReadLogs(t.Context(), newID(t), &logs); err == nil {
+	if err := p.ReadLogs(t.Context(), testkit.NewID(t), &logs); err == nil {
 		t.Error("ReadLogs() of an unknown run succeeded")
 	}
 }
@@ -257,7 +246,7 @@ func TestProvider_ContainerResultCarriesNonZeroExit(t *testing.T) {
 	p := NewFakeContainerProvider("fake-container")
 	p.ExitCode = 3
 
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	if _, err := p.Submit(t.Context(), id, &job.Task{Name: "test"}); err != nil {
 		t.Fatalf("Submit returned unexpected error: %v", err)
@@ -278,7 +267,7 @@ func TestProvider_ContainerResultCarriesNonZeroExit(t *testing.T) {
 func TestProvider_ResultForUnknownExecution(t *testing.T) {
 	p := NewFakeContainerProvider("fake-container")
 
-	_, err := p.Result(t.Context(), newID(t))
+	_, err := p.Result(t.Context(), testkit.NewID(t))
 	if err == nil {
 		t.Fatal("expected an error for an unknown execution")
 	}
@@ -298,7 +287,7 @@ func TestProvider_ResultForUnknownExecution(t *testing.T) {
 func TestProvider_UnsupportedIsInternalAndNotReroutable(t *testing.T) {
 	p := NewFakeWorkerProvider("fake-worker")
 
-	err := p.Cancel(t.Context(), newID(t))
+	err := p.Cancel(t.Context(), testkit.NewID(t))
 
 	var classified *Error
 	if !errors.As(err, &classified) {
@@ -448,7 +437,7 @@ func TestFakes_NameAndCapabilities(t *testing.T) {
 // not the provider's.
 func TestFakeContainerProvider_UnknownExecution(t *testing.T) {
 	p := NewFakeContainerProvider("fake-container")
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	if _, err := p.Status(t.Context(), id); !errors.Is(err, ErrUnknownExecution) {
 		t.Errorf("Status on an unknown execution = %v, want ErrUnknownExecution", err)
@@ -466,7 +455,7 @@ func TestFakeContainerProvider_UnknownExecution(t *testing.T) {
 // Cancel makes a run terminal, and the transition table refuses reviving it.
 func TestFakeContainerProvider_CancelAndIllegalAdvance(t *testing.T) {
 	p := NewFakeContainerProvider("fake-container")
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	if _, err := p.Submit(t.Context(), id, &job.Task{}); err != nil {
 		t.Fatalf("Submit returned unexpected error: %v", err)
@@ -496,7 +485,7 @@ func TestFakeSyncProvider_SubmitError(t *testing.T) {
 	p := NewFakeFunctionProvider("fake-function")
 	p.SubmitErr = Infrastructure(errors.New("throttled"))
 
-	if _, err := p.Submit(t.Context(), newID(t), &job.Task{}); !errors.Is(err, ErrProvider) {
+	if _, err := p.Submit(t.Context(), testkit.NewID(t), &job.Task{}); !errors.Is(err, ErrProvider) {
 		t.Errorf("error = %v, want a classified provider failure", err)
 	}
 }
@@ -506,7 +495,7 @@ func TestProvider_SubmitErrorIsReturnedUnchanged(t *testing.T) {
 	p := NewFakeContainerProvider("fake-container")
 	p.SubmitErr = Infrastructure(errors.New("service unavailable"))
 
-	_, err := p.Submit(t.Context(), newID(t), &job.Task{})
+	_, err := p.Submit(t.Context(), testkit.NewID(t), &job.Task{})
 	if !errors.Is(err, ErrProvider) {
 		t.Errorf("error = %v, want a classified provider failure", err)
 	}

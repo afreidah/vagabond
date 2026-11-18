@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -68,7 +69,7 @@ func TestReadLogs_FollowsEmptyPages(t *testing.T) {
 
 	var out bytes.Buffer
 
-	if err := p.ReadLogs(t.Context(), newID(t), &out); err != nil {
+	if err := p.ReadLogs(t.Context(), testkit.NewID(t), &out); err != nil {
 		t.Fatalf("ReadLogs failed: %v", err)
 	}
 
@@ -88,7 +89,7 @@ func TestReadLogs_SendsThePageToken(t *testing.T) {
 		page("", entry("second")),
 	)
 
-	if err := p.ReadLogs(t.Context(), newID(t), io.Discard); err != nil {
+	if err := p.ReadLogs(t.Context(), testkit.NewID(t), io.Discard); err != nil {
 		t.Fatalf("ReadLogs failed: %v", err)
 	}
 
@@ -118,7 +119,7 @@ func TestReadLogs_StopsAtThePageCap(t *testing.T) {
 
 	var out bytes.Buffer
 
-	err := p.ReadLogs(t.Context(), newID(t), &out)
+	err := p.ReadLogs(t.Context(), testkit.NewID(t), &out)
 	if !errors.Is(err, errPageCap) || classOf(err) != plugin.ClassInfrastructure {
 		t.Errorf("ReadLogs() = %v, want an Infrastructure error wrapping errPageCap", err)
 	}
@@ -142,7 +143,7 @@ func TestReadLogs_SkipsEmptyPayloads(t *testing.T) {
 
 	var out bytes.Buffer
 
-	if err := p.ReadLogs(t.Context(), newID(t), &out); err != nil {
+	if err := p.ReadLogs(t.Context(), testkit.NewID(t), &out); err != nil {
 		t.Fatalf("ReadLogs failed: %v", err)
 	}
 
@@ -159,7 +160,7 @@ func TestReadLogs_FiltersToTheJob(t *testing.T) {
 	g, p := newFakeGoogle(t)
 	g.respond(logsRoute, page(""))
 
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	if err := p.ReadLogs(t.Context(), id, io.Discard); err != nil {
 		t.Fatalf("ReadLogs failed: %v", err)
@@ -179,7 +180,7 @@ func TestReadLogs_ReportsARefusedPage(t *testing.T) {
 	// Nothing registered for entries:list, so it 404s.
 	_, p := newFakeGoogle(t)
 
-	if err := p.ReadLogs(t.Context(), newID(t), io.Discard); err == nil {
+	if err := p.ReadLogs(t.Context(), testkit.NewID(t), io.Discard); err == nil {
 		t.Fatal("a refused page was reported as success")
 	}
 }
@@ -193,7 +194,7 @@ func TestReadLogs_ReportsAFailedWrite(t *testing.T) {
 
 	gone := writerFunc(func([]byte) (int, error) { return 0, errors.New("client gone") })
 
-	if err := p.ReadLogs(t.Context(), newID(t), gone); classOf(err) != plugin.ClassInternal {
+	if err := p.ReadLogs(t.Context(), testkit.NewID(t), gone); classOf(err) != plugin.ClassInternal {
 		t.Errorf("ReadLogs() = %v, want an Internal error", err)
 	}
 }

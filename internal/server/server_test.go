@@ -39,6 +39,7 @@ import (
 	"github.com/afreidah/vagabond/internal/registry"
 	"github.com/afreidah/vagabond/internal/state"
 	"github.com/afreidah/vagabond/internal/state/memory"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -130,18 +131,6 @@ func fixtures(t *testing.T) (*registry.Registry, *ledger.Ledger) {
 	}
 
 	return reg, led
-}
-
-// newExecutionID mints an execution ID.
-func newExecutionID(t *testing.T) execution.ID {
-	t.Helper()
-
-	id, err := execution.NewID()
-	if err != nil {
-		t.Fatalf("NewID() = %v", err)
-	}
-
-	return id
 }
 
 // newHarness starts a server over the fixtures and returns its URL.
@@ -458,14 +447,14 @@ func TestCancel_UnrecordableRequestFails(t *testing.T) {
 	executions := refusingCancels{memory.NewExecutions()}
 
 	d := &execution.Dispatch{
-		ID: newExecutionID(t), Namespace: "default", Job: "sleepy", Tasks: 1, State: execution.DispatchRunning,
+		ID: testkit.NewID(t), Namespace: "default", Job: "sleepy", Tasks: 1, State: execution.DispatchRunning,
 		Owner: "server:b:2", Epoch: 1, LeaseUntil: time.Now().Add(time.Minute), Created: time.Now(),
 	}
 	if err := executions.CreateDispatch(ctx, d); err != nil {
 		t.Fatalf("CreateDispatch() = %v", err)
 	}
 
-	id := newExecutionID(t)
+	id := testkit.NewID(t)
 
 	err := executions.Create(ctx, &execution.Record{
 		ID: id, State: execution.StateRunning, UpdatedAt: time.Now(),
@@ -601,14 +590,14 @@ func TestServeListener_ResumesAnAbandonedDispatch(t *testing.T) {
 	lapsed := time.Now().Add(-time.Hour)
 
 	d := &execution.Dispatch{
-		ID: newExecutionID(t), Namespace: "default", Job: "sleepy", Tasks: 1,
+		ID: testkit.NewID(t), Namespace: "default", Job: "sleepy", Tasks: 1,
 		State: execution.DispatchRunning, Owner: "cli:dead:1", Epoch: 1, LeaseUntil: lapsed, Created: lapsed,
 	}
 	if err := executions.CreateDispatch(ctx, d); err != nil {
 		t.Fatalf("CreateDispatch() = %v", err)
 	}
 
-	id := newExecutionID(t)
+	id := testkit.NewID(t)
 	if _, err := box.Submit(ctx, id, &job.Task{Name: "wait"}); err != nil {
 		t.Fatalf("Submit() = %v", err)
 	}

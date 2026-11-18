@@ -6,7 +6,7 @@ description: "Vagabond documentation: job files, scheduling, quotas, dispatch, c
 ---
 
 Vagabond is a compute broker for short-lived, stateless jobs on Cloud Run Jobs,
-AWS Lambda and agent nodes. Jobs are written in Nomad-style HCL. For each task,
+Code Engine Jobs, AWS Lambda and agent nodes. Jobs are written in Nomad-style HCL. For each task,
 the server rejects backends that fail the job's constraints, resources, cost
 limit or remaining quota, scores the rest, runs the task on the selected
 backend, and records what it used.
@@ -26,7 +26,8 @@ backend, and records what it used.
 | | [Deployment](deployment.md) | Running the server and agents |
 | | [Database](database.md) | Postgres and CockroachDB, migrations, schema |
 | | [Background services](background-services.md) | Every periodic loop the server and agent run |
-| Own nodes | [Agent](agent.md) | Pools of your own nodes running containerd |
+| Own nodes | [Agent](agent.md) | Pools of your own nodes, running work on containerd or in microVMs |
+| | [vagabond-firecracker](firecracker.md) | The daemon that runs an agent's workloads in Firecracker microVMs |
 | Providers | [Cloud Run Jobs](providers/cloud-run.md) | The `cloud-run` provider |
 | | [Code Engine Jobs](providers/code-engine.md) | The `code-engine` provider |
 | | [AWS Lambda](providers/lambda.md) | The `lambda` provider |

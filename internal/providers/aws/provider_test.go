@@ -30,6 +30,7 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -127,18 +128,6 @@ func rawBlock(t *testing.T, src string) *job.RawBlock {
 	return &job.RawBlock{Body: f.Body}
 }
 
-// newID returns a fresh execution id, failing the test if one cannot be made.
-func newID(t *testing.T) execution.ID {
-	t.Helper()
-
-	id, err := execution.NewID()
-	if err != nil {
-		t.Fatalf("NewID() = %v", err)
-	}
-
-	return id
-}
-
 // -------------------------------------------------------------------------
 // SUBMIT
 // -------------------------------------------------------------------------
@@ -150,7 +139,7 @@ func TestSubmit_InvokesSynchronouslyWithTheEvent(t *testing.T) {
 
 	f := &fakeLambda{logs: "hello\n" + reportLine}
 	p := newTestProvider(t, f)
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	task := functionTask(t, `
 function = "vagabond-runner"
@@ -198,7 +187,7 @@ func TestSubmit_EventCarriesMetadata(t *testing.T) {
 	task := functionTask(t, `function = "f"`, "")
 	task.Meta = map[string]string{"commit": "abc123"}
 
-	if _, err := p.Submit(t.Context(), newID(t), task); err != nil {
+	if _, err := p.Submit(t.Context(), testkit.NewID(t), task); err != nil {
 		t.Fatalf("Submit() = %v", err)
 	}
 
@@ -214,7 +203,7 @@ func TestSubmit_ReportsWhatAWSBilled(t *testing.T) {
 
 	p := newTestProvider(t, &fakeLambda{logs: "hello\n" + reportLine})
 
-	sub, err := p.Submit(t.Context(), newID(t), functionTask(t, `function = "f"`, ""))
+	sub, err := p.Submit(t.Context(), testkit.NewID(t), functionTask(t, `function = "f"`, ""))
 	if err != nil {
 		t.Fatalf("Submit() = %v", err)
 	}
@@ -241,7 +230,7 @@ func TestSubmit_NoReportLeavesTheBillUnset(t *testing.T) {
 
 	p := newTestProvider(t, &fakeLambda{logs: "hello\n"})
 
-	sub, err := p.Submit(t.Context(), newID(t), functionTask(t, `function = "f"`, ""))
+	sub, err := p.Submit(t.Context(), testkit.NewID(t), functionTask(t, `function = "f"`, ""))
 	if err != nil {
 		t.Fatalf("Submit() = %v", err)
 	}
@@ -261,7 +250,7 @@ func TestSubmit_FunctionErrorIsAFailedTask(t *testing.T) {
 
 	p := newTestProvider(t, &fakeLambda{functionError: "Unhandled", logs: reportLine})
 
-	sub, err := p.Submit(t.Context(), newID(t), functionTask(t, `function = "f"`, ""))
+	sub, err := p.Submit(t.Context(), testkit.NewID(t), functionTask(t, `function = "f"`, ""))
 	if err != nil {
 		t.Fatalf("Submit() = %v, want a failed task rather than an error", err)
 	}
@@ -282,7 +271,7 @@ func TestSubmit_TaskNamingNoFunction(t *testing.T) {
 	f := &fakeLambda{}
 	p := newTestProvider(t, f)
 
-	_, err := p.Submit(t.Context(), newID(t), functionTask(t, `args = ["x"]`, ""))
+	_, err := p.Submit(t.Context(), testkit.NewID(t), functionTask(t, `args = ["x"]`, ""))
 
 	var classified *plugin.Error
 	if !errors.As(err, &classified) || classified.Class != plugin.ClassInternal {
@@ -330,7 +319,7 @@ func TestSubmit_ClassifiesRefusals(t *testing.T) {
 			f := &fakeLambda{status: tt.status, errorType: tt.errorType}
 			p := newTestProvider(t, f)
 
-			_, err := p.Submit(t.Context(), newID(t), functionTask(t, `function = "f"`, ""))
+			_, err := p.Submit(t.Context(), testkit.NewID(t), functionTask(t, `function = "f"`, ""))
 
 			var classified *plugin.Error
 			if !errors.As(err, &classified) {
@@ -357,7 +346,7 @@ func TestStatus_IsUnsupported(t *testing.T) {
 
 	p := newTestProvider(t, &fakeLambda{})
 
-	if _, err := p.Status(t.Context(), newID(t)); !errors.Is(err, plugin.ErrUnsupported) {
+	if _, err := p.Status(t.Context(), testkit.NewID(t)); !errors.Is(err, plugin.ErrUnsupported) {
 		t.Errorf("Status() = %v, want ErrUnsupported", err)
 	}
 }

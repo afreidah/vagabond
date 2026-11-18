@@ -36,6 +36,7 @@ const (
 	AttrInternetEgress  = Prefix + "internet"
 	AttrPrivateNetwork  = Prefix + "private_network"
 	AttrArbitraryImages = Prefix + "arbitrary_images"
+	AttrIsolation       = Prefix + "isolation"
 	AttrEstimatedCost   = Prefix + "estimated_cost"
 )
 
@@ -56,9 +57,6 @@ const MetaPrefix = Prefix + "meta."
 // flags. Open like MetaPrefix, and only present when a pool's node is judged.
 const NodeLabelPrefix = "node.label."
 
-// setValuedAttributes are matched by membership rather than equality.
-var setValuedAttributes = []string{AttrArchitecture, AttrDrivers}
-
 // knownAttributes is every name Vagabond publishes about a provider. A
 // constraint outside it and MetaPrefix is a typo, caught so the job does not
 // silently match nothing and report as having no capacity.
@@ -71,6 +69,7 @@ var knownAttributes = []string{
 	AttrInternetEgress,
 	AttrPrivateNetwork,
 	AttrArbitraryImages,
+	AttrIsolation,
 	AttrEstimatedCost,
 	AttrFreeQuotaPercent,
 	AttrTier,
@@ -80,8 +79,9 @@ var knownAttributes = []string{
 // PROJECTION
 // -------------------------------------------------------------------------
 
-// Attributes returns the dotted view of the snapshot. An unadvertised limit is
-// left out rather than written as "0"; cost is published even at zero.
+// Attributes returns the dotted view of the snapshot. An unadvertised limit or
+// isolation is left out rather than written as "0" or empty; cost is published
+// even at zero.
 func (c *Capabilities) Attributes() map[string]string {
 	attrs := map[string]string{
 		AttrInternetEgress:  strconv.FormatBool(c.InternetEgress),
@@ -120,18 +120,16 @@ func (c *Capabilities) Attributes() map[string]string {
 		attrs[AttrMaxMemory] = strconv.Itoa(*c.MaxResources.Memory)
 	}
 
+	if c.Isolation != "" {
+		attrs[AttrIsolation] = c.Isolation
+	}
+
 	return attrs
 }
 
 // -------------------------------------------------------------------------
 // QUERIES
 // -------------------------------------------------------------------------
-
-// SetValued reports whether an attribute holds a comma-separated set, and so
-// must be matched by membership rather than by equality.
-func SetValued(name string) bool {
-	return slices.Contains(setValuedAttributes, name)
-}
 
 // Reserved reports whether an attribute name belongs to Vagabond rather than to
 // a provider plugin.

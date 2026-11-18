@@ -17,6 +17,7 @@ use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use nix::sys::signal::Signal;
+use protobuf::MessageField;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tracing::{info, warn};
 use ttrpc::Code;
@@ -27,7 +28,8 @@ use crate::config::Config;
 use crate::guest;
 use crate::network::Slot;
 use crate::proto::agent::{
-    Empty, ExecutionRequest, ExecutionResult, ExecutionStatus, LogsRequest, Submission,
+    Empty, ExecutionRequest, ExecutionResult, ExecutionStatus, LogsRequest, NodeExecutor,
+    Resources, Submission,
 };
 use crate::proto::executor::{ExecutorSubmitRequest, HeldList, Output};
 use crate::proto::executor_ttrpc::Executor as ExecutorService;
@@ -56,6 +58,10 @@ const MAX_LOG_READ: u64 = 64 * 1024;
 // RECONNECT_PATIENCE is how long a recovered microVM's guest, booted long ago,
 // gets to answer before it is taken for dead.
 const RECONNECT_PATIENCE: Duration = Duration::from_secs(5);
+
+// NAME is what the agent registers the executor as, and what a workload for it
+// names.
+pub const NAME: &str = "firecracker";
 
 // Executor runs the agent's executions in microVMs. A clone shares the same
 // state, so each microVM's supervisor task holds its own handle to it.
@@ -106,22 +112,34 @@ impl Executor {
         Ok(())
     }
 
-    // recover takes back the executions a previous daemon left unfinished,
-    // once at start. A running workload's supervisor and timeout resume; one
-    // that never started, whose Firecracker is gone, or whose guest does not
-    // answer has its microVM removed and is ended without an exit, so it
-    // reports failed and Release can clear it.
+    // recover takes back the executions a previous daemon left, once at start.
+    // A running workload's supervisor and timeout resume; one that never
+    // started, whose Firecracker is gone, or whose guest does not answer has
+    // its microVM removed and is ended without an exit, so it reports failed
+    // and Release can clear it. One that ended before its microVM was shut
+    // down has the microVM removed, so it holds no more of the node.
     pub async fn recover(&self) -> io::Result<()> {
-        let unfinished: Vec<Record> = {
+        let left: Vec<Record> = {
             let records = self.records.lock().expect("records lock poisoned");
-            records
-                .values()
-                .filter(|record| record.ended.is_none())
-                .cloned()
-                .collect()
+            records.values().cloned().collect()
         };
-        for record in unfinished {
+        for record in left {
             let id = record.execution_id.clone();
+
+            // Its end saved, the daemon stopped before shutting the microVM down.
+            if record.ended.is_some() {
+                if record
+                    .firecracker
+                    .is_some_and(|firecracker| firecracker.running())
+                {
+                    info!(execution = %id, "removing an ended microVM");
+                    vm::remove(&self.config, &record).await.inspect_err(
+                        |err| warn!(execution = %id, error = %err, "removing the microVM"),
+                    )?;
+                }
+                continue;
+            }
+
             if let Some(guest) = self.reattach(&record).await {
                 info!(execution = %id, "recovered");
                 self.supervise(id, guest);
@@ -233,7 +251,13 @@ impl Executor {
     ) -> io::Result<GuestClient> {
         let id = &record.execution_id;
         let drive = Path::new(&request.root_drive);
-        let firecracker = vm::launch(Arc::clone(&self.config), record, drive).await?;
+        let firecracker = vm::launch(
+            Arc::clone(&self.config),
+            record,
+            drive,
+            &request.root_fstype,
+        )
+        .await?;
         self.update(id, |record| record.firecracker = Some(firecracker))?;
         let vsock = vm::vsock_path(&self.config, id);
         let guest = tokio::select! {
@@ -276,7 +300,10 @@ impl Executor {
     // supervise follows a started workload to its end in a task of its own: its
     // output copied to its log, its end saved with the exit code, unset when the
     // guest's connection broke as the microVM died, and the microVM shut down.
-    // A workload released while it runs ends with nothing saved.
+    // A workload released while it runs ends with nothing saved. One already
+    // cancelled is stopped first, as a Cancel while its microVM booted, or just
+    // before the daemon stopped, found no guest to stop it through; the guest
+    // is registered before the task looks, so no Cancel falls between the two.
     fn supervise(&self, id: String, guest: GuestClient) {
         if let Some(record) = self.record(&id) {
             self.watch(&record);
@@ -287,6 +314,13 @@ impl Executor {
             .insert(id.clone(), guest.clone());
         let executor = self.clone();
         tokio::spawn(async move {
+            if executor.record(&id).is_some_and(|record| record.cancelled) {
+                info!(execution = %id, "stopping a workload cancelled before it was supervised");
+                if let Err(err) = executor.stop(&id).await {
+                    warn!(execution = %id, error = %err, "stopping the workload");
+                }
+            }
+
             let followed = executor.follow(&id, &guest).await;
             // Let go of the guest first, so nothing seeing the end can signal it.
             // One already let go of was released, its microVM removed under the
@@ -529,19 +563,42 @@ impl ExecutorService for Executor {
         })
     }
 
-    // held lists every execution the executor holds, with what it declared and
-    // whether it still runs.
+    // held lists every execution the executor holds, with what it takes of the
+    // node and whether it still does.
     async fn held(&self, _ctx: &TtrpcContext, _: Empty) -> ttrpc::Result<HeldList> {
+        let overhead = self.overhead();
         let records = self.records.lock().expect("records lock poisoned");
-        let held = records.values().map(Record::held).collect();
+        let held = records
+            .values()
+            .map(|record| record.held(&overhead))
+            .collect();
         Ok(HeldList {
             held,
+            ..Default::default()
+        })
+    }
+
+    // info is the executor as the agent registers it: its name, and what each
+    // microVM takes beyond what its workload declared.
+    async fn info(&self, _ctx: &TtrpcContext, _: Empty) -> ttrpc::Result<NodeExecutor> {
+        Ok(NodeExecutor {
+            name: NAME.to_string(),
+            overhead: MessageField::some(self.overhead()),
             ..Default::default()
         })
     }
 }
 
 impl Executor {
+    // overhead is what each microVM takes of the node beyond what its workload
+    // declared: the memory its cgroup allows Firecracker itself.
+    fn overhead(&self) -> Resources {
+        Resources {
+            memory: self.config.vmm_overhead as i64,
+            ..Default::default()
+        }
+    }
+
     // known is an execution's record, or the status for one the executor does
     // not hold, the one place an execution is reported unknown.
     fn known(&self, id: &str) -> ttrpc::Result<Record> {
@@ -599,7 +656,8 @@ async fn signal(guest: &GuestClient, sent: Signal) -> io::Result<()> {
 // check refuses a Submit the daemon cannot act on, before anything is made: an
 // ID the jailer would refuse, which, as it names directories, also keeps a path
 // out of it; no memory to size the microVM by; a negative timeout; nothing to
-// run; or no drive or cgroup.
+// run; no drive or cgroup; or a filesystem type that is not one plain word,
+// which the guest kernel's command line would take for more parameters.
 fn check(request: &ExecutorSubmitRequest) -> Result<(), String> {
     let id = &request.execution_id;
     let allowed = |c: char| c.is_ascii_alphanumeric() || c == '-';
@@ -620,19 +678,22 @@ fn check(request: &ExecutorSubmitRequest) -> Result<(), String> {
     if request.root_drive.is_empty() || request.cgroup.is_empty() {
         return Err("a root drive and a cgroup are both needed".into());
     }
+    let fstype = &request.root_fstype;
+    if fstype.is_empty() || !fstype.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(format!(
+            "root drive filesystem {fstype:?} is not one word, such as ext4"
+        ));
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::agent::Resources;
     use crate::proto::executor::{Output, Process};
     use crate::proto::executor_ttrpc::{ExecutorClient, create_executor};
     use crate::proto::guest::Exit;
     use crate::proto::guest_ttrpc::{Guest, create_guest};
-    use clap::Parser;
-    use protobuf::MessageField;
     use std::sync::atomic::{AtomicBool, Ordering};
     use ttrpc::r#async::{Server, Service};
 
@@ -766,28 +827,22 @@ mod tests {
         panic!("{id} did not end");
     }
 
-    // config is the daemon's flags with only the required ones given, the state
-    // directory at state_dir and the jails under it.
-    fn config(state_dir: &Path) -> Config {
-        let jails = state_dir.join("jails");
-        let (state_dir, jails) = (state_dir.to_str().unwrap(), jails.to_str().unwrap());
-        Config::parse_from([
-            "vagabond-firecracker",
-            "--kernel",
-            "/boot/vmlinux",
-            "--initramfs",
-            "/boot/initramfs",
-            "--uid",
-            "10000",
-            "--gid",
-            "10000",
-            "--uplink",
-            "eth0",
-            "--state-dir",
-            state_dir,
-            "--chroot-base",
-            jails,
-        ])
+    // Info names the executor as workloads do, with the memory each microVM's
+    // cgroup allows Firecracker beyond its workload.
+    #[tokio::test]
+    async fn info_names_the_executor_and_its_overhead() {
+        let dir = tempfile::tempdir().unwrap();
+        let (client, _server) = serve_executor(
+            dir.path(),
+            Executor::new(Config::sample(dir.path())).unwrap(),
+        )
+        .await;
+
+        let info = client.info(context(), &Empty::new()).await.unwrap();
+
+        assert_eq!(info.name, NAME);
+        assert_eq!(info.overhead.memory, 32);
+        assert_eq!(info.overhead.cpu, 0);
     }
 
     // A new executor holds every record saved before it, and update changes a
@@ -796,7 +851,7 @@ mod tests {
     fn update_changes_the_saved_record() {
         let dir = tempfile::tempdir().unwrap();
         Record::sample().save(dir.path()).unwrap();
-        let executor = Executor::new(config(dir.path())).unwrap();
+        let executor = Executor::new(Config::sample(dir.path())).unwrap();
 
         executor
             .update("exec-1", |record| record.cancelled = true)
@@ -811,7 +866,7 @@ mod tests {
     #[test]
     fn admit_records_a_new_execution() {
         let dir = tempfile::tempdir().unwrap();
-        let executor = Executor::new(config(dir.path())).unwrap();
+        let executor = Executor::new(Config::sample(dir.path())).unwrap();
         let request = request();
 
         let record = executor.admit(&request).unwrap().unwrap();
@@ -834,7 +889,7 @@ mod tests {
     #[test]
     fn admit_leaves_a_held_execution() {
         let dir = tempfile::tempdir().unwrap();
-        let executor = Executor::new(config(dir.path())).unwrap();
+        let executor = Executor::new(Config::sample(dir.path())).unwrap();
         executor.admit(&request()).unwrap();
         assert_eq!(executor.admit(&request()).unwrap(), None);
         assert_eq!(executor.records.lock().unwrap().len(), 1);
@@ -845,7 +900,7 @@ mod tests {
     #[test]
     fn admit_refuses_when_the_pool_is_used_up() {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = config(dir.path());
+        let mut config = Config::sample(dir.path());
         config.pool = "172.16.0.0/30".parse().unwrap();
         let executor = Executor::new(config).unwrap();
         executor.admit(&request()).unwrap();
@@ -861,7 +916,7 @@ mod tests {
     #[test]
     fn admit_refuses_a_socket_path_too_long() {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = config(dir.path());
+        let mut config = Config::sample(dir.path());
         config.chroot_base = dir.path().join("j".repeat(100));
         let executor = Executor::new(config).unwrap();
 
@@ -875,7 +930,7 @@ mod tests {
     #[tokio::test]
     async fn supervise_follows_the_workload_to_its_end() {
         let dir = tempfile::tempdir().unwrap();
-        let executor = Executor::new(config(dir.path())).unwrap();
+        let executor = Executor::new(Config::sample(dir.path())).unwrap();
         let request = request();
         let id = request.execution_id.clone();
         executor.admit(&request).unwrap();
@@ -892,12 +947,39 @@ mod tests {
         assert!(executor.guests.lock().unwrap().is_empty());
     }
 
+    // A workload cancelled before it was supervised, as while its microVM
+    // booted, is sent SIGTERM as soon as it is.
+    #[tokio::test]
+    async fn supervise_stops_a_workload_already_cancelled() {
+        let dir = tempfile::tempdir().unwrap();
+        let executor = Executor::new(Config::sample(dir.path())).unwrap();
+        let request = request();
+        let id = request.execution_id.clone();
+        executor.admit(&request).unwrap();
+        executor
+            .update(&id, |record| record.cancelled = true)
+            .unwrap();
+        let signals: Arc<Mutex<Vec<i32>>> = Arc::default();
+        let (guest, _server) = serve_guest(
+            dir.path(),
+            Running {
+                signals: Arc::clone(&signals),
+            },
+        )
+        .await;
+
+        executor.supervise(id.clone(), guest);
+        ended(&executor, &id).await;
+
+        assert_eq!(*signals.lock().unwrap(), [15]);
+    }
+
     // stop sends a supervised workload SIGTERM at once and SIGKILL once the
     // grace has passed.
     #[tokio::test]
     async fn stop_terms_then_kills() {
         let dir = tempfile::tempdir().unwrap();
-        let mut executor = Executor::new(config(dir.path())).unwrap();
+        let mut executor = Executor::new(Config::sample(dir.path())).unwrap();
         executor.grace = Duration::from_millis(50);
         let signals: Arc<Mutex<Vec<i32>>> = Arc::default();
         let (guest, _server) = serve_guest(
@@ -924,7 +1006,7 @@ mod tests {
     #[tokio::test]
     async fn watch_stops_a_workload_past_its_timeout() {
         let dir = tempfile::tempdir().unwrap();
-        let executor = Executor::new(config(dir.path())).unwrap();
+        let executor = Executor::new(Config::sample(dir.path())).unwrap();
         let signals: Arc<Mutex<Vec<i32>>> = Arc::default();
         let (guest, _server) = serve_guest(
             dir.path(),
@@ -952,8 +1034,11 @@ mod tests {
     #[tokio::test]
     async fn unknown_executions_and_bad_requests_are_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let (client, _server) =
-            serve_executor(dir.path(), Executor::new(config(dir.path())).unwrap()).await;
+        let (client, _server) = serve_executor(
+            dir.path(),
+            Executor::new(Config::sample(dir.path())).unwrap(),
+        )
+        .await;
         let unknown = ExecutionRequest {
             execution_id: "exec-9".into(),
             ..Default::default()
@@ -992,7 +1077,7 @@ mod tests {
     #[tokio::test]
     async fn a_finished_execution_reports_its_result_and_output() {
         let dir = tempfile::tempdir().unwrap();
-        let executor = Executor::new(config(dir.path())).unwrap();
+        let executor = Executor::new(Config::sample(dir.path())).unwrap();
         let id = finished(&executor, b"hello world");
         let (client, _server) = serve_executor(dir.path(), executor).await;
         let request = ExecutionRequest {
@@ -1026,7 +1111,7 @@ mod tests {
     #[tokio::test]
     async fn a_running_execution_has_no_result_yet() {
         let dir = tempfile::tempdir().unwrap();
-        let executor = Executor::new(config(dir.path())).unwrap();
+        let executor = Executor::new(Config::sample(dir.path())).unwrap();
         let id = executor.admit(&request()).unwrap().unwrap().execution_id;
         executor
             .update(&id, |record| record.started = Some(SystemTime::now()))
@@ -1065,7 +1150,7 @@ mod tests {
     #[tokio::test]
     async fn release_forgets_the_execution() {
         let dir = tempfile::tempdir().unwrap();
-        let executor = Executor::new(config(dir.path())).unwrap();
+        let executor = Executor::new(Config::sample(dir.path())).unwrap();
         let id = finished(&executor, b"done");
         let (client, _server) = serve_executor(dir.path(), executor).await;
         let request = ExecutionRequest {
@@ -1101,7 +1186,7 @@ mod tests {
         };
         unstarted.save(dir.path()).unwrap();
         gone.save(dir.path()).unwrap();
-        let executor = Executor::new(config(dir.path())).unwrap();
+        let executor = Executor::new(Config::sample(dir.path())).unwrap();
 
         executor.recover().await.unwrap();
 
@@ -1116,7 +1201,7 @@ mod tests {
     #[tokio::test]
     async fn boot_forgets_an_execution_that_fails() {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = config(dir.path());
+        let mut config = Config::sample(dir.path());
         config.chroot_base = dir.path().join("jails");
         config.kernel = dir.path().join("missing-vmlinux");
         let executor = Executor::new(config).unwrap();
@@ -1133,7 +1218,7 @@ mod tests {
     #[test]
     fn update_of_an_unknown_execution_is_not_found() {
         let dir = tempfile::tempdir().unwrap();
-        let executor = Executor::new(config(dir.path())).unwrap();
+        let executor = Executor::new(Config::sample(dir.path())).unwrap();
         let err = executor.update("exec-1", |_| {}).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
@@ -1153,6 +1238,7 @@ mod tests {
                 ..Default::default()
             }),
             root_drive: "/dev/dm-3".into(),
+            root_fstype: "ext4".into(),
             cgroup: "/system.slice/vagabond-agent.service".into(),
             ..Default::default()
         }
@@ -1165,10 +1251,11 @@ mod tests {
     }
 
     // Each thing the daemon cannot act on is refused: a path or an oversized or
-    // empty ID, no memory, a negative timeout, nothing to run, and no drive.
+    // empty ID, no memory, a negative timeout, nothing to run, no drive, and no
+    // filesystem type or one carrying more kernel parameters.
     #[test]
     fn check_refuses_what_the_daemon_cannot_act_on() {
-        let refusals: [fn(&mut ExecutorSubmitRequest); 7] = [
+        let refusals: [fn(&mut ExecutorSubmitRequest); 9] = [
             |r| r.execution_id = "../etc".into(),
             |r| r.execution_id = "a".repeat(65),
             |r| r.execution_id.clear(),
@@ -1176,6 +1263,8 @@ mod tests {
             |r| r.timeout.mut_or_insert_default().seconds = -1,
             |r| r.process.mut_or_insert_default().args.clear(),
             |r| r.root_drive.clear(),
+            |r| r.root_fstype.clear(),
+            |r| r.root_fstype = "ext4 init=/bin/sh".into(),
         ];
         for refuse in refusals {
             let mut request = request();

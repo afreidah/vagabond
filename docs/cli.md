@@ -709,6 +709,7 @@ and only the [client flags](#connecting-to-the-server).
 | `POOL` | Pool the node joined (`-pool`) |
 | `ADDRESS` | Address the agent connected from |
 | `ARCH` | Node architecture |
+| `EXECUTORS` | What the node runs workloads with: `containerd`, and `firecracker` with `-firecracker` |
 | `CPU USED` | Millicores used by running workloads / capacity |
 | `MEMORY USED` | MiB used by running workloads / capacity |
 | `WORKLOADS` | Running workloads |
@@ -716,9 +717,9 @@ and only the [client flags](#connecting-to-the-server).
 
 ```shell
 $ vagabond node status
-NAME    POOL     ADDRESS          ARCH   CPU USED    MEMORY USED    WORKLOADS  CONNECTED
-nuc-01  homelab  10.0.4.21:51432  amd64  1000/4000m  1024/15872MiB  1          2026-09-28 09:14:03Z
-pi-02   homelab  10.0.4.35:40118  arm64  0/4000m     0/7680MiB      0          2026-09-28 09:14:07Z
+NAME    POOL     ADDRESS          ARCH   EXECUTORS               CPU USED    MEMORY USED    WORKLOADS  CONNECTED
+nuc-01  homelab  10.0.4.21:51432  amd64  containerd,firecracker  1000/4000m  1024/15872MiB  1          2026-09-28 09:14:03Z
+pi-02   homelab  10.0.4.35:40118  arm64  containerd              0/4000m     0/7680MiB      0          2026-09-28 09:14:07Z
 
 $ vagabond node status
 No agent nodes are connected.
@@ -888,7 +889,8 @@ vagabond agent [options]
 ```
 
 Runs the agent on a node: dials the server's agent address, registers the node
-into a pool, and runs the workloads the server sends on the node's containerd
+into a pool, and runs the workloads the server sends on the node's containerd,
+and in Firecracker microVMs through vagabond-firecracker with `-firecracker`,
 until SIGINT or SIGTERM. Workloads keep running when the agent stops, and it
 finds them again when it starts. See [agent](agent.md) for requirements,
 cgroup setup and pools.
@@ -896,12 +898,13 @@ cgroup setup and pools.
 **Requirements** (checked before the node registers): cgroup v2, access to
 containerd's socket, and permission to create cgroups under the agent's own
 (`Delegate=yes` under systemd, or `--cgroupns=host` with `/sys/fs/cgroup`
-writable in a container).
+writable in a container). With `-firecracker`, containerd's devmapper
+snapshotter and a vagabond-firecracker answering on the socket too.
 
 | Flag | Default | Description |
 |---|---|---|
 | `-server <addr>` | `127.0.0.1:4748` | Server's agent address (`agent_bind`), not its API address |
-| `-pool <name>` | `default` | Pool the node joins. Jobs reach it through a `pool` provider of this name |
+| `-pool <name>` | `default` | Pool the node joins. Jobs reach it through a `containerd` or `firecracker` provider whose `pool` is this name |
 | `-name <name>` | certificate's common name with TLS, else hostname | Node name, shown in `node status` and as the execution's provider ID. With TLS it must match the certificate |
 | `-tls-ca <path>` | none | CA file or directory the server's certificate chains to. With `-tls-cert` and `-tls-key`: all three or none. Not read from `$VAGABOND_TLS_CA`, which is the client commands' |
 | `-tls-cert <path>` | none | This agent's certificate; its common name is the node's name |
@@ -911,6 +914,7 @@ writable in a container).
 | `-cpu <millicores>` | `0` (no cap) | Cap on CPU the agent offers |
 | `-memory <MiB>` | `0` (no cap) | Cap on memory the agent offers |
 | `-containerd <path>` | `/run/containerd/containerd.sock` | containerd socket |
+| `-firecracker <path>` | empty | vagabond-firecracker's socket, to run workloads in microVMs as well; off when empty |
 | `-data-dir <path>` | `/var/lib/vagabond` | Where workload output is kept. In a container, must be the same path inside and out |
 | `-cgroup-parent <path>` | agent's own cgroup | Operator-prepared cgroup to create workloads under, instead of delegating from the agent's own |
 | `-log-level <level>` | `info` | `debug`, `info`, `warn` or `error` |
@@ -926,6 +930,8 @@ namespace `vagabond`.
 | `Reading the node: ...` | Host CPU, memory or cgroup could not be read |
 | Cgroup delegation error | No `-cgroup-parent` and the agent's cgroup cannot be delegated |
 | containerd error | Socket missing or not reachable |
+| `... devmapper snapshotter ...` | `-firecracker` given, and containerd has no working devmapper snapshotter |
+| `vagabond-firecracker at <socket> does not answer: ...` | `-firecracker` given, and the daemon is not serving |
 | `Finding workloads from before: ...` | Recovering existing workloads failed |
 | `-tls-ca, -tls-cert and -tls-key go together: set all three or none` | Some TLS flags without the others |
 | `-name "<name>" does not match the certificate's common name "<cn>"` | `-name` disagrees with the certificate |

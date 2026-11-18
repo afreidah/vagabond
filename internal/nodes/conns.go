@@ -221,9 +221,12 @@ func (c *Conns) All() []*Conn {
 	return c.filter(func(*Conn) bool { return true })
 }
 
-// InPool returns the connected nodes that joined pool, by name.
-func (c *Conns) InPool(pool string) []*Conn {
-	return c.filter(func(conn *Conn) bool { return conn.Node.GetPool() == pool })
+// InPool returns the connected nodes that joined pool and run executor, by
+// name.
+func (c *Conns) InPool(pool, executor string) []*Conn {
+	return c.filter(func(conn *Conn) bool {
+		return conn.Node.GetPool() == pool && conn.Node.Executor(executor) != nil
+	})
 }
 
 // filter returns the connections keep accepts, sorted by name.

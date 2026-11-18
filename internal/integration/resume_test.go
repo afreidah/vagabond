@@ -25,6 +25,7 @@ import (
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/server"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -67,7 +68,7 @@ func (h *harness) abandon() execution.ID {
 func (h *harness) leave(until time.Time, states ...execution.State) (execution.ID, execution.ID) {
 	h.t.Helper()
 
-	id := newID(h.t)
+	id := testkit.NewID(h.t)
 
 	if _, err := h.box().Submit(context.Background(), id, &job.Task{Name: "wait"}); err != nil {
 		h.t.Fatalf("Submit() = %v", err)
@@ -90,7 +91,7 @@ func (h *harness) seed(id execution.ID, provider, node string, until time.Time) 
 
 	ctx := context.Background()
 	lapsed := time.Now().Add(-time.Hour)
-	dispatchID := newID(h.t)
+	dispatchID := testkit.NewID(h.t)
 
 	d := &execution.Dispatch{
 		ID: dispatchID, Namespace: job.DefaultNamespace, Job: "sleepy", Tasks: 1,

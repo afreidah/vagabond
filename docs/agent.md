@@ -7,15 +7,16 @@ weight: 510
 
 `vagabond agent` runs on a node you own, apart from the server. It dials the
 server's `agent_bind` address, registers the node into a named pool, and runs
-the workloads the server sends it as containers on the node's containerd. The
-server schedules onto the pool's nodes through a provider of type
-`containerd`, each node a candidate of its own.
-`vagabond node status` lists the nodes connected now and how much of each is
-in use.
+the workloads the server sends it with the node's executors: as containers on
+the node's containerd, and, with `-firecracker`, in Firecracker microVMs
+through [vagabond-firecracker](firecracker.md). The server schedules onto the
+pool's nodes through providers of type `containerd` and `firecracker`, each
+node a candidate of its own. `vagabond node status` lists the nodes connected
+now and how much of each is in use.
 
-Workloads belong to containerd, not to the agent process: they keep running
-when the agent stops or loses the server, and the agent finds them again when
-it starts.
+Workloads belong to containerd and vagabond-firecracker, not to the agent
+process: they keep running when the agent stops or loses the server, and the
+agent finds them again when it starts.
 
 ## Requirements
 
@@ -27,6 +28,8 @@ it starts.
 | `-cgroup-parent` exists and can parent workloads | first `Submit` | `Internal` `creating the task: ...` |
 | containerd reachable on `-containerd` | startup | |
 | `-data-dir` writable | startup | |
+| With `-firecracker`: containerd's devmapper snapshotter loaded | startup | [Startup errors](#startup-errors) |
+| With `-firecracker`: vagabond-firecracker answering on its socket | startup | [Startup errors](#startup-errors) |
 | TCP reach to the server's `agent_bind` | after startup, retried | `connecting to the server` warnings |
 
 The agent needs no inbound port. The server calls it back down the
@@ -42,7 +45,7 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=no -memory 12288 \
 | Flag | Default | Description |
 |---|---|---|
 | `-server <addr>` | `127.0.0.1:4748` | The server's `agent_bind` address, `host:port`. |
-| `-pool <name>` | `default` | Pool the node joins. Must match the `pool` of a `containerd` provider on the server to receive work. |
+| `-pool <name>` | `default` | Pool the node joins. Must match the `pool` of a `containerd` or `firecracker` provider on the server to receive work. |
 | `-name <name>` | the certificate's common name with TLS, else the hostname | Node name. Unique per server: an agent registering under a name already connected replaces that connection. With TLS it must match the certificate. |
 | `-tls-ca <path>` | none | CA file, or directory of them, the server's certificate chains to. `-tls-ca`, `-tls-cert` and `-tls-key` are all set or none. See [Security](#security). |
 | `-tls-cert <path>` | none | This agent's certificate. Its common name is the node's name. |
@@ -52,6 +55,7 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=no -memory 12288 \
 | `-cpu <millicores>` | `0` (no cap; negative is the same) | Upper bound on capacity CPU. |
 | `-memory <MiB>` | `0` (no cap; negative is the same) | Upper bound on capacity memory. |
 | `-containerd <path>` | `/run/containerd/containerd.sock` | containerd's socket. |
+| `-firecracker <path>` | empty | vagabond-firecracker's socket, `/run/vagabond-firecracker/executor.sock` by its default. Runs workloads in microVMs as well as containers, their images' snapshots in the containerd namespace `vagabond-firecracker`. Off when empty. |
 | `-data-dir <path>` | `/var/lib/vagabond` | Workload output, under `<data-dir>/logs`. Created mode `0750` if missing. In a container it must be the same path inside and out. |
 | `-cgroup-parent <path>` | empty | cgroup v2 path to create workloads under, prepared by the operator. Skips [cgroup delegation](#cgroup-delegation). |
 | `-log-level <level>` | `info` | `debug`, `info`, `warn` or `error`. Logs are text to stderr. |
@@ -66,20 +70,24 @@ The full CLI reference is in [CLI](cli.md).
    the limits above it ([Capacity](#capacity)).
 3. Delegate the agent's cgroup, unless `-cgroup-parent` is set
    ([Cgroup delegation](#cgroup-delegation)).
-4. Connect to containerd, create `<data-dir>/logs`, and check that containerd
-   answers.
+4. Connect to containerd and create `<data-dir>/logs`.
 5. Re-arm the timeout of every workload already in the `vagabond` namespace
    ([Agent restarts](#agent-restarts)).
-6. Log the node, then dial the server and stay connected until `SIGINT` or
-   `SIGTERM`. Either signal closes the session and exits 0; workloads keep
-   running.
+6. With `-firecracker`, connect to containerd again for the
+   `vagabond-firecracker` namespace.
+7. Log the node, then ask each executor what it is: containerd answers by its
+   version; vagabond-firecracker by `Info`, once containerd's devmapper
+   snapshotter is found loaded. What they answer, each executor's name and
+   overhead, is what the node registers.
+8. Dial the server and stay connected until `SIGINT` or `SIGTERM`. Either
+   signal closes the session and exits 0; workloads keep running.
 
 ```text
 level=INFO msg=node name=box1 pool=homelab cpu=4000 memory=12288 cgroup=/system.slice/vagabond-agent.service
 level=INFO msg=connected server=10.0.0.5:4748 name=box1 pool=homelab
 ```
 
-Steps 1 to 5 exit with status 1 on failure, before the node registers. A
+Steps 1 to 7 exit with status 1 on failure, before the node registers. A
 server that cannot be reached is not a startup failure; the agent keeps
 retrying.
 
@@ -159,6 +167,9 @@ children, and the first `Submit` fails `creating the task: ...`.
 | `-containerd` not a usable address | `connecting to containerd at <socket>: ...` |
 | `<data-dir>/logs` cannot be created | `creating the log directory: ...` |
 | containerd cannot list containers | `Finding workloads from before: listing containers: ...` |
+| `-firecracker` given, containerd has no devmapper snapshotter | `containerd at <socket> has no devmapper snapshotter` |
+| `-firecracker` given, devmapper failed to load (no thin pool, bad config) | `containerd's devmapper snapshotter did not load: <containerd's reason>` |
+| `-firecracker` given, vagabond-firecracker not serving | `vagabond-firecracker at <socket> does not answer: dialling vagabond-firecracker at <socket>: ...` |
 | Bad `-log-level` | `Invalid -log-level "<value>": use debug, info, warn or error.` |
 | `-tls-ca`, `-tls-cert`, `-tls-key` partly set | `-tls-ca, -tls-cert and -tls-key go together: set all three or none` |
 | `-tls-server-name` without the other three | `-tls-server-name needs -tls-ca, -tls-cert and -tls-key` |
@@ -202,6 +213,10 @@ WantedBy=multi-user.target
 | `CPUQuota=`, `MemoryMax=` | Become the unit cgroup's `cpu.max` and `memory.max`, and so the node's capacity. Optional. |
 | `KillMode=process` | Workload processes live in the unit's cgroup subtree. With the default `control-group`, stopping or restarting the unit kills every workload with it. |
 
+With `-firecracker`, add `After=` and `Requires=` on vagabond-firecracker's
+unit too, so the agent starts once the daemon serves
+([Deployment](firecracker.md#deployment)).
+
 ### Container
 
 The agent in a container drives the host's containerd, so workloads run on the
@@ -226,6 +241,7 @@ docker run -d --name vagabond-agent --restart unless-stopped \
 | `-data-dir` mounted at the same path | containerd on the host writes workload output to the path the agent names, and the agent reads it back from the same path. |
 | `--cpus`, `--memory` | Become the container cgroup's limits, and so the node's capacity. Optional. |
 | `/etc/vagabond` mounted read-only | The CA and the node's certificate and key. The node's name comes from the certificate, not the container's hostname, which is its ID and changes when the container is recreated. |
+| With `-firecracker`: `/run/vagabond-firecracker` and `/dev` mounted | The daemon's socket, and the devmapper devices the agent's snapshots appear as after the container started. |
 
 ### Nomad
 
@@ -345,8 +361,10 @@ Agent reporting is one of the loops listed in
 
 ### Declaring a provider
 
-A provider of type `containerd` on the server runs work on the nodes that
-joined its pool.
+A provider of type `containerd` or `firecracker` on the server runs work on
+the nodes that joined its pool and run its executor: containers on a
+`containerd` provider, microVMs on a `firecracker` one. Both take the same
+settings.
 
 ```hcl
 provider "homelab" {
@@ -355,6 +373,14 @@ provider "homelab" {
   config {
     pool      = "homelab"
     placement = "spread"
+  }
+}
+
+provider "homelab-vm" {
+  type = "firecracker"
+
+  config {
+    pool = "homelab"
   }
 }
 ```
@@ -373,14 +399,17 @@ provider "homelab" {
 - Only `vagabond server` can build one. Loading one elsewhere fails with the
   diagnostic `Agent nodes without a server`:
   `Provider "<name>" runs on agent nodes, which only vagabond server can reach.`
-- With no connected nodes in its pool the provider is unhealthy
-  (`no nodes have joined pool "<pool>"`) and admission rejects it with
-  `provider-unhealthy`. At server start this appears as
+- `pool` defaults to the label, so a second provider on one pool, as
+  `homelab-vm` above, sets it.
+- With no connected nodes in its pool running its executor, the provider is
+  unhealthy (`no nodes running <type> have joined pool "<pool>"`) and
+  admission rejects it with `provider-unhealthy`. At server start this appears as
   `Some providers did not answer: ...`, which does not stop the server.
 - An agent whose `-pool` no provider draws on still connects and appears in
   `node status`, but receives no work.
 - Two providers may draw on one pool. A node's room is counted once, whichever
-  provider places work on it.
+  provider places work on it, so a node running both executors shares its
+  room between its containers and its microVMs.
 
 ### Joining
 
@@ -401,11 +430,12 @@ Each node is one member of the provider, with its own capability snapshot:
 |---|---|
 | `provider.drivers` | `container` |
 | `provider.architecture` | The agent binary's `GOARCH`, e.g. `amd64`, `arm64` |
-| `provider.max_cpu` | Room left, millicores; `0` when full |
-| `provider.max_memory` | Room left, MiB; `0` when full |
+| `provider.max_cpu` | Room left after the executor's overhead, millicores; `0` when full |
+| `provider.max_memory` | Room left after the executor's overhead, MiB; `0` when full |
 | `provider.internet` | `true` |
 | `provider.private_network` | `true` |
 | `provider.arbitrary_images` | `true` |
+| `provider.isolation` | `container` on a `containerd` provider, `vm` on a `firecracker` one |
 | `provider.estimated_cost` | `0` |
 | `node.label.<key>` | Each `-label` |
 
@@ -449,7 +479,9 @@ Dispatch takes the candidates in rank order. For a node:
 1. Reserve the task's quota on the provider.
 2. Reserve room on the node, in one locked step against the node's room,
    sized from the task's `resources` with **1000 millicores** for an unset or
-   zero `cpu` and **1024 MiB** for an unset or zero `memory`. A node with too
+   zero `cpu` and **1024 MiB** for an unset or zero `memory`, plus the
+   overhead the node registered for the provider's executor: none for
+   containerd, `--vmm-overhead` of memory for a microVM. A node with too
    little room left, or no longer connected, is refused: the quota is given
    back, nothing is recorded, no attempt is spent, and dispatch goes on to the
    next candidate, another node or another provider.
@@ -464,14 +496,15 @@ server restart as before it.
 A node's room is:
 
 ```text
-capacity - sum(declared size of running workloads) - sum(unexpired reservations not yet reported)
+capacity - sum(what running workloads take) - sum(unexpired reservations not yet reported)
 ```
 
-- Declared sizes, not live usage. Each workload is capped at what it declared,
-  so the sum is what the node can be asked for at once.
-- A workload whose task has stopped still holds a container until released,
-  but no longer counts.
-- A container with no task yet counts as running.
+- What a workload takes is its declared size plus its executor's overhead,
+  not live usage. Each workload is capped at that, so the sum is what the node
+  can be asked for at once.
+- A workload that has ended is held until released but no longer counts; a
+  microVM counts until its Firecracker has exited.
+- A workload not yet started counts as running.
 - The agent and the server count room the same way, from the same reports.
 
 ### Reservations
@@ -501,6 +534,8 @@ nothing new.
 | Answer | Server does |
 |---|---|
 | `ResourceExhausted` (`the node has <cpu> millicores and <mem> MiB free; the workload needs <cpu> and <mem>`) | Drops the reservation; infrastructure failure `node <name>: rpc error: code = ResourceExhausted desc = ...`. |
+| `FailedPrecondition` (`the node has no such executor: "<name>"`) | Drops the reservation; infrastructure failure, as for a node gone. |
+| `InvalidArgument` (`invalid workload: image "<ref>": ...`) | Drops the reservation; internal failure `node <name>: ...`. No node could run it, so it is not sent anywhere else. |
 | Any other error | Drops the reservation; infrastructure failure `node <name>: ...`. |
 | Node disconnected between reserving and sending | Drops the reservation; infrastructure failure `node <name> is not connected`. |
 | Task names no `image`, or its `env` or `timeout` does not evaluate | Drops the reservation; internal failure `task "<name>" names no image`, `task "<name>" env: ...` or `task "<name>" timeout: ...`, before anything is sent. Not sent anywhere else. |
@@ -549,6 +584,25 @@ the next report.
 
 ## Workloads
 
+Each workload runs on the executor its provider's type names. Every executor
+keeps the same contract, which the server relies on:
+
+| | Every executor |
+|---|---|
+| Idempotency | The execution ID: a second `Submit` of a held execution starts nothing |
+| States | `accepted` until started, `running`, then `succeeded`, `failed` or `cancelled`; one gone after it started, without an exit, ends `failed` with no exit code |
+| Output | Standard output and error together, kept whole until `Release`, read from any byte offset |
+| Timeout | Measured from the saved start: `SIGTERM`, then `SIGKILL` 10 seconds later; ends `failed` |
+| Cancel | `SIGTERM`, then `SIGKILL` 10 seconds later; ends `cancelled` whatever the exit |
+| Release | Deletes everything kept for it; one not held is released already |
+| Restarts | Workloads outlive the agent, which finds them again when it starts |
+
+The rest of this section is containerd's. A microVM differs in its own
+kernel, the network behind NAT rather than the host's, memory charged with
+Firecracker's overhead, and a workload that is not PID 1, so `SIGTERM` ends a
+plain `sh -c` at once with 143; see
+[vagabond-firecracker](firecracker.md#workloads).
+
 One container per execution, on the node's containerd.
 
 | Property | Value |
@@ -577,6 +631,7 @@ One container per execution, on the node's containerd.
   `VAGABOND_META_*` variables from `meta`; the task's values win on the same
   name. See [`env` block](job-specification.md#env-block).
 - **Working directory:** the task's `working_directory`, else the image's.
+  One the image lacks is made by runc, owned by root with mode `0755`.
 - **Limits:** `memory` MiB becomes the container's memory limit; `cpu`
   millicores becomes a CFS quota of `cpu * 100` us per 100000 us period.
 
@@ -596,7 +651,8 @@ State lives on the container as labels, so it survives the agent:
 
 | containerd | Execution state |
 |---|---|
-| Container without a task | `accepted` |
+| Container without a task, never started | `accepted` |
+| Container whose task went after it started, as after a host restart | `failed`, with no exit code |
 | Task created, not started | `accepted` |
 | Task running, paused or other | `running` |
 | Task stopped, `vagabond.cancelled=true` | `cancelled` |
@@ -668,15 +724,16 @@ name.
 
 ```shell
 $ vagabond node status
-NAME  POOL     ADDRESS          ARCH   CPU USED    MEMORY USED    WORKLOADS  CONNECTED
-box1  homelab  10.0.0.21:51234  amd64  1500/4000m  2048/12288MiB  2          2026-09-28 14:02:11Z
-box3  homelab  10.0.0.23:40112  arm64  0/8000m     0/15872MiB     0          2026-09-28 14:05:47Z
+NAME  POOL     ADDRESS          ARCH   EXECUTORS               CPU USED    MEMORY USED    WORKLOADS  CONNECTED
+box1  homelab  10.0.0.21:51234  amd64  containerd,firecracker  1500/4000m  2048/12288MiB  2          2026-09-28 14:02:11Z
+box3  homelab  10.0.0.23:40112  arm64  containerd              0/8000m     0/15872MiB     0          2026-09-28 14:05:47Z
 ```
 
 | Column | Meaning |
 |---|---|
 | `ADDRESS` | Where the agent connected from |
-| `CPU USED`, `MEMORY USED` | Declared size of running workloads and the server's reservations / capacity |
+| `EXECUTORS` | What the node runs workloads with |
+| `CPU USED`, `MEMORY USED` | What running workloads take and the server's reservations / capacity |
 | `WORKLOADS` | Running workloads |
 | `CONNECTED` | When this connection registered, UTC |
 
@@ -685,27 +742,7 @@ of the node's last report, plus the server's reservations not yet in it. The
 server is read from `-address`, then `$VAGABOND_ADDR`, then
 `http://127.0.0.1:4747`.
 
-The same data is `GET /v1/nodes`; see [API](api.md).
-
-```json
-[
-  {
-    "Name": "box1",
-    "Pool": "homelab",
-    "Address": "10.0.0.21:51234",
-    "Labels": {"gpu": "no"},
-    "Architecture": "amd64",
-    "CPU": 4000,
-    "Memory": 12288,
-    "UsedCPU": 1500,
-    "UsedMemory": 2048,
-    "Runtimes": ["io.containerd.runc.v2"],
-    "Version": "dev",
-    "Executions": 2,
-    "Connected": "2026-09-28T14:02:11.482913Z"
-  }
-]
-```
+The same data is `GET /v1/nodes`; see [List nodes](api.md#list-nodes).
 
 ## Protocol
 
@@ -713,7 +750,7 @@ One TCP connection from agent to server, multiplexed with yamux. Each side
 serves gRPC on the streams the other opens, so the server calls the agent
 without the agent listening on anything.
 
-![The agent dials one mutual TLS connection to the server, multiplexed with yamux, and presents a certificate whose common name is its node name. The agent calls the server's Node service to register under that name; the server calls the agent's AgentExecutions service to run workloads. The agent starts workloads on the node's containerd, inside the agent's cgroup.](assets/agent-connection.svg)
+![The agent dials one mutual TLS connection to the server, multiplexed with yamux, and presents a certificate whose common name is its node name. The agent calls the server's Node service to register under that name and its executors; the server calls the agent's AgentExecutions service to run workloads. The agent starts each workload on the node's containerd, or through vagabond-firecracker in a microVM, inside the agent's cgroup.](assets/agent-connection.svg)
 
 Interactive version, with notes on each component:
 [Agents and pools](https://vagabond.munchbox.cc/diagrams/agents/).
@@ -730,32 +767,31 @@ regenerate with `make generate`.
 
 | RPC | Request | Response |
 |---|---|---|
-| `Node.Register` | `name`, `pool`, `labels`, `architecture`, `capacity` (cpu, memory), `runtimes`, `version`, `held[]` (execution ID, declared resources, running) | `release[]`: held execution IDs to release, empty when the server cannot tell |
-| `AgentExecutions.Submit` | `execution_id`, `workload`: `image`, `command`, `args`, `env`, `working_dir`, `resources`, `timeout`, `runtime` | `state`, `provider_id` |
+| `Node.Register` | `name`, `pool`, `labels`, `architecture`, `capacity` (cpu, memory), `version`, `held[]` (execution ID, what it takes, running), `executors[]` (`name`, `overhead`). Field 6, `runtimes`, is reserved | `release[]`: held execution IDs to release, empty when the server cannot tell |
+| `AgentExecutions.Submit` | `execution_id`, `workload`: `image`, `command`, `args`, `env`, `working_dir`, `resources`, `timeout`, `executor`. Field 8, `runtime`, is reserved | `state`, `provider_id` |
 | `AgentExecutions.Status` | `execution_id` | `state`, `provider_id`, `started_at`, `ended_at` |
 | `AgentExecutions.Result` | `execution_id` | `exit_code` (unset if never exited), `duration`. Fields 3 and 4, which carried a tail of the output, are reserved |
 | `AgentExecutions.Cancel` | `execution_id` | empty |
 | `AgentExecutions.Release` | `execution_id` | empty |
 | `AgentExecutions.StreamLogs` | `execution_id`, `offset` (bytes the server already has) | stream of `data` chunks from `offset`, polled every 250 ms until the workload ends or is released |
 
-States travel as their names (`accepted`, `running`, `succeeded`, ...).
-`runtime` is left empty by the server and defaults to `io.containerd.runc.v2`.
-An agent that predates `offset` reads the request as an `execution_id` alone
-and streams from the start; a reopened stream from such an agent repeats output
-the client already has. Upgrade the server before its agents: an agent from
-this release no longer sends output in `Result`, which an older server reads
-it from, while a newer server reads any agent's output through `StreamLogs`.
-`provider_id` from the agent is the container ID, which is the execution ID,
-and is recorded as the execution's provider ID; the node is recorded apart. An
-agent that predates `release` ignores it and keeps what it holds.
+States travel as their names (`accepted`, `running`, `succeeded`, ...), and
+the server refuses a name it does not know rather than record it. `executor`
+is the provider's type, and names the executor that runs the workload.
+`provider_id` from the agent is the execution ID, recorded as the execution's
+provider ID; the node is recorded apart. Upgrade the server and its agents
+together: a server from this release offers work only to nodes that register
+executors, and an older agent refuses a workload naming one.
 
 ### Status codes
 
 | Code | Returned by the agent when | Server maps it to |
 |---|---|---|
-| `ResourceExhausted` | `Submit` does not fit the node's room | Try the next node ([Refusal and retry](#refusal-and-retry)) |
-| `NotFound` | The node holds no container for the execution (`Status`, `Result`, `Cancel`) | Unknown execution |
-| `Internal` | Any other executor error: image pull, container create, `Result` before the workload finished, `StreamLogs` with no log file | Infrastructure failure |
+| `ResourceExhausted` | `Submit` does not fit the node's room | Infrastructure failure ([Refusal and retry](#refusal-and-retry)) |
+| `FailedPrecondition` | `Submit` names an executor the node does not run | Infrastructure failure |
+| `InvalidArgument` | `Submit` of a workload no node could run, such as an image reference that does not parse | Internal failure, not rerouted |
+| `NotFound` | No executor on the node holds the execution (`Status`, `Result`, `Cancel`, `StreamLogs`) | Unknown execution |
+| `Internal` | Any other executor error: image pull, container create, a daemon not answering, `Result` before the workload finished | Infrastructure failure |
 | Transport errors | Connection dropped mid-call | Infrastructure failure |
 | `Canceled`, `DeadlineExceeded` | The server's call ended first, including a `Submit` waiting on another in flight for the same execution | Infrastructure failure |
 
@@ -849,7 +885,9 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab \
 |---|---|---|
 | `connecting to the server ... error="dialing <addr>: ... connection refused"` repeating | Server not listening there, or `agent_bind` still loopback | Set `agent_bind` to a reachable address; check `-server`. |
 | Node absent from `node status` | Agent not connected; see its log | |
-| Node listed, jobs never placed on it; plan shows `provider-unhealthy` or no node | `-pool` does not match a `containerd` provider's `pool` | Match the names. |
+| Node listed, jobs never placed on it; plan shows `provider-unhealthy` or no node | `-pool` does not match the provider's `pool`, or the node does not run the provider's executor (see `EXECUTORS` in `node status`) | Match the names; start the agent with `-firecracker` for a `firecracker` provider. |
+| Agent exits at startup: `vagabond-firecracker at <socket> does not answer` | The daemon not running, or not yet serving | Start vagabond-firecracker first; under systemd, order the agent after it. |
+| Agent exits at startup: `has no devmapper snapshotter` or `devmapper snapshotter did not load` | containerd lacks a working devmapper thin pool | Configure one ([containerd's devmapper guide](https://github.com/containerd/containerd/blob/main/docs/snapshotters/devmapper.md)). |
 | `closest node <name>: ...` in plan | No node passes admission | Read the reason; check `node.label.*` constraints and free room. |
 | Dispatch reports `no node in pool "<pool>" has room for ...` | Every admitted node full, or reservations pending | Wait for work to finish or add capacity. Reservations expire after 2 minutes. |
 | Two agents alternate in `node status`, both logging `lost the server` | Same `-name` on two hosts. The server logs nothing while they alternate. | Give each a unique `-name`. |
@@ -871,19 +909,22 @@ which is retried 5ms doubling to 1s.
 ## Testing
 
 ```bash
-make containerd-test       # the executor tests, verbose
-make containerd-coverage   # the same, into containerd-coverage.out, as CI runs it
+make executor-test       # both executors' tests, verbose
+make executor-coverage   # the same, into executor-coverage.out, as CI runs it
 ```
 
-Builds the executor's tests with `-race` and the `containerd` build tag into
-`bin/executor.test` as your user, then runs it with `sudo` and a 5 minute
-timeout. It runs real workloads on containerd at
-`/run/containerd/containerd.sock`, pulling `alpine:3.20`, in the
-`vagabond-test` namespace and the `/vagabond-test` cgroup. It skips when
-containerd is unavailable. `containerd-coverage` hands the root-written profile
-back to your user.
+Starts a containerd of its own, with the devmapper snapshotter on a thin pool
+over loop devices, and a vagabond-firecracker beside it
+(`scripts/executor-env.sh`), apart from anything the host runs. Then it builds
+the executors' tests with `-race` and the `containerd` and `firecracker` build
+tags into `bin/executor.test` as your user, and runs them with `sudo` and a
+10 minute timeout, pulling `alpine:3.20`, in the `/vagabond-test` cgroup. The
+environment is cleared after, pass or fail, and `executor-coverage` hands the
+root-written profile back to your user. `make executor-env-down` clears what
+an interrupted run left. It needs root, `/dev/kvm`, `containerd` and
+`dmsetup`; the tests skip without the environment, which the make targets
+always start.
 
-CI's `containerd` job runs `make containerd-coverage` on the runner's own
-containerd, the one Docker uses, and fails first with `sudo ctr version` if it
-is unreachable, so a skip never passes for a run. The profile joins the unit
-and integration ones in SonarCloud.
+CI's `firecracker` job runs `make executor-coverage` after the microVM tests
+([Testing](firecracker.md#testing)). The profile joins the unit and
+integration ones in SonarCloud.

@@ -19,6 +19,7 @@ import (
 	"math"
 	"net"
 	"net/http/httptest"
+	"slices"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -29,7 +30,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/afreidah/vagabond/internal/agent"
-	"github.com/afreidah/vagabond/internal/agent/executor"
+	"github.com/afreidah/vagabond/internal/agent/agenttest"
 	"github.com/afreidah/vagabond/internal/agent/executor/executortest"
 	"github.com/afreidah/vagabond/internal/agent/fingerprint"
 	"github.com/afreidah/vagabond/internal/agentrpc"
@@ -37,6 +38,7 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/nodes"
 	"github.com/afreidah/vagabond/internal/state/memory"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -169,44 +171,11 @@ func flakyLoopback(t *testing.T, failures, drops int32) *flakyListener {
 func (h *agentHarness) connect(t *testing.T, name string, exec *executortest.Fake) func() {
 	t.Helper()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-
-	a := agent.New(
+	return agenttest.Run(t,
 		&agent.Config{Server: h.address, Pool: "homelab", Name: name, Labels: map[string]string{"gpu": "no"}},
 		fingerprint.Node{Architecture: "amd64", CPU: 4000, Memory: 8192},
-		exec, slog.New(slog.DiscardHandler),
+		exec,
 	)
-
-	go func() {
-		defer close(done)
-		_ = a.Run(ctx)
-	}()
-
-	stop := func() {
-		cancel()
-		<-done
-	}
-
-	t.Cleanup(stop)
-
-	return stop
-}
-
-// await polls cond until it holds, or fails the test after five seconds.
-func await(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	t.Fatalf("timed out waiting for %s", what)
 }
 
 // node waits for the named node to connect and returns its connection.
@@ -215,7 +184,7 @@ func (h *agentHarness) node(t *testing.T, name string) *nodes.Conn {
 
 	var found *nodes.Conn
 
-	await(t, "node "+name, func() bool {
+	testkit.Eventually(t, 5*time.Second, "node "+name, func() bool {
 		found, _ = h.srv.nodeConns.Get(name)
 
 		return found != nil
@@ -298,7 +267,7 @@ func TestAgent_ReconnectsAfterTheServerDropsIt(t *testing.T) {
 
 	h.srv.nodeConns.CloseAll()
 
-	await(t, "box1 to leave", func() bool {
+	testkit.Eventually(t, 5*time.Second, "box1 to leave", func() bool {
 		conn, _ := h.srv.nodeConns.Get("box1")
 
 		return conn == nil
@@ -359,13 +328,13 @@ func TestAgent_ReleasesWhatNoExecutionNeeds(t *testing.T) {
 
 	exec := finishing()
 	for _, id := range []string{live, released, unrecorded.String(), "not-an-id"} {
-		_ = exec.Submit(t.Context(), id, &executor.Spec{})
+		_ = exec.Submit(t.Context(), id, &agentrpc.Workload{})
 	}
 
 	h.connect(t, "box1", exec)
 
 	for _, id := range []string{released, unrecorded.String(), "not-an-id"} {
-		await(t, id+" to be released", func() bool { return exec.Workload(id) == nil })
+		testkit.Eventually(t, 5*time.Second, id+" to be released", func() bool { return exec.Workload(id) == nil })
 	}
 
 	if exec.Workload(live) == nil {
@@ -396,14 +365,15 @@ func TestAgent_ExecutionsAreCalledBack(t *testing.T) {
 		Workload: &agentrpc.Workload{
 			Image: "alpine:3.20", Args: []string{"echo", "hi"},
 			Resources: &agentrpc.Resources{Cpu: 1000, Memory: 512},
+			Executor:  agentrpc.ExecutorContainerd,
 		},
 	})
 	if err != nil || sub.GetState() != string(execution.StateSucceeded) {
 		t.Fatalf("Submit() = %+v, %v", sub, err)
 	}
 
-	if spec := exec.Workload(run); spec == nil || spec.Image != "alpine:3.20" {
-		t.Errorf("the executor got %+v", spec)
+	if w := exec.Workload(run); w.GetImage() != "alpine:3.20" {
+		t.Errorf("the executor got %+v", w)
 	}
 
 	res, err := calls.Result(ctx, &agentrpc.ExecutionRequest{ExecutionId: run})
@@ -449,7 +419,11 @@ func TestAgent_RefusesWhatDoesNotFit(t *testing.T) {
 
 	_, err := calls.Submit(t.Context(), &agentrpc.SubmitRequest{
 		ExecutionId: "too-big",
-		Workload:    &agentrpc.Workload{Image: "alpine:3.20", Resources: &agentrpc.Resources{Cpu: 1000, Memory: 16384}},
+		Workload: &agentrpc.Workload{
+			Image:     "alpine:3.20",
+			Resources: &agentrpc.Resources{Cpu: 1000, Memory: 16384},
+			Executor:  agentrpc.ExecutorContainerd,
+		},
 	})
 	if status.Code(err) != codes.ResourceExhausted {
 		t.Errorf("Submit() = %v, want ResourceExhausted", err)
@@ -480,9 +454,14 @@ func TestAgent_NodesListAndLeave(t *testing.T) {
 		t.Fatalf("Nodes() = %+v, %v; want box1 and box2", listed, err)
 	}
 
+	// Each lists the executor its agent registered.
+	if !slices.Equal(listed[0].Executors, []string{agentrpc.ExecutorContainerd}) {
+		t.Errorf("Executors = %v, want containerd", listed[0].Executors)
+	}
+
 	stop()
 
-	await(t, "box1 to leave", func() bool { return len(h.srv.nodeConns.All()) == 1 })
+	testkit.Eventually(t, 5*time.Second, "box1 to leave", func() bool { return len(h.srv.nodeConns.All()) == 1 })
 }
 
 // An agent reconnecting under its name replaces its old connection rather than
@@ -494,11 +473,11 @@ func TestAgent_ReconnectReplaces(t *testing.T) {
 	first := h.node(t, "box1")
 
 	stop()
-	await(t, "box1 to leave", func() bool { return len(h.srv.nodeConns.All()) == 0 })
+	testkit.Eventually(t, 5*time.Second, "box1 to leave", func() bool { return len(h.srv.nodeConns.All()) == 0 })
 
 	h.connect(t, "box1", finishing())
 
-	await(t, "box1 to return", func() bool {
+	testkit.Eventually(t, 5*time.Second, "box1 to return", func() bool {
 		connected := h.srv.nodeConns.All()
 
 		return len(connected) == 1 && connected[0] != first

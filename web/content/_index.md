@@ -34,7 +34,7 @@ layout: hextra-home
 </div>
 
 <div class="vb-diagram">
-<img src="images/architecture.svg" width="1200" height="560" alt="The vagabond CLI calls the server's HTTP API. The server admits, ranks, dispatches and accounts for each task, keeps its records in Postgres or CockroachDB, and runs work on Cloud Run Jobs, AWS Lambda, or agent nodes.">
+<img src="images/architecture.svg" width="1200" height="560" alt="The vagabond CLI calls the server's HTTP API. The server admits, ranks, dispatches and accounts for each task, keeps its records in Postgres or CockroachDB, and runs work on Cloud Run Jobs, Code Engine Jobs, AWS Lambda, or agent nodes, as containers or in Firecracker microVMs.">
 </div>
 
 <div class="vb-sections">
@@ -148,10 +148,11 @@ provider "aws-lambda" {
 
 ## Agent nodes
 
-`vagabond agent` registers a machine into a pool, and a `pool` provider
-schedules onto it like any other backend. Workloads run on the node's
-containerd, limited to the agent's CPU and memory, and are placed on the node
-with the most free memory. Beyond loopback, agents connect over mutual TLS and
+`vagabond agent` registers a machine into a pool, and a `containerd` or
+`firecracker` provider schedules onto it like any other backend. Workloads run
+on the node's containerd, or each in a Firecracker microVM of its own,
+limited to the agent's CPU and memory, and are placed on the node with the
+most free memory. Beyond loopback, agents connect over mutual TLS and
 register under their certificate's name.
 
 <a class="vb-more" href="docs/agent/">Agent</a>
@@ -164,9 +165,9 @@ $ vagabond agent -server 10.0.0.5:4748 -pool homelab \
     -tls-ca ca.pem -tls-cert box1.pem -tls-key box1-key.pem
 
 $ vagabond node status
-NAME  POOL     ADDRESS         ARCH   CPU USED    MEMORY USED    WORKLOADS  CONNECTED
-box1  homelab  10.0.0.21:4211  amd64  2000/8000m  4096/16384MiB  2          2026-09-28 07:12:40Z
-box2  homelab  10.0.0.22:3877  arm64  0/4000m     0/8192MiB      0          2026-09-28 07:14:02Z
+NAME  POOL     ADDRESS         ARCH   EXECUTORS               CPU USED    MEMORY USED    WORKLOADS  CONNECTED
+box1  homelab  10.0.0.21:4211  amd64  containerd,firecracker  2000/8000m  4096/16384MiB  2          2026-09-28 07:12:40Z
+box2  homelab  10.0.0.22:3877  arm64  containerd              0/4000m     0/8192MiB      0          2026-09-28 07:14:02Z
 ```
 
 </div>
@@ -190,7 +191,8 @@ unfinished.
 
 ### Provider plugins
 
-Cloud Run Jobs, Code Engine Jobs, AWS Lambda and agent pools today. A plugin
+Cloud Run Jobs, Code Engine Jobs, AWS Lambda and agent pools, as containers
+or Firecracker microVMs, today. A plugin
 translates a task and classifies failures; scheduling, retries and accounting
 stay in Vagabond.
 

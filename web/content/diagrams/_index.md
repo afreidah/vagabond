@@ -15,7 +15,8 @@ in detail links to it, and its panel stays in place so the link can be clicked.
   {{< card link="task-path/" title="Task Path" icon="arrow-right" subtitle="One run of a job, from admission and ranking through the execution runner to settle, release and reroute." >}}
   {{< card link="admission/" title="Admission and Ranking" icon="filter" subtitle="13 checks in four tiers, scorers, strict and weighted tiers, and selection." >}}
   {{< card link="quotas/" title="Quota Accounting" icon="scale" subtitle="Pools and namespace shares, headroom, reservation, settlement and the reaper." >}}
-  {{< card link="agents/" title="Agents and Pools" icon="chip" subtitle="Agent startup, the mTLS session, placement, containerd and the grace period." >}}
+  {{< card link="agents/" title="Agents and Pools" icon="chip" subtitle="Agent startup, the mTLS session, placement, the executors and the grace period." >}}
+  {{< card link="firecracker/" title="Firecracker MicroVMs" icon="shield-check" subtitle="vagabond-firecracker from Submit to Release: the jail, the boot, the guest, restarts." >}}
   {{< card link="live-output/" title="Live Output" icon="status-online" subtitle="The CLI follower, the follow route, the provider streams, resume and 416." >}}
   {{< card link="execution-states/" title="Execution States" icon="check-circle" subtitle="Every execution and dispatch state, each legal transition, and what writes it." >}}
   {{< card link="background-services/" title="Background Services" icon="refresh" subtitle="Every server and agent loop, its interval, what it touches and how it fails." >}}

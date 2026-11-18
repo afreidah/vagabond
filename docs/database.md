@@ -176,7 +176,7 @@ that increments `epoch`. See [dispatch](dispatch.md#leases).
 |---|---|
 | `dispatch_id` | The run it belongs to |
 | `task`, `provider`, `attempt` | What ran where; attempts count from 1 |
-| `node` | The agent node it runs on, for a `containerd` provider; `''` otherwise |
+| `node` | The agent node it runs on, for a `containerd` or `firecracker` provider; `''` otherwise |
 | `previous_id` | The attempt this one rerouted from; `''` on the first |
 | `state` | `pending`, `submitted`, `accepted`, `running`, `succeeded`, `failed`, `cancelled`, `lost` |
 | `provider_id` | The provider's own identifier for the run |

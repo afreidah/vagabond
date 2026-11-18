@@ -13,7 +13,7 @@
 # push event's own commit range does not reliably describe what changed. A filter
 # that silently skips a build is worse than always building.
 #
-# Both images are tagged from .version and latest, so a merge that does not bump
+# Every image is tagged from .version and latest, so a merge that does not bump
 # it republishes that tag from current main.
 # -------------------------------------------------------------------------------
 
@@ -44,6 +44,7 @@ jobs:
 
           make push
           make web-push
+          make firecracker-push
 
       # The deployment reads its version from this key, so it is written only
       # once the images above exist under that tag.

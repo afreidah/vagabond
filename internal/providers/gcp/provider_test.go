@@ -28,6 +28,7 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/ptr"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -170,18 +171,6 @@ func rawBlock(t *testing.T, src string) *job.RawBlock {
 	return &job.RawBlock{Body: f.Body}
 }
 
-// newID returns a fresh execution id, failing the test if one cannot be made.
-func newID(t *testing.T) execution.ID {
-	t.Helper()
-
-	id, err := execution.NewID()
-	if err != nil {
-		t.Fatalf("NewID() failed: %v", err)
-	}
-
-	return id
-}
-
 // containerTask is a task shaped like the documented example.
 func containerTask(t *testing.T) *job.Task {
 	t.Helper()
@@ -209,7 +198,7 @@ func TestSubmitCreatesThenRuns(t *testing.T) {
 	g.respond("POST /v2/projects/test-project/locations/us-central1/jobs", map[string]any{})
 	g.respond("POST /v2/projects/test-project/locations/us-central1/jobs/*", map[string]any{})
 
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	submission, err := p.Submit(t.Context(), id, containerTask(t))
 	if err != nil {
@@ -245,7 +234,7 @@ func TestSubmitDisablesGoogleRetries(t *testing.T) {
 	g.respond("POST /v2/projects/test-project/locations/us-central1/jobs", map[string]any{})
 	g.respond("POST /v2/projects/test-project/locations/us-central1/jobs/*", map[string]any{})
 
-	if _, err := p.Submit(t.Context(), newID(t), containerTask(t)); err != nil {
+	if _, err := p.Submit(t.Context(), testkit.NewID(t), containerTask(t)); err != nil {
 		t.Fatalf("Submit failed: %v", err)
 	}
 
@@ -270,7 +259,7 @@ func TestSubmitTranslatesTheTask(t *testing.T) {
 	g.respond("POST /v2/projects/test-project/locations/us-central1/jobs", map[string]any{})
 	g.respond("POST /v2/projects/test-project/locations/us-central1/jobs/*", map[string]any{})
 
-	if _, err := p.Submit(t.Context(), newID(t), containerTask(t)); err != nil {
+	if _, err := p.Submit(t.Context(), testkit.NewID(t), containerTask(t)); err != nil {
 		t.Fatalf("Submit failed: %v", err)
 	}
 
@@ -314,7 +303,7 @@ func TestSubmitCleansUpAfterAFailedRun(t *testing.T) {
 	g, p := newFakeGoogle(t)
 	g.respond("POST /v2/projects/test-project/locations/us-central1/jobs", map[string]any{})
 
-	if _, err := p.Submit(t.Context(), newID(t), containerTask(t)); err == nil {
+	if _, err := p.Submit(t.Context(), testkit.NewID(t), containerTask(t)); err == nil {
 		t.Fatal("expected the run to fail")
 	}
 
@@ -391,7 +380,7 @@ func TestStatusListsTheExecution(t *testing.T) {
 			g.respond("GET /v2/projects/test-project/locations/us-central1/jobs/*",
 				map[string]any{"executions": []any{tc.execution}})
 
-			id := newID(t)
+			id := testkit.NewID(t)
 
 			status, err := p.Status(t.Context(), id)
 			if err != nil {
@@ -418,7 +407,7 @@ func TestStatusWithNoExecution(t *testing.T) {
 	g.respond("GET /v2/projects/test-project/locations/us-central1/jobs/*",
 		map[string]any{"executions": []any{}})
 
-	_, err := p.Status(t.Context(), newID(t))
+	_, err := p.Status(t.Context(), testkit.NewID(t))
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -440,7 +429,7 @@ func TestStatusWithNoJob(t *testing.T) {
 
 	_, p := newFakeGoogle(t)
 
-	_, err := p.Status(t.Context(), newID(t))
+	_, err := p.Status(t.Context(), testkit.NewID(t))
 	if !errors.Is(err, plugin.ErrUnknownExecution) {
 		t.Errorf("error = %v, want plugin.ErrUnknownExecution", err)
 	}
@@ -469,7 +458,7 @@ func TestResultReadsTheExitCode(t *testing.T) {
 			"lastAttemptResult": map[string]any{"exitCode": 3},
 		}}})
 
-	result, err := p.Result(t.Context(), newID(t))
+	result, err := p.Result(t.Context(), testkit.NewID(t))
 	if err != nil {
 		t.Fatalf("Result failed: %v", err)
 	}
@@ -495,7 +484,7 @@ func TestCancelDeletesTheJob(t *testing.T) {
 	g.respond("DELETE /v2/projects/test-project/locations/us-central1/jobs/*",
 		map[string]any{})
 
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	if err := p.Cancel(t.Context(), id); err != nil {
 		t.Fatalf("Cancel failed: %v", err)
@@ -514,7 +503,7 @@ func TestCancelIsIdempotent(t *testing.T) {
 	_, p := newFakeGoogle(t)
 
 	// Nothing registered, so the delete 404s.
-	if err := p.Cancel(t.Context(), newID(t)); err != nil {
+	if err := p.Cancel(t.Context(), testkit.NewID(t)); err != nil {
 		t.Errorf("cancelling a job that is already gone failed: %v", err)
 	}
 }

@@ -20,6 +20,17 @@ import (
 )
 
 // -------------------------------------------------------------------------
+// CONSTANTS
+// -------------------------------------------------------------------------
+
+// How a provider keeps one workload from the others on the same machine: in a
+// container on a shared kernel, or in a virtual machine of its own.
+const (
+	IsolationContainer = "container"
+	IsolationVM        = "vm"
+)
+
+// -------------------------------------------------------------------------
 // TYPES
 // -------------------------------------------------------------------------
 
@@ -28,6 +39,29 @@ import (
 type Resources struct {
 	CPU    int // millicores; 1000 is one vCPU
 	Memory int // MiB
+}
+
+// Or is r with fallback in place of anything r leaves zero.
+func (r Resources) Or(fallback Resources) Resources {
+	if r.CPU == 0 {
+		r.CPU = fallback.CPU
+	}
+
+	if r.Memory == 0 {
+		r.Memory = fallback.Memory
+	}
+
+	return r
+}
+
+// Cloud is what tells one managed container platform from another: the
+// largest task it runs and the size of one declaring none, its longest run,
+// and how it keeps workloads apart.
+type Cloud struct {
+	Max         Resources
+	Default     Resources
+	MaxDuration time.Duration
+	Isolation   string
 }
 
 // Limits is the largest task a provider accepts. A nil field advertises no
@@ -59,6 +93,8 @@ type Capabilities struct {
 	InternetEgress  bool
 	PrivateNetwork  bool
 	ArbitraryImages bool
+
+	Isolation string // how a workload is kept from others: an Isolation value, empty if unknown
 
 	EstimatedCost job.Cost // one execution, once free-tier no longer covers it
 
@@ -111,18 +147,20 @@ func (c *Capabilities) Clone() Capabilities {
 // -------------------------------------------------------------------------
 
 // CloudContainer is the capability set of a managed platform that runs any
-// amd64 container image with internet egress and no private network, within
-// the given limits. Each call builds its own slices and limits.
-func CloudContainer(cpu, memory int, maxDuration time.Duration) Capabilities {
+// amd64 container image with internet egress and no private network, as cloud
+// describes it. Each call builds its own slices and limits.
+func CloudContainer(cloud Cloud) Capabilities {
 	return Capabilities{
 		Drivers:       []job.DriverName{job.DriverContainer},
 		Architectures: []job.Arch{job.ArchAMD64},
 
-		MaxResources: Limits{CPU: new(cpu), Memory: new(memory)},
-		MaxDuration:  maxDuration,
+		MaxResources:     Limits{CPU: new(cloud.Max.CPU), Memory: new(cloud.Max.Memory)},
+		MaxDuration:      cloud.MaxDuration,
+		DefaultResources: cloud.Default,
 
 		InternetEgress:  true,
 		ArbitraryImages: true,
+		Isolation:       cloud.Isolation,
 
 		ObservedAt: time.Now(),
 	}
@@ -152,15 +190,7 @@ func (c *Capabilities) WithinDuration(d time.Duration) bool {
 // Sized returns r with the provider's defaults in place of anything r leaves
 // zero: the size a task actually runs at here.
 func (c *Capabilities) Sized(r Resources) Resources {
-	if r.CPU == 0 {
-		r.CPU = c.DefaultResources.CPU
-	}
-
-	if r.Memory == 0 {
-		r.Memory = c.DefaultResources.Memory
-	}
-
-	return r
+	return r.Or(c.DefaultResources)
 }
 
 // WithinResources reports whether the provider accepts a task of size r, once

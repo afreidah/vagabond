@@ -12,6 +12,7 @@
 package gcp
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"slices"
@@ -41,43 +42,46 @@ const (
 	defaultMemory = 2048
 )
 
+// cloudRun is Cloud Run as Capabilities publishes it and jobSpec sizes a task.
+// Jobs always run in the second generation execution environment, a microVM.
+var cloudRun = plugin.Cloud{
+	Max:         plugin.Resources{CPU: maxCPU, Memory: maxMemory},
+	Default:     plugin.Resources{CPU: defaultCPU, Memory: defaultMemory},
+	MaxDuration: maxDuration,
+	Isolation:   plugin.IsolationVM,
+}
+
 // -------------------------------------------------------------------------
 // THE SPEC
 // -------------------------------------------------------------------------
 
-// jobSpec builds the Cloud Run job for a task.
+// jobSpec builds the Cloud Run job for a task. One with no timeout runs to
+// Cloud Run's maximum, not zero, which would end the job as it started.
 func (p *Provider) jobSpec(task *job.Task) (map[string]any, error) {
-	image, ok := task.ConfigString(job.ConfigImage)
-	if !ok {
-		return nil, plugin.Internal(
-			fmt.Errorf("task %q names no image", task.Name))
-	}
-
-	timeout, err := taskTimeout(task)
-	if err != nil {
-		return nil, plugin.Internal(err)
-	}
-
-	container := map[string]any{
-		"image":     image,
-		"resources": map[string]any{"limits": resourceLimits(task)},
-	}
-
-	if command, ok := task.ConfigString("command"); ok {
-		container["command"] = []string{command}
-	}
-
-	if args, ok := task.ConfigStrings("args"); ok {
-		container["args"] = args
-	}
-
-	env, err := environment(task)
+	c, err := plugin.ContainerOf(task, cloudRun.Default)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(env) > 0 {
+	container := map[string]any{
+		"image":     c.Image,
+		"resources": map[string]any{"limits": resourceLimits(c.CPU, c.Memory)},
+	}
+
+	if len(c.Command) > 0 {
+		container["command"] = c.Command
+	}
+
+	if len(c.Args) > 0 {
+		container["args"] = c.Args
+	}
+
+	if env := environment(c.Env); len(env) > 0 {
 		container["env"] = env
+	}
+
+	if c.WorkingDir != "" {
+		container["workingDir"] = c.WorkingDir
 	}
 
 	return map[string]any{
@@ -85,7 +89,7 @@ func (p *Provider) jobSpec(task *job.Task) (map[string]any, error) {
 			"taskCount": 1,
 			"template": map[string]any{
 				"containers": []map[string]any{container},
-				"timeout":    fmt.Sprintf("%ds", int(timeout.Seconds())),
+				"timeout":    fmt.Sprintf("%ds", int(cmp.Or(c.Timeout, maxDuration).Seconds())),
 
 				// The default of 3 bills four runs the ledger counts as one
 				"maxRetries": 0,
@@ -101,21 +105,9 @@ func (p *Provider) jobSpec(task *job.Task) (map[string]any, error) {
 // RESOURCES
 // -------------------------------------------------------------------------
 
-// resourceLimits translates a task's requirements into Cloud Run's whole vCPU
-// and memory string, rounding up: less than asked for fails mysteriously.
-func resourceLimits(task *job.Task) map[string]string {
-	cpu, memory := defaultCPU, defaultMemory
-
-	if task.Resources != nil {
-		if task.Resources.CPU != nil && *task.Resources.CPU > 0 {
-			cpu = *task.Resources.CPU
-		}
-
-		if task.Resources.Memory != nil && *task.Resources.Memory > 0 {
-			memory = *task.Resources.Memory
-		}
-	}
-
+// resourceLimits translates a size into Cloud Run's whole vCPU and memory
+// string, rounding up: less than asked for fails mysteriously.
+func resourceLimits(cpu, memory int) map[string]string {
 	return map[string]string{
 		"cpu":    fmt.Sprintf("%d", vCPU(cpu)),
 		"memory": fmt.Sprintf("%dMi", memory),
@@ -133,40 +125,19 @@ func vCPU(millicores int) int {
 	return cores
 }
 
-// taskTimeout returns what the task declared, or Cloud Run's own default.
-func taskTimeout(task *job.Task) (time.Duration, error) {
-	if task.Timeout == nil {
-		return maxDuration, nil
-	}
-
-	timeout, err := task.Timeout.Std()
-	if err != nil {
-		return 0, fmt.Errorf("task %q timeout: %w", task.Name, err)
-	}
-
-	return timeout, nil
-}
-
 // -------------------------------------------------------------------------
 // THE DRIVER CONFIG
 // -------------------------------------------------------------------------
 
-// environment renders a task's environment the way Cloud Run wants it: its env
-// block plus the VAGABOND_META_* variables. One that does not evaluate is an
-// admission failure, never a job run with no environment.
-func environment(task *job.Task) ([]map[string]string, error) {
-	attrs, diags := task.Environment()
-	if diags.HasErrors() {
-		return nil, plugin.Internal(fmt.Errorf("task %q env: %s", task.Name, diags.Error()))
-	}
-
-	env := make([]map[string]string, 0, len(attrs))
-	for name, value := range attrs {
+// environment renders a task's environment the way Cloud Run wants it, sorted
+// so two submissions of the same task send identical specs.
+func environment(vars map[string]string) []map[string]string {
+	env := make([]map[string]string, 0, len(vars))
+	for name, value := range vars {
 		env = append(env, map[string]string{"name": name, "value": value})
 	}
 
-	// Sorted, so two submissions of the same task send identical specs
 	slices.SortFunc(env, func(a, b map[string]string) int { return strings.Compare(a["name"], b["name"]) })
 
-	return env, nil
+	return env
 }

@@ -89,7 +89,7 @@ enableRobotsTXT = true
       icon = "github"
 
 [params]
-  description = "Compute broker for short-lived, stateless jobs on Cloud Run Jobs, AWS Lambda and agent nodes."
+  description = "Compute broker for short-lived, stateless jobs on Cloud Run Jobs, Code Engine Jobs, AWS Lambda and agent nodes."
   homeTitle = "Vagabond: compute broker for short-lived jobs"
   # Social card for pages with no image of their own. With one set, links
   # shared to Slack, X or LinkedIn get the large-image card.

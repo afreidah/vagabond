@@ -26,7 +26,7 @@ window.vagabondDiagram = {
     '        UPKEEP[Upkeep<br>loops]:::background',
     '        FOLLOW[Live output<br>streams]:::process',
     '        PLUGIN[plugin.Provider]:::filter',
-    '        POOL[containerd<br>provider]:::process',
+    '        POOL[containerd and<br>firecracker providers]:::process',
     '        NODES[(Connected<br>nodes)]:::storage',
     '        AGENTL[Agent listener<br>mTLS, yamux]:::filter',
     '    end',
@@ -42,6 +42,7 @@ window.vagabondDiagram = {
     '    subgraph AGENTNODE [Agent node]',
     '        AGENT([vagabond agent]):::entry',
     '        CONTAINERD[(containerd)]:::data',
+    '        FIRECRACKER[(vagabond-firecracker)]:::data',
     '    end',
     '',
     '    CLI -->|HTTP/JSON| API',
@@ -71,7 +72,8 @@ window.vagabondDiagram = {
     '    AGENTL -->|register, remove| NODES',
     '    AGENTL <-->|session the agent dials| AGENT',
     '    POOL -->|AgentExecutions gRPC| AGENT',
-    '    AGENT -->|workloads| CONTAINERD',
+    '    AGENT -->|containers, images| CONTAINERD',
+    '    AGENT -->|microVMs| FIRECRACKER',
     '',
     '    JOBS -->|jobs, versions| STORE',
     '    DISP -->|dispatches, executions| STORE',
@@ -97,7 +99,7 @@ window.vagabondDiagram = {
     SCHED: {
       title: 'Admission and ranking',
       badge: 'decision', badgeText: 'scheduler',
-      body: '<p><code>scheduler.Admit</code> runs 13 checks in 4 tiers (policy, availability, mismatch, capacity) against every provider, each node of a <code>containerd</code> provider on its own. Every check runs; the first rejection carries the reason code and the rest ride along.</p><p><code>scheduler.Rank</code> scores each candidate with <code>headroom</code>, any affinities and, under weighted tiers, <code>tier</code>; the score is their mean. Under strict tiers candidates order by tier, then score.</p><p>A pure function over the registry&rsquo;s capability snapshots and the ledger&rsquo;s usage snapshot: no network call, so a plan needs no provider credentials. <code>job plan</code> stops here and reserves nothing; a dispatch admits and ranks each task again when it runs.</p><p><a href="../admission/">Admission diagram &rarr;</a></p>'
+      body: '<p><code>scheduler.Admit</code> runs 13 checks in 4 tiers (policy, availability, mismatch, capacity) against every provider, each node of a <code>containerd</code> or <code>firecracker</code> provider on its own. Every check runs; the first rejection carries the reason code and the rest ride along.</p><p><code>scheduler.Rank</code> scores each candidate with <code>headroom</code>, any affinities and, under weighted tiers, <code>tier</code>; the score is their mean. Under strict tiers candidates order by tier, then score.</p><p>A pure function over the registry&rsquo;s capability snapshots and the ledger&rsquo;s usage snapshot: no network call, so a plan needs no provider credentials. <code>job plan</code> stops here and reserves nothing; a dispatch admits and ranks each task again when it runs.</p><p><a href="../admission/">Admission diagram &rarr;</a></p>'
     },
     DISP: {
       title: 'Dispatcher',
@@ -112,7 +114,7 @@ window.vagabondDiagram = {
     REG: {
       title: 'Provider registry',
       badge: 'process', badgeText: 'registry',
-      body: '<p><code>registry</code> builds every <code>provider</code> block into its plugin, the one package that imports them all: <code>cloud-run</code>, <code>code-engine</code>, <code>lambda</code>, <code>containerd</code>, and the <code>fake-container</code>, <code>fake-function</code> and <code>fake-worker</code> test providers. It holds each one&rsquo;s capability snapshot, health, tags, tier and quota pools. A disabled provider is kept, so a plan can say why it was not used.</p><p><code>Refresh</code> asks every enabled provider for <code>Capabilities</code> in parallel, 30s each, at startup and every minute. One that fails is marked unhealthy and keeps its last snapshot. <code>containerd</code> providers are skipped: their capabilities are built from connected nodes on every read.</p><p>Resolves a provider&rsquo;s credential again when the platform rejects it, at most once a minute.</p>'
+      body: '<p><code>registry</code> builds every <code>provider</code> block into its plugin, the one package that imports them all: <code>cloud-run</code>, <code>code-engine</code>, <code>lambda</code>, <code>containerd</code>, <code>firecracker</code>, and the <code>fake-container</code>, <code>fake-function</code> and <code>fake-worker</code> test providers, each one row of a table. It holds each one&rsquo;s capability snapshot, health, tags, tier and quota pools. A disabled provider is kept, so a plan can say why it was not used.</p><p><code>Refresh</code> asks every enabled provider for <code>Capabilities</code> in parallel, 30s each, at startup and every minute. One that fails is marked unhealthy and keeps its last snapshot. <code>containerd</code> and <code>firecracker</code> providers are skipped: their capabilities are built from connected nodes on every read.</p><p>Resolves a provider&rsquo;s credential again when the platform rejects it, at most once a minute.</p>'
     },
     UPKEEP: {
       title: 'Upkeep loops',
@@ -130,14 +132,14 @@ window.vagabondDiagram = {
       body: '<p>The interface every provider implements: <code>Name</code>, <code>Capabilities</code>, <code>Submit</code>, <code>Status</code>, <code>Result</code>, <code>Cancel</code>. Optional interfaces are found by type assertion: <code>LogStreamer</code>, <code>LogReader</code>, <code>Releaser</code>, <code>Live</code>, <code>Nodes</code>, <code>Reserver</code>, <code>Recredentialer</code>.</p><p>A plugin translates a task into its platform&rsquo;s API and classifies failures as <code>infrastructure</code> (rerouted) or <code>internal</code> (not). It never retries or picks another provider; retries, rerouting, quota, records and leases belong to the control plane.</p><p>depguard keeps cloud SDKs inside <code>internal/providers/</code>, and provider imports out of <code>scheduler</code>, <code>job</code> and <code>quota</code>.</p><p><a href="../../docs/writing-a-provider/">Writing a provider &rarr;</a></p>'
     },
     POOL: {
-      title: 'containerd provider',
+      title: 'containerd and firecracker providers',
       badge: 'process', badgeText: 'provider',
-      body: '<p><code>providers/pool</code>, provider type <code>containerd</code>: the agent nodes started with the <code>-pool</code> its <code>config</code> block names, default the provider&rsquo;s label. <code>LiveCapabilities</code> builds one member per connected node, sized by the room it has left, on every plan and dispatch. With no nodes the provider is unhealthy.</p><p>Admission judges each node on its own, and every passing node is a candidate of its own, ordered among equal scores by <code>placement</code>: <code>spread</code> (default) most free memory first, <code>pack</code> least. Dispatch reserves room on the node before recording the execution with its node; a node without room is refused without spending an attempt.</p><p>Every later call goes to the node the record names. While that node is not connected, calls fail as infrastructure and the execution is <code>lost</code>; <code>Release</code> succeeds, and the node releases the workload when it returns.</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
+      body: '<p><code>providers/pool</code>, one package behind two provider types: <code>containerd</code> runs its work as containers, <code>firecracker</code> in microVMs. Each draws on the agent nodes started with the <code>-pool</code> its <code>config</code> block names, default the provider&rsquo;s label, that run its executor. <code>LiveCapabilities</code> builds one member per such node, sized by the room it has left after the executor&rsquo;s overhead, on every plan and dispatch, publishing <code>provider.isolation</code> as <code>container</code> or <code>vm</code>. With no nodes the provider is unhealthy.</p><p>Admission judges each node on its own, and every passing node is a candidate of its own, ordered among equal scores by <code>placement</code>: <code>spread</code> (default) most free memory first, <code>pack</code> least. Dispatch reserves room on the node before recording the execution with its node; a node without room is refused without spending an attempt.</p><p>Every later call goes to the node the record names. While that node is not connected, calls fail as infrastructure and the execution is <code>lost</code>; <code>Release</code> succeeds, and the node releases the workload when it returns.</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
     },
     NODES: {
       title: 'Connected nodes',
       badge: 'storage', badgeText: 'in memory',
-      body: '<p><code>nodes.Conns</code>, shared by the server and every <code>containerd</code> provider: each connected node by name, with its last report, its session and a client for its executions, and the room reserved on each. A node&rsquo;s room is counted here once, whatever providers draw on it. Read by <code>GET /v1/nodes</code>.</p><p>A report on a new session replaces and closes the old one. When a session ends, the node is removed.</p><p>Server memory only. After a restart, agents reconnect with backoff and report again.</p>'
+      body: '<p><code>nodes.Conns</code>, shared by the server and every <code>containerd</code> and <code>firecracker</code> provider: each connected node by name, with its last report, its session and a client for its executions, and the room reserved on each. A node&rsquo;s room is counted here once, whatever providers draw on it. Read by <code>GET /v1/nodes</code>.</p><p>A report on a new session replaces and closes the old one. When a session ends, the node is removed.</p><p>Server memory only. After a restart, agents reconnect with backoff and report again.</p>'
     },
     AGENTL: {
       title: 'Agent listener',
@@ -177,12 +179,17 @@ window.vagabondDiagram = {
     AGENT: {
       title: 'vagabond agent',
       badge: 'entry', badgeText: 'node process',
-      body: '<p><code>internal/agent</code>, on a node apart from the server. Reads the node&rsquo;s architecture, CPU and memory (<code>agent/fingerprint</code>), delegates its cgroup, then dials the server and stays connected, reconnecting with backoff from 1s doubling to 30s.</p><p>Registers the node with every workload it holds on connecting, after each submit, cancel or release, and every 10s. Checks room itself before starting a workload and refuses one that does not fit with <code>ResourceExhausted</code>. Releases the held workloads the server answers it has no use for.</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
+      body: '<p><code>internal/agent</code>, on a node apart from the server. Reads the node&rsquo;s architecture, CPU and memory (<code>agent/fingerprint</code>), delegates its cgroup, asks each of its executors, containerd and, with <code>-firecracker</code>, vagabond-firecracker, what it is, then dials the server and stays connected, reconnecting with backoff from 1s doubling to 30s.</p><p>Registers the node with its executors and every workload it holds on connecting, after each submit, cancel or release, and every 10s. Checks room itself before starting a workload and refuses one that does not fit with <code>ResourceExhausted</code>. Releases the held workloads the server answers it has no use for.</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
     },
     CONTAINERD: {
       title: 'containerd',
       badge: 'data', badgeText: 'runtime',
-      body: '<p><code>agent/executor</code> runs each execution as one container in the <code>vagabond</code> namespace with the <code>io.containerd.runc.v2</code> runtime, in cgroup <code>&lt;parent&gt;/&lt;execution id&gt;</code> with its declared CPU and memory as limits, on the host network.</p><p>Start time, timeout and size are container labels, so a restarted agent finds its workloads and re-arms their timeouts. A timeout stops the workload with SIGTERM, then SIGKILL 10s later. Output goes to a log file, which the server reads whole once the workload ends.</p><p>Workloads belong to containerd and keep running while the agent is disconnected.</p>'
+      body: '<p><code>agent/executor</code> runs each execution as one container in the <code>vagabond</code> namespace with the <code>io.containerd.runc.v2</code> runtime, in cgroup <code>&lt;parent&gt;/&lt;execution id&gt;</code> with its declared CPU and memory as limits, on the host network.</p><p>Start time, timeout and size are container labels, so a restarted agent finds its workloads and re-arms their timeouts. A timeout stops the workload with SIGTERM, then SIGKILL 10s later. Output goes to a log file, which the server reads whole once the workload ends.</p><p>Workloads belong to containerd and keep running while the agent is disconnected. containerd also holds the images and devmapper snapshots of the agent&rsquo;s microVMs, in the <code>vagabond-firecracker</code> namespace.</p>'
+    },
+    FIRECRACKER: {
+      title: 'vagabond-firecracker',
+      badge: 'data', badgeText: 'microVMs',
+      body: '<p>The daemon beside the agent, reached over ttRPC on a socket only root can open. It runs each workload the agent hands it in a Firecracker microVM of its own, booted from the image&rsquo;s devmapper snapshot, with its own kernel, jail, cgroup and tap behind NAT.</p><p>It keeps every record and watches timeouts itself, so its microVMs outlive both the agent and the daemon, which takes them back when it starts.</p><p><a href="../firecracker/">Firecracker diagram &rarr;</a></p>'
     }
   }
 };

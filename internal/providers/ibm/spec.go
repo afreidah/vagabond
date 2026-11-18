@@ -15,6 +15,7 @@
 package ibm
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"slices"
@@ -44,6 +45,16 @@ const (
 	defaultCPU    = 1000
 	defaultMemory = 2048
 )
+
+// codeEngine is Code Engine as Capabilities publishes it and buildSpec sizes a
+// task. Tenants' containers share its Kubernetes nodes, kept apart by Linux
+// isolation.
+var codeEngine = plugin.Cloud{
+	Max:         plugin.Resources{CPU: maxCPU, Memory: maxMemory},
+	Default:     plugin.Resources{CPU: defaultCPU, Memory: defaultMemory},
+	MaxDuration: maxDuration,
+	Isolation:   plugin.IsolationContainer,
+}
 
 // minStorageGB is Code Engine's default ephemeral storage, 400M. A run may have
 // up to its memory instead, which costs nothing, so a size gets whichever is more.
@@ -120,30 +131,25 @@ type size struct {
 
 // buildSpec builds the job run for a task under the given name.
 func (p *Provider) buildSpec(name string, task *job.Task) (*jobRunSpec, error) {
-	image, ok := task.ConfigString(job.ConfigImage)
-	if !ok {
-		return nil, plugin.Internal(fmt.Errorf("task %q names no image", task.Name))
-	}
-
-	fit, err := sizeFor(task)
-	if err != nil {
-		return nil, plugin.Internal(err)
-	}
-
-	seconds, err := executionSeconds(task)
-	if err != nil {
-		return nil, plugin.Internal(err)
-	}
-
-	env, err := environment(task)
+	c, err := plugin.ContainerOf(task, codeEngine.Default)
 	if err != nil {
 		return nil, err
 	}
 
+	fit, err := sizeFor(c.CPU, c.Memory)
+	if err != nil {
+		return nil, plugin.Internal(fmt.Errorf("task %q %w", task.Name, err))
+	}
+
+	seconds, err := executionSeconds(c.Timeout)
+	if err != nil {
+		return nil, plugin.Internal(fmt.Errorf("task %q %w", task.Name, err))
+	}
+
 	spec := &jobRunSpec{
 		Name:             name,
-		Image:            image,
-		Env:              env,
+		Image:            c.Image,
+		Env:              environment(c.Env),
 		Mode:             "task",
 		ServiceAccount:   "none", // the workload gets no identity inside the project
 		CPU:              fit.cpu(),
@@ -158,7 +164,7 @@ func (p *Provider) buildSpec(name string, task *job.Task) (*jobRunSpec, error) {
 		spec.ImageSecret = *p.cfg.ImageSecret
 	}
 
-	if err := spec.invoke(task); err != nil {
+	if err := spec.invoke(c.Command, c.Args); err != nil {
 		return nil, plugin.Internal(fmt.Errorf("task %q: %w", task.Name, err))
 	}
 
@@ -169,21 +175,9 @@ func (p *Provider) buildSpec(name string, task *job.Task) (*jobRunSpec, error) {
 // RESOURCES
 // -------------------------------------------------------------------------
 
-// sizeFor picks the first size with at least the CPU and memory a task
-// declared, comparing memory in bytes since Code Engine's G is decimal.
-func sizeFor(task *job.Task) (size, error) {
-	cpu, memory := defaultCPU, defaultMemory
-
-	if task.Resources != nil {
-		if task.Resources.CPU != nil && *task.Resources.CPU > 0 {
-			cpu = *task.Resources.CPU
-		}
-
-		if task.Resources.Memory != nil && *task.Resources.Memory > 0 {
-			memory = *task.Resources.Memory
-		}
-	}
-
+// sizeFor picks the first size with at least cpu millicores and memory MiB,
+// comparing memory in bytes since Code Engine's G is decimal.
+func sizeFor(cpu, memory int) (size, error) {
 	need := float64(memory) * bytesPerMiB
 
 	for _, s := range sizes {
@@ -192,8 +186,8 @@ func sizeFor(task *job.Task) (size, error) {
 		}
 	}
 
-	return size{}, fmt.Errorf("task %q asks for %d millicores and %d MiB, more than "+
-		"Code Engine's largest size of 12 vCPU and 48G", task.Name, cpu, memory)
+	return size{}, fmt.Errorf("asks for %d millicores and %d MiB, more than "+
+		"Code Engine's largest size of 12 vCPU and 48G", cpu, memory)
 }
 
 // cpu is the size's vCPU as the API takes it: "0.125", "1".
@@ -217,22 +211,13 @@ func gigabytes(gb float64) string {
 	return strconv.FormatFloat(gb, 'f', -1, 64) + "G"
 }
 
-// executionSeconds is the task's timeout in whole seconds, rounded up so the
-// run is never cut short, or the 24h maximum when it declares none.
-func executionSeconds(task *job.Task) (int, error) {
-	timeout := maxDuration
-
-	if task.Timeout != nil {
-		declared, err := task.Timeout.Std()
-		if err != nil {
-			return 0, fmt.Errorf("task %q timeout: %w", task.Name, err)
-		}
-
-		timeout = declared
-	}
+// executionSeconds is a timeout in whole seconds, rounded up so the run is
+// never cut short, or the 24h maximum for none.
+func executionSeconds(timeout time.Duration) (int, error) {
+	timeout = cmp.Or(timeout, maxDuration)
 
 	if timeout > maxDuration {
-		return 0, fmt.Errorf("task %q timeout %s is past Code Engine's %s", task.Name, timeout, maxDuration)
+		return 0, fmt.Errorf("timeout %s is past Code Engine's %s", timeout, maxDuration)
 	}
 
 	return max(int(math.Ceil(timeout.Seconds())), 1), nil
@@ -242,53 +227,43 @@ func executionSeconds(task *job.Task) (int, error) {
 // THE DRIVER CONFIG
 // -------------------------------------------------------------------------
 
-// environment renders a task's environment as escaped literal variables: its
-// env block plus the VAGABOND_META_* variables. One that does not evaluate is
-// an internal failure, never a job run with no environment.
-func environment(task *job.Task) ([]envVar, error) {
-	attrs, diags := task.Environment()
-	if diags.HasErrors() {
-		return nil, plugin.Internal(fmt.Errorf("task %q env: %s", task.Name, diags.Error()))
-	}
-
-	env := make([]envVar, 0, len(attrs))
-	for name, value := range attrs {
+// environment renders a task's environment as escaped literal variables,
+// sorted so two submissions of the same task send identical specs.
+func environment(vars map[string]string) []envVar {
+	env := make([]envVar, 0, len(vars))
+	for name, value := range vars {
 		env = append(env, envVar{Type: "literal", Name: name, Value: escape(value)})
 	}
 
-	// Sorted, so two submissions of the same task send identical specs
 	slices.SortFunc(env, func(a, b envVar) int { return strings.Compare(a.Name, b.Name) })
 
-	return env, nil
+	return env
 }
 
 // -------------------------------------------------------------------------
 // THE COMMAND LINE
 // -------------------------------------------------------------------------
 
-// invoke sets the run's command and arguments from the task's, each escaped,
-// and each holding a line break carried in the environment instead.
-func (s *jobRunSpec) invoke(task *job.Task) error {
-	if command, ok := task.ConfigString("command"); ok {
-		sent, err := s.carry(carriedCommand, command)
+// invoke sets the run's command and arguments, each escaped, and each holding
+// a line break carried in the environment instead. A task's command is one
+// word at most, so it alone is carried as VAGABOND_COMMAND.
+func (s *jobRunSpec) invoke(command, args []string) error {
+	for _, word := range command {
+		sent, err := s.carry(carriedCommand, word)
 		if err != nil {
 			return err
 		}
 
-		s.Commands = []string{sent}
+		s.Commands = append(s.Commands, sent)
 	}
 
-	if args, ok := task.ConfigStrings("args"); ok {
-		s.Arguments = make([]string, len(args))
-
-		for i, arg := range args {
-			sent, err := s.carry(carriedArgPrefix+strconv.Itoa(i), arg)
-			if err != nil {
-				return err
-			}
-
-			s.Arguments[i] = sent
+	for i, arg := range args {
+		sent, err := s.carry(carriedArgPrefix+strconv.Itoa(i), arg)
+		if err != nil {
+			return err
 		}
+
+		s.Arguments = append(s.Arguments, sent)
 	}
 
 	return nil

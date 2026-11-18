@@ -36,19 +36,28 @@ import (
 // under the race detector.
 const signalTimeout = 2 * time.Second
 
-// newTestEndpoint builds an executions endpoint over exec with the given room
+// newTestEndpoint builds an executions endpoint over execs with the given room
 // and a buffered change channel.
-func newTestEndpoint(exec agentExecutor, cpu, memory int64) *executions {
+func newTestEndpoint(t *testing.T, cpu, memory int64, execs ...Executor) *executions {
+	t.Helper()
+
+	exec, err := newExecutors(t.Context(), execs...)
+	if err != nil {
+		t.Fatalf("newExecutors() = %v", err)
+	}
+
 	return newExecutions(exec, &agentrpc.Resources{Cpu: cpu, Memory: memory}, make(chan struct{}, 32))
 }
 
-// submitRequest builds an AgentExecutions SubmitRequest with the given size.
+// submitRequest builds an AgentExecutions SubmitRequest for containerd with
+// the given size.
 func submitRequest(id, image string, cpu, memory int64) *agentrpc.SubmitRequest {
 	return &agentrpc.SubmitRequest{
 		ExecutionId: id,
 		Workload: &agentrpc.Workload{
 			Image:     image,
 			Resources: &agentrpc.Resources{Cpu: cpu, Memory: memory},
+			Executor:  agentrpc.ExecutorContainerd,
 		},
 	}
 }
@@ -87,7 +96,7 @@ func TestSubmit_CachedWorkloadStartsWhilePullInProgress(t *testing.T) {
 
 	pullStarted := make(chan struct{})
 	pullRelease := make(chan struct{})
-	ep := newTestEndpoint(pausing("slow-pull", pullStarted, pullRelease), 2000, 2048)
+	ep := newTestEndpoint(t, 2000, 2048, pausing("slow-pull", pullStarted, pullRelease))
 
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -125,7 +134,7 @@ func TestSubmit_InflightReservationBlocksOvercommit(t *testing.T) {
 	pullStarted := make(chan struct{})
 	pullRelease := make(chan struct{})
 	fake := pausing("sub-1", pullStarted, pullRelease)
-	ep := newTestEndpoint(fake, 1000, 1024)
+	ep := newTestEndpoint(t, 1000, 1024, fake)
 
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -155,7 +164,7 @@ func TestSubmit_ConcurrentRaceAdmitsExactlyOne(t *testing.T) {
 
 	const racers = 16
 
-	ep := newTestEndpoint(&executortest.Fake{}, 1000, 1024)
+	ep := newTestEndpoint(t, 1000, 1024, &executortest.Fake{})
 
 	start := make(chan struct{})
 	var admitted, exhausted, unexpected atomic.Int32
@@ -202,7 +211,7 @@ func TestSubmit_HandoffDoesNotDoubleCountHeldReservation(t *testing.T) {
 		}
 	}}
 
-	ep := newTestEndpoint(fake, 1000, 1000)
+	ep := newTestEndpoint(t, 1000, 1000, fake)
 
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -240,7 +249,7 @@ func TestSubmit_SameIDWaitsForInflightAndSucceeds(t *testing.T) {
 			return nil
 		}}
 
-		ep := newTestEndpoint(fake, 1000, 1024)
+		ep := newTestEndpoint(t, 1000, 1024, fake)
 
 		var wg sync.WaitGroup
 		wg.Go(func() {
@@ -288,7 +297,7 @@ func TestSubmit_SameIDContextDoneWhileWaiting(t *testing.T) {
 
 	pullStarted := make(chan struct{})
 	pullRelease := make(chan struct{})
-	ep := newTestEndpoint(pausing("dup-ctx", pullStarted, pullRelease), 1000, 1024)
+	ep := newTestEndpoint(t, 1000, 1024, pausing("dup-ctx", pullStarted, pullRelease))
 
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -328,7 +337,7 @@ func TestSubmit_FailedPullReleasesReservedCapacity(t *testing.T) {
 		return nil
 	}}
 
-	ep := newTestEndpoint(fake, 1000, 1024)
+	ep := newTestEndpoint(t, 1000, 1024, fake)
 
 	_, err := ep.Submit(t.Context(), submitRequest("broken-pull", "bad:latest", 1000, 1024))
 	if status.Code(err) != codes.Internal {

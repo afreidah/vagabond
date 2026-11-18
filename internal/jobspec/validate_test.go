@@ -261,6 +261,26 @@ job "build" {
 	}
 }
 
+// An image written out in full must be one a node could pull, while one built
+// from metadata waits until it is resolved.
+func TestValidate_ImageReference(t *testing.T) {
+	bad := strings.Replace(minimalJob, `"alpine:latest"`, `"Not A Reference"`, 1)
+	if messages := validate(t, bad, nil); !mentions(messages, "Invalid image", "verify", "Not A Reference") {
+		t.Errorf("diagnostics do not report the bad image: %v", messages)
+	}
+
+	d := declared(t, optionalJob)
+
+	parsed, diags := Parse(Config{Source: []byte(optionalJob), Meta: d.References()})
+	if diags.HasErrors() {
+		t.Fatalf("Parse() = %s", diags.Error())
+	}
+
+	if found := Validate(parsed.Spec); found.HasErrors() {
+		t.Errorf("Validate() of an image built from metadata = %s, want it left until resolved", found.Error())
+	}
+}
+
 // A container task with no config block is missing its image.
 func TestValidate_ContainerWithNoConfigAtAll(t *testing.T) {
 	messages := validate(t, `

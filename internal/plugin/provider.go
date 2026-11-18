@@ -183,6 +183,11 @@ var ErrInvalidSubmission = errors.New("invalid submission")
 // lookup that merely failed.
 var ErrUnknownExecution = errors.New("unknown execution")
 
+// UnknownExecution is ErrUnknownExecution, saying which and where.
+func UnknownExecution(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrUnknownExecution, fmt.Sprintf(format, args...))
+}
+
 // ErrNoRoom reports a node with too little room left for a task, so nothing
 // was placed on it.
 var ErrNoRoom = errors.New("no room on the node")

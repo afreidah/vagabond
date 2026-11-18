@@ -167,24 +167,6 @@ func (r *Request) Architecture() (job.Arch, bool) {
 	return *r.Task.Execution.Architecture, true
 }
 
-// CPU returns the millicores the task asked for, zero if it did not ask.
-func (r *Request) CPU() int {
-	if r.Task.Resources == nil || r.Task.Resources.CPU == nil {
-		return 0
-	}
-
-	return *r.Task.Resources.CPU
-}
-
-// Memory returns the MiB the task asked for, zero if it did not ask.
-func (r *Request) Memory() int {
-	if r.Task.Resources == nil || r.Task.Resources.Memory == nil {
-		return 0
-	}
-
-	return *r.Task.Resources.Memory
-}
-
 // NeedsInternet reports whether the task requires egress. Only an explicit
 // true is a requirement; absent leaves it to the provider, false denies it.
 func (r *Request) NeedsInternet() bool {

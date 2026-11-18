@@ -27,22 +27,36 @@ import (
 // with ExitCode when Finish is set; Cancel ends one cancelled. Output is what
 // every workload printed. Pull runs before a submission is held, as an image
 // pull does, and may block or fail it; Started runs once it is held, before
-// Submit returns.
+// Submit returns. It registers as Name, containerd when empty, each workload
+// taking Overhead on top of what it declared.
 type Fake struct {
 	Finish   bool
 	ExitCode int
 	Output   string
 	Pull     func(ctx context.Context, id string) error
 	Started  func(id string)
+	Name     string
+	Overhead *agentrpc.Resources
 
 	mu        sync.Mutex
-	workloads map[string]*executor.Spec
+	workloads map[string]*agentrpc.Workload
 	cancelled map[string]bool
+}
+
+// Info names the fake and what each of its workloads takes beyond what it
+// declared.
+func (f *Fake) Info(context.Context) (*agentrpc.NodeExecutor, error) {
+	name := f.Name
+	if name == "" {
+		name = agentrpc.ExecutorContainerd
+	}
+
+	return &agentrpc.NodeExecutor{Name: name, Overhead: f.Overhead}, nil
 }
 
 // Submit holds the workload under id, once: a second submission of a held
 // one starts nothing.
-func (f *Fake) Submit(ctx context.Context, id string, spec *executor.Spec) error {
+func (f *Fake) Submit(ctx context.Context, id string, w *agentrpc.Workload) error {
 	if f.Workload(id) != nil {
 		return nil
 	}
@@ -55,10 +69,10 @@ func (f *Fake) Submit(ctx context.Context, id string, spec *executor.Spec) error
 
 	f.mu.Lock()
 	if f.workloads == nil {
-		f.workloads, f.cancelled = make(map[string]*executor.Spec), make(map[string]bool)
+		f.workloads, f.cancelled = make(map[string]*agentrpc.Workload), make(map[string]bool)
 	}
 
-	f.workloads[id] = spec
+	f.workloads[id] = w
 	f.mu.Unlock()
 
 	if f.Started != nil {
@@ -70,39 +84,28 @@ func (f *Fake) Submit(ctx context.Context, id string, spec *executor.Spec) error
 
 // Status reports a held workload running, succeeded when Finish is set, or
 // cancelled; any other is executor.ErrUnknown.
-func (f *Fake) Status(_ context.Context, id string) (execution.Status, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if _, ok := f.workloads[id]; !ok {
-		return execution.Status{}, executor.ErrUnknown
-	}
-
-	state := execution.StateRunning
-
-	switch {
-	case f.cancelled[id]:
-		state = execution.StateCancelled
-	case f.Finish:
-		state = execution.StateSucceeded
-	}
-
-	return execution.Status{State: state, ProviderID: id}, nil
-}
-
-// Result returns an ended workload's exit code, and fails for one still
-// running.
-func (f *Fake) Result(ctx context.Context, id string) (*execution.Result, error) {
-	st, err := f.Status(ctx, id)
+func (f *Fake) Status(_ context.Context, id string) (*agentrpc.ExecutionStatus, error) {
+	state, err := f.state(id)
 	if err != nil {
 		return nil, err
 	}
 
-	if !st.State.Terminal() {
+	return &agentrpc.ExecutionStatus{State: string(state), ProviderId: id}, nil
+}
+
+// Result returns an ended workload's exit code, and fails for one still
+// running.
+func (f *Fake) Result(_ context.Context, id string) (*agentrpc.ExecutionResult, error) {
+	state, err := f.state(id)
+	if err != nil {
+		return nil, err
+	}
+
+	if !state.Terminal() {
 		return nil, errors.New("still running")
 	}
 
-	return &execution.Result{ExitCode: new(f.ExitCode), Duration: time.Second}, nil
+	return agentrpc.ResultOf(&execution.Result{ExitCode: new(f.ExitCode), Duration: time.Second}), nil
 }
 
 // Cancel ends the workload cancelled.
@@ -129,8 +132,8 @@ func (f *Fake) Release(_ context.Context, id string) error {
 }
 
 // Logs writes a held workload's output from offset on.
-func (f *Fake) Logs(ctx context.Context, id string, offset int64, w io.Writer) error {
-	if _, err := f.Status(ctx, id); err != nil {
+func (f *Fake) Logs(_ context.Context, id string, offset int64, w io.Writer) error {
+	if _, err := f.state(id); err != nil {
 		return err
 	}
 
@@ -139,16 +142,16 @@ func (f *Fake) Logs(ctx context.Context, id string, offset int64, w io.Writer) e
 	return err
 }
 
-// Held reports every workload with what it declared, running until it ends.
+// Held reports every workload with what it takes, running until it ends.
 func (f *Fake) Held(context.Context) ([]*agentrpc.Held, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	held := make([]*agentrpc.Held, 0, len(f.workloads))
-	for id, spec := range f.workloads {
+	for id, w := range f.workloads {
 		held = append(held, &agentrpc.Held{
 			ExecutionId: id,
-			Resources:   &agentrpc.Resources{Cpu: spec.CPU, Memory: spec.Memory},
+			Resources:   agentrpc.Charge(w.GetResources(), f.Overhead),
 			Running:     !f.Finish && !f.cancelled[id],
 		})
 	}
@@ -156,16 +159,31 @@ func (f *Fake) Held(context.Context) ([]*agentrpc.Held, error) {
 	return held, nil
 }
 
-// Runtimes offers only the default runtime.
-func (f *Fake) Runtimes() []string {
-	return []string{executor.DefaultRuntime}
-}
-
 // Workload returns what the workload id was submitted as, or nil when it is
 // not held.
-func (f *Fake) Workload(id string) *executor.Spec {
+func (f *Fake) Workload(id string) *agentrpc.Workload {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	return f.workloads[id]
+}
+
+// state is where a held workload stands: running, succeeded when Finish is
+// set, or cancelled. Any other is executor.ErrUnknown.
+func (f *Fake) state(id string) (execution.State, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if _, ok := f.workloads[id]; !ok {
+		return "", executor.ErrUnknown
+	}
+
+	switch {
+	case f.cancelled[id]:
+		return execution.StateCancelled, nil
+	case f.Finish:
+		return execution.StateSucceeded, nil
+	default:
+		return execution.StateRunning, nil
+	}
 }

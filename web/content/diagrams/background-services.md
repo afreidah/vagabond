@@ -2,7 +2,7 @@
 title: "Background Services"
 linkTitle: "Background Services"
 description: "Interactive diagram of every loop and long-running goroutine the server and agent run, with its interval, what it touches and how it fails."
-weight: 8
+weight: 9
 ---
 
 Every loop the server and the agent run, with its interval and what it touches. The server runs five upkeep tickers plus one goroutine per dispatch, lease, execution, agent session and followed log; the agent holds one connection to the server and reports its workloads on a timer. **Hover over any component** for implementation details.
@@ -37,6 +37,7 @@ window.vagabondDiagram = {
     '    REPORT[Workload<br>report 10s]:::background',
     '    TIMEOUT[Timeout<br>watcher]:::process',
     '    CONTAINERD[(containerd)]:::data',
+    '    FIRECRACKER[(vagabond-firecracker:<br>supervision, timeouts)]:::data',
     '',
     '    SRV --> CAPS',
     '    SRV --> USAGE',
@@ -79,6 +80,7 @@ window.vagabondDiagram = {
     '    CONN --> REPORT',
     '    REPORT -->|Node.Register| LISTENER',
     '    REPORT --> CONTAINERD',
+    '    REPORT -->|Held| FIRECRACKER',
     '    TIMEOUT --> CONTAINERD',
   ].join('\n'),
 
@@ -156,7 +158,7 @@ window.vagabondDiagram = {
     AGENT: {
       title: 'vagabond agent',
       badge: 'entry', badgeText: 'node process',
-      body: '<p><code>internal/cli/agent.go</code> reads the node (<code>agent/fingerprint</code>), delegates its cgroup unless <code>-cgroup-parent</code> is set, connects to containerd, re-arms the timeout of every workload already in the <code>vagabond</code> namespace, then dials the server until SIGINT or SIGTERM.</p><p>A failure before the dial exits with status 1. A server that cannot be reached is not a startup failure; the agent keeps retrying.</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
+      body: '<p><code>internal/cli/agent.go</code> reads the node (<code>agent/fingerprint</code>), delegates its cgroup unless <code>-cgroup-parent</code> is set, connects to containerd, re-arms the timeout of every workload already in the <code>vagabond</code> namespace, asks each executor what it is, vagabond-firecracker too with <code>-firecracker</code>, then dials the server until SIGINT or SIGTERM.</p><p>A failure before the dial exits with status 1. A server that cannot be reached is not a startup failure; the agent keeps retrying.</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
     },
     CONN: {
       title: 'Server connection',
@@ -166,12 +168,12 @@ window.vagabondDiagram = {
     REPORT: {
       title: 'Workload report',
       badge: 'background', badgeText: 'every 10 s',
-      body: '<p>Re-registers the node through <code>Node.Register</code> with every workload containerd holds, each with its declared CPU and memory and whether it is still running. The server sizes the node&rsquo;s free room from these reports.</p><p><b>Interval:</b> 10s, which catches a workload finishing on its own.<br><b>Also:</b> on connecting, after a <code>Submit</code> that started a workload, and after every <code>Cancel</code> or <code>Release</code>.</p><p>Change signals coalesce: one pending signal covers any number of changes. A failed report is not fatal; the next one carries everything, and a connection that is really gone ends through the session closing.</p><p>Each report is answered with the held workloads the server has no use for: released, never recorded, or not an execution ID. The agent releases each through its own <code>Release</code>; a failed one is answered again on the next report.</p><p class="dg-metric">Logs: warn <code>reporting workloads</code> with <code>error</code>; info <code>released a workload the server has no use for</code> with <code>execution</code>; warn <code>releasing a workload the server has no use for</code> with <code>execution</code> and <code>error</code></p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
+      body: '<p>Re-registers the node through <code>Node.Register</code> with its executors and every workload they hold, containerd&rsquo;s containers and vagabond-firecracker&rsquo;s <code>Held</code>, each with what it takes, its declared CPU and memory plus its executor&rsquo;s overhead, and whether it is still running. The server sizes the node&rsquo;s free room from these reports.</p><p><b>Interval:</b> 10s, which catches a workload finishing on its own.<br><b>Also:</b> on connecting, after a <code>Submit</code> that started a workload, and after every <code>Cancel</code> or <code>Release</code>.</p><p>Change signals coalesce: one pending signal covers any number of changes. A failed report is not fatal; the next one carries everything, and a connection that is really gone ends through the session closing.</p><p>Each report is answered with the held workloads the server has no use for: released, never recorded, or not an execution ID. The agent releases each through its own <code>Release</code>; a failed one is answered again on the next report.</p><p class="dg-metric">Logs: warn <code>reporting workloads</code> with <code>error</code>; info <code>released a workload the server has no use for</code> with <code>execution</code>; warn <code>releasing a workload the server has no use for</code> with <code>execution</code> and <code>error</code></p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
     },
     TIMEOUT: {
       title: 'Timeout watcher',
       badge: 'process', badgeText: 'per workload',
-      body: '<p>One goroutine per workload that declares a timeout, stopping it once it has run that long: SIGTERM, then SIGKILL 10s later if it has not exited.</p><p><b>Deadline:</b> the workload&rsquo;s start plus its timeout, both stored as container labels (<code>vagabond.started</code>, <code>vagabond.timeout</code>), so a restarted agent watches the same deadline.<br><b>Started:</b> on submit, and for every held workload when the agent starts.</p><p>A workload without a timeout gets no watcher. A watcher that cannot load the task exits and leaves the workload running.</p><p class="dg-metric">Logs: none</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
+      body: '<p>One goroutine per container that declares a timeout, stopping it once it has run that long: SIGTERM, then SIGKILL 10s later if it has not exited. A microVM&rsquo;s timeout is vagabond-firecracker&rsquo;s to watch.</p><p><b>Deadline:</b> the workload&rsquo;s start plus its timeout, both stored as container labels (<code>vagabond.started</code>, <code>vagabond.timeout</code>), so a restarted agent watches the same deadline.<br><b>Started:</b> on submit, and for every held workload when the agent starts.</p><p>A workload without a timeout gets no watcher. A watcher that cannot load the task exits and leaves the workload running.</p><p class="dg-metric">Logs: none</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
     },
     STORE: {
       title: 'Store (Postgres or CockroachDB)',
@@ -202,6 +204,11 @@ window.vagabondDiagram = {
       title: 'containerd',
       badge: 'data', badgeText: 'node runtime',
       body: '<p>The node&rsquo;s containerd, <code>vagabond</code> namespace. It owns the workloads, so they keep running while the agent is disconnected. The workload report lists its containers; the timeout watcher stops their tasks.</p>'
+    },
+    FIRECRACKER: {
+      title: 'vagabond-firecracker',
+      badge: 'data', badgeText: 'microVMs',
+      body: '<p>The daemon beside the agent that runs its microVMs, with loops of its own, so a microVM&rsquo;s deadline holds and its output is kept while the agent is down:</p><p><b>Supervision:</b> one task per running microVM, copying its output to the execution&rsquo;s log, saving its end, and shutting the microVM down.<br><b>Timeout:</b> one per microVM with a timeout, from its saved start: SIGTERM, then SIGKILL 10 s later.<br><b>Recovery:</b> once at start, taking back what a previous daemon left.</p><p>The workload report reads its <code>Held</code>.</p><p><a href="../firecracker/">Firecracker diagram &rarr;</a></p>'
     }
   }
 };
@@ -216,7 +223,7 @@ window.vagabondDiagram = {
 | <span class="dg-swatch dg-process"></span> | Goroutine per dispatch, execution, session, request or workload |
 | <span class="dg-swatch dg-filter"></span> | Checked when read; not a loop |
 | <span class="dg-swatch dg-storage"></span> | State the loops read and write |
-| <span class="dg-swatch dg-success"></span> | External systems: provider platforms, containerd |
+| <span class="dg-swatch dg-success"></span> | External systems: provider platforms, containerd, vagabond-firecracker |
 
 ## Service summary
 
@@ -234,4 +241,5 @@ window.vagabondDiagram = {
 | Live output follow | Server | Per request, record re-read every 1s | | `Server.follow` |
 | Server connection | Agent | Backoff 1s to 30s | Yes | `Agent.Run` |
 | Workload report | Agent | 10s, and on every change | On connecting | `Agent.connect` |
-| Timeout watcher | Agent | Per workload | For every held workload | `Containerd.watch` |
+| Timeout watcher | Agent | Per container | For every held container | `Containerd.watch` |
+| MicroVM supervision and timeout | vagabond-firecracker | Per microVM | Taken back at start | `Executor::supervise`, `Executor::watch` |

@@ -26,7 +26,8 @@ runs the task on the selected backend, and stores the result.
 
 Backends are provider plugins: Google Cloud Run Jobs, IBM Code Engine Jobs, AWS
 Lambda, and agent nodes, which are hosts running `vagabond agent` that execute
-tasks on the host's containerd.
+tasks on the host's containerd, or in Firecracker microVMs through
+`vagabond-firecracker`.
 
 Usage is recorded for every run and checked against quotas set per backend,
 optionally split per namespace. `job plan` prints every backend with its score
@@ -67,8 +68,11 @@ does not use or require Nomad.
   it.
 - Store: Postgres or CockroachDB.
 - Agent nodes: `vagabond agent` registers a node into a pool and runs tasks on
-  its containerd, limited to the agent's cgroup. Off loopback, agents connect
-  over mutual TLS and register under their certificate's name.
+  its containerd, or in a Firecracker microVM each with `-firecracker`, limited
+  to the agent's cgroup. Off loopback, agents connect over mutual TLS and
+  register under their certificate's name.
+- Isolation: every provider publishes how it keeps workloads apart, as
+  `provider.isolation`, so a task can demand a virtual machine of its own.
 
 Backends:
 
@@ -77,7 +81,8 @@ Backends:
 | Google Cloud Run Jobs | `container` | [cloud-run.md](docs/providers/cloud-run.md) |
 | IBM Code Engine Jobs | `container` | [code-engine.md](docs/providers/code-engine.md) |
 | AWS Lambda | `function` | [lambda.md](docs/providers/lambda.md) |
-| Agent nodes (`vagabond agent`, `pool` provider) | `container` | [agent.md](docs/agent.md) |
+| Agent nodes (`vagabond agent`, `containerd` provider) | `container` | [agent.md](docs/agent.md) |
+| Agent nodes in microVMs (`vagabond-firecracker`, `firecracker` provider) | `container` | [firecracker.md](docs/firecracker.md) |
 
 The `worker` driver is modeled and admitted; no plugin implements it yet.
 
@@ -195,7 +200,8 @@ job "go-test" {
         |                  |                   |
         v                  v                   v
    cloud providers    agent nodes         store: jobs, dispatches,
-   Cloud Run, Lambda  containerd          executions, quota
+   Cloud Run, Lambda  containerd,         executions, quota
+                      Firecracker
                                           (Postgres / CockroachDB)
 ```
 
@@ -239,7 +245,7 @@ Details: [architecture.md](docs/architecture.md).
 
 Not implemented yet. Tracked in [issues](https://github.com/afreidah/vagabond/issues).
 
-- Own nodes: a Firecracker runtime.
+- Own nodes: Firecracker on arm64.
 - Server: API tokens scoped to namespaces, degraded mode that keeps
   dispatching through a store outage.
 - Operations: periodic jobs, an event stream, blocking queries, disabling a

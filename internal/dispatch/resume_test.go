@@ -19,6 +19,7 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -40,7 +41,7 @@ func abandon(
 	lapsed := time.Now().Add(-time.Hour)
 
 	d := &execution.Dispatch{
-		ID: newTestID(t), Namespace: ns, Job: "ci", Tasks: tasks,
+		ID: testkit.NewID(t), Namespace: ns, Job: "ci", Tasks: tasks,
 		State: execution.DispatchRunning, Owner: "cli:dead:1", Epoch: 1, LeaseUntil: lapsed, Created: lapsed,
 	}
 
@@ -51,7 +52,7 @@ func abandon(
 	ids := make([]execution.ID, 0, len(states))
 
 	for i, state := range states {
-		id := newTestID(t)
+		id := testkit.NewID(t)
 		ids = append(ids, id)
 
 		if err := reg.ledger.Reserve(ctx, id, ns, "a", declared, false); err != nil {
@@ -79,18 +80,6 @@ func abandon(
 	}
 
 	return claimed[0], ids
-}
-
-// newTestID mints an execution ID.
-func newTestID(t *testing.T) execution.ID {
-	t.Helper()
-
-	id, err := execution.NewID()
-	if err != nil {
-		t.Fatalf("NewID() = %v", err)
-	}
-
-	return id
 }
 
 // resumer builds a dispatcher that never waits, leased as the claiming

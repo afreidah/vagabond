@@ -35,10 +35,6 @@ pub struct Config {
     #[arg(long)]
     pub initramfs: PathBuf,
 
-    /// Filesystem of the root drives the agent prepares, its snapshotter's fs_type
-    #[arg(long, default_value = "ext4")]
-    pub root_fstype: String,
-
     /// Firecracker binary the jailer runs
     #[arg(long, default_value = "/usr/bin/firecracker")]
     pub firecracker: PathBuf,
@@ -78,4 +74,32 @@ pub struct Config {
     /// Least severe level logged: error, warn, info, debug or trace
     #[arg(long, default_value = "info")]
     pub log_level: LevelFilter,
+}
+
+#[cfg(test)]
+impl Config {
+    // sample is the daemon's flags with only the required ones given, as an
+    // operator who takes every default starts it, with its state under dir and
+    // its jails under dir/jails, for the tests of every module.
+    pub(crate) fn sample(dir: &std::path::Path) -> Config {
+        let state_dir = dir.display().to_string();
+        let jails = dir.join("jails").display().to_string();
+        Config::parse_from([
+            "vagabond-firecracker",
+            "--kernel",
+            "/boot/vmlinux",
+            "--initramfs",
+            "/boot/initramfs",
+            "--uid",
+            "10000",
+            "--gid",
+            "10000",
+            "--uplink",
+            "eth0",
+            "--state-dir",
+            &state_dir,
+            "--chroot-base",
+            &jails,
+        ])
+    }
 }

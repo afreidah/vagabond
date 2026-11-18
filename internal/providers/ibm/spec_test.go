@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobspec"
@@ -23,6 +24,14 @@ import (
 // -------------------------------------------------------------------------
 // RESOURCES
 // -------------------------------------------------------------------------
+
+// sized is the size a task declaring resources runs at, through the same
+// defaults buildSpec reads it with.
+func sized(resources *job.Resources) (size, error) {
+	declared := plugin.Declared(&job.Task{Resources: resources}).Or(codeEngine.Default)
+
+	return sizeFor(declared.CPU, declared.Memory)
+}
 
 // A task gets the smallest size holding what it declared, with memory compared
 // in bytes since Code Engine's G is decimal, and as much disk as the size
@@ -47,7 +56,7 @@ func TestSizeFor(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		got, err := sizeFor(&job.Task{Name: "test", Resources: tc.resources})
+		got, err := sized(tc.resources)
 		if err != nil {
 			t.Errorf("%s: sizeFor() = %v", tc.name, err)
 
@@ -70,7 +79,7 @@ func TestSizeFor_PastTheLargest(t *testing.T) {
 		{Memory: new(45777)},
 		{CPU: new(12001), Memory: new(1024)},
 	} {
-		if got, err := sizeFor(&job.Task{Name: "test", Resources: resources}); err == nil {
+		if got, err := sized(resources); err == nil {
 			t.Errorf("sizeFor(%+v) = %s / %s, want an error", resources, got.cpu(), got.memory())
 		}
 	}
@@ -85,18 +94,18 @@ func TestExecutionSeconds(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		timeout *job.Duration
+		timeout time.Duration
 		want    int
 	}{
-		{nil, 86400},
-		{new(job.Duration("15m")), 900},
-		{new(job.Duration("1500ms")), 2},
-		{new(job.Duration("10ms")), 1},
-		{new(job.Duration("24h")), 86400},
+		{0, 86400},
+		{15 * time.Minute, 900},
+		{1500 * time.Millisecond, 2},
+		{10 * time.Millisecond, 1},
+		{24 * time.Hour, 86400},
 	}
 
 	for _, tc := range cases {
-		got, err := executionSeconds(&job.Task{Name: "test", Timeout: tc.timeout})
+		got, err := executionSeconds(tc.timeout)
 		if err != nil || got != tc.want {
 			t.Errorf("executionSeconds(%v) = %d, %v; want %d", tc.timeout, got, err, tc.want)
 		}
@@ -107,7 +116,7 @@ func TestExecutionSeconds(t *testing.T) {
 func TestExecutionSeconds_PastTheMaximum(t *testing.T) {
 	t.Parallel()
 
-	if _, err := executionSeconds(&job.Task{Name: "test", Timeout: new(job.Duration("25h"))}); err == nil {
+	if _, err := executionSeconds(25 * time.Hour); err == nil {
 		t.Fatal("a 25h timeout was accepted")
 	}
 }

@@ -16,7 +16,7 @@ edition = "2024"
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 ipnet = { version = "2", features = ["serde"] }
-nix = { version = "0.31", features = ["fs", "mount", "process", "reboot", "signal", "term"] }
+nix = { version = "0.31", features = ["fs", "mount", "process", "reboot", "signal", "term", "user"] }
 protobuf = "3.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

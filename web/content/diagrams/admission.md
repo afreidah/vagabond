@@ -5,7 +5,7 @@ description: "Interactive diagram of how one task is admitted against every prov
 weight: 3
 ---
 
-How one task is placed: every provider, or each node of a `containerd` provider, runs 13 checks in four tiers, the candidates that pass every check are scored and ordered by the tier mode, and the first in the ranking is selected. `job plan` and dispatch run the same two steps. **Hover over any component** for implementation details.
+How one task is placed: every provider, or each node of a `containerd` or `firecracker` provider, runs 13 checks in four tiers, the candidates that pass every check are scored and ordered by the tier mode, and the first in the ranking is selected. `job plan` and dispatch run the same two steps. **Hover over any component** for implementation details.
 
 {{< diagram >}}
 
@@ -18,7 +18,7 @@ window.vagabondDiagram = {
     '    TASK([Task request<br>scheduler.Request]):::entry --> ADMIT[Admit<br>every check, every provider]:::process',
     '    INPUTS[(Provider inputs<br>one per provider)]:::storage --> ADMIT',
     '    ADMIT -->|each provider| CK_ALLOW',
-    '    ADMIT -->|containerd with nodes| MEMBER[containerd node<br>judged as the provider]:::process',
+    '    ADMIT -->|agent nodes| MEMBER[Each node judged<br>as the provider]:::process',
     '    MEMBER -->|each node| CK_ALLOW',
     '',
     '    subgraph POLICY [Policy]',
@@ -72,17 +72,17 @@ window.vagabondDiagram = {
     INPUTS: {
       title: 'Provider Inputs',
       badge: 'storage', badgeText: 'snapshot',
-      body: '<p><code>registry.Inputs</code> builds one <code>scheduler.Input</code> per configured provider: its capability snapshot, <code>enabled</code>, health, <code>meta</code> tags, <code>tier</code>, its quota pools with their usage, and the namespace&rsquo;s share of them with its usage.</p><p>Capabilities come from the last refresh, every minute on the server. A <code>containerd</code> provider is read live from its connected nodes on every plan, so a node that just joined or filled up is seen at once.</p><p>Usage comes from the ledger&rsquo;s in-memory snapshot: dispatch re-reads it from the store before admitting each task, and <code>job plan</code> uses the copy the server re-reads every 15 seconds.</p><p><a href="../quotas/">Quota accounting diagram &rarr;</a></p>'
+      body: '<p><code>registry.Inputs</code> builds one <code>scheduler.Input</code> per configured provider: its capability snapshot, <code>enabled</code>, health, <code>meta</code> tags, <code>tier</code>, its quota pools with their usage, and the namespace&rsquo;s share of them with its usage.</p><p>Capabilities come from the last refresh, every minute on the server. A <code>containerd</code> or <code>firecracker</code> provider is read live from its connected nodes on every plan, so a node that just joined or filled up is seen at once.</p><p>Usage comes from the ledger&rsquo;s in-memory snapshot: dispatch re-reads it from the store before admitting each task, and <code>job plan</code> uses the copy the server re-reads every 15 seconds.</p><p><a href="../quotas/">Quota accounting diagram &rarr;</a></p>'
     },
     ADMIT: {
       title: 'Admit',
       badge: 'process', badgeText: 'pure function',
-      body: '<p><code>scheduler.Admit</code> runs all 13 checkers against every provider, in a fixed order, without stopping at the first rejection. The first failure sets the rejection&rsquo;s reason and detail; each later failure is recorded as a code alone in <code>Also</code>.</p><p>It calls no provider, reads no clock and reserves nothing. <code>job plan</code>, <code>POST /v1/jobs/plan</code> and dispatch call the same function.</p><p>A <code>containerd</code> provider with connected nodes is judged node by node. Every other provider, including a <code>containerd</code> provider with no nodes, is judged once.</p><p><a href="../../docs/scheduling/#checkers">Checkers &rarr;</a></p>'
+      body: '<p><code>scheduler.Admit</code> runs all 13 checkers against every provider, in a fixed order, without stopping at the first rejection. The first failure sets the rejection&rsquo;s reason and detail; each later failure is recorded as a code alone in <code>Also</code>.</p><p>It calls no provider, reads no clock and reserves nothing. <code>job plan</code>, <code>POST /v1/jobs/plan</code> and dispatch call the same function.</p><p>A <code>containerd</code> or <code>firecracker</code> provider with connected nodes is judged node by node. Every other provider, including a <code>containerd</code> or <code>firecracker</code> provider with no nodes, is judged once.</p><p><a href="../../docs/scheduling/#checkers">Checkers &rarr;</a></p>'
     },
     MEMBER: {
-      title: 'containerd Node',
+      title: 'Agent Node',
       badge: 'process', badgeText: 'per node',
-      body: '<p>Each connected node of a <code>containerd</code> provider runs all 13 checks as if it were the whole provider: its own capability snapshot and <code>node.label.*</code> attributes, with the provider&rsquo;s allowlist, <code>enabled</code>, health, tags and quota. A node&rsquo;s maximums are its free room, so a busy node fails <code>resources</code> for a task that fits it idle.</p><p>Every node that passes is a candidate of its own (<code>scheduler.Candidate.Node</code>), ranked with its own labels, so a <code>node.label.*</code> affinity can put one node ahead of another. A plan lists each as <code>&lt;provider&gt;/&lt;node&gt;</code>.</p><p>When no node passes, the provider takes the rejection of the node with the fewest failed checks, the first on a tie, its detail prefixed <code>closest node &lt;name&gt;: </code>.</p><p><a href="../agents/">Agents and pools diagram &rarr;</a></p>'
+      body: '<p>Each connected node of a <code>containerd</code> or <code>firecracker</code> provider runs all 13 checks as if it were the whole provider: its own capability snapshot and <code>node.label.*</code> attributes, with the provider&rsquo;s allowlist, <code>enabled</code>, health, tags and quota. A node&rsquo;s maximums are its free room, so a busy node fails <code>resources</code> for a task that fits it idle.</p><p>Every node that passes is a candidate of its own (<code>scheduler.Candidate.Node</code>), ranked with its own labels, so a <code>node.label.*</code> affinity can put one node ahead of another. A plan lists each as <code>&lt;provider&gt;/&lt;node&gt;</code>.</p><p>When no node passes, the provider takes the rejection of the node with the fewest failed checks, the first on a tie, its detail prefixed <code>closest node &lt;name&gt;: </code>.</p><p><a href="../agents/">Agents and pools diagram &rarr;</a></p>'
     },
     CK_ALLOW: {
       title: 'allowlist',
@@ -102,7 +102,7 @@ window.vagabondDiagram = {
     CK_HEALTHY: {
       title: 'healthy',
       badge: 'check', badgeText: 'availability, check 4',
-      body: '<p>Rejects with <code>provider-unhealthy</code> when the provider&rsquo;s last capability refresh failed. Transient. An unhealthy provider keeps its last snapshot, which the checks after this one would otherwise judge it on.</p><p>A <code>containerd</code> provider with no connected nodes is unhealthy.</p><p>Detail: <code>This provider did not answer its last capability refresh.</code></p>'
+      body: '<p>Rejects with <code>provider-unhealthy</code> when the provider&rsquo;s last capability refresh failed. Transient. An unhealthy provider keeps its last snapshot, which the checks after this one would otherwise judge it on.</p><p>A <code>containerd</code> or <code>firecracker</code> provider with no connected nodes is unhealthy.</p><p>Detail: <code>This provider did not answer its last capability refresh.</code></p>'
     },
     CK_DRIVER: {
       title: 'driver',
@@ -127,7 +127,7 @@ window.vagabondDiagram = {
     CK_RESOURCES: {
       title: 'resources',
       badge: 'check', badgeText: 'mismatch, check 9',
-      body: '<p>Rejects with <code>resources-exceeded</code> when <code>resources.cpu</code> or <code>resources.memory</code> exceeds the provider&rsquo;s maximum. CPU is checked first and the detail names the first that fails.</p><p>A task that declares no CPU or memory is checked at the provider&rsquo;s default size where it publishes one (<code>containerd</code> nodes do), otherwise at 0. No advertised maximum admits any size; a maximum of 0 admits nothing.</p><p>Detail: <code>The task asks for &lt;n&gt; millicores and this provider allows &lt;max&gt;.</code>, or <code>declares none and is sized at</code> for a default size.</p>'
+      body: '<p>Rejects with <code>resources-exceeded</code> when <code>resources.cpu</code> or <code>resources.memory</code> exceeds the provider&rsquo;s maximum. CPU is checked first and the detail names the first that fails.</p><p>A task that declares no CPU or memory is checked at the provider&rsquo;s default size where it publishes one (agent nodes, Cloud Run and Code Engine do), otherwise at 0. No advertised maximum admits any size; a maximum of 0 admits nothing.</p><p>Detail: <code>The task asks for &lt;n&gt; millicores and this provider allows &lt;max&gt;.</code>, or <code>declares none and is sized at</code> for a default size.</p>'
     },
     CK_DURATION: {
       title: 'duration',
@@ -142,7 +142,7 @@ window.vagabondDiagram = {
     CK_CONSTRAINT: {
       title: 'constraint',
       badge: 'check', badgeText: 'mismatch, check 12',
-      body: '<p>Rejects with <code>constraint-unmet</code> when a constraint evaluates false against the provider&rsquo;s attributes: the capability snapshot, <code>provider.free_quota_percent</code> for this task, <code>provider.tier</code>, <code>provider.meta.*</code> and, on a node of a <code>containerd</code> provider, <code>node.label.*</code>.</p><p>Constraints are evaluated in declaration order and the first that fails is reported. An absent attribute satisfies only <code>!=</code> and <code>is_not_set</code>.</p><p><a href="../../docs/job-specification/#operators">Operators &rarr;</a></p>'
+      body: '<p>Rejects with <code>constraint-unmet</code> when a constraint evaluates false against the provider&rsquo;s attributes: the capability snapshot, <code>provider.free_quota_percent</code> for this task, <code>provider.tier</code>, <code>provider.meta.*</code> and, on a node of a <code>containerd</code> or <code>firecracker</code> provider, <code>node.label.*</code>.</p><p>Constraints are evaluated in declaration order and the first that fails is reported. An absent attribute satisfies only <code>!=</code> and <code>is_not_set</code>.</p><p><a href="../../docs/job-specification/#operators">Operators &rarr;</a></p>'
     },
     CK_QUOTA: {
       title: 'quota',
@@ -152,7 +152,7 @@ window.vagabondDiagram = {
     CAND: {
       title: 'Candidates',
       badge: 'success', badgeText: 'admitted',
-      body: '<p>Every provider that passed all 13 checks, and every node of a <code>containerd</code> provider that did, sorted by provider name, a provider&rsquo;s nodes kept in its <code>placement</code> order, so a plan of the same inputs is byte-identical and can be diffed in CI.</p><p>A candidate embeds the input it was admitted from, with the capability snapshot cloned, so scoring reads the same quota usage, tags, tier and node labels. It carries the estimated cost and, for a node, its name (<code>Candidate.Node</code>).</p>'
+      body: '<p>Every provider that passed all 13 checks, and every node of a <code>containerd</code> or <code>firecracker</code> provider that did, sorted by provider name, a provider&rsquo;s nodes kept in its <code>placement</code> order, so a plan of the same inputs is byte-identical and can be diffed in CI.</p><p>A candidate embeds the input it was admitted from, with the capability snapshot cloned, so scoring reads the same quota usage, tags, tier and node labels. It carries the estimated cost and, for a node, its name (<code>Candidate.Node</code>).</p>'
     },
     REJ: {
       title: 'Rejections',
@@ -167,7 +167,7 @@ window.vagabondDiagram = {
     AFFINITY: {
       title: 'affinity',
       badge: 'scorer', badgeText: 'scorer, when declared',
-      body: '<p>The summed weight of satisfied affinities over the summed weight of all of them. <code>weight</code> defaults to 50 and must be positive. An unsatisfied affinity adds nothing and never rejects.</p><p>A node of a <code>containerd</code> provider is scored with its own <code>node.label.*</code> attributes, so a label affinity ranks the nodes carrying the label first.</p><p>Applied only when the job declares at least one affinity. A job with none has no affinity scorer, rather than a 0 averaged in.</p><p>Affinities weighted 75 and 25, where only the first matches, score 0.75.</p>'
+      body: '<p>The summed weight of satisfied affinities over the summed weight of all of them. <code>weight</code> defaults to 50 and must be positive. An unsatisfied affinity adds nothing and never rejects.</p><p>A node of a <code>containerd</code> or <code>firecracker</code> provider is scored with its own <code>node.label.*</code> attributes, so a label affinity ranks the nodes carrying the label first.</p><p>Applied only when the job declares at least one affinity. A job with none has no affinity scorer, rather than a 0 averaged in.</p><p>Affinities weighted 75 and 25, where only the first matches, score 0.75.</p>'
     },
     TIERSC: {
       title: 'tier',

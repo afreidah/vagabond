@@ -5,7 +5,7 @@
 #
 # Runs on push to main and on pull requests. Formatting, vet, lint, and tests
 # are the same gates `make check` runs locally, plus the integration suite, the
-# containerd executor tests and the microVM tests, so a change that passes
+# microVM tests and both executors' tests, so a change that passes
 # locally passes here. Tool versions are pinned to match the Makefile; a
 # mismatch would mean local and CI results disagree.
 # -------------------------------------------------------------------------------
@@ -48,7 +48,7 @@ jobs:
         id: changes
         run: |
           if git diff --name-only origin/${{ github.base_ref }}...HEAD \
-            | grep -qE '\.(go|sql)$|^go\.(mod|sum)$|^sqlc\.yaml$|^web/'; then
+            | grep -qE '\.(go|sql|proto)$|^go\.(mod|sum)$|^sqlc\.yaml$|^web/|^rust/|Dockerfile$'; then
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
@@ -144,37 +144,6 @@ jobs:
           path: integration-coverage.out
 
   # ---------------------------------------------------------------------------
-  # CONTAINERD EXECUTOR
-  #
-  # The agent's executor against the runner's own containerd, which Docker on
-  # the runner already runs. It needs root, so the test binary is built as the
-  # runner user and run with sudo, as `make containerd-coverage` does locally.
-  # ---------------------------------------------------------------------------
-  containerd:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
-        with:
-          go-version-file: go.mod
-
-      # The tests skip when containerd cannot be reached, which would pass here
-      # having run nothing.
-      - name: Check containerd
-        run: sudo ctr version
-
-      - name: Containerd test
-        run: make containerd-coverage
-
-      - name: Upload containerd coverage
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: containerd-coverage
-          path: containerd-coverage.out
-
-  # ---------------------------------------------------------------------------
   # RUST
   #
   # vagabond-firecracker's gates. rustup on the runner installs the toolchain
@@ -219,18 +188,24 @@ jobs:
           path: rust-coverage.lcov
 
   # ---------------------------------------------------------------------------
-  # FIRECRACKER
+  # FIRECRACKER AND THE EXECUTORS
   #
-  # The microVM tests on the runner's KVM, which GitHub's Linux runners expose
-  # though nested virtualization is not officially supported. They need root,
-  # so they are built as the runner user and run with sudo, as `make
-  # firecracker-coverage` does locally.
+  # The microVM tests, then the agent's two executors against a containerd and
+  # a vagabond-firecracker of their own, on the runner's KVM, which GitHub's
+  # Linux runners expose though nested virtualization is not officially
+  # supported. They need root, so they are built as the runner user and run
+  # with sudo, as `make firecracker-coverage` and `make executor-coverage` do
+  # locally. Docker on the runner supplies containerd and runc.
   # ---------------------------------------------------------------------------
   firecracker:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version-file: go.mod
 
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
@@ -240,17 +215,26 @@ jobs:
       - name: Check KVM
         run: test -c /dev/kvm
 
-      - name: Install the initramfs, root drive and firewall tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cpio e2fsprogs nftables
+      - name: Install the initramfs, root drive, thin pool and firewall tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cpio dmsetup e2fsprogs nftables
 
       - name: Firecracker test
         run: make firecracker-coverage
+
+      - name: Executor test
+        run: make executor-coverage
 
       - name: Upload Firecracker coverage
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: firecracker-coverage
           path: firecracker-coverage.lcov
+
+      - name: Upload executor coverage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: executor-coverage
+          path: executor-coverage.out
 
   # ---------------------------------------------------------------------------
   # VULNERABILITY SCANNING
@@ -293,7 +277,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # SONARCLOUD
   #
-  # Combines the Go unit, integration and containerd coverage and the Rust unit
+  # Combines the Go unit, integration and executor coverage and the Rust unit
   # and microVM coverage the test jobs uploaded. Runs on every pull request and
   # every push to main, so main is re-analysed with fresh coverage. A test job
   # that failed uploaded no profile, and scanning without it would report a
@@ -302,48 +286,23 @@ jobs:
   sonarqube:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [test, integration, containerd, rust-test, firecracker]
+    needs: [test, integration, rust-test, firecracker]
     if: >-
       always()
       && github.actor != 'dependabot[bot]'
-      && !contains(fromJSON('["failure", "cancelled"]'), needs.test.result)
-      && !contains(fromJSON('["failure", "cancelled"]'), needs.integration.result)
-      && !contains(fromJSON('["failure", "cancelled"]'), needs.containerd.result)
-      && !contains(fromJSON('["failure", "cancelled"]'), needs.rust-test.result)
-      && !contains(fromJSON('["failure", "cancelled"]'), needs.firecracker.result)
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           fetch-depth: 0
 
-      - name: Download unit coverage
+      # Every coverage artifact into the checkout, each file under its own name.
+      - name: Download coverage
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: unit-coverage
-        continue-on-error: true
-
-      - name: Download integration coverage
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: integration-coverage
-        continue-on-error: true
-
-      - name: Download containerd coverage
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: containerd-coverage
-        continue-on-error: true
-
-      - name: Download Rust coverage
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: rust-coverage
-        continue-on-error: true
-
-      - name: Download Firecracker coverage
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: firecracker-coverage
+          pattern: '*-coverage'
+          merge-multiple: true
         continue-on-error: true
 
       - name: SonarCloud scan

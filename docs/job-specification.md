@@ -420,12 +420,25 @@ Published attributes:
 | `provider.internet` | bool | Always | `true` when the provider offers outbound internet |
 | `provider.private_network` | bool | Always | `true` when the provider offers private network access |
 | `provider.arbitrary_images` | bool | Always | `true` when any container image may be run |
+| `provider.isolation` | string | When the provider states it | How a workload is kept from others on the same machine: `vm` for its own virtual machine (`firecracker`, Cloud Run jobs, Lambda), `container` for a container on a shared kernel (`containerd`, Code Engine) |
 | `provider.estimated_cost` | integer | Always, including `0` | Estimated cost per execution |
 | `provider.free_quota_percent` | integer | Always | Tightest remaining allowance, 0-100, see below |
 | `provider.tier` | integer | Always, including `0` | The provider's [`tier`](configuration.md#tiers) from the server configuration |
 
 A limit the provider never stated is absent rather than `0`, so `is_set` and
 `is_not_set` distinguish "no limit stated" from "a limit of zero".
+
+**`provider.isolation`:** a task that must run in a virtual machine of its
+own, such as one running code nobody reviewed, constrains it, and every
+provider sharing a kernel between workloads, or stating nothing, is rejected
+with `constraint-unmet`:
+
+```hcl
+constraint {
+  attribute = "provider.isolation"
+  value     = "vm"
+}
+```
 
 **`provider.free_quota_percent`:** computed per task at admission. It is the
 lowest remaining percentage among the quota pools this task would charge,
@@ -455,7 +468,7 @@ constraint {
 }
 ```
 
-**`node.label.*`:** a [`containerd`](agent.md) provider judges and ranks each
+**`node.label.*`:** a [`containerd` or `firecracker`](agent.md) provider judges and ranks each
 connected node separately, and while it does, that node's labels are
 published under `node.label.`. A node failing a constraint is not a
 candidate, and an affinity ranks the nodes it matches first. On any other
@@ -495,7 +508,7 @@ task "test" {
 |---|---|---|---|---|
 | label | string | yes | - | Task name, unique within the job |
 | `driver` | string | yes | - | Execution contract: `container`, `function` or `worker` |
-| `working_directory` | string | no | image default | Directory the command runs in. Applied by the `containerd` provider only |
+| `working_directory` | string | no | image default | Directory the command runs in. Applied by `cloud-run`, `containerd` and `firecracker`; on an agent node one the image lacks is made, owned by root. Code Engine has no setting for it, so a task there starts in the image's |
 | `timeout` | duration | no | none | Maximum runtime. See [`timeout`](#timeout) |
 | `config` | block | depends on driver | - | Driver configuration |
 | `env` | block | no | - | Environment variables |
@@ -684,8 +697,9 @@ resources {
 
 **Admission:** a value above the provider's `provider.max_cpu` or
 `provider.max_memory` is rejected with `resources-exceeded`. An omitted value
-is checked at the provider's default size where it publishes one (a
-`containerd` provider sizes it at 1000 millicores / 1024 MiB), and passes any provider that publishes none.
+is checked at the provider's default size where it publishes one (agent nodes
+size it at 1000 millicores / 1024 MiB, Cloud Run and Code Engine at 1000
+millicores / 2048 MiB), and passes any provider that publishes none.
 
 **Quota:** the declared values (0 when omitted) are what the task charges
 against CPU- and memory-metered pools. See [quotas](quotas.md).
@@ -775,7 +789,8 @@ execution {
 | `privileged` | bool | no | - | Accepted and stored. No provider or admission check reads it |
 
 Architectures offered: Cloud Run `amd64`; Lambda `amd64`, `arm64`; a
-`containerd` provider each connected node's own.
+`containerd` provider each connected node's own; a `firecracker` provider
+`amd64`, as vagabond-firecracker runs only there.
 
 **Validation:** `Unknown architecture in "<job>" task "<task>"`
 (`Architecture "x86_64" is not one Vagabond schedules against. Valid architectures are amd64, arm64.`).

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/afreidah/vagabond/internal/execution"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // A reservation with no execution record was never submitted on, so it is
@@ -29,14 +30,14 @@ func TestResolve(t *testing.T) {
 	defer o.lease.release()
 
 	recorded := &execution.Record{
-		ID: newTestID(t), State: execution.StatePending, UpdatedAt: time.Now(), Dispatch: o.Dispatch, Provider: "a",
+		ID: testkit.NewID(t), State: execution.StatePending, UpdatedAt: time.Now(), Dispatch: o.Dispatch, Provider: "a",
 	}
 
 	if err := reg.executions.Create(t.Context(), recorded, o.lease.key); err != nil {
 		t.Fatalf("Create() = %v", err)
 	}
 
-	for id, want := range map[execution.ID]bool{newTestID(t): true, recorded.ID: false} {
+	for id, want := range map[execution.ID]bool{testkit.NewID(t): true, recorded.ID: false} {
 		if got := d.orphaned(t.Context(), id); got != want {
 			t.Errorf("orphaned(%s) = %t, want %t", id, got, want)
 		}
