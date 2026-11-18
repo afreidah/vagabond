@@ -4,6 +4,8 @@
 
 - **Go 1.27+** (version pinned in `go.mod`, resolved automatically through
   `GOTOOLCHAIN=auto`, so no manual install is required)
+- **Rust** through rustup (`rust/vagabond-firecracker/rust-toolchain.toml` pins
+  the compiler, rustfmt, clippy and the musl target, installed on first use)
 - **Make** (all common tasks have Makefile targets)
 - **Docker** (integration tests only; not needed for unit tests)
 - **jj** (optional; the repository is colocated, so plain git works too)
@@ -25,8 +27,9 @@ make help
 make check
 ```
 
-`make check` is formatting, vet, lint, tests, and a vulnerability scan. CI runs
-the same targets with the same pinned tool versions.
+`make check` is formatting, vet, lint, tests, and a vulnerability scan, for the
+Go code and for the Rust crate. CI runs the same targets with the same pinned
+tool versions.
 
 ## Testing
 
@@ -61,15 +64,31 @@ Docker must be running, but nothing needs starting by hand.
 - Use `-v` to watch progress; without it a package prints nothing until it
   finishes.
 
+### Rust
+
+```bash
+make rust-test              # vagabond-firecracker's unit tests
+make rust-coverage          # the same, into rust-coverage.lcov, as CI runs it
+make firecracker-test       # real microVMs: root, /dev/kvm and the internet, through sudo
+make firecracker-coverage   # the same, into firecracker-coverage.lcov, as CI runs it
+```
+
+The microVM tests fetch Firecracker, a kernel and a root filesystem on first
+run and need `cpio` and `mkfs.ext4`. What they do to the host, and undo, is in
+[`docs/firecracker.md`](docs/firecracker.md#testing).
+
 ### Vulnerability scanning
 
 ```bash
 make govulncheck
+make rust-audit
 ```
 
 `govulncheck` is declared as a tool directive in `go.mod`, so the module graph
 pins its version. The analysis is call-graph based: a vulnerable dependency is
-reported only when a path to the affected symbol exists.
+reported only when a path to the affected symbol exists. `rust-audit` checks
+the crate's `Cargo.lock` against the RustSec advisory database with the
+`cargo-audit` that `make tools` installs.
 
 ## Code Style
 

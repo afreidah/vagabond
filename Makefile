@@ -3,9 +3,10 @@
 #
 # Author: Alex Freidah
 #
-# Common development tasks for the Vagabond control plane and CLI. `make check`
-# is the gate a change must pass before it is pushed, and it is what CI runs.
-# Every target is safe to run against a tree with no Go packages.
+# Common development tasks for the Vagabond control plane, CLI and
+# vagabond-firecracker. `make check` is the gate a change must pass before it is
+# pushed, and it is what CI runs. Every target is safe to run against a tree
+# with no Go packages.
 # -------------------------------------------------------------------------------
 
 GO             ?= go
@@ -20,6 +21,12 @@ MOCKGEN        := $(shell command -v mockgen 2>/dev/null || echo $(GOBIN)/mockge
 # Pinned so that a lint failure is a code change rather than a tool upgrade.
 GOLANGCI_VERSION ?= v2.14.0
 MOCKGEN_VERSION  ?= v0.6.0
+CARGO_AUDIT_VERSION    ?= 0.23.0
+CARGO_LLVM_COV_VERSION ?= 0.9.1
+
+# The Rust crate. Its targets run in it, where rust-toolchain.toml picks the
+# compiler, rustfmt and clippy.
+FC_CRATE       := rust/vagabond-firecracker
 
 # Injected into internal/version at link time, so a built binary reports what it
 # actually is rather than whatever string was last committed. Read from
@@ -132,6 +139,16 @@ vet: ## Run Go vet static analysis
 lint: $(GOLANGCI_LINT) ## Run golangci-lint, including the depguard boundaries
 	@if $(HAVE_GO_PKGS); then $(GOLANGCI_LINT) run; else echo "$(NO_PKGS_MSG) lint"; fi
 
+# rustfmt's default style, with no configuration.
+rust-fmt: ## Apply rustfmt to the Rust crate
+	cd $(FC_CRATE) && cargo fmt
+
+rust-fmt-check: ## Verify the Rust crate's formatting without modifying files
+	cd $(FC_CRATE) && cargo fmt --check
+
+rust-lint: ## Run clippy on the Rust crate and its tests, failing on any warning
+	cd $(FC_CRATE) && cargo clippy --all-targets -- -D warnings
+
 # -------------------------------------------------------------------------
 # TESTING
 # -------------------------------------------------------------------------
@@ -141,6 +158,10 @@ test: ## Run Go tests with the race detector
 
 test-fast: ## Run Go tests without the race detector for quick iteration
 	@if $(HAVE_GO_PKGS); then $(GO) test ./...; else echo "$(NO_PKGS_MSG) test"; fi
+
+# The microVM tests are ignored here; firecracker-test runs them.
+rust-test: ## Run the Rust crate's tests
+	cd $(FC_CRATE) && cargo test
 
 # Integration tests are gated behind a build tag and manage their own
 # containers through testcontainers, so nothing needs starting by hand.
@@ -179,6 +200,88 @@ containerd-coverage: ## Write containerd-coverage.out from the containerd execut
 	sudo ./bin/executor.test -test.v -test.timeout 5m -test.coverprofile=containerd-coverage.out
 	sudo chown "$$(id -u):$$(id -g)" containerd-coverage.out
 
+# cargo-llvm-cov builds the crate instrumented with the toolchain's llvm-tools
+# and writes LCOV, the format SonarCloud reads for Rust.
+rust-coverage: ## Write rust-coverage.lcov from the Rust crate's tests
+	cd $(FC_CRATE) && cargo llvm-cov --lcov --output-path $(CURDIR)/rust-coverage.lcov
+
+# -------------------------------------------------------------------------
+# FIRECRACKER TESTS
+# -------------------------------------------------------------------------
+
+# What the microVM tests boot, pinned with checksums and fetched once into the
+# crate's target directory. The kernel is Firecracker's own test kernel, which
+# has the IP autoconfig, vsock and virtio disk the guest init needs built in.
+KVM_DIR          := $(FC_CRATE)/target/kvm
+FC_VERSION       := v1.18.0
+FC_SHA256        := 1ac8eec866dd5eea14efecf6323e22b23eea24054545338a5b34bc5bca6623cd
+FC_KERNEL        := firecracker-ci/v1.15/x86_64/vmlinux-6.1.155
+FC_KERNEL_SHA256 := e20e46d0c36c55c0d1014eb20576171b3f3d922260d9f792017aeff53af3d4f2
+ALPINE_ROOTFS    := alpine-minirootfs-3.20.10-x86_64.tar.gz
+ALPINE_SHA256    := 0d44a414245f043ae56872a23762e6c9bee585da2cbe4aa81cbd0331eaf53223
+
+# fetch downloads $(1) to the target and fails unless its sha256 is $(2). It
+# goes through a partial file, so an interrupted download never counts as done.
+fetch = mkdir -p $(@D) && curl -fsSL -o $@.part $(1) && \
+	echo "$(2)  $@.part" | sha256sum --check --quiet && mv $@.part $@
+
+$(KVM_DIR)/firecracker.tgz:
+	$(call fetch,https://github.com/firecracker-microvm/firecracker/releases/download/$(FC_VERSION)/firecracker-$(FC_VERSION)-x86_64.tgz,$(FC_SHA256))
+
+# The release holds each binary under its versioned name; the tests take the
+# plain one. -m dates it now rather than at the release, so it is newer than
+# the archive and make extracts it once.
+$(KVM_DIR)/firecracker $(KVM_DIR)/jailer: $(KVM_DIR)/firecracker.tgz
+	tar -xzmf $< -C $(@D) --strip-components=1 release-$(FC_VERSION)-x86_64/$(@F)-$(FC_VERSION)-x86_64
+	mv $(@D)/$(@F)-$(FC_VERSION)-x86_64 $@
+
+$(KVM_DIR)/vmlinux:
+	$(call fetch,https://s3.amazonaws.com/spec.ccfc.min/$(FC_KERNEL),$(FC_KERNEL_SHA256))
+
+$(KVM_DIR)/$(ALPINE_ROOTFS):
+	$(call fetch,https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/$(ALPINE_ROOTFS),$(ALPINE_SHA256))
+
+# The guest init, static so the initramfs needs nothing beside it. Always run,
+# since cargo decides itself what needs rebuilding, and run in the crate, where
+# rust-toolchain.toml picks the compiler.
+firecracker-init:
+	cd $(FC_CRATE) && cargo build --release --target x86_64-unknown-linux-musl --bin vagabond-init
+
+# The initramfs is the init alone, as /init and owned by root. The init makes
+# its own mountpoints, and the kernel's built-in initramfs has /dev/console.
+$(KVM_DIR)/initramfs.cpio.gz: firecracker-init
+	rm -rf $(KVM_DIR)/initramfs && mkdir -p $(KVM_DIR)/initramfs
+	cp $(FC_CRATE)/target/x86_64-unknown-linux-musl/release/vagabond-init $(KVM_DIR)/initramfs/init
+	cd $(KVM_DIR)/initramfs && echo init | cpio --quiet -o -H newc -R 0:0 | gzip > ../initramfs.cpio.gz
+
+# The root drive each test copies for its microVM: Alpine as an ext4 image,
+# written straight from the tarball, so its files are root's without sudo.
+MKFS_EXT4 ?= /usr/sbin/mkfs.ext4
+
+$(KVM_DIR)/rootfs.ext4: $(KVM_DIR)/$(ALPINE_ROOTFS)
+	truncate -s 64M $@.part && $(MKFS_EXT4) -q -F -d $< $@.part && mv $@.part $@
+
+# The tests launch Firecracker through the jailer, which needs root. cargo
+# builds them as the user and runs each test binary through sudo as its
+# runner, so the build cache stays the user's; env hands the binary where the
+# files above are.
+KVM_FILES := $(addprefix $(KVM_DIR)/,firecracker jailer vmlinux initramfs.cpio.gz rootfs.ext4)
+
+firecracker-test: $(KVM_FILES) ## Boot microVMs through vagabond-firecracker (requires root, /dev/kvm and a network uplink)
+	cd $(FC_CRATE) && \
+		CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="sudo env VAGABOND_KVM_DIR=$(abspath $(KVM_DIR))" \
+		cargo test --test kvm -- --ignored
+
+# The same tests instrumented, the daemon they start included. sudo keeps
+# LLVM_PROFILE_FILE, without which nothing is written, and the profiles written
+# as root are handed back to the user, whether or not the tests passed, so the
+# next run can clear them.
+firecracker-coverage: $(KVM_FILES) ## Write firecracker-coverage.lcov from the microVM tests (requires root, /dev/kvm and a network uplink)
+	cd $(FC_CRATE) && \
+		CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="sudo --preserve-env=LLVM_PROFILE_FILE env VAGABOND_KVM_DIR=$(abspath $(KVM_DIR))" \
+		cargo llvm-cov --lcov --output-path $(CURDIR)/firecracker-coverage.lcov --test kvm -- --ignored; \
+		status=$$?; sudo chown -R "$$(id -u):$$(id -g)" target/llvm-cov-target; exit $$status
+
 # -------------------------------------------------------------------------
 # SECURITY
 # -------------------------------------------------------------------------
@@ -190,7 +293,12 @@ containerd-coverage: ## Write containerd-coverage.out from the containerd execut
 govulncheck: ## Scan Go dependencies for known vulnerabilities
 	@if $(HAVE_GO_PKGS); then $(GO) tool govulncheck ./...; else echo "$(NO_PKGS_MSG) govulncheck"; fi
 
-check: fmt-check vet lint test govulncheck ## Everything CI runs
+# cargo-audit checks Cargo.lock against the RustSec advisory database, at the
+# version tools installs.
+rust-audit: ## Scan the Rust crate's dependencies for known vulnerabilities
+	cd $(FC_CRATE) && cargo audit
+
+check: fmt-check vet lint test govulncheck rust-fmt-check rust-lint rust-test rust-audit ## Everything CI runs
 
 ##@ Development
 
@@ -236,9 +344,11 @@ web-push: builder ## Build and push the multi-arch site image
 # TOOL INSTALLATION
 # -------------------------------------------------------------------------
 
-tools: ## Install build and lint dependencies into GOPATH/bin
+tools: ## Install build and lint dependencies into GOPATH/bin and ~/.cargo/bin
 	$(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 	$(GO) install go.uber.org/mock/mockgen@$(MOCKGEN_VERSION)
+	cargo install --locked cargo-audit@$(CARGO_AUDIT_VERSION)
+	cargo install --locked cargo-llvm-cov@$(CARGO_LLVM_COV_VERSION)
 
 $(GOLANGCI_LINT):
 	$(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
@@ -254,7 +364,7 @@ $(MOCKGEN):
 
 clean: ## Remove build and coverage artifacts
 	$(GO) clean
-	rm -f coverage.out integration-coverage.out vagabond
+	rm -f coverage.out integration-coverage.out vagabond rust-coverage.lcov firecracker-coverage.lcov
 	rm -rf bin
 
-.PHONY: help build install uninstall builder docker scan push fmt fmt-check vet lint test test-fast integration-test coverage integration-coverage containerd-test containerd-coverage govulncheck check generate generate-check web-serve web-build web-docker web-push tools clean
+.PHONY: help build install uninstall builder docker scan push fmt fmt-check vet lint rust-fmt rust-fmt-check rust-lint test test-fast rust-test rust-audit integration-test coverage integration-coverage containerd-test containerd-coverage rust-coverage firecracker-init firecracker-test firecracker-coverage govulncheck check generate generate-check web-serve web-build web-docker web-push tools clean
