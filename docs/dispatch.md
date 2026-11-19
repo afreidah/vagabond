@@ -91,7 +91,7 @@ Every transition, with what records it:
 | `succeeded` | yes | The provider reported success |
 | `failed` | yes | The provider reported failure, the submission failed, the provider no longer knows the execution, a `lost` execution was given up on, or its provider is no longer configured |
 | `cancelled` | yes | Stopped by Vagabond or by the provider |
-| `lost` | no | Submitted, then a `Status` call failed, as it does while a `containerd` provider's node is not connected. The work may still be running; its runner keeps polling it ([Lost executions](#lost-executions)) |
+| `lost` | no | Submitted, then a `Status` call failed, as it does while a `containerd` or `firecracker` provider's node is not connected. The work may still be running; its runner keeps polling it ([Lost executions](#lost-executions)) |
 
 Legal transitions:
 
@@ -324,7 +324,7 @@ output, and releasing may destroy it.
 
 | Provider | Where the output comes from |
 |---|---|
-| Implements `plugin.LogReader` (Cloud Run, Code Engine, `containerd`) | `ReadLogs`, which writes the whole output |
+| Implements `plugin.LogReader` (Cloud Run, Code Engine, `containerd`, `firecracker`) | `ReadLogs`, which writes the whole output |
 | Any other (Lambda) | `Result.Logs`, the output that came with the answer |
 
 - The output is written in 256 KiB chunks as it is read, so a capture holds one
@@ -363,6 +363,7 @@ on providers that implement `plugin.Releaser`:
 | Cloud Run | Deletes the execution's Job resource |
 | Code Engine | Deletes the execution's job run, and its pod with it |
 | `containerd` | Deletes the workload's task, container, snapshot and log file from the node; a node not connected is told when it registers again |
+| `firecracker` | Removes the microVM and everything vagabond-firecracker kept for it, then the image's snapshot; a node not connected is told when it registers again |
 
 - Called after `Result`, the capture and the settle, because releasing may
   delete what `Result` and the capture read.

@@ -29,6 +29,7 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/ptr"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -79,7 +80,7 @@ project_id = "`+project+`"
 // follower attaches while it runs.
 func TestLiveRoundTrip(t *testing.T) {
 	p := liveProvider(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	task := &job.Task{
 		Name:   "live",
@@ -157,7 +158,7 @@ args    = ["-c", "echo hello-stdout; echo hello-stderr >&2; sleep 10; exit 3"]
 // Engine refuses a line break in an argument and rewrites $(NAME) and $$.
 func TestLiveMultiLine(t *testing.T) {
 	p := liveProvider(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	// $0 is the one-line third argument and LIVE_PRICE an env value, both echoed as received
 	task := &job.Task{
@@ -207,7 +208,7 @@ args    = ["-ec", "if true; then\n  echo line-one\nfi\necho \"$0 / $LIVE_PRICE\"
 // may cut.
 func TestLiveLongOutput(t *testing.T) {
 	p := liveProvider(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	task := &job.Task{
 		Name:   "live-long",

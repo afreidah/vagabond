@@ -11,8 +11,6 @@
 package pool
 
 import (
-	"fmt"
-
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/afreidah/vagabond/internal/agentrpc"
@@ -26,58 +24,35 @@ import (
 var defaultResources = plugin.Resources{CPU: 1000, Memory: 1024}
 
 // workloadOf translates a task into the workload an agent runs. A task with no
-// image, or an unreadable timeout, is an admission failure, not the node's.
+// image, or an unreadable environment or timeout, is an admission failure, not
+// the node's. No timeout is no timeout: the agent only stops a workload that
+// set one.
 func workloadOf(task *job.Task) (*agentrpc.Workload, error) {
-	image, ok := task.ConfigString(job.ConfigImage)
-	if !ok {
-		return nil, plugin.Internal(fmt.Errorf("task %q names no image", task.Name))
+	c, err := plugin.ContainerOf(task, defaultResources)
+	if err != nil {
+		return nil, err
 	}
 
-	env, diags := task.Environment()
-	if diags.HasErrors() {
-		return nil, plugin.Internal(fmt.Errorf("task %q env: %s", task.Name, diags.Error()))
+	w := &agentrpc.Workload{
+		Image:      c.Image,
+		Command:    c.Command,
+		Args:       c.Args,
+		Env:        c.Env,
+		WorkingDir: c.WorkingDir,
+		Resources:  &agentrpc.Resources{Cpu: int64(c.CPU), Memory: int64(c.Memory)},
 	}
 
-	w := &agentrpc.Workload{Image: image, Env: env, Resources: resourcesOf(task)}
-
-	if command, ok := task.ConfigString("command"); ok {
-		w.Command = []string{command}
-	}
-
-	if args, ok := task.ConfigStrings("args"); ok {
-		w.Args = args
-	}
-
-	if task.WorkingDirectory != nil {
-		w.WorkingDir = *task.WorkingDirectory
-	}
-
-	// No timeout is no timeout: the agent only stops a workload that set one.
-	if task.Timeout != nil {
-		timeout, err := task.Timeout.Std()
-		if err != nil {
-			return nil, plugin.Internal(fmt.Errorf("task %q timeout: %w", task.Name, err))
-		}
-
-		w.Timeout = durationpb.New(timeout)
+	if c.Timeout > 0 {
+		w.Timeout = durationpb.New(c.Timeout)
 	}
 
 	return w, nil
 }
 
-// resourcesOf is what the task declared, with defaults for what it did not.
+// resourcesOf is the size a task runs at on a node: what it declared, with
+// defaults for what it did not.
 func resourcesOf(task *job.Task) *agentrpc.Resources {
-	out := &agentrpc.Resources{Cpu: int64(defaultResources.CPU), Memory: int64(defaultResources.Memory)}
+	size := plugin.Declared(task).Or(defaultResources)
 
-	if r := task.Resources; r != nil {
-		if r.CPU != nil && *r.CPU > 0 {
-			out.Cpu = int64(*r.CPU)
-		}
-
-		if r.Memory != nil && *r.Memory > 0 {
-			out.Memory = int64(*r.Memory)
-		}
-	}
-
-	return out
+	return &agentrpc.Resources{Cpu: int64(size.CPU), Memory: int64(size.Memory)}
 }

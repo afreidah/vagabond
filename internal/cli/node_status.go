@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // NodeStatusCommand implements `vagabond node status`.
@@ -57,12 +58,13 @@ func (c *NodeStatusCommand) Run(args []string) int {
 	}
 
 	c.Ui.Output(columns(func(w io.Writer) {
-		_, _ = fmt.Fprintln(w, "NAME\tPOOL\tADDRESS\tARCH\tCPU USED\tMEMORY USED\tWORKLOADS\tCONNECTED")
+		_, _ = fmt.Fprintln(w, "NAME\tPOOL\tADDRESS\tARCH\tEXECUTORS\tCPU USED\tMEMORY USED\tWORKLOADS\tCONNECTED")
 
+		// One row per node, its executors joined into one column.
 		for i := range nodes {
 			n := &nodes[i]
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d/%dm\t%d/%dMiB\t%d\t%s\n",
-				n.Name, n.Pool, n.Address, n.Architecture,
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d/%dm\t%d/%dMiB\t%d\t%s\n",
+				n.Name, n.Pool, n.Address, n.Architecture, strings.Join(n.Executors, ","),
 				n.UsedCPU, n.CPU, n.UsedMemory, n.Memory, n.Executions, stamp(n.Connected))
 		}
 	}))

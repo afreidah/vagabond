@@ -57,6 +57,18 @@ make push DOCKER_REGISTRY=registry.internal   # linux/amd64 and linux/arm64, tag
 - An agent runs as root and privileged ([agent](agent.md)), so it needs the
   user overridden.
 
+The `vagabond-firecracker` image, amd64 only, holds the daemon that runs an
+agent's microVMs and everything it boots them from:
+
+```bash
+make firecracker-docker   # $(REGISTRY)/vagabond-firecracker:$(VERSION)
+make firecracker-push     # linux/amd64, tagged $(VERSION) and latest
+```
+
+It builds its two Rust binaries in a build stage and takes Firecracker, its
+jailer and the guest kernel from the pinned, checksummed downloads make
+fetches. How to run it: [vagabond-firecracker](firecracker.md#deployment).
+
 ## Running the server
 
 ```bash
@@ -205,8 +217,8 @@ certificate to its own listener. The server does not check this.
 
 ## Running agents
 
-Agents run on the nodes that execute `pool` workloads, not on the server host
-(though they can). Each dials one server's `agent_bind` address, over mutual
+Agents run on the nodes that execute `containerd` and `firecracker` workloads,
+not on the server host (though they can). Each dials one server's `agent_bind` address, over mutual
 TLS unless both are on the same host:
 
 ```bash
@@ -217,8 +229,9 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab \
 Certificates: [agent](agent.md#certificates).
 
 The server needs a `provider "homelab" { type = "containerd" }` block for
-anything to schedule there. Requirements, systemd unit, capacity and flags:
-[agent](agent.md).
+anything to schedule there, and a `firecracker` one for microVMs on the nodes
+running [vagabond-firecracker](firecracker.md) beside the agent. Requirements,
+systemd unit, capacity and flags: [agent](agent.md).
 
 ## Sizing
 
@@ -282,7 +295,8 @@ Not safe, or not shared:
   `failed`, charges them for the time they were seen running, and marks them
   released without a provider call.
 - **Agents belong to one server.** An agent dials one `-server` address, and
-  a `containerd` provider sees only the agents connected to its own server.
+  a `containerd` or `firecracker` provider sees only the agents connected to
+  its own server.
   The same pool name on two servers is two disjoint sets of nodes. When a
   server dies, another server that claims its dispatches cannot reach those
   nodes: their executions stay `lost`, charged and unreleased, until the

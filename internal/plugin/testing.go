@@ -26,6 +26,7 @@ func FixtureContainer(observedAt time.Time) Capabilities {
 		MaxResources:    Limits{CPU: new(4000), Memory: new(8192)},
 		InternetEgress:  true,
 		ArbitraryImages: true,
+		Isolation:       IsolationContainer,
 		ObservedAt:      observedAt,
 	}
 }
@@ -44,6 +45,7 @@ func FixtureFunction(observedAt time.Time) Capabilities {
 		MaxDuration:     15 * time.Minute,
 		InternetEgress:  true,
 		ArbitraryImages: false,
+		Isolation:       IsolationVM,
 		ObservedAt:      observedAt,
 	}
 }

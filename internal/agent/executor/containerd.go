@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"syscall"
@@ -55,29 +56,18 @@ const (
 	logPoll   = 250 * time.Millisecond
 )
 
-// DefaultRuntime is containerd's runc shim.
-const DefaultRuntime = "io.containerd.runc.v2"
+var (
+	// ErrUnknown reports an execution this executor holds no workload for.
+	ErrUnknown = errors.New("no such workload")
 
-// ErrUnknown reports an execution this executor holds no workload for.
-var ErrUnknown = errors.New("no such workload")
+	// ErrInvalid reports a workload no node could run, such as one whose image
+	// reference does not parse.
+	ErrInvalid = errors.New("invalid workload")
+)
 
 // -------------------------------------------------------------------------
 // TYPES
 // -------------------------------------------------------------------------
-
-// Spec is a workload to run: a task already translated to what a container
-// needs. CPU is millicores, Memory MiB; zero leaves the image's defaults.
-type Spec struct {
-	Image      string
-	Command    []string
-	Args       []string
-	Env        map[string]string
-	WorkingDir string
-	CPU        int64
-	Memory     int64
-	Timeout    time.Duration
-	Runtime    string
-}
 
 // Config is where the executor runs workloads. Cgroup is the parent every
 // workload's cgroup is created under.
@@ -94,6 +84,15 @@ type Containerd struct {
 	cfg     Config
 	mu      sync.Mutex
 	watched map[string]bool
+}
+
+// workloadLabels are a container's labels read back: when its task started,
+// its timeout, whether Cancel stopped it, and what it declared.
+type workloadLabels struct {
+	started   time.Time
+	timeout   time.Duration
+	cancelled bool
+	declared  *agentrpc.Resources
 }
 
 // -------------------------------------------------------------------------
@@ -121,18 +120,14 @@ func (c *Containerd) Close() error {
 	return c.client.Close()
 }
 
-// Check reports whether containerd answers.
-func (c *Containerd) Check(ctx context.Context) error {
+// Info names the executor, once containerd answers. Its workloads take nothing
+// of the node beyond what they declare.
+func (c *Containerd) Info(ctx context.Context) (*agentrpc.NodeExecutor, error) {
 	if _, err := c.client.Version(ctx); err != nil {
-		return fmt.Errorf("containerd at %s does not answer: %w", c.cfg.Socket, err)
+		return nil, fmt.Errorf("containerd at %s does not answer: %w", c.cfg.Socket, err)
 	}
 
-	return nil
-}
-
-// Runtimes lists the runtimes workloads can ask for.
-func (c *Containerd) Runtimes() []string {
-	return []string{DefaultRuntime}
+	return &agentrpc.NodeExecutor{Name: agentrpc.ExecutorContainerd}, nil
 }
 
 // -------------------------------------------------------------------------
@@ -140,45 +135,40 @@ func (c *Containerd) Runtimes() []string {
 // -------------------------------------------------------------------------
 
 // Submit pulls the image and starts the workload under id. A workload already
-// under id is left as it is, since the ID is the idempotency key.
-func (c *Containerd) Submit(ctx context.Context, id string, spec *Spec) error {
+// under id is left as it is, since the ID is the idempotency key; one that
+// fails to start leaves nothing behind, so a retry starts it afresh.
+func (c *Containerd) Submit(ctx context.Context, id string, w *agentrpc.Workload) error {
 	if _, err := c.client.LoadContainer(ctx, id); err == nil {
 		return nil
 	}
 
-	ref, err := reference.ParseDockerRef(spec.Image)
-	if err != nil {
-		return fmt.Errorf("image %q: %w", spec.Image, err)
-	}
-
-	image, err := c.client.Pull(ctx, ref.String(), client.WithPullUnpack)
-	if err != nil {
-		return fmt.Errorf("pulling %s: %w", ref, err)
-	}
-
-	runtime := spec.Runtime
-	if runtime == "" {
-		runtime = DefaultRuntime
-	}
-
-	container, err := c.client.NewContainer(ctx, id,
-		client.WithNewSnapshot(id, image),
-		client.WithNewSpec(c.specOpts(id, image, spec)...),
-		client.WithRuntime(runtime, nil),
+	container, err := create(ctx, c.client, id, w, "", c.limits(id, w),
 		client.WithContainerLabels(map[string]string{
-			labelTimeout: spec.Timeout.String(),
-			labelCPU:     strconv.FormatInt(spec.CPU, 10),
-			labelMemory:  strconv.FormatInt(spec.Memory, 10),
+			labelTimeout: w.GetTimeout().AsDuration().String(),
+			labelCPU:     strconv.FormatInt(w.GetResources().GetCpu(), 10),
+			labelMemory:  strconv.FormatInt(w.GetResources().GetMemory(), 10),
 		}),
 	)
 	if err != nil {
-		return fmt.Errorf("creating the container: %w", err)
+		return err
 	}
 
-	task, err := container.NewTask(ctx, cio.LogFile(c.logPath(id)))
-	if err != nil {
-		_ = container.Delete(ctx, client.WithSnapshotCleanup)
+	if err := c.start(ctx, container); err != nil {
+		_ = c.remove(context.WithoutCancel(ctx), container)
 
+		return err
+	}
+
+	c.watch(id, w.GetTimeout().AsDuration(), time.Now())
+
+	return nil
+}
+
+// start creates the container's task writing to its log, labels the container
+// with when it started, and starts it.
+func (c *Containerd) start(ctx context.Context, container client.Container) error {
+	task, err := container.NewTask(ctx, cio.LogFile(c.logPath(container.ID())))
+	if err != nil {
 		return fmt.Errorf("creating the task: %w", err)
 	}
 
@@ -190,43 +180,20 @@ func (c *Containerd) Submit(ctx context.Context, id string, spec *Spec) error {
 		return fmt.Errorf("starting the task: %w", err)
 	}
 
-	c.watch(id, spec.Timeout, time.Now())
-
 	return nil
 }
 
-// specOpts translates a spec into the container's OCI spec: the image's
-// defaults, then the spec's overrides, its limits under the executor's
-// cgroup, and the host's network.
-func (c *Containerd) specOpts(id string, image client.Image, spec *Spec) []oci.SpecOpts {
-	opts := []oci.SpecOpts{oci.WithImageConfig(image)}
+// limits holds a workload to what it declared, under the executor's cgroup, on
+// the host's network.
+func (c *Containerd) limits(id string, w *agentrpc.Workload) []oci.SpecOpts {
+	var opts []oci.SpecOpts
 
-	switch {
-	case len(spec.Command) > 0:
-		opts = append(opts, oci.WithProcessArgs(append(spec.Command, spec.Args...)...))
-	case len(spec.Args) > 0:
-		opts = append(opts, oci.WithImageConfigArgs(image, spec.Args))
+	if memory := w.GetResources().GetMemory(); memory > 0 {
+		opts = append(opts, oci.WithMemoryLimit(uint64(memory)<<20)) //nolint:gosec // positive
 	}
 
-	if len(spec.Env) > 0 {
-		env := make([]string, 0, len(spec.Env))
-		for k, v := range spec.Env {
-			env = append(env, k+"="+v)
-		}
-
-		opts = append(opts, oci.WithEnv(env))
-	}
-
-	if spec.WorkingDir != "" {
-		opts = append(opts, oci.WithProcessCwd(spec.WorkingDir))
-	}
-
-	if spec.Memory > 0 {
-		opts = append(opts, oci.WithMemoryLimit(uint64(spec.Memory)<<20)) //nolint:gosec // positive
-	}
-
-	if spec.CPU > 0 {
-		opts = append(opts, oci.WithCPUCFS(spec.CPU*100, 100000))
+	if cpu := w.GetResources().GetCpu(); cpu > 0 {
+		opts = append(opts, oci.WithCPUCFS(cpu*100, 100000))
 	}
 
 	return append(opts,
@@ -279,28 +246,40 @@ func (c *Containerd) stop(ctx context.Context, task client.Task) error {
 	return nil
 }
 
-// Release deletes a finished workload: its task, container, snapshot and log.
+// Release deletes a workload and everything kept for it. One the executor does
+// not hold is released already.
 func (c *Containerd) Release(ctx context.Context, id string) error {
-	container, task, err := c.load(ctx, id)
-	if errors.Is(err, ErrUnknown) {
+	container, err := c.client.LoadContainer(ctx, id)
+	if errdefs.IsNotFound(err) {
 		return nil
 	}
 
 	if err != nil {
-		return err
+		return fmt.Errorf("loading %s: %w", id, err)
 	}
 
-	if task != nil {
+	return c.remove(ctx, container)
+}
+
+// remove deletes a workload's task, killing it if it runs, its container with
+// its snapshot, and its log. Any of them already gone counts as deleted.
+func (c *Containerd) remove(ctx context.Context, container client.Container) error {
+	task, err := container.Task(ctx, nil)
+
+	switch {
+	case err == nil:
 		if _, err := task.Delete(ctx, client.WithProcessKill); err != nil && !errdefs.IsNotFound(err) {
 			return fmt.Errorf("deleting the task: %w", err)
 		}
+	case !errdefs.IsNotFound(err):
+		return fmt.Errorf("loading the task: %w", err)
 	}
 
 	if err := container.Delete(ctx, client.WithSnapshotCleanup); err != nil && !errdefs.IsNotFound(err) {
 		return fmt.Errorf("deleting the container: %w", err)
 	}
 
-	if err := os.Remove(c.logPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(c.logPath(container.ID())); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("removing the log: %w", err)
 	}
 
@@ -311,24 +290,38 @@ func (c *Containerd) Release(ctx context.Context, id string) error {
 // READING
 // -------------------------------------------------------------------------
 
-// Status reports where a workload stands. A container whose task was never
-// created is still being set up; a stopped task succeeded on exit zero, and
+// Status reports where a workload stands.
+func (c *Containerd) Status(ctx context.Context, id string) (*agentrpc.ExecutionStatus, error) {
+	st, err := c.status(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return agentrpc.StatusOf(&st), nil
+}
+
+// status reports where a workload stands. A container whose task was never
+// created is still being set up, and one whose task went after it started, as
+// when the host restarts, failed. A stopped task succeeded on exit zero, and
 // was cancelled if Cancel stopped it.
-func (c *Containerd) Status(ctx context.Context, id string) (execution.Status, error) {
+func (c *Containerd) status(ctx context.Context, id string) (execution.Status, error) {
 	container, task, err := c.load(ctx, id)
 	if err != nil {
 		return execution.Status{}, err
 	}
 
-	labels, err := container.Labels(ctx)
+	labels, err := labelsOf(ctx, container)
 	if err != nil {
-		return execution.Status{}, fmt.Errorf("reading labels: %w", err)
+		return execution.Status{}, err
 	}
 
-	out := execution.Status{State: execution.StateAccepted, ProviderID: id, UpdatedAt: time.Now()}
-	out.StartedAt, _ = time.Parse(time.RFC3339Nano, labels[labelStarted])
+	out := execution.Status{State: execution.StateAccepted, ProviderID: id, UpdatedAt: time.Now(), StartedAt: labels.started}
 
 	if task == nil {
+		if !labels.started.IsZero() {
+			out.State = execution.StateFailed
+		}
+
 		return out, nil
 	}
 
@@ -342,7 +335,7 @@ func (c *Containerd) Status(ctx context.Context, id string) (execution.Status, e
 		out.State = execution.StateAccepted
 	case client.Stopped:
 		out.EndedAt = status.ExitTime
-		out.State = terminal(status.ExitStatus, labels[labelCancelled] == "true")
+		out.State = terminal(status.ExitStatus, labels.cancelled)
 	default:
 		out.State = execution.StateRunning
 	}
@@ -362,15 +355,16 @@ func terminal(exit uint32, cancelled bool) execution.State {
 	}
 }
 
-// Result returns what a finished workload produced: its exit code and how long
-// it ran. Its output is read through Logs.
-func (c *Containerd) Result(ctx context.Context, id string) (*execution.Result, error) {
-	status, err := c.Status(ctx, id)
+// Result returns what a finished workload produced: its exit code, unset when
+// its task went without one, and how long it ran. Its output is read through
+// Logs.
+func (c *Containerd) Result(ctx context.Context, id string) (*agentrpc.ExecutionResult, error) {
+	st, err := c.status(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	if !status.State.Terminal() {
+	if !st.State.Terminal() {
 		return nil, fmt.Errorf("workload %s has not finished", id)
 	}
 
@@ -379,23 +373,34 @@ func (c *Containerd) Result(ctx context.Context, id string) (*execution.Result, 
 		return nil, err
 	}
 
-	exit, err := task.Status(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("reading the task: %w", err)
+	res := &execution.Result{Duration: execution.Elapsed(st.StartedAt, st.EndedAt)}
+
+	if task != nil {
+		exit, err := task.Status(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("reading the task: %w", err)
+		}
+
+		res.ExitCode = new(int(exit.ExitStatus))
 	}
 
-	code := int(exit.ExitStatus)
-
-	return &execution.Result{
-		ExitCode: &code,
-		Duration: execution.Elapsed(status.StartedAt, status.EndedAt),
-	}, nil
+	return agentrpc.ResultOf(res), nil
 }
 
 // Logs copies a workload's output from byte offset on to w as it is written,
-// until the workload ends, is released, or ctx ends.
+// until the workload ends, is released, or ctx ends. One it does not hold is
+// ErrUnknown before anything is written, so the caller can ask another
+// executor; one with no log yet has written nothing.
 func (c *Containerd) Logs(ctx context.Context, id string, offset int64, w io.Writer) error {
+	if _, _, err := c.load(ctx, id); err != nil {
+		return err
+	}
+
 	file, err := os.Open(c.logPath(id))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+
 	if err != nil {
 		return fmt.Errorf("opening the log of %s: %w", id, err)
 	}
@@ -411,13 +416,13 @@ func (c *Containerd) Logs(ctx context.Context, id string, offset int64, w io.Wri
 			return err
 		}
 
-		status, err := c.Status(ctx, id)
+		st, err := c.status(ctx, id)
 		if err != nil && !errors.Is(err, ErrUnknown) {
 			return err
 		}
 
 		// Ended or released: the open file still holds whatever it wrote last.
-		if err != nil || status.State.Terminal() {
+		if err != nil || st.State.Terminal() {
 			_, err := io.Copy(w, file)
 
 			return err
@@ -432,7 +437,8 @@ func (c *Containerd) Logs(ctx context.Context, id string, offset int64, w io.Wri
 }
 
 // Held returns every workload the executor holds, with what it declared and
-// whether it is still using it: running, or created and about to.
+// whether it is still using it: running, or created and about to, and not once
+// its task stopped or went.
 func (c *Containerd) Held(ctx context.Context) ([]*agentrpc.Held, error) {
 	containers, err := c.client.Containers(ctx)
 	if err != nil {
@@ -442,19 +448,22 @@ func (c *Containerd) Held(ctx context.Context) ([]*agentrpc.Held, error) {
 	held := make([]*agentrpc.Held, 0, len(containers))
 
 	for _, container := range containers {
-		labels, err := container.Labels(ctx)
+		labels, err := labelsOf(ctx, container)
 		if err != nil {
-			return nil, fmt.Errorf("reading labels of %s: %w", container.ID(), err)
+			return nil, err
 		}
 
-		h := &agentrpc.Held{ExecutionId: container.ID(), Resources: &agentrpc.Resources{}, Running: true}
-		h.Resources.Cpu, _ = strconv.ParseInt(labels[labelCPU], 10, 64)
-		h.Resources.Memory, _ = strconv.ParseInt(labels[labelMemory], 10, 64)
+		h := &agentrpc.Held{ExecutionId: container.ID(), Resources: labels.declared, Running: true}
 
-		if task, err := container.Task(ctx, nil); err == nil {
-			if status, err := task.Status(ctx); err == nil && status.Status == client.Stopped {
-				h.Running = false
-			}
+		// No task is still being set up, or gone since it started; stopped is done.
+		task, err := container.Task(ctx, nil)
+
+		switch {
+		case errdefs.IsNotFound(err):
+			h.Running = labels.started.IsZero()
+		case err == nil:
+			status, err := task.Status(ctx)
+			h.Running = err != nil || status.Status != client.Stopped
 		}
 
 		held = append(held, h)
@@ -472,20 +481,81 @@ func (c *Containerd) Recover(ctx context.Context) error {
 	}
 
 	for _, container := range containers {
-		id := container.ID()
-
-		labels, err := container.Labels(ctx)
+		labels, err := labelsOf(ctx, container)
 		if err != nil {
 			continue
 		}
 
-		timeout, _ := time.ParseDuration(labels[labelTimeout])
-		started, _ := time.Parse(time.RFC3339Nano, labels[labelStarted])
-
-		c.watch(id, timeout, started)
+		c.watch(container.ID(), labels.timeout, labels.started)
 	}
 
 	return nil
+}
+
+// -------------------------------------------------------------------------
+// CONTAINERS
+// -------------------------------------------------------------------------
+
+// create pulls w's image, unpacked into snapshotter (containerd's default when
+// empty), and makes a container for it under id: a snapshot of the image as
+// its root filesystem, and a spec of the image's process with w's overrides,
+// then spec. A bad image reference is ErrInvalid. Nothing is left behind when
+// it fails, the snapshot made before the container included, which would
+// otherwise stop a retry.
+func create(
+	ctx context.Context, cl *client.Client, id string, w *agentrpc.Workload, snapshotter string,
+	spec []oci.SpecOpts, opts ...client.NewContainerOpts,
+) (client.Container, error) {
+	ref, err := reference.ParseDockerRef(w.GetImage())
+	if err != nil {
+		return nil, fmt.Errorf("%w: image %q: %w", ErrInvalid, w.GetImage(), err)
+	}
+
+	image, err := cl.Pull(ctx, ref.String(), client.WithPullUnpack, client.WithPullSnapshotter(snapshotter))
+	if err != nil {
+		return nil, fmt.Errorf("pulling %s: %w", ref, err)
+	}
+
+	container, err := cl.NewContainer(ctx, id, append([]client.NewContainerOpts{
+		client.WithSnapshotter(snapshotter),
+		client.WithNewSnapshot(id, image),
+		client.WithNewSpec(append(process(image, w), spec...)...),
+	}, opts...)...)
+	if err != nil {
+		_ = cl.SnapshotService(snapshotter).Remove(context.WithoutCancel(ctx), id)
+
+		return nil, fmt.Errorf("creating the container: %w", err)
+	}
+
+	return container, nil
+}
+
+// process is a workload's process: the image's entrypoint, command,
+// environment, working directory and user, with w's overrides on top.
+func process(image client.Image, w *agentrpc.Workload) []oci.SpecOpts {
+	opts := []oci.SpecOpts{oci.WithImageConfig(image)}
+
+	switch {
+	case len(w.GetCommand()) > 0:
+		opts = append(opts, oci.WithProcessArgs(slices.Concat(w.GetCommand(), w.GetArgs())...))
+	case len(w.GetArgs()) > 0:
+		opts = append(opts, oci.WithImageConfigArgs(image, w.GetArgs()))
+	}
+
+	if len(w.GetEnv()) > 0 {
+		env := make([]string, 0, len(w.GetEnv()))
+		for k, v := range w.GetEnv() {
+			env = append(env, k+"="+v)
+		}
+
+		opts = append(opts, oci.WithEnv(env))
+	}
+
+	if w.GetWorkingDir() != "" {
+		opts = append(opts, oci.WithProcessCwd(w.GetWorkingDir()))
+	}
+
+	return opts
 }
 
 // -------------------------------------------------------------------------
@@ -514,6 +584,23 @@ func (c *Containerd) load(ctx context.Context, id string) (client.Container, cli
 	}
 
 	return container, task, nil
+}
+
+// labelsOf reads a container's labels back. A value that does not parse reads
+// as unset.
+func labelsOf(ctx context.Context, container client.Container) (workloadLabels, error) {
+	labels, err := container.Labels(ctx)
+	if err != nil {
+		return workloadLabels{}, fmt.Errorf("reading the labels of %s: %w", container.ID(), err)
+	}
+
+	out := workloadLabels{cancelled: labels[labelCancelled] == "true", declared: &agentrpc.Resources{}}
+	out.started, _ = time.Parse(time.RFC3339Nano, labels[labelStarted])
+	out.timeout, _ = time.ParseDuration(labels[labelTimeout])
+	out.declared.Cpu, _ = strconv.ParseInt(labels[labelCPU], 10, 64)
+	out.declared.Memory, _ = strconv.ParseInt(labels[labelMemory], 10, 64)
+
+	return out, nil
 }
 
 // watch stops a workload that runs past its timeout, measured from when it

@@ -26,6 +26,7 @@ import (
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/state/postgres"
 	"github.com/afreidah/vagabond/internal/state/postgres/pgtest"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -62,25 +63,13 @@ var (
 	fnCompute  = ledger.Key{Provider: "fn", Pool: "compute", Period: "2026-09"}
 )
 
-// newID returns a fresh execution id, failing the test if one cannot be made.
-func newID(t *testing.T) execution.ID {
-	t.Helper()
-
-	id, err := execution.NewID()
-	if err != nil {
-		t.Fatalf("NewID() = %v", err)
-	}
-
-	return id
-}
-
 // fnReservation asks for one request and some compute, against limits of 10
 // requests and 1000 GB-seconds.
 func fnReservation(t *testing.T, created time.Time, compute int64) *ledger.Reservation {
 	t.Helper()
 
 	return &ledger.Reservation{
-		ID:       newID(t),
+		ID:       testkit.NewID(t),
 		Provider: "fn",
 		Created:  created,
 		Charges: []ledger.Charge{
@@ -526,7 +515,7 @@ func TestLedgerSurvivesARestart(t *testing.T) {
 				t.Fatalf("New() = %v", err)
 			}
 
-			if err := before.Reserve(ctx, newID(t), "ci", "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, false); err != nil {
+			if err := before.Reserve(ctx, testkit.NewID(t), "ci", "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, false); err != nil {
 				t.Fatalf("Reserve() = %v", err)
 			}
 

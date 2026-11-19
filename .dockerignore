@@ -5,9 +5,13 @@ dist
 docs
 examples
 local
+rust
+scripts
 web
 vagabond
 *.test
+*.lcov
 cover.out
 coverage.out
 integration-coverage.out
+executor-coverage.out

@@ -218,6 +218,7 @@ argument in `args`.
 | `resources.memory` (MiB) | `...limits.memory` | `<n>Mi`, unchanged |
 | `timeout` | `template.template.timeout` | Whole seconds, e.g. `1200s` |
 | `env` block and `meta` | `containers[0].env` | Sorted by name |
+| `working_directory` | `containers[0].workingDir` | Omitted when unset, leaving the image's |
 | none | `template.taskCount` | Always `1` |
 | none | `template.template.maxRetries` | Always `0` |
 | `runtime_service_account` | `template.template.serviceAccount` | From provider config |
@@ -244,7 +245,7 @@ failing task up to four times and bill each run while the ledger records one
 execution. Retry and reroute are decided by dispatch, per the task's `retry`
 block.
 
-**Not translated:** `source`, `working_directory`, `network` and `execution`
+**Not translated:** `source`, `network` and `execution`
 blocks are not sent to Cloud Run. `network` and `execution.architecture` are
 enforced by admission against the capabilities above.
 

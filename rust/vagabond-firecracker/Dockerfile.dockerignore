@@ -1,0 +1,5 @@
+# The image needs the protocols and the crate, without what the crate built.
+*
+!internal/agentrpc/*.proto
+!rust/vagabond-firecracker
+rust/vagabond-firecracker/target

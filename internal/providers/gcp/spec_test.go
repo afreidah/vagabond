@@ -11,7 +11,6 @@ package gcp
 
 import (
 	"testing"
-	"time"
 
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobspec"
@@ -50,65 +49,86 @@ func TestVCPURoundsUp(t *testing.T) {
 	}
 }
 
-// A task that states nothing gets the ratio at which the free tier's two
-// dimensions exhaust together.
-func TestResourceLimitsDefaultToTheFreeTierRatio(t *testing.T) {
-	t.Parallel()
+// podOf builds the job for a task with the given resources and timeout, and
+// returns its one container's limits and its template's timeout.
+func podOf(t *testing.T, resources *job.Resources, timeout *job.Duration) (limits map[string]string, seconds string) {
+	t.Helper()
 
-	limits := resourceLimits(&job.Task{Name: "test"})
+	_, p := newFakeGoogle(t)
 
-	if limits["cpu"] != "1" || limits["memory"] != "2048Mi" {
-		t.Errorf("limits = %v, want one vCPU against 2048Mi", limits)
-	}
-}
-
-// Zero is not a request for nothing, it is a task that said nothing.
-func TestResourceLimitsIgnoresZeroes(t *testing.T) {
-	t.Parallel()
-
-	limits := resourceLimits(&job.Task{
+	spec, err := p.jobSpec(&job.Task{
 		Name:      "test",
-		Resources: &job.Resources{CPU: new(0), Memory: new(0)},
+		Driver:    job.DriverContainer,
+		Config:    rawBlock(t, "image = \"alpine:3.20\"\n"),
+		Resources: resources,
+		Timeout:   timeout,
 	})
+	if err != nil {
+		t.Fatalf("jobSpec() = %v", err)
+	}
 
-	if limits["cpu"] != "1" || limits["memory"] != "2048Mi" {
-		t.Errorf("limits = %v, want the defaults", limits)
+	template := spec["template"].(map[string]any)["template"].(map[string]any)
+	container := template["containers"].([]map[string]any)[0]
+
+	return container["resources"].(map[string]any)["limits"].(map[string]string), template["timeout"].(string)
+}
+
+// A task that states nothing, or zero, which is saying nothing, gets the ratio
+// at which the free tier's two dimensions exhaust together, and Cloud Run's
+// maximum run, not zero, which would end the job as it started.
+func TestJobSpecDefaultsToTheFreeTierRatio(t *testing.T) {
+	t.Parallel()
+
+	for _, resources := range []*job.Resources{nil, {CPU: new(0), Memory: new(0)}} {
+		limits, timeout := podOf(t, resources, nil)
+
+		if limits["cpu"] != "1" || limits["memory"] != "2048Mi" || timeout != "86400s" {
+			t.Errorf("limits = %v and timeout %s, want one vCPU against 2048Mi for a day", limits, timeout)
+		}
 	}
 }
 
-// -------------------------------------------------------------------------
-// TIMEOUT
-// -------------------------------------------------------------------------
-
-// Absent means Cloud Run's own maximum, not zero, which would be a job killed
-// the moment it started.
-func TestTaskTimeoutDefaultsToTheMaximum(t *testing.T) {
+// What a task declares is used, its CPU rounded up to whole vCPUs.
+func TestJobSpecReadsTheTask(t *testing.T) {
 	t.Parallel()
 
-	got, err := taskTimeout(&job.Task{Name: "test"})
-	if err != nil {
-		t.Fatalf("taskTimeout failed: %v", err)
-	}
+	limits, timeout := podOf(t, &job.Resources{CPU: new(1500), Memory: new(4096)}, new(job.Duration("90m")))
 
-	if got != maxDuration {
-		t.Errorf("timeout = %s, want %s", got, maxDuration)
+	if limits["cpu"] != "2" || limits["memory"] != "4096Mi" || timeout != "5400s" {
+		t.Errorf("limits = %v and timeout %s, want 2 vCPU, 4096Mi and 90 minutes", limits, timeout)
 	}
 }
 
-// A declared timeout is used as written.
-func TestTaskTimeoutReadsTheTask(t *testing.T) {
+// The task's working directory becomes the container's, and a task without one
+// leaves the image's in place.
+func TestJobSpecSetsTheWorkingDirectory(t *testing.T) {
 	t.Parallel()
 
-	got, err := taskTimeout(&job.Task{
-		Name:    "test",
-		Timeout: new(job.Duration("90m")),
-	})
-	if err != nil {
-		t.Fatalf("taskTimeout failed: %v", err)
-	}
+	_, p := newFakeGoogle(t)
 
-	if want := 90 * time.Minute; got != want {
-		t.Errorf("timeout = %s, want %s", got, want)
+	cases := []struct {
+		dir  *string
+		want any
+	}{
+		{new("/workspace"), "/workspace"},
+		{nil, nil},
+	}
+	for _, tc := range cases {
+		spec, err := p.jobSpec(&job.Task{
+			Name:             "test",
+			Driver:           job.DriverContainer,
+			Config:           rawBlock(t, "image = \"alpine:3.20\"\n"),
+			WorkingDirectory: tc.dir,
+		})
+		if err != nil {
+			t.Fatalf("jobSpec() = %v", err)
+		}
+
+		template := spec["template"].(map[string]any)["template"].(map[string]any)
+		container := template["containers"].([]map[string]any)[0]
+		if container["workingDir"] != tc.want {
+			t.Errorf("workingDir = %v, want %v", container["workingDir"], tc.want)
+		}
 	}
 }
 

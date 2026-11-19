@@ -100,7 +100,7 @@ func (resourcesChecker) Name() string { return "resources" }
 // at there: what it declared, or the provider's default for what it did not.
 // A nil limit admits any size; zero admits nothing.
 func (resourcesChecker) Check(req *Request, in *Input) *Rejection {
-	declared := plugin.Resources{CPU: req.CPU(), Memory: req.Memory()}
+	declared := plugin.Declared(req.Task)
 	sized := in.Capabilities.Sized(declared)
 	limits := in.Capabilities.MaxResources
 

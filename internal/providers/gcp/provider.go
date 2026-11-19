@@ -114,7 +114,7 @@ func (p *Provider) Name() string {
 // Capabilities reports what Cloud Run can do: constants, since nothing here
 // varies by account. ObservedAt is set anyway, as admission requires.
 func (p *Provider) Capabilities(context.Context) (plugin.Capabilities, error) {
-	return plugin.CloudContainer(maxCPU, maxMemory, maxDuration), nil
+	return plugin.CloudContainer(cloudRun), nil
 }
 
 // -------------------------------------------------------------------------

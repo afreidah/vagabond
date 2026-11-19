@@ -29,6 +29,7 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -283,18 +284,6 @@ func rawBlock(t *testing.T, src string) *job.RawBlock {
 	return &job.RawBlock{Body: f.Body}
 }
 
-// newID returns a fresh execution id.
-func newID(t *testing.T) execution.ID {
-	t.Helper()
-
-	id, err := execution.NewID()
-	if err != nil {
-		t.Fatalf("NewID() = %v", err)
-	}
-
-	return id
-}
-
 // containerTask is a task shaped like the documented example.
 func containerTask(t *testing.T) *job.Task {
 	t.Helper()
@@ -449,7 +438,7 @@ func TestSubmit_CreatesTheJobRun(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 	name := runName(id)
 
 	f.on("POST /v2/projects/"+testProject+"/job_runs", reply(http.StatusAccepted, jobRunBody(name, "pending", "")))
@@ -488,7 +477,7 @@ func TestSubmit_RefusesAnUntranslatableTask(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 
-	_, err := p.Submit(t.Context(), newID(t), &job.Task{
+	_, err := p.Submit(t.Context(), testkit.NewID(t), &job.Task{
 		Name:   "test",
 		Driver: job.DriverContainer,
 		Config: rawBlock(t, "command = \"true\"\n"),
@@ -511,7 +500,7 @@ func TestSubmit_DuplicateIsInternal(t *testing.T) {
 	f.on("POST /v2/projects/"+testProject+"/job_runs",
 		reply(http.StatusConflict, v2Error("resource_already_exists", "A resource with this name already exists.")))
 
-	_, err := p.Submit(t.Context(), newID(t), containerTask(t))
+	_, err := p.Submit(t.Context(), testkit.NewID(t), containerTask(t))
 	if err == nil || plugin.Reroutable(err) {
 		t.Fatalf("Submit() = %v, want an internal failure", err)
 	}
@@ -527,7 +516,7 @@ func TestStatus_ReadsTheRun(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 	name := runName(id)
 
 	f.on("GET "+runPath(name),
@@ -564,7 +553,7 @@ func TestStatus_UnknownRun(t *testing.T) {
 
 	_, p := newFakeIBM(t)
 
-	_, err := p.Status(t.Context(), newID(t))
+	_, err := p.Status(t.Context(), testkit.NewID(t))
 	if !errors.Is(err, plugin.ErrUnknownExecution) {
 		t.Fatalf("Status() = %v, want ErrUnknownExecution", err)
 	}
@@ -575,7 +564,7 @@ func TestStatus_UnknownStatus(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	f.on("GET "+runPath(runName(id)), reply(http.StatusOK, jobRunBody(runName(id), "suspended", "")))
 
@@ -594,7 +583,7 @@ func TestResult_ReadsThePod(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 	name := runName(id)
 	podName := name + "-0-0"
 
@@ -621,7 +610,7 @@ func TestResult_Evicted(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 	name := runName(id)
 	podName := name + "-0-0"
 
@@ -657,7 +646,7 @@ func TestResult_PodGone(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 	name := runName(id)
 
 	f.on("GET "+runPath(name), reply(http.StatusOK, jobRunBody(name, "failed", "ContainerExitedCode3")))
@@ -678,7 +667,7 @@ func TestResult_PodLookupFails(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 	name := runName(id)
 
 	f.on("GET "+runPath(name), reply(http.StatusOK, jobRunBody(name, "completed", "")))
@@ -695,7 +684,7 @@ func TestResult_UnknownRun(t *testing.T) {
 
 	_, p := newFakeIBM(t)
 
-	if _, err := p.Result(t.Context(), newID(t)); !errors.Is(err, plugin.ErrUnknownExecution) {
+	if _, err := p.Result(t.Context(), testkit.NewID(t)); !errors.Is(err, plugin.ErrUnknownExecution) {
 		t.Fatalf("Result() = %v, want ErrUnknownExecution", err)
 	}
 }
@@ -709,7 +698,7 @@ func TestCancel_DeletesTheRun(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 	route := "DELETE " + runPath(runName(id))
 
 	f.on(route, reply(http.StatusAccepted, map[string]any{}), reply(http.StatusNotFound, v2Error("job_run_not_found", "gone")))
@@ -732,7 +721,7 @@ func TestCancel_ReportsARefusal(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	f.on("DELETE "+runPath(runName(id)), reply(http.StatusInternalServerError, v2Error("internal", "boom")))
 

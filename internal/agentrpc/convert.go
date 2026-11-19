@@ -24,8 +24,15 @@ import (
 // ROOM
 // -------------------------------------------------------------------------
 
+// Executors a node runs workloads with, by the names they register under and
+// workloads name.
+const (
+	ExecutorContainerd  = "containerd"
+	ExecutorFirecracker = "firecracker"
+)
+
 // Free is the room a node has left, in millicores and MiB: its capacity, less
-// what its running workloads declared, less pending workloads it does not yet
+// what its running workloads take, less pending workloads it does not yet
 // report running. A pending workload the node already runs counts once.
 func Free(capacity *Resources, held []*Held, pending map[string]*Resources) (cpu, memory int64) {
 	cpu, memory = capacity.GetCpu(), capacity.GetMemory()
@@ -48,6 +55,27 @@ func Free(capacity *Resources, held []*Held, pending map[string]*Resources) (cpu
 	return cpu, memory
 }
 
+// Charge is what a workload takes of a node: what it declared, and its
+// executor's overhead on top.
+func Charge(declared, overhead *Resources) *Resources {
+	return &Resources{
+		Cpu:    declared.GetCpu() + overhead.GetCpu(),
+		Memory: declared.GetMemory() + overhead.GetMemory(),
+	}
+}
+
+// Executor is the node's executor called name, nil when it runs none by that
+// name.
+func (r *NodeRegisterRequest) Executor(name string) *NodeExecutor {
+	for _, e := range r.GetExecutors() {
+		if e.GetName() == name {
+			return e
+		}
+	}
+
+	return nil
+}
+
 // -------------------------------------------------------------------------
 // EXECUTIONS
 // -------------------------------------------------------------------------
@@ -62,11 +90,18 @@ func StatusOf(st *execution.Status) *ExecutionStatus {
 	}
 }
 
-// Execution reads the status back as execution id's, observed at now.
-func (s *ExecutionStatus) Execution(id execution.ID, now time.Time) execution.Status {
+// Execution reads the status back as execution id's, observed at now. A state
+// internal/execution does not name is an error, not a status no transition
+// would take.
+func (s *ExecutionStatus) Execution(id execution.ID, now time.Time) (execution.Status, error) {
+	state, err := execution.ParseState(s.GetState())
+	if err != nil {
+		return execution.Status{}, err
+	}
+
 	out := execution.Status{
 		ID:         id,
-		State:      execution.State(s.GetState()),
+		State:      state,
 		ProviderID: s.GetProviderId(),
 		UpdatedAt:  now,
 	}
@@ -79,7 +114,7 @@ func (s *ExecutionStatus) Execution(id execution.ID, now time.Time) execution.St
 		out.EndedAt = s.GetEndedAt().AsTime()
 	}
 
-	return out
+	return out, nil
 }
 
 // ResultOf puts a finished execution's exit code and run time on the wire.

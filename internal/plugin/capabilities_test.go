@@ -90,11 +90,21 @@ func TestCapabilities_CloneCopiesScalars(t *testing.T) {
 // CONSTRUCTOR
 // -------------------------------------------------------------------------
 
+// testCloud is a platform taking up to 8 vCPU and 32 GiB for a day, a task
+// declaring nothing sized at one vCPU and 2 GiB.
+var testCloud = Cloud{
+	Max:         Resources{CPU: 8000, Memory: 32768},
+	Default:     Resources{CPU: 1000, Memory: 2048},
+	MaxDuration: 24 * time.Hour,
+	Isolation:   IsolationVM,
+}
+
 // A cloud container platform runs any amd64 image with internet and no private
-// network, within the limits given, observed now.
+// network, within its limits, sized by its defaults and kept apart as it says,
+// observed now.
 func TestCloudContainer(t *testing.T) {
 	before := time.Now()
-	caps := CloudContainer(8000, 32768, 24*time.Hour)
+	caps := CloudContainer(testCloud)
 
 	if !caps.SupportsDriver(job.DriverContainer) || caps.SupportsDriver(job.DriverFunction) ||
 		!caps.SupportsArch(job.ArchAMD64) || caps.SupportsArch(job.ArchARM64) {
@@ -106,15 +116,20 @@ func TestCloudContainer(t *testing.T) {
 			*caps.MaxResources.CPU, *caps.MaxResources.Memory, caps.MaxDuration)
 	}
 
-	if !caps.InternetEgress || !caps.ArbitraryImages || caps.PrivateNetwork || caps.ObservedAt.Before(before) {
+	if caps.DefaultResources != testCloud.Default {
+		t.Errorf("default resources = %+v, want %+v", caps.DefaultResources, testCloud.Default)
+	}
+
+	if !caps.InternetEgress || !caps.ArbitraryImages || caps.PrivateNetwork || caps.Isolation != IsolationVM ||
+		caps.ObservedAt.Before(before) {
 		t.Errorf("capabilities = %+v", caps)
 	}
 }
 
 // Two snapshots share nothing, so a caller changing one cannot change the next.
 func TestCloudContainer_SharesNothing(t *testing.T) {
-	first := CloudContainer(8000, 32768, time.Hour)
-	second := CloudContainer(8000, 32768, time.Hour)
+	first := CloudContainer(testCloud)
+	second := CloudContainer(testCloud)
 
 	first.Drivers[0] = job.DriverWorker
 	*first.MaxResources.CPU = 1

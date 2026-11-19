@@ -6,8 +6,8 @@
 // The process that runs on a node, apart from the server. Dials the server,
 // registers the node, and serves its executions on the same connection until
 // it drops, then dials again. Workloads outlive the connection: they belong to
-// containerd, and the agent reports what it still holds each time it
-// registers.
+// containerd or vagabond-firecracker, and the agent reports what it still
+// holds each time it registers.
 // -------------------------------------------------------------------------------
 
 package agent
@@ -58,7 +58,7 @@ type Config struct {
 type Agent struct {
 	cfg    Config
 	node   fingerprint.Node
-	exec   agentExecutor
+	exec   *executors
 	logger *slog.Logger
 }
 
@@ -66,9 +66,15 @@ type Agent struct {
 // CONSTRUCTOR
 // -------------------------------------------------------------------------
 
-// New builds an agent reporting node and running work on exec.
-func New(cfg *Config, node fingerprint.Node, exec agentExecutor, logger *slog.Logger) *Agent {
-	return &Agent{cfg: *cfg, node: node, exec: exec, logger: logger}
+// New builds an agent reporting node and running work on execs, once each of
+// them has said what it is. One that does not answer stops it.
+func New(ctx context.Context, cfg *Config, node fingerprint.Node, logger *slog.Logger, execs ...Executor) (*Agent, error) {
+	exec, err := newExecutors(ctx, execs...)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Agent{cfg: *cfg, node: node, exec: exec, logger: logger}, nil
 }
 
 // -------------------------------------------------------------------------
@@ -165,9 +171,9 @@ func (a *Agent) register(ctx context.Context, session *agentrpc.Session, local *
 		Labels:       a.cfg.Labels,
 		Architecture: a.node.Architecture,
 		Capacity:     local.capacity,
-		Runtimes:     a.exec.Runtimes(),
 		Version:      a.cfg.Version,
 		Held:         held,
+		Executors:    a.exec.info,
 	})
 	if err != nil {
 		return fmt.Errorf("registering: %w", err)

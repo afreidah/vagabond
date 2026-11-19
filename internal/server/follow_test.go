@@ -30,6 +30,7 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/state/memory"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -211,7 +212,7 @@ func dispatched(t *testing.T, s *memory.Executions) *execution.Dispatch {
 	t.Helper()
 
 	d := &execution.Dispatch{
-		ID: newExecutionID(t), Namespace: "default", Job: "sleepy", Tasks: 1, State: execution.DispatchRunning,
+		ID: testkit.NewID(t), Namespace: "default", Job: "sleepy", Tasks: 1, State: execution.DispatchRunning,
 		Owner: "server:test:1", Epoch: 1, LeaseUntil: time.Now().Add(time.Hour), Created: time.Now(),
 	}
 
@@ -326,7 +327,7 @@ func TestFollow_StreamErrors(t *testing.T) {
 				return tc.err
 			})
 
-			s.follow(t.Context(), w, stream, newExecutionID(t), 5)
+			s.follow(t.Context(), w, stream, testkit.NewID(t), 5)
 
 			if w.Code != tc.want || (tc.wantBody != "" && w.Body.String() != tc.wantBody) {
 				t.Errorf("follow() = %d %q, want %d %q", w.Code, w.Body.String(), tc.want, tc.wantBody)
@@ -350,7 +351,7 @@ func TestEndFollow(t *testing.T) {
 
 	d := dispatched(t, store)
 
-	rec := &execution.Record{ID: newExecutionID(t), State: execution.StateRunning, Dispatch: d.ID}
+	rec := &execution.Record{ID: testkit.NewID(t), State: execution.StateRunning, Dispatch: d.ID}
 	if err := store.Create(t.Context(), rec, d.Lease()); err != nil {
 		t.Fatalf("Create() = %v", err)
 	}
@@ -387,7 +388,7 @@ func TestEndFollow(t *testing.T) {
 	stopped := make(chan struct{})
 
 	// Nothing recorded this one, so every read of it fails and is retried.
-	go s.endFollow(t.Context(), func() { close(stopped) }, newExecutionID(t))
+	go s.endFollow(t.Context(), func() { close(stopped) }, testkit.NewID(t))
 
 	time.Sleep(10 * time.Millisecond)
 	s.endStreams()

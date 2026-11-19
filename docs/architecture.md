@@ -12,7 +12,7 @@ them, dispatches to the best, and records what the run used.
 
 ## Components
 
-![The vagabond CLI calls the server's HTTP API. The server admits, ranks, dispatches and accounts for each task, keeps its records in Postgres or CockroachDB, and runs work on Cloud Run Jobs, AWS Lambda, or agent nodes.](assets/architecture.svg)
+![The vagabond CLI calls the server's HTTP API. The server admits, ranks, dispatches and accounts for each task, keeps its records in Postgres or CockroachDB, and runs work on Cloud Run Jobs, Code Engine Jobs, AWS Lambda, or agent nodes, as containers or in Firecracker microVMs.](assets/architecture.svg)
 
 Interactive version, with notes on each component:
 [System architecture](https://vagabond.munchbox.cc/diagrams/architecture/).
@@ -21,9 +21,9 @@ Interactive version, with notes on each component:
 |---|---|---|
 | Server | `vagabond server` | Serves the HTTP API on `127.0.0.1:4747` and accepts agents on `127.0.0.1:4748`. Holds the provider registry, admits and ranks tasks, runs dispatches, keeps the quota ledger, and runs the [background services](background-services.md). |
 | CLI | `vagabond job ...`, `execution ...`, `node ...`, `provider ...` | Validates job files locally, then calls the server's [API](api.md). Holds no state. See the [CLI reference](cli.md). |
-| Agent | `vagabond agent` | Runs on a node apart from the server. Dials the server, reports the node's architecture, CPU and memory, and runs the tasks placed on it in containerd. See [Agent](agent.md). |
+| Agent | `vagabond agent` | Runs on a node apart from the server. Dials the server, reports the node's architecture, CPU, memory and executors, and runs the tasks placed on it in containerd, or in Firecracker microVMs through [vagabond-firecracker](firecracker.md). See [Agent](agent.md). |
 | Store | Postgres or CockroachDB | Holds registered jobs, dispatches and their leases, executions, and quota usage and reservations. Replaced by in-memory stores under `-dev`. See [Database](database.md). |
-| Providers | `provider` blocks in [configuration](configuration.md) | Plugins that run tasks on a backend: `cloud-run`, `code-engine`, `lambda`, `containerd` (agent nodes), and the `fake-container`, `fake-function` and `fake-worker` test providers. |
+| Providers | `provider` blocks in [configuration](configuration.md) | Plugins that run tasks on a backend: `cloud-run`, `code-engine`, `lambda`, `containerd` and `firecracker` (agent nodes), and the `fake-container`, `fake-function` and `fake-worker` test providers. |
 
 **Connections:**
 
@@ -78,7 +78,8 @@ Every package under `internal/`. `cmd/vagabond` only calls `cli.Run`.
 | Package | Responsibility |
 |---|---|
 | `agent` | The `vagabond agent` process: connection to the server, cgroup delegation, workload reporting, and the executions endpoint the server calls (submit, cancel, release, stream logs) |
-| `agent/executor` | Runs an agent's workloads in containerd |
+| `agent/executor` | Runs an agent's workloads: as containers on containerd, and in microVMs through vagabond-firecracker's executor protocol |
+| `agent/agenttest` | Runs a real agent for the tests of what it connects to |
 | `agent/fingerprint` | Reads the architecture, CPU and memory an agent may use, bounded by host, cgroups and operator caps |
 | `agentrpc` | Agent protocol: generated gRPC bindings for `agent.proto`, the yamux session they run over, and the node name an agent's certificate carries |
 | `api` | HTTP API request and response bodies, and the client the CLI uses |
@@ -97,7 +98,7 @@ Every package under `internal/`. `cmd/vagabond` only calls `cli.Run`.
 | `providers/aws` | The `lambda` provider: function tasks on AWS Lambda |
 | `providers/gcp` | The `cloud-run` provider: container tasks on Cloud Run Jobs |
 | `providers/ibm` | The `code-engine` provider: container tasks on Code Engine job runs |
-| `providers/pool` | The `containerd` provider: container tasks on a pool of agent nodes |
+| `providers/pool` | The `containerd` and `firecracker` providers: container tasks on a pool of agent nodes, as containers or in microVMs |
 | `ptr` | Helpers for reading optional specification fields |
 | `quota` | Pool budgets, meters and periods, and arithmetic over usage |
 | `registry` | Builds providers from configuration and holds their capability snapshots; resolves a provider's credential again after a 401 or 403 |
@@ -146,7 +147,7 @@ result.
 | Capabilities (drivers, architectures, limits, networking, images, cost) | `Provider.Capabilities`, stored in the registry | At server startup, then every minute |
 | Node capabilities | `plugin.Live.LiveCapabilities`, the connected agent nodes | On every plan and every dispatch |
 | Enabled | `enabled` in the `provider` block | Fixed at startup |
-| Healthy | Whether the provider answered its last refresh; for a `containerd` provider, whether any node in its pool is connected, read on every plan | With capabilities |
+| Healthy | Whether the provider answered its last refresh; for a `containerd` or `firecracker` provider, whether any node in its pool running its executor is connected, read on every plan | With capabilities |
 | Tags | `meta` in the `provider` block, as `provider.meta.*` | Fixed at startup |
 | Tier | `tier` in the `provider` block | Fixed at startup |
 | Quota limits, provider total and namespace share | `pool` blocks in the `provider` block, `quota` blocks in the `namespace` block | Fixed at startup |
@@ -202,11 +203,11 @@ Optional interfaces, detected by type assertion:
 
 | Interface | Method | Used for | Implemented by |
 |---|---|---|---|
-| `plugin.LogStreamer` | `StreamLogs` | Output before the execution ends, for `GET /v1/execution/{id}/logs?follow=true` | `cloud-run`, `code-engine`, `containerd`, `fake-container` |
-| `plugin.Releaser` | `Release` | Deleting what an execution left behind, last, however it ended | `cloud-run`, `code-engine`, `containerd` |
-| `plugin.Live` | `LiveCapabilities` | Capabilities read on every plan instead of on the refresh timer | `containerd` |
-| `plugin.Targeter` | `Target` | The provider for the executions on one node, which dispatch and log following use for a node candidate or a record naming a node | `containerd` |
-| `plugin.Reserver` | `Reserve` | Holding room on a node before the execution is recorded; `ErrNoRoom` is a refusal that spends no attempt | `containerd` |
+| `plugin.LogStreamer` | `StreamLogs` | Output before the execution ends, for `GET /v1/execution/{id}/logs?follow=true` | `cloud-run`, `code-engine`, `containerd`, `firecracker`, `fake-container` |
+| `plugin.Releaser` | `Release` | Deleting what an execution left behind, last, however it ended | `cloud-run`, `code-engine`, `containerd`, `firecracker` |
+| `plugin.Live` | `LiveCapabilities` | Capabilities read on every plan instead of on the refresh timer | `containerd`, `firecracker` |
+| `plugin.Targeter` | `Target` | The provider for the executions on one node, which dispatch and log following use for a node candidate or a record naming a node | `containerd`, `firecracker` |
+| `plugin.Reserver` | `Reserve` | Holding room on a node before the execution is recorded; `ErrNoRoom` is a refusal that spends no attempt | `containerd`, `firecracker` |
 | `plugin.Recredentialer` | `Recredential` | Taking a credential resolved again from its source after the platform answered 401 or 403; the call is then made once more | `cloud-run`, `code-engine`, `lambda` |
 
 See [Writing a provider](writing-a-provider.md).
@@ -265,7 +266,7 @@ Intervals, locks and failure handling for every loop are in
 | Capability snapshots and health | Server memory (registry) | No; rebuilt by the startup refresh |
 | Quota usage snapshot | Server memory (ledger) | No; re-read from the store at startup |
 | Connected agent nodes | Server memory (`nodes`) | No; agents reconnect with backoff from 1 to 30 seconds and re-report |
-| Workloads on a node | containerd on the node, reported by the agent | Yes, on the node |
+| Workloads on a node | containerd and vagabond-firecracker on the node, reported by the agent | Yes, on the node |
 | Configuration | HCL files | Read at startup |
 
 Everything in server memory is rebuilt from the store, the providers and the

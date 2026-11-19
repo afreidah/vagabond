@@ -71,8 +71,8 @@ Per-check behavior:
   every job.
 - **healthy**: a provider starts healthy and becomes unhealthy when a refresh
   fails; it keeps its last snapshot. A disabled provider is never refreshed, so
-  its snapshot is empty. A `containerd` provider with no connected nodes is
-  unhealthy.
+  its snapshot is empty. A `containerd` or `firecracker` provider with no
+  connected nodes running its executor is unhealthy.
 - **arch**: a task with no `architecture` passes everywhere.
 - **image**: a task with no image passes everywhere.
 - **network**: only an explicit `true` is a requirement. An absent value or
@@ -143,7 +143,7 @@ other reason requires a change to the job or the configuration.
 
 ### Pools
 
-A [`containerd`](agent.md#pools) provider is judged node by node. Each
+A [`containerd` or `firecracker`](agent.md#pools) provider is judged node by node. Each
 connected node in its pool runs all 13 checks as if it were the whole
 provider, with its own capability snapshot and `node.label.*` attributes, and
 the provider's allowlist, `enabled`, health, tags and quota.
@@ -206,8 +206,8 @@ byte-identical apart from observation times and can be diffed in CI.
 
 ## Ranking
 
-Ranking scores every candidate, a provider or one node of a `containerd`
-provider, and orders them best first. The full ordering is kept: dispatch
+Ranking scores every candidate, a provider or one node of a `containerd` or
+`firecracker` provider, and orders them best first. The full ordering is kept: dispatch
 tries candidates in ranked order, moving to the next when a quota or node
 reservation is refused, or when a provider fails with `infrastructure` and the
 task's retry budget allows rerouting (see [Dispatch](dispatch.md)). A node's

@@ -37,11 +37,12 @@ import (
 // -------------------------------------------------------------------------
 
 // Defaults for where the agent finds containerd and keeps workload output, and
-// the containerd namespace its workloads live in.
+// the containerd namespaces its containers and its microVMs' snapshots live in.
 const (
-	defaultContainerd = "/run/containerd/containerd.sock"
-	defaultDataDir    = "/var/lib/vagabond"
-	workloadNamespace = "vagabond"
+	defaultContainerd    = "/run/containerd/containerd.sock"
+	defaultDataDir       = "/var/lib/vagabond"
+	workloadNamespace    = "vagabond"
+	firecrackerNamespace = "vagabond-firecracker"
 )
 
 // -------------------------------------------------------------------------
@@ -65,12 +66,14 @@ Usage: vagabond agent [options]
 
   Runs the agent on this node: dials the server, registers the node into a
   pool, and runs the workloads the server sends it on the node's containerd,
+  and in Firecracker microVMs through vagabond-firecracker with -firecracker,
   until interrupted. Workloads keep running if the agent stops, and it finds
   them again when it starts.
 
   Requires cgroup v2, access to containerd's socket, and permission to create
   cgroups under its own: Delegate=yes under systemd, or --cgroupns=host with
-  /sys/fs/cgroup writable in a container.
+  /sys/fs/cgroup writable in a container. -firecracker also requires
+  containerd's devmapper snapshotter.
 
   Capacity is the smallest of the host's CPU and memory, the limits on the
   agent's cgroup, and -cpu and -memory.
@@ -95,6 +98,11 @@ Agent Options:
 
   -containerd <path>
     containerd's socket. Defaults to /run/containerd/containerd.sock.
+
+  -firecracker <path>
+    vagabond-firecracker's socket, to run workloads in Firecracker microVMs
+    as well as in containers. The agent does not start when it does not
+    answer. Off when unset.
 
   -data-dir <path>
     Where workload output is kept. Defaults to /var/lib/vagabond; in a
@@ -124,10 +132,10 @@ Agent Options:
 // or SIGTERM.
 func (c *AgentCommand) Run(args []string) int {
 	var (
-		server, pool, name, socket, dataDir, cgroupParent, logLevel string
-		labels                                                      metaFlags
-		caps                                                        fingerprint.Caps
-		certs                                                       tlsFlags
+		server, pool, name, socket, firecracker, dataDir, cgroupParent, logLevel string
+		labels                                                                   metaFlags
+		caps                                                                     fingerprint.Caps
+		certs                                                                    tlsFlags
 	)
 
 	host, _ := os.Hostname()
@@ -140,6 +148,7 @@ func (c *AgentCommand) Run(args []string) int {
 	flags.Int64Var(&caps.CPU, "cpu", 0, "millicores the agent may use")
 	flags.Int64Var(&caps.Memory, "memory", 0, "MiB the agent may use")
 	flags.StringVar(&socket, "containerd", defaultContainerd, "containerd's socket")
+	flags.StringVar(&firecracker, "firecracker", "", "vagabond-firecracker's socket")
 	flags.StringVar(&dataDir, "data-dir", defaultDataDir, "where workload output is kept")
 	flags.StringVar(&cgroupParent, "cgroup-parent", "", "a cgroup to create workloads under")
 	flags.StringVar(&logLevel, "log-level", "info", "debug, info, warn or error")
@@ -183,12 +192,24 @@ func (c *AgentCommand) Run(args []string) int {
 
 	defer func() { _ = exec.Close() }()
 
-	if err := exec.Check(ctx); err != nil {
-		return c.Errorf("%s", err)
-	}
-
 	if err := exec.Recover(ctx); err != nil {
 		return c.Errorf("Finding workloads from before: %s", err)
+	}
+
+	execs := []agent.Executor{exec}
+
+	// MicroVMs as well, on a node running vagabond-firecracker.
+	if firecracker != "" {
+		vm, err := executor.NewFirecracker(executor.FirecrackerConfig{
+			Socket: firecracker, Containerd: socket, Namespace: firecrackerNamespace, Cgroup: parent,
+		})
+		if err != nil {
+			return c.Errorf("%s", err)
+		}
+
+		defer func() { _ = vm.Close() }()
+
+		execs = append(execs, vm)
 	}
 
 	logger := slog.New(slog.NewTextHandler(c.ErrStream, &slog.HandlerOptions{Level: level}))
@@ -198,7 +219,12 @@ func (c *AgentCommand) Run(args []string) int {
 		Server: server, Pool: pool, Name: name, Labels: labels, TLS: tlsConfig, Version: version.String(),
 	}
 
-	if err := agent.New(&cfg, node, exec, logger).Run(ctx); err != nil {
+	a, err := agent.New(ctx, &cfg, node, logger, execs...)
+	if err != nil {
+		return c.Errorf("%s", err)
+	}
+
+	if err := a.Run(ctx); err != nil {
 		return c.Errorf("%s", err)
 	}
 

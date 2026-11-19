@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/distribution/reference"
 	"github.com/hashicorp/hcl/v2"
 
 	"github.com/afreidah/vagabond/internal/job"
@@ -263,7 +264,10 @@ func validateDriver(jobName string, task *job.Task) hcl.Diagnostics {
 }
 
 // validateConfig checks what the driver contract implies, that a container
-// task's config names an image; anything more is the plugin's to reject.
+// task's config names an image, which, written out in full, is an image
+// reference every node and platform could pull. One built from metadata is
+// checked once resolved, by whatever pulls it; anything more is the plugin's to
+// reject.
 func validateConfig(jobName string, task *job.Task) hcl.Diagnostics {
 	if task.Driver != job.DriverContainer {
 		return nil
@@ -282,8 +286,25 @@ func validateConfig(jobName string, task *job.Task) hcl.Diagnostics {
 		return diags
 	}
 
-	if _, ok := attrs["image"]; !ok {
+	attr, ok := attrs[job.ConfigImage]
+	if !ok {
 		return missing
+	}
+
+	// Metadata stands as its own reference until dispatch, so only a whole image can be read here.
+	if len(attr.Expr.Variables()) > 0 {
+		return nil
+	}
+
+	image, diags := task.Image(nil)
+	if diags.HasErrors() {
+		return diags
+	}
+
+	if _, err := reference.ParseDockerRef(image); err != nil {
+		return hcl.Diagnostics{simple(
+			fmt.Sprintf("Invalid image in %q task %q", jobName, task.Name),
+			fmt.Sprintf("%q is not an image reference: %s.", image, err))}
 	}
 
 	return nil

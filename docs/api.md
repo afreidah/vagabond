@@ -532,8 +532,8 @@ Response, `Plan`:
 |---|---|
 | `Tasks` | One entry per task, in job order |
 | `Driver` | The task's driver |
-| `Candidates` | Admitted providers, and nodes of a `containerd` provider, best first. `[]` when none |
-| `Candidates[].Node` | The node, for a `containerd` provider's candidate; empty otherwise |
+| `Candidates` | Admitted providers, and nodes of a `containerd` or `firecracker` provider, best first. `[]` when none |
+| `Candidates[].Node` | The node, for a node provider's candidate; empty otherwise |
 | `Candidates[].Tier` | The provider's configured [tier](configuration.md#tiers) |
 | `Candidates[].Score` | Overall score as a percentage, 0 to 100 |
 | `Candidates[].Scores` | Each scorer's contribution in `[0,1]`: `headroom`, `affinity`, `tier` (see [scorers](scheduling.md#scorers)) |
@@ -597,7 +597,7 @@ and `JobStatus`.
 | `DispatchID` | Owning dispatch |
 | `Task` | Task name |
 | `Provider` | Provider name from configuration |
-| `Node` | The agent node it runs on, for a `containerd` provider; empty otherwise |
+| `Node` | The agent node it runs on, for a `containerd` or `firecracker` provider; empty otherwise |
 | `Attempt` | 1 for the first attempt; increments on retry or reroute |
 | `PreviousID` | The attempt this one follows; empty on attempt 1 |
 | `State` | See table below |
@@ -760,7 +760,7 @@ Response, `[]NodeListStub`:
     "Memory": 8192,
     "UsedCPU": 1000,
     "UsedMemory": 2048,
-    "Runtimes": [ "io.containerd.runc.v2" ],
+    "Executors": [ "containerd", "firecracker" ],
     "Version": "0.4.0",
     "Executions": 2,
     "Connected": "2026-09-28T09:00:12Z"
@@ -777,8 +777,8 @@ Response, `[]NodeListStub`:
 | `Architecture` | CPU architecture |
 | `CPU` | Millicores the agent may use |
 | `Memory` | MiB the agent may use |
-| `UsedCPU`, `UsedMemory` | Declared by the node's running workloads, as last reported |
-| `Runtimes` | Container runtimes the agent offers |
+| `UsedCPU`, `UsedMemory` | What the node's running workloads take, their declared size and their executor's overhead, as last reported, plus the server's reservations |
+| `Executors` | What the node runs workloads with: `containerd`, and `firecracker` with `-firecracker` |
 | `Version` | Agent version |
 | `Executions` | Workloads running on the node, as last reported |
 | `Connected` | When the current connection was established |

@@ -5,10 +5,11 @@
 //
 // Author: Alex Freidah
 //
-// Real workloads on the host's containerd, in a namespace of their own. Needs
-// root, so it is behind the containerd build tag and skips when the socket
-// cannot be reached; make containerd-test builds it as the user and runs it
-// with sudo.
+// Real workloads on the containerd the executor test environment starts, found
+// by VAGABOND_CONTAINERD, in a namespace of their own. Needs root, so it is
+// behind the containerd build tag and skips without the environment; make
+// executor-test starts it, builds the tests as the user and runs them with
+// sudo.
 // -------------------------------------------------------------------------------
 
 package executor
@@ -16,11 +17,15 @@ package executor
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/containerd/containerd/v2/client"
+
+	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/execution"
 )
 
@@ -28,28 +33,31 @@ import (
 // HELPERS
 // -------------------------------------------------------------------------
 
-// testImage is small and has a shell.
-const testImage = "alpine:3.20"
-
-// newTestExecutor connects to the host's containerd, or skips.
+// newTestExecutor connects to the test environment's containerd, or skips
+// when there is none.
 func newTestExecutor(t *testing.T) *Containerd {
 	t.Helper()
 
+	socket := os.Getenv("VAGABOND_CONTAINERD")
+	if socket == "" {
+		t.Skip("VAGABOND_CONTAINERD names no containerd; make executor-test starts one")
+	}
+
 	c, err := New(Config{
-		Socket:    "/run/containerd/containerd.sock",
+		Socket:    socket,
 		Namespace: "vagabond-test",
 		DataDir:   t.TempDir(),
 		Cgroup:    "/vagabond-test",
 	})
 	if err != nil {
-		t.Skipf("containerd unavailable: %v", err)
-	}
-
-	if err := c.Check(t.Context()); err != nil {
-		t.Skipf("containerd unavailable: %v", err)
+		t.Fatalf("New() = %v", err)
 	}
 
 	t.Cleanup(func() { _ = c.Close() })
+
+	if _, err := c.Info(t.Context()); err != nil {
+		t.Fatalf("Info() = %v", err)
+	}
 
 	return c
 }
@@ -58,10 +66,7 @@ func newTestExecutor(t *testing.T) *Containerd {
 func run(t *testing.T, c *Containerd, id, script string, timeout time.Duration) {
 	t.Helper()
 
-	err := c.Submit(t.Context(), id, &Spec{
-		Image: testImage, Command: []string{"sh", "-c", script}, Memory: 64, CPU: 250, Timeout: timeout,
-	})
-	if err != nil {
+	if err := c.Submit(t.Context(), id, workload(timeout, "sh", "-c", script)); err != nil {
 		t.Fatalf("Submit() = %v", err)
 	}
 
@@ -75,9 +80,9 @@ func finished(t *testing.T, c *Containerd, id string) execution.Status {
 	deadline := time.Now().Add(time.Minute)
 
 	for time.Now().Before(deadline) {
-		st, err := c.Status(t.Context(), id)
+		st, err := c.status(t.Context(), id)
 		if err != nil {
-			t.Fatalf("Status() = %v", err)
+			t.Fatalf("status() = %v", err)
 		}
 
 		if st.State.Terminal() {
@@ -90,6 +95,24 @@ func finished(t *testing.T, c *Containerd, id string) execution.Status {
 	t.Fatalf("workload %s did not finish", id)
 
 	return execution.Status{}
+}
+
+// heldAs is the workload id among the held ones, or nil.
+func heldAs(t *testing.T, c *Containerd, id string) *agentrpc.Held {
+	t.Helper()
+
+	held, err := c.Held(t.Context())
+	if err != nil {
+		t.Fatalf("Held() = %v", err)
+	}
+
+	for _, h := range held {
+		if h.GetExecutionId() == id {
+			return h
+		}
+	}
+
+	return nil
 }
 
 // gatedWriter collects what is written to it, holding its first write until
@@ -128,7 +151,7 @@ func TestContainerd_RunsAWorkload(t *testing.T) {
 	}
 
 	res, err := c.Result(t.Context(), id)
-	if err != nil || res.ExitCode == nil || *res.ExitCode != 3 {
+	if err != nil || res.ExitCode == nil || res.GetExitCode() != 3 {
 		t.Fatalf("Result() = %+v, %v; want exit 3", res, err)
 	}
 
@@ -138,25 +161,9 @@ func TestContainerd_RunsAWorkload(t *testing.T) {
 		t.Errorf("Logs() = %q, %v", logs.String(), err)
 	}
 
-	held, err := c.Held(t.Context())
-	if err != nil {
-		t.Fatalf("Held() = %v", err)
-	}
-
-	found := false
-
-	for _, h := range held {
-		if h.GetExecutionId() == id {
-			found = true
-
-			if h.GetRunning() || h.GetResources().GetCpu() != 250 || h.GetResources().GetMemory() != 64 {
-				t.Errorf("held = %+v, want finished with 250 millicores and 64 MiB", h)
-			}
-		}
-	}
-
-	if !found {
-		t.Errorf("Held() = %+v; want %s", held, id)
+	h := heldAs(t, c, id)
+	if h.GetRunning() || h.GetResources().GetCpu() != 250 || h.GetResources().GetMemory() != 128 {
+		t.Errorf("held = %+v, want finished with 250 millicores and 128 MiB", h)
 	}
 
 	if err := c.Release(t.Context(), id); err != nil {
@@ -165,6 +172,77 @@ func TestContainerd_RunsAWorkload(t *testing.T) {
 
 	if _, err := c.Status(t.Context(), id); !errors.Is(err, ErrUnknown) {
 		t.Errorf("Status() after release = %v, want ErrUnknown", err)
+	}
+}
+
+// An image reference that does not parse is refused as invalid, before any
+// pull.
+func TestContainerd_RefusesABadImage(t *testing.T) {
+	c := newTestExecutor(t)
+	w := workload(0, "true")
+	w.Image = "Not A Reference"
+
+	if err := c.Submit(t.Context(), "exec-bad-image", w); !errors.Is(err, ErrInvalid) {
+		t.Errorf("Submit() = %v, want ErrInvalid", err)
+	}
+}
+
+// A workload that cannot start leaves nothing behind, so a retry is not taken
+// for a workload already there.
+func TestContainerd_AFailedStartLeavesNothing(t *testing.T) {
+	c := newTestExecutor(t)
+	id := "exec-no-start-" + time.Now().Format("150405.000")
+
+	if err := c.Submit(t.Context(), id, workload(0, "/no/such/program")); err == nil {
+		_ = c.Release(context.Background(), id)
+		t.Fatal("Submit() = nil, want the start to fail")
+	}
+
+	if _, err := c.Status(t.Context(), id); !errors.Is(err, ErrUnknown) {
+		t.Errorf("Status() after a failed start = %v, want ErrUnknown", err)
+	}
+}
+
+// Logs of a workload another executor holds is unknown here, with nothing
+// written, so the caller can ask the next one.
+func TestContainerd_LogsOfAnUnknownWorkload(t *testing.T) {
+	c := newTestExecutor(t)
+
+	var logs strings.Builder
+
+	if err := c.Logs(t.Context(), "exec-elsewhere", 0, &logs); !errors.Is(err, ErrUnknown) || logs.Len() > 0 {
+		t.Errorf("Logs() = %q, %v; want nothing and ErrUnknown", logs.String(), err)
+	}
+}
+
+// A workload whose task went after it started, as when the host restarts, has
+// failed without an exit code and no longer takes room.
+func TestContainerd_ATaskGoneAfterItStarted(t *testing.T) {
+	c := newTestExecutor(t)
+	id := "exec-gone-" + time.Now().Format("150405.000")
+
+	run(t, c, id, "sleep 60", 0)
+
+	_, task, err := c.load(t.Context(), id)
+	if err != nil {
+		t.Fatalf("load() = %v", err)
+	}
+
+	if _, err := task.Delete(t.Context(), client.WithProcessKill); err != nil {
+		t.Fatalf("deleting the task: %v", err)
+	}
+
+	st, err := c.Status(t.Context(), id)
+	if err != nil || st.GetState() != string(execution.StateFailed) {
+		t.Errorf("Status() = %+v, %v; want failed", st, err)
+	}
+
+	if res, err := c.Result(t.Context(), id); err != nil || res.ExitCode != nil {
+		t.Errorf("Result() = %+v, %v; want no exit code", res, err)
+	}
+
+	if h := heldAs(t, c, id); h.GetRunning() {
+		t.Errorf("held = %+v, want not running", h)
 	}
 }
 
@@ -255,7 +333,7 @@ func TestContainerd_SurvivesARestart(t *testing.T) {
 	finished(t, second, id)
 
 	res, err := second.Result(t.Context(), id)
-	if err != nil || res.ExitCode == nil || *res.ExitCode != 5 {
+	if err != nil || res.ExitCode == nil || res.GetExitCode() != 5 {
 		t.Errorf("Result() = %+v, %v; want exit 5", res, err)
 	}
 

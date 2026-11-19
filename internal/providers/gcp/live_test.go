@@ -28,6 +28,7 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/ptr"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -161,7 +162,7 @@ args    = ["-c", "echo hello-stdout; echo hello-stderr >&2; exit 3"]
 // minute allows.
 func TestLiveLateFollow(t *testing.T) {
 	p := liveProvider(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	task := &job.Task{
 		Name:   "live-late",

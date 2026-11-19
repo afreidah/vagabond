@@ -15,21 +15,21 @@
 package integration
 
 import (
-	"context"
-	"log/slog"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/afreidah/vagabond/internal/agent"
-	"github.com/afreidah/vagabond/internal/agent/executor"
+	"github.com/afreidah/vagabond/internal/agent/agenttest"
 	"github.com/afreidah/vagabond/internal/agent/executor/executortest"
 	"github.com/afreidah/vagabond/internal/agent/fingerprint"
+	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/nodes"
 	"github.com/afreidah/vagabond/internal/registry"
 	"github.com/afreidah/vagabond/internal/server"
 	"github.com/afreidah/vagabond/internal/state/postgres/pgtest"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -79,38 +79,8 @@ func newNodeHarness(t *testing.T) (*harness, server.Option) {
 func (h *harness) join(name string, exec *executortest.Fake) {
 	h.t.Helper()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-
-	a := agent.New(&agent.Config{Server: h.agents.Addr().String(), Pool: "homelab", Name: name},
-		fingerprint.Node{Architecture: "amd64", CPU: 4000, Memory: 8192},
-		exec, slog.New(slog.DiscardHandler))
-
-	go func() {
-		defer close(done)
-		_ = a.Run(ctx)
-	}()
-
-	h.t.Cleanup(func() {
-		cancel()
-		<-done
-	})
-}
-
-// eventually polls cond until it holds, or fails the test after runTimeout.
-func eventually(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-
-	deadline := time.Now().Add(runTimeout)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	t.Fatalf("timed out waiting for %s", what)
+	agenttest.Run(h.t, &agent.Config{Server: h.agents.Addr().String(), Pool: "homelab", Name: name},
+		fingerprint.Node{Architecture: "amd64", CPU: 4000, Memory: 8192}, exec)
 }
 
 // -------------------------------------------------------------------------
@@ -124,14 +94,14 @@ func eventually(t *testing.T, what string, cond func() bool) {
 func TestNodes_LostWhileAwayResolvesOnReturn(t *testing.T) {
 	h, withNodes := newNodeHarness(t)
 
-	id := newID(t)
+	id := testkit.NewID(t)
 	exec := &executortest.Fake{Finish: true, Output: "done\n"}
-	_ = exec.Submit(t.Context(), id.String(), &executor.Spec{CPU: 1000, Memory: 512})
+	_ = exec.Submit(t.Context(), id.String(), &agentrpc.Workload{Resources: &agentrpc.Resources{Cpu: 1000, Memory: 512}})
 
 	h.seed(id, "homelab", "box1", time.Now().Add(-time.Hour))
 	h.serve(server.WithOwner("server-a"), withNodes)
 
-	eventually(t, "the execution to be lost", func() bool {
+	testkit.Eventually(t, runTimeout, "the execution to be lost", func() bool {
 		rec, err := h.store.Get(t.Context(), id)
 
 		return err == nil && rec.State == execution.StateLost
@@ -145,13 +115,13 @@ func TestNodes_LostWhileAwayResolvesOnReturn(t *testing.T) {
 	h.join("box1", exec)
 
 	// The dispatch answered lost; the execution resolves in the background
-	eventually(t, "the execution to finish and be released", func() bool {
+	testkit.Eventually(t, runTimeout, "the execution to finish and be released", func() bool {
 		rec, err := h.store.Get(t.Context(), id)
 
 		return err == nil && rec.State == execution.StateSucceeded && !rec.Released.IsZero()
 	})
 
-	eventually(t, "the workload to be released", func() bool { return exec.Workload(id.String()) == nil })
+	testkit.Eventually(t, runTimeout, "the workload to be released", func() bool { return exec.Workload(id.String()) == nil })
 
 	// The fake reports one second.
 	if got := h.used("homelab", "runtime"); got != second {
@@ -165,7 +135,7 @@ func TestNodes_LostWhileAwayResolvesOnReturn(t *testing.T) {
 func TestNodes_ReturningNodeReleasesWhatNothingNeeds(t *testing.T) {
 	h, withNodes := newNodeHarness(t)
 
-	live, released, unrecorded := newID(t), newID(t), newID(t)
+	live, released, unrecorded := testkit.NewID(t), testkit.NewID(t), testkit.NewID(t)
 
 	// Leased to a live owner far ahead, so the server leaves the dispatch be.
 	h.seed(live, "homelab", "box1", time.Now().Add(time.Hour))
@@ -183,13 +153,13 @@ func TestNodes_ReturningNodeReleasesWhatNothingNeeds(t *testing.T) {
 
 	exec := &executortest.Fake{}
 	for _, id := range []execution.ID{live, released, unrecorded} {
-		_ = exec.Submit(t.Context(), id.String(), &executor.Spec{})
+		_ = exec.Submit(t.Context(), id.String(), &agentrpc.Workload{})
 	}
 
 	h.serve(withNodes)
 	h.join("box1", exec)
 
-	eventually(t, "the unneeded workloads to be released", func() bool {
+	testkit.Eventually(t, runTimeout, "the unneeded workloads to be released", func() bool {
 		return exec.Workload(released.String()) == nil && exec.Workload(unrecorded.String()) == nil
 	})
 

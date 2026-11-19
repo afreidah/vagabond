@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -51,7 +52,7 @@ func TestStreamLogs_WaitsThenStreams(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 	podName := runName(id) + "-0-0"
 
 	f.on("GET "+podsPath(),
@@ -86,7 +87,7 @@ func TestStreamLogs_ResumesFromAnOffset(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 	podName := runName(id) + "-0-0"
 
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList(podBody(podName, time.Now(), nil))))
@@ -109,7 +110,7 @@ func TestStreamLogs_ClassifiesARefusal(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 	podName := runName(id) + "-0-0"
 
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList(podBody(podName, time.Now(), nil))))
@@ -130,7 +131,7 @@ func TestStreamLogs_PodLookupFails(t *testing.T) {
 
 	f.on("GET "+podsPath(), reply(http.StatusServiceUnavailable, map[string]any{"message": "unavailable"}))
 
-	if err := p.StreamLogs(t.Context(), newID(t), 0, io.Discard); !plugin.Reroutable(err) {
+	if err := p.StreamLogs(t.Context(), testkit.NewID(t), 0, io.Discard); !plugin.Reroutable(err) {
 		t.Fatalf("StreamLogs() = %v, want an infrastructure failure", err)
 	}
 }
@@ -147,7 +148,7 @@ func TestStreamLogs_CancelWhileWaiting(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 
-	if err := p.StreamLogs(ctx, newID(t), 0, io.Discard); err != nil {
+	if err := p.StreamLogs(ctx, testkit.NewID(t), 0, io.Discard); err != nil {
 		t.Fatalf("StreamLogs() = %v, want a quiet end", err)
 	}
 }
@@ -162,7 +163,7 @@ func TestReadLogs_ReadsTheWholeLog(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 	podName := runName(id) + "-0-0"
 	log := strings.Repeat("x", 5*maxResponse/4)
 
@@ -198,7 +199,7 @@ func TestReadLogs_PodGone(t *testing.T) {
 
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList()))
 
-	if err := p.ReadLogs(t.Context(), newID(t), io.Discard); !plugin.Reroutable(err) {
+	if err := p.ReadLogs(t.Context(), testkit.NewID(t), io.Discard); !plugin.Reroutable(err) {
 		t.Fatalf("ReadLogs() = %v, want an infrastructure failure", err)
 	}
 }
@@ -209,7 +210,7 @@ func TestReadLogs_NeverStarted(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 	podName := runName(id) + "-0-0"
 
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList(waitingPod(podName))))
@@ -228,7 +229,7 @@ func TestReadLogs_CutConnection(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 	podName := runName(id) + "-0-0"
 
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList(podBody(podName, time.Now(), new(0)))))
@@ -255,7 +256,7 @@ func TestReadLogs_Refusals(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	id := newID(t)
+	id := testkit.NewID(t)
 	podName := runName(id) + "-0-0"
 
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList(podBody(podName, time.Now(), new(0)))))
