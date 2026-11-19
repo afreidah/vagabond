@@ -26,8 +26,8 @@ runs the task on the selected backend, and stores the result.
 
 Backends are provider plugins: Google Cloud Run Jobs, IBM Code Engine Jobs, AWS
 Lambda, and agent nodes, which are hosts running `vagabond agent` that execute
-tasks on the host's containerd, or in Firecracker microVMs through
-`vagabond-firecracker`.
+tasks on the host's containerd, or in Firecracker microVMs through the
+`vagabond-firecracker` daemon the agent starts.
 
 Usage is recorded for every run and checked against quotas set per backend,
 optionally split per namespace. `job plan` prints every backend with its score

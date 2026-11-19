@@ -208,7 +208,7 @@ window.vagabondDiagram = {
     FIRECRACKER: {
       title: 'vagabond-firecracker',
       badge: 'data', badgeText: 'microVMs',
-      body: '<p>The daemon beside the agent that runs its microVMs, with loops of its own, so a microVM&rsquo;s deadline holds and its output is kept while the agent is down:</p><p><b>Supervision:</b> one task per running microVM, copying its output to the execution&rsquo;s log, saving its end, and shutting the microVM down.<br><b>Timeout:</b> one per microVM with a timeout, from its saved start: SIGTERM, then SIGKILL 10 s later.<br><b>Recovery:</b> once at start, taking back what a previous daemon left.</p><p>The workload report reads its <code>Held</code>.</p><p><a href="../firecracker/">Firecracker diagram &rarr;</a></p>'
+      body: '<p>The daemon the agent starts to run its microVMs, with loops of its own, so a microVM&rsquo;s deadline holds and its output is kept while the agent is down:</p><p><b>Supervision:</b> one task per running microVM, copying its output to the execution&rsquo;s log, saving its end, and shutting the microVM down.<br><b>Timeout:</b> one per microVM with a timeout, from its saved start: SIGTERM, then SIGKILL 10 s later.<br><b>Recovery:</b> once at start, taking back what a previous daemon left.</p><p>The workload report reads its <code>Held</code>.</p><p><a href="../firecracker/">Firecracker diagram &rarr;</a></p>'
     }
   }
 };

@@ -70,7 +70,6 @@ NO_PKGS_MSG    := no Go packages yet, skipping
 REGISTRY       ?= $(or $(DOCKER_REGISTRY),registry.example.com)
 IMAGE          := $(REGISTRY)/vagabond
 WEB_IMAGE      := $(REGISTRY)/vagabond-web
-FC_IMAGE       := $(REGISTRY)/vagabond-firecracker
 PLATFORMS      := linux/amd64,linux/arm64
 
 
@@ -130,22 +129,16 @@ image = docker buildx build --pull -f $(2) $(3) \
 	--build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) -t $(1):$(VERSION) \
 	$(if $(4),--platform $(4) -t $(1):latest --output type=image$(comma)push=true,--load) .
 
-docker: ## Build the vagabond image for the local architecture
-	$(call image,$(IMAGE),Dockerfile)
+# Handed Firecracker, the jailer and the kernel as fetched and checked here,
+# which the amd64 image carries for the agent's -firecracker.
+docker: $(KVM_IMAGE) ## Build the vagabond image for the local architecture
+	$(call image,$(IMAGE),Dockerfile,--build-context kvm=$(KVM_DIR))
 
 scan: docker ## Scan the local vagabond image with Trivy
 	trivy image --severity CRITICAL,HIGH $(IMAGE):$(VERSION)
 
-push: builder ## Build and push the multi-arch vagabond image
-	$(call image,$(IMAGE),Dockerfile,,$(PLATFORMS))
-
-# amd64 alone, and handed Firecracker, the jailer and the kernel as fetched and
-# checked here.
-firecracker-docker: $(KVM_IMAGE) ## Build the vagabond-firecracker image
-	$(call image,$(FC_IMAGE),$(FC_CRATE)/Dockerfile,--build-context kvm=$(KVM_DIR))
-
-firecracker-push: builder $(KVM_IMAGE) ## Build and push the vagabond-firecracker image
-	$(call image,$(FC_IMAGE),$(FC_CRATE)/Dockerfile,--build-context kvm=$(KVM_DIR),linux/amd64)
+push: builder $(KVM_IMAGE) ## Build and push the multi-arch vagabond image
+	$(call image,$(IMAGE),Dockerfile,--build-context kvm=$(KVM_DIR),$(PLATFORMS))
 
 ##@ Quality
 
@@ -410,4 +403,4 @@ clean: ## Remove build and coverage artifacts
 	rm -f coverage.out integration-coverage.out executor-coverage.out vagabond rust-coverage.lcov firecracker-coverage.lcov
 	rm -rf bin
 
-.PHONY: help build install uninstall builder docker scan push firecracker-docker firecracker-push fmt fmt-check vet lint rust-fmt rust-fmt-check rust-lint test test-fast rust-test rust-audit integration-test coverage integration-coverage rust-coverage firecracker-init firecracker-test firecracker-coverage firecracker-daemon executor-env executor-env-down executor-test executor-coverage govulncheck check generate generate-check web-serve web-build web-docker web-push tools clean
+.PHONY: help build install uninstall builder docker scan push fmt fmt-check vet lint rust-fmt rust-fmt-check rust-lint test test-fast rust-test rust-audit integration-test coverage integration-coverage rust-coverage firecracker-init firecracker-test firecracker-coverage firecracker-daemon executor-env executor-env-down executor-test executor-coverage govulncheck check generate generate-check web-serve web-build web-docker web-push tools clean

@@ -44,7 +44,6 @@ jobs:
 
           make push
           make web-push
-          make firecracker-push
 
       # The deployments read their versions from these keys, so they are written
       # only once the images above exist under that tag. The server and the

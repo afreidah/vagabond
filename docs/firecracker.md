@@ -5,7 +5,7 @@ description: "The vagabond-firecracker daemon and its guest init: requirements, 
 weight: 520
 ---
 
-`vagabond-firecracker` runs beside the agent on a KVM node and runs each
+`vagabond-firecracker` runs on a KVM node, started by the agent, and runs each
 workload in a Firecracker microVM of its own, with its own kernel, where a
 container shares the host's. It serves the executor protocol on a Unix socket:
 the caller hands it a process, its CPU, memory and timeout, a root drive
@@ -16,7 +16,7 @@ its output and exit back over vsock.
 MicroVMs belong to their Firecracker processes, not to the daemon: they keep
 running when the daemon stops, and the daemon takes them back when it starts.
 
-The agent drives it when started with `-firecracker <socket>`: it pulls each
+The agent started with `-firecracker` runs it as a child and drives it: it pulls each
 workload's image through the node's containerd into a devmapper snapshot,
 resolves the image's process and user as containerd would, and hands the
 daemon the snapshot's block device as the root drive ([Agent](agent.md)).
@@ -100,37 +100,40 @@ Steps 2 to 5 log `failed error=...` and exit 1 on failure.
 
 ## Deployment
 
-The `vagabond-firecracker` image, amd64 only, holds the daemon,
-`vagabond-init` packed as `/usr/share/vagabond-firecracker/initramfs.cpio.gz`,
-Firecracker and its jailer at `/usr/bin`, where the flags look by default, and
-Firecracker's test kernel at `/usr/share/vagabond-firecracker/vmlinux`: the
-same pinned files the tests boot. Its entrypoint passes `--kernel` and
-`--initramfs`; the deployment gives the rest.
+The agent runs it: nothing else is deployed. The amd64 `vagabond` image holds
+the daemon, `vagabond-init` packed as
+`/usr/share/vagabond-firecracker/initramfs.cpio.gz`, Firecracker and its
+jailer at `/usr/bin`, where the flags look by default, and Firecracker's test
+kernel at `/usr/share/vagabond-firecracker/vmlinux`: the same pinned files the
+tests boot. On bare metal, install the same files at the same paths, with
+`vagabond-firecracker` on the agent's `PATH`.
 
-```bash
-docker run -d --name vagabond-firecracker --restart unless-stopped \
-  --privileged --network host --pid host --cgroupns host \
-  -v /dev:/dev \
-  -v /run/vagabond-firecracker:/run/vagabond-firecracker \
-  -v /var/lib/vagabond-firecracker:/var/lib/vagabond-firecracker \
-  -v /srv/jailer:/srv/jailer \
-  <registry>/vagabond-firecracker:<version> --uid 990 --gid 990 --uplink eth0
-```
+With `-firecracker`, the agent starts it with:
+
+| Flag | Value |
+|---|---|
+| `--socket` | `<data-dir>/firecracker/executor.sock` |
+| `--state-dir` | `<data-dir>/firecracker/state` |
+| `--chroot-base` | `<data-dir>/firecracker/jails` |
+| `--kernel`, `--initramfs` | The image's paths above |
+| `--uid`, `--gid` | `-firecracker-uid`, `-firecracker-gid`, default `990` |
+| `--uplink` | `-firecracker-uplink`, default the interface of the default route in `/proc/net/route` |
+| `--log-level` | The agent's `-log-level` |
+
+Its log goes to the agent's stderr. The agent waits up to 30s for it to serve
+and exits when it does not, or when it exits later; it sends the daemon
+`SIGTERM` when it stops, and the kernel does if the agent dies outright.
+MicroVMs outlive both.
+
+The agent's container takes, beyond what the [agent](agent.md#container) needs:
 
 | Setting | Why |
 |---|---|
-| `--privileged` | `/dev/kvm`, a writable `/sys/fs/cgroup`, device nodes in the jails, and the network changes in [Networking](#networking) |
+| `--privileged` | `/dev/kvm`, device nodes in the jails, and the network changes in [Networking](#networking) |
 | `--network host` | The taps, the nftables table and the Docker rules belong on the host, where microVM traffic flows |
 | `--pid host` | Each record keeps Firecracker's host pid, so a restarted daemon finds it, and the microVMs are not ended with the container |
-| `--cgroupns host` | Each microVM's cgroup is made under the path the agent names, a host path |
 | `/dev` mounted | Each root drive is a devmapper device made after the container started, which a privileged container's own `/dev` does not show |
-| `/run/vagabond-firecracker` mounted | The socket, which the agent names with `-firecracker` |
-| `--state-dir` and `--chroot-base` mounted | Records and output outlive the container, and the jails, which hold device nodes, sit on a filesystem that allows them |
-
-Start the agent with `-firecracker /run/vagabond-firecracker/executor.sock`
-once the daemon serves: it refuses to start when the daemon does not answer
-([Agent](agent.md#flags)). Under systemd, order the agent's unit after the
-daemon's, with `Requires=`.
+| `-data-dir` on a filesystem that allows device files | The jails hold device nodes; records and output outlive the container |
 
 ## Kernel
 

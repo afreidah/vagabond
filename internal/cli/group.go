@@ -11,7 +11,11 @@
 
 package cli
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/hashicorp/cli"
+)
 
 // -------------------------------------------------------------------------
 // CONSTANTS
@@ -92,7 +96,8 @@ func (c *groupCommand) Help() string {
 	return strings.TrimSpace(c.help)
 }
 
-// Run prints help, because a group on its own is not an instruction.
+// Run asks for help, because a group on its own is not an instruction; the
+// library prints it with the group's subcommands listed.
 func (c *groupCommand) Run(_ []string) int {
-	return c.Errorf("%s", c.Help())
+	return cli.RunResultHelp
 }

@@ -179,7 +179,7 @@ window.vagabondDiagram = {
     STARTUP: {
       title: 'vagabond-firecracker Starts',
       badge: 'entry', badgeText: 'daemon',
-      body: '<p>Parses its flags, sets up the network, reads every record in <code>--state-dir</code>, takes back the microVMs a previous daemon left, then serves. A record that cannot be read stops it, rather than lose the microVM it describes.</p><p>MicroVMs belong to their Firecracker processes, not to the daemon, so they keep running while it is stopped.</p><p><a href="../../docs/firecracker/#startup-sequence">Startup sequence &rarr;</a></p>'
+      body: '<p>Started by the agent with <code>-firecracker</code>, as its child. Parses its flags, sets up the network, reads every record in <code>--state-dir</code>, takes back the microVMs a previous daemon left, then serves. A record that cannot be read stops it, rather than lose the microVM it describes.</p><p>MicroVMs belong to their Firecracker processes, not to the daemon, so they keep running while it is stopped.</p><p><a href="../../docs/firecracker/#startup-sequence">Startup sequence &rarr;</a></p>'
     },
     NAT: {
       title: 'Forwarding, NAT Table, Docker Rules',

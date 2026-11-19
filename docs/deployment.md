@@ -57,17 +57,11 @@ make push DOCKER_REGISTRY=registry.internal   # linux/amd64 and linux/arm64, tag
 - An agent runs as root and privileged ([agent](agent.md)), so it needs the
   user overridden.
 
-The `vagabond-firecracker` image, amd64 only, holds the daemon that runs an
-agent's microVMs and everything it boots them from:
-
-```bash
-make firecracker-docker   # $(REGISTRY)/vagabond-firecracker:$(VERSION)
-make firecracker-push     # linux/amd64, tagged $(VERSION) and latest
-```
-
-It builds its two Rust binaries in a build stage and takes Firecracker, its
-jailer and the guest kernel from the pinned, checksummed downloads make
-fetches. How to run it: [vagabond-firecracker](firecracker.md#deployment).
+- The amd64 image also carries what an agent's `-firecracker` runs:
+  vagabond-firecracker and its initramfs, built from the Rust crate in a build
+  stage, and Firecracker, its jailer and the guest kernel from the pinned,
+  checksummed downloads make fetches. The arm64 image has none of it
+  ([vagabond-firecracker](firecracker.md#deployment)).
 
 ## Running the server
 
@@ -230,7 +224,7 @@ Certificates: [agent](agent.md#certificates).
 
 The server needs a `provider "homelab" { type = "containerd" }` block for
 anything to schedule there, and a `firecracker` one for microVMs on the nodes
-running [vagabond-firecracker](firecracker.md) beside the agent. Requirements,
+whose agents run with `-firecracker` ([vagabond-firecracker](firecracker.md)). Requirements,
 systemd unit, capacity and flags: [agent](agent.md).
 
 ## Sizing

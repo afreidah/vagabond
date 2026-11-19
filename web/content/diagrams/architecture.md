@@ -189,7 +189,7 @@ window.vagabondDiagram = {
     FIRECRACKER: {
       title: 'vagabond-firecracker',
       badge: 'data', badgeText: 'microVMs',
-      body: '<p>The daemon beside the agent, reached over ttRPC on a socket only root can open. It runs each workload the agent hands it in a Firecracker microVM of its own, booted from the image&rsquo;s devmapper snapshot, with its own kernel, jail, cgroup and tap behind NAT.</p><p>It keeps every record and watches timeouts itself, so its microVMs outlive both the agent and the daemon, which takes them back when it starts.</p><p><a href="../firecracker/">Firecracker diagram &rarr;</a></p>'
+      body: '<p>The daemon the agent starts with <code>-firecracker</code>, reached over ttRPC on a socket only root can open. It runs each workload the agent hands it in a Firecracker microVM of its own, booted from the image&rsquo;s devmapper snapshot, with its own kernel, jail, cgroup and tap behind NAT.</p><p>It keeps every record and watches timeouts itself, so its microVMs outlive both the agent and the daemon, which takes them back when it starts.</p><p><a href="../firecracker/">Firecracker diagram &rarr;</a></p>'
     }
   }
 };

@@ -55,7 +55,9 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=no -memory 12288 \
 | `-cpu <millicores>` | `0` (no cap; negative is the same) | Upper bound on capacity CPU. |
 | `-memory <MiB>` | `0` (no cap; negative is the same) | Upper bound on capacity memory. |
 | `-containerd <path>` | `/run/containerd/containerd.sock` | containerd's socket. |
-| `-firecracker <path>` | empty | vagabond-firecracker's socket, `/run/vagabond-firecracker/executor.sock` by its default. Runs workloads in microVMs as well as containers, their images' snapshots in the containerd namespace `vagabond-firecracker`. Off when empty. |
+| `-firecracker` | off | Runs workloads in microVMs as well as containers, through a [vagabond-firecracker](firecracker.md) the agent starts with its socket, records and jails under `<data-dir>/firecracker`, their images' snapshots in the containerd namespace `vagabond-firecracker`. The agent stops when the daemon exits, and the daemon with the agent. |
+| `-firecracker-uid <uid>`, `-firecracker-gid <gid>` | `990` | User and group Firecracker runs as. Give them to nothing else on the node. |
+| `-firecracker-uplink <interface>` | the default route's | Interface microVM traffic leaves through, behind NAT. |
 | `-data-dir <path>` | `/var/lib/vagabond` | Workload output, under `<data-dir>/logs`. Created mode `0750` if missing. In a container it must be the same path inside and out. |
 | `-cgroup-parent <path>` | empty | cgroup v2 path to create workloads under, prepared by the operator. Skips [cgroup delegation](#cgroup-delegation). |
 | `-log-level <level>` | `info` | `debug`, `info`, `warn` or `error`. Logs are text to stderr. |
@@ -71,10 +73,11 @@ The full CLI reference is in [CLI](cli.md).
 3. Delegate the agent's cgroup, unless `-cgroup-parent` is set
    ([Cgroup delegation](#cgroup-delegation)).
 4. Connect to containerd and create `<data-dir>/logs`.
-5. Re-arm the timeout of every workload already in the `vagabond` namespace
+5. With `-firecracker`, start vagabond-firecracker, its log on the agent's
+   stderr, and wait up to 30s for it to serve; then connect to containerd
+   again for the `vagabond-firecracker` namespace.
+6. Re-arm the timeout of every workload already in the `vagabond` namespace
    ([Agent restarts](#agent-restarts)).
-6. With `-firecracker`, connect to containerd again for the
-   `vagabond-firecracker` namespace.
 7. Log the node, then ask each executor what it is: containerd answers by its
    version; vagabond-firecracker by `Info`, once containerd's devmapper
    snapshotter is found loaded. What they answer, each executor's name and
@@ -241,7 +244,7 @@ docker run -d --name vagabond-agent --restart unless-stopped \
 | `-data-dir` mounted at the same path | containerd on the host writes workload output to the path the agent names, and the agent reads it back from the same path. |
 | `--cpus`, `--memory` | Become the container cgroup's limits, and so the node's capacity. Optional. |
 | `/etc/vagabond` mounted read-only | The CA and the node's certificate and key. The node's name comes from the certificate, not the container's hostname, which is its ID and changes when the container is recreated. |
-| With `-firecracker`: `/run/vagabond-firecracker` and `/dev` mounted | The daemon's socket, and the devmapper devices the agent's snapshots appear as after the container started. |
+| With `-firecracker`: `--pid=host` and `/dev` mounted | Each record keeps Firecracker's host pid, so a restarted daemon finds it, and the microVMs outlive the container; the devmapper devices the agent's snapshots appear as are made after the container started. amd64 images only. |
 
 ### Nomad
 
