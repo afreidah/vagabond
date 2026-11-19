@@ -19,7 +19,8 @@ window.vagabondDiagram = {
     '        CGROUP -->|no| DELEGATE[Delegate own cgroup:<br>leaf + controllers]:::process',
     '        CGROUP -->|yes| CTRD',
     '        DELEGATE --> CTRD[containerd: log dir,<br>Recover timeouts]:::process',
-    '        CTRD --> INFO[Each executor Info:<br>name, overhead]:::process',
+    '        CTRD --> FCSTART["-firecracker: start<br>vagabond-firecracker"]:::process',
+    '        FCSTART --> INFO[Each executor Info:<br>name, overhead]:::process',
     '        INFO --> DIAL[Dial the server:<br>mTLS + yamux]:::process',
     '        DIAL --> REPORT[Node.Register:<br>workload report]:::background',
     '    end',
@@ -103,6 +104,11 @@ window.vagabondDiagram = {
       badge: 'process', badgeText: 'executor',
       body: '<p><code>executor.New</code> connects to containerd on <code>-containerd</code> (default <code>/run/containerd/containerd.sock</code>) in the <code>vagabond</code> namespace and creates <code>&lt;data-dir&gt;/logs</code>, mode <code>0750</code> (default data dir <code>/var/lib/vagabond</code>).</p><p><code>Recover</code> lists every container in the namespace and re-arms each timeout from its <code>vagabond.timeout</code> and <code>vagabond.started</code> labels; one already past its deadline is stopped at once. Workloads belong to containerd, so they outlive an agent restart.</p><p>With <code>-firecracker</code>, <code>executor.NewFirecracker</code> connects to containerd again for the <code>vagabond-firecracker</code> namespace, where its images&rsquo; snapshots live. The agent then logs <code>node</code> with its name, pool, cpu, memory and cgroup parent.</p>'
     },
+    FCSTART: {
+      title: 'Start vagabond-firecracker',
+      badge: 'process', badgeText: 'agent child',
+      body: '<p>With <code>-firecracker</code>, the agent starts <code>vagabond-firecracker</code> from its own image as a child, its socket, records and jails under <code>&lt;data-dir&gt;/firecracker</code>, its log on the agent&rsquo;s stderr, and waits up to 30 s for it to serve. <code>-firecracker-uid</code> and <code>-firecracker-gid</code> (default 990) are Firecracker&rsquo;s user; <code>-firecracker-uplink</code> defaults to the default route&rsquo;s interface.</p><p>The agent exits when the daemon does, and sends it <code>SIGTERM</code> when it stops; the kernel does if the agent dies outright. MicroVMs outlive both. Without the flag this step is skipped.</p><p><a href="../../docs/firecracker/#deployment">Deployment &rarr;</a></p>'
+    },
     INFO: {
       title: 'Each Executor&rsquo;s Info',
       badge: 'process', badgeText: 'executors',
@@ -161,7 +167,7 @@ window.vagabondDiagram = {
     DAEMON: {
       title: 'vagabond-firecracker',
       badge: 'process', badgeText: 'daemon',
-      body: '<p>The daemon beside the agent, reached on <code>-firecracker</code>. It runs each workload in a microVM of its own, keeps every record, watches timeouts and follows output itself, so its microVMs outlive the agent and the daemon both.</p><p><code>Held</code> reports each microVM at its declared size plus <code>--vmm-overhead</code>, running until its Firecracker exits; <code>ReadLogs</code> serves the output from an offset.</p><p><a href="../../docs/firecracker/">vagabond-firecracker &rarr;</a></p>'
+      body: '<p>The daemon the agent starts as its child with <code>-firecracker</code>, on a socket under <code>&lt;data-dir&gt;/firecracker</code>; the agent stops when it exits. It runs each workload in a microVM of its own, keeps every record, watches timeouts and follows output itself, so its microVMs outlive the agent and the daemon both.</p><p><code>Held</code> reports each microVM at its declared size plus <code>--vmm-overhead</code>, running until its Firecracker exits; <code>ReadLogs</code> serves the output from an offset.</p><p><a href="../../docs/firecracker/">vagabond-firecracker &rarr;</a></p>'
     },
     MICROVM: {
       title: 'Workload MicroVM',

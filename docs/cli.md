@@ -914,7 +914,9 @@ snapshotter and a vagabond-firecracker answering on the socket too.
 | `-cpu <millicores>` | `0` (no cap) | Cap on CPU the agent offers |
 | `-memory <MiB>` | `0` (no cap) | Cap on memory the agent offers |
 | `-containerd <path>` | `/run/containerd/containerd.sock` | containerd socket |
-| `-firecracker <path>` | empty | vagabond-firecracker's socket, to run workloads in microVMs as well; off when empty |
+| `-firecracker` | off | Run workloads in microVMs as well, through a vagabond-firecracker the agent starts |
+| `-firecracker-uid <uid>`, `-firecracker-gid <gid>` | `990` | User and group Firecracker runs as |
+| `-firecracker-uplink <interface>` | the default route's | Interface microVM traffic leaves through |
 | `-data-dir <path>` | `/var/lib/vagabond` | Where workload output is kept. In a container, must be the same path inside and out |
 | `-cgroup-parent <path>` | agent's own cgroup | Operator-prepared cgroup to create workloads under, instead of delegating from the agent's own |
 | `-log-level <level>` | `info` | `debug`, `info`, `warn` or `error` |

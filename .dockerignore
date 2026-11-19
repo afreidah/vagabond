@@ -5,7 +5,7 @@ dist
 docs
 examples
 local
-rust
+rust/*/target
 scripts
 web
 vagabond

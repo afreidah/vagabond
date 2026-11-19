@@ -12,15 +12,18 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -66,14 +69,15 @@ Usage: vagabond agent [options]
 
   Runs the agent on this node: dials the server, registers the node into a
   pool, and runs the workloads the server sends it on the node's containerd,
-  and in Firecracker microVMs through vagabond-firecracker with -firecracker,
-  until interrupted. Workloads keep running if the agent stops, and it finds
-  them again when it starts.
+  and with -firecracker in Firecracker microVMs, through a vagabond-firecracker
+  it starts itself, until interrupted. Workloads keep running if the agent
+  stops, and it finds them again when it starts.
 
   Requires cgroup v2, access to containerd's socket, and permission to create
   cgroups under its own: Delegate=yes under systemd, or --cgroupns=host with
-  /sys/fs/cgroup writable in a container. -firecracker also requires
-  containerd's devmapper snapshotter.
+  /sys/fs/cgroup writable in a container. -firecracker also requires root,
+  /dev/kvm, containerd's devmapper snapshotter, and in a container the host's
+  PID namespace and /dev.
 
   Capacity is the smallest of the host's CPU and memory, the limits on the
   agent's cgroup, and -cpu and -memory.
@@ -99,10 +103,18 @@ Agent Options:
   -containerd <path>
     containerd's socket. Defaults to /run/containerd/containerd.sock.
 
-  -firecracker <path>
-    vagabond-firecracker's socket, to run workloads in Firecracker microVMs
-    as well as in containers. The agent does not start when it does not
-    answer. Off when unset.
+  -firecracker
+    Run workloads in Firecracker microVMs as well as in containers, through a
+    vagabond-firecracker the agent starts, keeping its state and jails under
+    <data-dir>/firecracker. The agent stops when it exits. Off by default.
+
+  -firecracker-uid <uid>, -firecracker-gid <gid>
+    The user and group Firecracker runs as, given to nothing else on the node.
+    Default 990.
+
+  -firecracker-uplink <interface>
+    The interface microVM traffic leaves through. Defaults to the default
+    route's.
 
   -data-dir <path>
     Where workload output is kept. Defaults to /var/lib/vagabond; in a
@@ -132,10 +144,12 @@ Agent Options:
 // or SIGTERM.
 func (c *AgentCommand) Run(args []string) int {
 	var (
-		server, pool, name, socket, firecracker, dataDir, cgroupParent, logLevel string
-		labels                                                                   metaFlags
-		caps                                                                     fingerprint.Caps
-		certs                                                                    tlsFlags
+		server, pool, name, socket, dataDir, cgroupParent, logLevel string
+		labels                                                      metaFlags
+		caps                                                        fingerprint.Caps
+		certs                                                       tlsFlags
+		firecracker                                                 bool
+		vmm                                                         executor.DaemonConfig
 	)
 
 	host, _ := os.Hostname()
@@ -148,7 +162,10 @@ func (c *AgentCommand) Run(args []string) int {
 	flags.Int64Var(&caps.CPU, "cpu", 0, "millicores the agent may use")
 	flags.Int64Var(&caps.Memory, "memory", 0, "MiB the agent may use")
 	flags.StringVar(&socket, "containerd", defaultContainerd, "containerd's socket")
-	flags.StringVar(&firecracker, "firecracker", "", "vagabond-firecracker's socket")
+	flags.BoolVar(&firecracker, "firecracker", false, "run workloads in Firecracker microVMs too")
+	flags.IntVar(&vmm.UID, "firecracker-uid", 990, "the user Firecracker runs as")
+	flags.IntVar(&vmm.GID, "firecracker-gid", 990, "the group Firecracker runs as")
+	flags.StringVar(&vmm.Uplink, "firecracker-uplink", "", "the interface microVM traffic leaves through")
 	flags.StringVar(&dataDir, "data-dir", defaultDataDir, "where workload output is kept")
 	flags.StringVar(&cgroupParent, "cgroup-parent", "", "a cgroup to create workloads under")
 	flags.StringVar(&logLevel, "log-level", "info", "debug, info, warn or error")
@@ -192,24 +209,29 @@ func (c *AgentCommand) Run(args []string) int {
 
 	defer func() { _ = exec.Close() }()
 
-	if err := exec.Recover(ctx); err != nil {
-		return c.Errorf("Finding workloads from before: %s", err)
-	}
-
 	execs := []agent.Executor{exec}
 
-	// MicroVMs as well, on a node running vagabond-firecracker.
-	if firecracker != "" {
-		vm, err := executor.NewFirecracker(executor.FirecrackerConfig{
-			Socket: firecracker, Containerd: socket, Namespace: firecrackerNamespace, Cgroup: parent,
-		})
-		if err != nil {
+	// MicroVMs as well, through a vagabond-firecracker of the agent's own, whose
+	// exit stops the agent rather than leave it running without them.
+	if firecracker {
+		vmm.Binary, vmm.Dir, vmm.LogLevel = "vagabond-firecracker", filepath.Join(dataDir, "firecracker"), logLevel
+
+		var (
+			vm   *executor.Firecracker
+			done func()
+		)
+
+		if ctx, vm, done, err = startFirecracker(ctx, &vmm, c.ErrStream, socket, parent); err != nil {
 			return c.Errorf("%s", err)
 		}
 
-		defer func() { _ = vm.Close() }()
+		defer done()
 
 		execs = append(execs, vm)
+	}
+
+	if err := exec.Recover(ctx); err != nil {
+		return c.Errorf("Finding workloads from before: %s", err)
 	}
 
 	logger := slog.New(slog.NewTextHandler(c.ErrStream, &slog.HandlerOptions{Level: level}))
@@ -224,11 +246,63 @@ func (c *AgentCommand) Run(args []string) int {
 		return c.Errorf("%s", err)
 	}
 
-	if err := a.Run(ctx); err != nil {
+	if err := ended(ctx, a.Run(ctx)); err != nil {
 		return c.Errorf("%s", err)
 	}
 
 	return ExitSuccess
+}
+
+// errExitedZero is the daemon's exit when it ended cleanly, which the agent
+// did not ask of it.
+var errExitedZero = errors.New("exit status 0")
+
+// startFirecracker starts the agent's vagabond-firecracker and an executor on
+// it, and returns ctx ended when the daemon exits, with a function that closes
+// the executor and stops the daemon.
+func startFirecracker(
+	ctx context.Context, vmm *executor.DaemonConfig, logs io.Writer, containerd, cgroup string,
+) (context.Context, *executor.Firecracker, func(), error) {
+	daemon, err := executor.StartDaemon(ctx, vmm, logs)
+	if err != nil {
+		return ctx, nil, nil, err
+	}
+
+	ctx, cancel := context.WithCancelCause(ctx)
+
+	go func() {
+		select {
+		case <-daemon.Done():
+			cancel(fmt.Errorf("vagabond-firecracker exited: %w", cmp.Or(daemon.Err(), errExitedZero)))
+		case <-ctx.Done():
+		}
+	}()
+
+	vm, err := executor.NewFirecracker(executor.FirecrackerConfig{
+		Socket: daemon.Socket, Containerd: containerd, Namespace: firecrackerNamespace, Cgroup: cgroup,
+	})
+	if err != nil {
+		cancel(nil)
+		_ = daemon.Stop()
+
+		return ctx, nil, nil, err
+	}
+
+	return ctx, vm, func() {
+		_ = vm.Close()
+		cancel(nil)
+		_ = daemon.Stop()
+	}, nil
+}
+
+// ended is what ended the agent: Run's own error, or the daemon's exit that
+// ended its context, but not a signal.
+func ended(ctx context.Context, err error) error {
+	if cause := context.Cause(ctx); err == nil && !errors.Is(cause, context.Canceled) {
+		return cause
+	}
+
+	return err
 }
 
 // -------------------------------------------------------------------------
