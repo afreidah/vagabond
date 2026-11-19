@@ -23,6 +23,7 @@ import (
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/state/postgres"
 	"github.com/afreidah/vagabond/internal/state/statetest"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -35,7 +36,7 @@ func leased(ctx context.Context, t *testing.T, store *postgres.Store) (execution
 	t.Helper()
 
 	d := &execution.Dispatch{
-		ID:         newID(t),
+		ID:         testkit.NewID(t),
 		Namespace:  "ci",
 		Job:        "go-test",
 		Tasks:      1,
@@ -58,7 +59,7 @@ func pendingRecord(t *testing.T, dispatch execution.ID) *execution.Record {
 	t.Helper()
 
 	return &execution.Record{
-		ID:        newID(t),
+		ID:        testkit.NewID(t),
 		State:     execution.StatePending,
 		UpdatedAt: time.Now().UTC().Truncate(time.Microsecond),
 		Namespace: "ci",
@@ -95,7 +96,7 @@ func TestExecutions_RoundTrip(t *testing.T) {
 			dispatch, lease := leased(ctx, t, store)
 
 			r := pendingRecord(t, dispatch)
-			r.Previous = newID(t)
+			r.Previous = testkit.NewID(t)
 			r.Attempt = 2
 
 			if err := store.Create(ctx, r, lease); err != nil {
@@ -195,7 +196,7 @@ func TestExecutions_GetUnknown(t *testing.T) {
 			ctx := context.Background()
 			store := open(ctx, t, e)
 
-			if _, err := store.Get(ctx, newID(t)); !errors.Is(err, execution.ErrNotFound) {
+			if _, err := store.Get(ctx, testkit.NewID(t)); !errors.Is(err, execution.ErrNotFound) {
 				t.Errorf("Get() = %v, want ErrNotFound", err)
 			}
 		})

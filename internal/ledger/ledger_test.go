@@ -20,6 +20,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/quota"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -115,18 +116,6 @@ func onStore(t *testing.T, at time.Time, store Store) *Ledger {
 	return l
 }
 
-// newID mints an execution ID, failing the test if it cannot.
-func newID(t *testing.T) execution.ID {
-	t.Helper()
-
-	id, err := execution.NewID()
-	if err != nil {
-		t.Fatalf("NewID() = %v", err)
-	}
-
-	return id
-}
-
 // reserve charges e to provider in ns, failing the test on any error.
 func reserve(t *testing.T, l *Ledger, id execution.ID, provider string, e quota.Execution) {
 	t.Helper()
@@ -180,7 +169,7 @@ func TestNew_FailsWhenTheStoreCannotBeRead(t *testing.T) {
 func TestReserve_ChargesEveryPoolTheExecutionTouches(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, nil)
 
-	reserve(t, l, newID(t), "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second})
+	reserve(t, l, testkit.NewID(t), "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second})
 
 	usage := total(l, "fn")
 
@@ -197,7 +186,7 @@ func TestReserve_ChargesEveryPoolTheExecutionTouches(t *testing.T) {
 func TestReserve_RefusedChargesNothing(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, Usage{fnCompute: 400_000 * gbSeconds})
 
-	err := l.Reserve(t.Context(), newID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, false)
+	err := l.Reserve(t.Context(), testkit.NewID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, false)
 
 	var refusal *Refusal
 	if !errors.As(err, &refusal) {
@@ -219,7 +208,7 @@ func TestReserve_PayingJobGoesPastTheLimit(t *testing.T) {
 	spent := int64(400_000 * gbSeconds)
 	l, _ := newLedger(t, midSeptember, Usage{fnCompute: spent})
 
-	if err := l.Reserve(t.Context(), newID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, true); err != nil {
+	if err := l.Reserve(t.Context(), testkit.NewID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, true); err != nil {
 		t.Fatalf("Reserve() for a paying job = %v, want it charged", err)
 	}
 
@@ -233,7 +222,7 @@ func TestReserve_PayingJobGoesPastTheLimit(t *testing.T) {
 func TestReserve_IgnoresPoolsTheExecutionMisses(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, Usage{fnCompute: 400_000 * gbSeconds})
 
-	reserve(t, l, newID(t), "fn", quota.Execution{Memory: 1024})
+	reserve(t, l, testkit.NewID(t), "fn", quota.Execution{Memory: 1024})
 }
 
 // A provider with no budgets, or none configured at all, reserves without error.
@@ -243,7 +232,7 @@ func TestReserve_ProvidersWithNothingToEnforce(t *testing.T) {
 
 	for _, provider := range []string{"unlimited", "never-configured"} {
 		t.Run(provider, func(t *testing.T) {
-			reserve(t, l, newID(t), provider, task)
+			reserve(t, l, testkit.NewID(t), provider, task)
 		})
 	}
 }
@@ -255,9 +244,9 @@ func TestReserve_RefusedByAChargeTheSnapshotMissed(t *testing.T) {
 	first := onStore(t, midSeptember, store)
 	second := onStore(t, midSeptember, store)
 
-	reserve(t, first, newID(t), "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second})
+	reserve(t, first, testkit.NewID(t), "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second})
 
-	err := second.Reserve(t.Context(), newID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, false)
+	err := second.Reserve(t.Context(), testkit.NewID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, false)
 
 	if _, ok := errors.AsType[*Refusal](err); !ok {
 		t.Errorf("Reserve() = %v, want a refusal from the other ledger's charge", err)
@@ -272,7 +261,7 @@ func TestReserve_RefusedByAChargeTheSnapshotMissed(t *testing.T) {
 // the allowance back.
 func TestSettle_CorrectsDownToActual(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, nil)
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	reserve(t, l, id, "fn", quota.Execution{Memory: 1024, Duration: 15 * time.Minute})
 	settle(t, l, id, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second})
@@ -292,7 +281,7 @@ func TestSettle_CorrectsDownToActual(t *testing.T) {
 // time-metered pool and still cost something.
 func TestSettle_ChargesAPoolTheReservationMissed(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, nil)
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	reserve(t, l, id, "fn", quota.Execution{Memory: 1024})
 
@@ -311,7 +300,7 @@ func TestSettle_ChargesAPoolTheReservationMissed(t *testing.T) {
 // cannot credit a period that never paid for it.
 func TestSettle_ChargesThePeriodItWasReservedIn(t *testing.T) {
 	l, store := newLedger(t, lastOfMonth, nil)
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	reserve(t, l, id, "fn", quota.Execution{Memory: 1024, Duration: 15 * time.Minute})
 
@@ -331,7 +320,7 @@ func TestSettle_ChargesThePeriodItWasReservedIn(t *testing.T) {
 // Settling twice, as a runner restored after its settle may, charges once.
 func TestSettle_IsIdempotent(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, nil)
-	id := newID(t)
+	id := testkit.NewID(t)
 	actual := quota.Execution{Memory: 1024, Duration: 10 * time.Second}
 
 	reserve(t, l, id, "fn", quota.Execution{Memory: 1024, Duration: 15 * time.Minute})
@@ -347,7 +336,7 @@ func TestSettle_IsIdempotent(t *testing.T) {
 func TestSettle_UnknownExecutionIsNoOp(t *testing.T) {
 	l, store := newLedger(t, midSeptember, nil)
 
-	settle(t, l, newID(t), "fn", quota.Execution{Memory: 1024, Duration: time.Hour})
+	settle(t, l, testkit.NewID(t), "fn", quota.Execution{Memory: 1024, Duration: time.Hour})
 
 	if got := len(store.used); got != 0 {
 		t.Errorf("store holds %d counters after settling nothing", got)
@@ -359,7 +348,7 @@ func TestSettle_UnknownExecutionIsNoOp(t *testing.T) {
 func TestUnsettledExecutionStaysCharged(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, nil)
 
-	reserve(t, l, newID(t), "fn", quota.Execution{Memory: 1024, Duration: 15 * time.Minute})
+	reserve(t, l, testkit.NewID(t), "fn", quota.Execution{Memory: 1024, Duration: 15 * time.Minute})
 
 	want := int64(900 * gbSeconds) // 15 minutes at one gibibyte
 
@@ -379,7 +368,7 @@ var tenGBSeconds = quota.Execution{Memory: 1024, Duration: 10 * time.Second}
 func TestReserve_ChargesTheTotalAndTheShare(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, nil)
 
-	if err := l.Reserve(t.Context(), newID(t), "ci", "fn", tenGBSeconds, false); err != nil {
+	if err := l.Reserve(t.Context(), testkit.NewID(t), "ci", "fn", tenGBSeconds, false); err != nil {
 		t.Fatalf("Reserve() = %v", err)
 	}
 
@@ -397,10 +386,11 @@ func TestReserve_ChargesTheTotalAndTheShare(t *testing.T) {
 // Shares are independent: one namespace spending its own does not refuse
 // another.
 func TestReserve_ShareRefusesItsOwnNamespaceOnly(t *testing.T) {
-	ciCompute := Key{Namespace: "ci", Provider: "fn", Pool: "compute", Period: "2026-09"}
-	l, _ := newLedger(t, midSeptember, Usage{ciCompute: 299_995 * gbSeconds})
+	l, _ := newLedger(t, midSeptember, Usage{
+		{Namespace: "ci", Provider: "fn", Pool: "compute", Period: "2026-09"}: 299_995 * gbSeconds,
+	})
 
-	err := l.Reserve(t.Context(), newID(t), "ci", "fn", tenGBSeconds, false)
+	err := l.Reserve(t.Context(), testkit.NewID(t), "ci", "fn", tenGBSeconds, false)
 
 	var refusal *Refusal
 	if !errors.As(err, &refusal) || refusal.Namespace != "ci" {
@@ -411,7 +401,7 @@ func TestReserve_ShareRefusesItsOwnNamespaceOnly(t *testing.T) {
 		t.Errorf("Refusal.Error() = %q, want it to name the namespace", err)
 	}
 
-	if err := l.Reserve(t.Context(), newID(t), "batch", "fn", tenGBSeconds, false); err != nil {
+	if err := l.Reserve(t.Context(), testkit.NewID(t), "batch", "fn", tenGBSeconds, false); err != nil {
 		t.Errorf("Reserve() in batch = %v, want it to fit", err)
 	}
 }
@@ -421,7 +411,7 @@ func TestReserve_ShareRefusesItsOwnNamespaceOnly(t *testing.T) {
 func TestReserve_TotalBindsAcrossShares(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, Usage{fnCompute: 399_995 * gbSeconds})
 
-	err := l.Reserve(t.Context(), newID(t), "ci", "fn", tenGBSeconds, false)
+	err := l.Reserve(t.Context(), testkit.NewID(t), "ci", "fn", tenGBSeconds, false)
 
 	var refusal *Refusal
 	if !errors.As(err, &refusal) || refusal.Namespace != Total {
@@ -432,7 +422,7 @@ func TestReserve_TotalBindsAcrossShares(t *testing.T) {
 // Settling corrects both layers.
 func TestSettle_CorrectsTheShareToo(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, nil)
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	if err := l.Reserve(t.Context(), id, "ci", "fn", quota.Execution{Memory: 1024, Duration: 15 * time.Minute}, false); err != nil {
 		t.Fatalf("Reserve() = %v", err)
@@ -465,7 +455,7 @@ func (unwritable) Settle(context.Context, execution.ID, map[PoolRef]int64) error
 // execution count included.
 func TestDrop_ChargesNothing(t *testing.T) {
 	l, store := newLedger(t, midSeptember, nil)
-	id := newID(t)
+	id := testkit.NewID(t)
 
 	reserve(t, l, id, "container", quota.Execution{CPU: 1000, Memory: 512, Duration: 15 * time.Minute})
 
@@ -492,7 +482,7 @@ func TestDrop_FailsWhenTheStoreCannotWrite(t *testing.T) {
 		t.Fatalf("New() = %v", err)
 	}
 
-	if err := l.Drop(t.Context(), newID(t)); !errors.Is(err, errStoreDown) {
+	if err := l.Drop(t.Context(), testkit.NewID(t)); !errors.Is(err, errStoreDown) {
 		t.Errorf("Drop() = %v, want the write failure", err)
 	}
 }
@@ -508,7 +498,7 @@ func reaped(t *testing.T, orphaned bool) (*Ledger, *Memory, int) {
 
 	l, store := newLedger(t, midSeptember.Add(-StaleAfter-time.Minute), nil)
 
-	reserve(t, l, newID(t), "container", quota.Execution{CPU: 1000, Memory: 512, Duration: 15 * time.Minute})
+	reserve(t, l, testkit.NewID(t), "container", quota.Execution{CPU: 1000, Memory: 512, Duration: 15 * time.Minute})
 
 	l.now = func() time.Time { return midSeptember }
 
@@ -555,7 +545,7 @@ func TestReap_DropsAnOrphanAtNothing(t *testing.T) {
 func TestReap_SkipsRecentReservations(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, nil)
 
-	reserve(t, l, newID(t), "fn", quota.Execution{Memory: 1024, Duration: time.Minute})
+	reserve(t, l, testkit.NewID(t), "fn", quota.Execution{Memory: 1024, Duration: time.Minute})
 
 	asked := false
 
@@ -582,7 +572,7 @@ func TestReap_SkipsRecentReservations(t *testing.T) {
 func TestRefusal_ErrorReportsNaturalUnits(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, Usage{fnCompute: 399_995 * gbSeconds})
 
-	err := l.Reserve(t.Context(), newID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, false)
+	err := l.Reserve(t.Context(), testkit.NewID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, false)
 	if err == nil {
 		t.Fatal("Reserve() admitted an execution with no room")
 	}
@@ -599,7 +589,7 @@ func TestRefusal_ErrorReportsNaturalUnits(t *testing.T) {
 func TestRefusal_ErrorFloorsWhatIsLeftAtZero(t *testing.T) {
 	l, _ := newLedger(t, midSeptember, Usage{fnCompute: 400_100 * gbSeconds})
 
-	err := l.Reserve(t.Context(), newID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, false)
+	err := l.Reserve(t.Context(), testkit.NewID(t), ns, "fn", quota.Execution{Memory: 1024, Duration: 10 * time.Second}, false)
 	if err == nil {
 		t.Fatal("Reserve() admitted an execution past the limit")
 	}

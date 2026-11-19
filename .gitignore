@@ -3,7 +3,7 @@
 *.test
 coverage.out
 integration-coverage.out
-containerd-coverage.out
+executor-coverage.out
 rust-coverage.lcov
 firecracker-coverage.lcov
 dist/

@@ -111,7 +111,7 @@ func (p *Provider) Name() string {
 }
 
 // Capabilities reports what Lambda can do. Constants: nothing here varies by
-// account.
+// account. Each execution environment is a Firecracker microVM of its own.
 func (p *Provider) Capabilities(context.Context) (plugin.Capabilities, error) {
 	return plugin.Capabilities{
 		Drivers:       []job.DriverName{job.DriverFunction},
@@ -122,6 +122,7 @@ func (p *Provider) Capabilities(context.Context) (plugin.Capabilities, error) {
 
 		InternetEgress:  true,
 		ArbitraryImages: false,
+		Isolation:       plugin.IsolationVM,
 
 		ObservedAt: time.Now(),
 	}, nil

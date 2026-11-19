@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -109,7 +110,7 @@ func stream(t *testing.T, p *Provider, offset int64) (string, error) {
 
 	var out bytes.Buffer
 
-	err := p.StreamLogs(t.Context(), newID(t), offset, &out)
+	err := p.StreamLogs(t.Context(), testkit.NewID(t), offset, &out)
 
 	return out.String(), err
 }
@@ -231,7 +232,7 @@ func TestStreamLogs_ReportsAFailedWrite(t *testing.T) {
 		"backfill": {pages: []any{page("", keyed("one", "1"))}, tail: `[]`},
 		"tail":     {pages: []any{page("")}, tail: tailOf(t, keyed("one", "1"))},
 	} {
-		err := newLogging(t, f).StreamLogs(t.Context(), newID(t), 0, gone)
+		err := newLogging(t, f).StreamLogs(t.Context(), testkit.NewID(t), 0, gone)
 		if classOf(err) != plugin.ClassInternal || errors.Is(err, plugin.ErrNoResume) {
 			t.Errorf("%s: StreamLogs() = %v, want an Internal error", name, err)
 		}

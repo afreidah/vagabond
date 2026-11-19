@@ -8,6 +8,7 @@
 // guest protocol to vagabond-firecracker over vsock until told to shut down.
 // -------------------------------------------------------------------------------
 
+use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitCode, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -17,7 +18,7 @@ use nix::sys::reboot::{RebootMode, reboot};
 use nix::sys::signal::{Signal, kill};
 use nix::sys::termios::tcdrain;
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
-use nix::unistd::{Pid, chdir, chroot, sync};
+use nix::unistd::{Gid, Pid, Uid, chdir, chroot, setgid, setgroups, setuid, sync};
 use tokio::io::AsyncReadExt;
 use tokio::net::unix::pipe;
 use tokio::signal::unix::{SignalKind, signal};
@@ -174,7 +175,9 @@ impl GuestService {
 }
 
 // spawn starts the workload with only its own environment, stdout and stderr
-// sharing one pipe, and returns its pid and the pipe's read end.
+// sharing one pipe, as the image's user, and returns its pid and the pipe's
+// read end. The groups are set before the group, and the group before the
+// user, as each needs the root the next gives up.
 fn spawn(process: &Process) -> std::io::Result<(Pid, pipe::Receiver)> {
     let (program, args) = process.args.split_first().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "no program to run")
@@ -189,8 +192,35 @@ fn spawn(process: &Process) -> std::io::Result<(Pid, pipe::Receiver)> {
         .stdin(Stdio::null())
         .stdout(output.try_clone()?)
         .stderr(output);
+
+    // A working directory the image lacks is made, owned by root and 0755 under
+    // init's umask, so the task starts in it as it would in a container.
     if !process.working_dir.is_empty() {
+        std::fs::create_dir_all(&process.working_dir)
+            .map_err(context(format!("creating {}", process.working_dir)))?;
         command.current_dir(&process.working_dir);
+    }
+
+    // Only root can take on another user, as init always is inside a microVM.
+    if Uid::effective().is_root() {
+        let (uid, gid) = (Uid::from_raw(process.uid), Gid::from_raw(process.gid));
+        let groups: Vec<Gid> = process
+            .additional_gids
+            .iter()
+            .map(|&group| Gid::from_raw(group))
+            .collect();
+
+        // SAFETY: between fork and exec the closure makes only the setgroups,
+        // setgid and setuid system calls, which are async-signal-safe, on values
+        // made before the fork, so it allocates and locks nothing.
+        unsafe {
+            command.pre_exec(move || {
+                setgroups(&groups)?;
+                setgid(gid)?;
+                setuid(uid)?;
+                Ok(())
+            });
+        }
     }
     let child = command.spawn()?;
     Ok((Pid::from_raw(child.id() as i32), receiver))

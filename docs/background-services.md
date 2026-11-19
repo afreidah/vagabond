@@ -22,7 +22,7 @@ Interactive version, with notes on each loop:
 
 | Service | Interval | At startup | Touches | On failure |
 |---|---|---|---|---|
-| [Capability refresh](#capability-refresh) | 1m | Yes, before serving | Every provider's `Capabilities` but a `containerd` one's, read live | Provider marked unhealthy, warn |
+| [Capability refresh](#capability-refresh) | 1m | Yes, before serving | Every provider's `Capabilities` but a `containerd` or `firecracker` one's, read live | Provider marked unhealthy, warn |
 | [Usage snapshot refresh](#usage-snapshot-refresh) | 15s | Yes, required | Store: quota usage and reservations | Last snapshot kept, warn |
 | [Reservation reaper](#reservation-reaper) | 5m | Yes, before serving | Store: reservations over 1h old and their execution records | Reservation kept, warn |
 | [Dispatch claim](#dispatch-claim) | 30s | Yes, before serving | Store: dispatches not done with a lapsed lease | Warn, retried next tick |
@@ -39,9 +39,13 @@ Interactive version, with notes on each loop:
 | Service | Interval | Touches | On failure |
 |---|---|---|---|
 | [Server connection](#server-connection) | Reconnect backoff 1s to 30s | Server's agent address | Warn, dial again |
-| [Workload report](#workload-report) | 10s, and on every change | containerd; server `Register` | Warn, next report carries everything |
-| [Log stream](#log-stream) | 250ms, per followed workload | Log file; containerd task | Stream ends with an error |
-| [Timeout watcher](#timeout-watcher) | Per workload | containerd task | Workload left running |
+| [Workload report](#workload-report) | 10s, and on every change | containerd, vagabond-firecracker; server `Register` | Warn, next report carries everything |
+| [Log stream](#log-stream) | 250ms, per followed workload | Log file or `ReadLogs`; containerd task | Stream ends with an error |
+| [Timeout watcher](#timeout-watcher) | Per container | containerd task | Workload left running |
+
+vagabond-firecracker watches its own microVMs' timeouts and follows their
+output itself ([Workloads](firecracker.md#workloads)), so a microVM's deadline
+holds while the agent is down.
 
 **Not loops:** node reservation expiry is checked when a node's room is read,
 not swept ([Node reservations](#node-reservations)).
@@ -67,7 +71,7 @@ every plan and dispatch.
 | Interval | 1m |
 | At startup | Once while loading configuration, before the server is built |
 | Timeout | 30s per provider; providers are asked in parallel |
-| Skips | Disabled providers, and `containerd` providers, whose capabilities are built from connected nodes on every read |
+| Skips | Disabled providers, and `containerd` and `firecracker` providers, whose capabilities are built from connected nodes on every read |
 
 - A provider that answers is marked healthy and its capabilities replaced.
 - A provider that fails is marked unhealthy and keeps its last capabilities.
@@ -343,8 +347,8 @@ Holds one session to the server and dials again whenever it drops.
 
 - A dial or registration failure counts as a failed connection and grows the
   backoff.
-- Workloads keep running while disconnected; they belong to containerd, and
-  the agent reports them when it reconnects.
+- Workloads keep running while disconnected; they belong to containerd and
+  vagabond-firecracker, and the agent reports them when it reconnects.
 
 **Logs:** info `connected` with `server`, `name` and `pool`; warn `lost the
 server` with `server`; warn `connecting to the server` with `server`, `error`
@@ -352,15 +356,16 @@ and `retry` (the next wait).
 
 ### Workload report
 
-Re-registers the node with every workload containerd holds, each with its
-declared CPU and memory and whether it is still running. The server sizes the
-node's free room from these reports.
+Re-registers the node with every workload its executors hold, each with what
+it takes, its declared CPU and memory and its executor's overhead, and
+whether it is still running. The server sizes the node's free room from these
+reports.
 
 | | |
 |---|---|
 | Interval | 10s |
 | Also | On connecting, after every submit that succeeds, and after every cancel or release, whether or not it succeeded |
-| Touches | containerd container list; server `Register` |
+| Touches | containerd container list, vagabond-firecracker's `Held`; server `Register` |
 
 - Change signals coalesce: one pending signal covers any number of changes.
 - The 10s report catches a workload finishing on its own.
@@ -392,14 +397,15 @@ run that long.
 
 ### Log stream
 
-One goroutine per server `StreamLogs` call, copying the workload's log file
-from the requested offset as it grows.
+One goroutine per server `StreamLogs` call, copying the workload's output from
+the requested offset as it grows: a container's log file, or a microVM's
+output through vagabond-firecracker's `ReadLogs`.
 
 | | |
 |---|---|
-| Interval | 250ms between reads, each followed by a task status check |
+| Interval | 250ms between reads, each followed by a task status check for a container; for a microVM, only when a read brought nothing new |
 | Ends | After a last read once the workload is terminal or released, or when the server stops listening |
-| Touches | `<data-dir>/logs/<id>.log`; containerd task status |
+| Touches | `<data-dir>/logs/<id>.log` and containerd task status; or vagabond-firecracker's `ReadLogs` |
 
 **Logs:** none on the agent; the server logs a broken stream.
 

@@ -2,10 +2,10 @@
 title: "Live Output"
 linkTitle: "Live Output"
 description: "Interactive diagram of a running execution's output from the provider through the server's follow route to the CLI, with resume, the Cloud Run backfill, the stored copy and 416."
-weight: 6
+weight: 7
 ---
 
-How a running execution's output reaches the terminal: the CLI follower, the server's follow route, the containerd, Cloud Run and Code Engine streams behind it, and the stored copy that finishes what did not stream. Every stream starts at the first byte the task printed, so a byte count is a position in all of them. **Hover over any component** for implementation details.
+How a running execution's output reaches the terminal: the CLI follower, the server's follow route, the agent node, Cloud Run and Code Engine streams behind it, and the stored copy that finishes what did not stream. Every stream starts at the first byte the task printed, so a byte count is a position in all of them. **Hover over any component** for implementation details.
 
 {{< diagram >}}
 
@@ -36,9 +36,10 @@ window.vagabondDiagram = {
     '        R416[416 Range Not<br>Satisfiable]:::reject',
     '    end',
     '',
-    '    subgraph POOLSIDE [containerd provider and agent]',
-    '        POOLSL["containerd StreamLogs:<br>the node on the record"]:::process -->|"StreamLogs<br>with offset"| AGENTSL["Agent: seek offset,<br>poll 250 ms"]:::process',
-    '        AGENTSL --> LOGFILE[(Workload<br>log file)]:::storage',
+    '    subgraph POOLSIDE [Node providers and agent]',
+    '        POOLSL["Node StreamLogs:<br>the node on the record"]:::process -->|"StreamLogs<br>with offset"| AGENTSL["Agent: the executor<br>holding it, poll 250 ms"]:::process',
+    '        AGENTSL -->|container| LOGFILE[(Workload<br>log file)]:::storage',
+    '        AGENTSL -->|"microVM:<br>ReadLogs"| VMLOG[("vagabond-firecracker:<br>output.log")]:::storage',
     '    end',
     '',
     '    subgraph GCPSIDE [Cloud Run provider]',
@@ -57,7 +58,7 @@ window.vagabondDiagram = {
     '',
     '    FOLLOWER -->|"follow=true,<br>offset=N"| ROUTE',
     '    REST -->|"offset=N"| ROUTE',
-    '    FOLLOW -->|containerd| POOLSL',
+    '    FOLLOW -->|"containerd,<br>firecracker"| POOLSL',
     '    FOLLOW -->|Cloud Run| TAIL',
     '    FOLLOW -->|Code Engine| CESL',
     '    NORESUME --> R416',
@@ -145,19 +146,24 @@ window.vagabondDiagram = {
       body: '<p><code>this provider&#39;s log stream cannot resume from an offset</code>, as the JSON error body, sent only when nothing has been written yet.</p><p>The CLI follow stops streaming that execution and does not reopen it. Once the execution has a result, the rest is read from the stored copy with <code>?offset=</code> set to the bytes streamed, which places it exactly.</p>'
     },
     POOLSL: {
-      title: 'containerd StreamLogs',
-      badge: 'process', badgeText: 'containerd provider',
-      body: '<p><code>pool.Provider.StreamLogs</code> goes to the node the execution&rsquo;s record names. One that is not connected fails <code>node &lt;name&gt; is not connected</code>, which ends the response early. Otherwise it opens <code>AgentExecutions.StreamLogs</code> with <code>execution_id</code> and <code>offset</code> down the agent&rsquo;s session and writes each <code>LogChunk</code> to the response until the agent ends the stream.</p><p>The provider honours <code>offset</code>, so a reopened stream resumes exactly where the last one stopped. Its <code>ReadLogs</code> is the same stream from offset 0, which ends once the workload has.</p><p><a href="../agents/">Agents and pools diagram &rarr;</a></p>'
+      title: 'Node StreamLogs',
+      badge: 'process', badgeText: 'node provider',
+      body: '<p><code>pool.Provider.StreamLogs</code>, for <code>containerd</code> and <code>firecracker</code> providers alike, goes to the node the execution&rsquo;s record names. One that is not connected fails <code>node &lt;name&gt; is not connected</code>, which ends the response early. Otherwise it opens <code>AgentExecutions.StreamLogs</code> with <code>execution_id</code> and <code>offset</code> down the agent&rsquo;s session and writes each <code>LogChunk</code> to the response until the agent ends the stream.</p><p>The provider honours <code>offset</code>, so a reopened stream resumes exactly where the last one stopped. Its <code>ReadLogs</code> is the same stream from offset 0, which ends once the workload has.</p><p><a href="../agents/">Agents and pools diagram &rarr;</a></p>'
     },
     AGENTSL: {
-      title: 'Agent: Seek Offset, Poll 250 ms',
+      title: 'Agent: the Executor Holding It',
       badge: 'process', badgeText: 'agent',
-      body: '<p><code>Containerd.Logs</code> opens <code>&lt;data-dir&gt;/logs/&lt;execution-id&gt;.log</code>, seeks to <code>offset</code>, and sends what is there. Between copies it reads the workload&rsquo;s state, waiting 250 ms while it runs.</p><p>Once the workload is terminal, or released since the last copy, it sends whatever the file still holds and returns, which ends the stream and the response. No log file is <code>Internal</code>. An agent that predates <code>offset</code> streams from byte 0.</p><p><a href="../../docs/agent/#output">Agent output &rarr;</a></p>'
+      body: '<p>The agent asks each executor in turn; one that does not hold the execution says so before writing anything. For a container, <code>Containerd.Logs</code> opens <code>&lt;data-dir&gt;/logs/&lt;execution-id&gt;.log</code>, seeks to <code>offset</code>, and sends what is there, reading the workload&rsquo;s state between copies and waiting 250 ms while it runs. For a microVM, the firecracker executor reads vagabond-firecracker&rsquo;s <code>ReadLogs</code> from <code>offset</code> until it reports the output ended, waiting 250 ms only when a read brought nothing new.</p><p>Once the workload is terminal, or released since the last copy, it sends what is left and returns, which ends the stream and the response. A container with no log yet has written nothing.</p><p><a href="../../docs/agent/#output">Agent output &rarr;</a></p>'
     },
     LOGFILE: {
       title: 'Workload Log File',
       badge: 'storage', badgeText: 'node disk',
       body: '<p>containerd writes the container&rsquo;s stdout and stderr to the file itself, so output keeps landing while the agent or the server is down, and a reopened stream can read it from any offset.</p><p>Dispatch reads it whole through the same stream once the workload ends, before <code>Release</code> deletes it.</p>'
+    },
+    VMLOG: {
+      title: 'MicroVM Output',
+      badge: 'storage', badgeText: 'node disk',
+      body: '<p>vagabond-firecracker copies a microVM&rsquo;s stdout and stderr from its guest to <code>&lt;state-dir&gt;/&lt;execution-id&gt;/output.log</code> as they are written, so output keeps landing while the agent or the server is down. <code>ReadLogs</code> returns it from an offset, up to 64 KiB a call, and <code>ended</code> once the workload has ended and the offset reached the end.</p><p>Kept whole until <code>Release</code>.</p><p><a href="../firecracker/">Firecracker diagram &rarr;</a></p>'
     },
     TAIL: {
       title: 'Open entries:tail, Queue What Arrives',

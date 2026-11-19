@@ -47,21 +47,27 @@ const ROOT_DRIVE: &str = "/rootfs";
 const VSOCK: &str = "/v.sock";
 const CONFIG_FILE: &str = "/config.json";
 
-// launch starts the microVM a record describes: its jail, cgroup and tap, then
-// the jailer, which moves into the cgroup, drops to Firecracker's user and
-// becomes Firecracker, booting at once. It returns Firecracker's process. The
-// jailer's errors and the guest's console go to console.log beside the record.
+// launch starts the microVM a record describes, its root on root_drive, of
+// filesystem root_fstype: its jail, cgroup and tap, then the jailer, which
+// moves into the cgroup, drops to Firecracker's user and becomes Firecracker,
+// booting at once. It returns Firecracker's process. The jailer's errors and
+// the guest's console go to console.log beside the record.
 pub async fn launch(
     config: Arc<Config>,
     record: &Record,
     root_drive: &Path,
+    root_fstype: &str,
 ) -> io::Result<Firecracker> {
     // The jail, a kernel copied across filesystems among it, the cgroup and the
     // console are written on a blocking thread, keeping the runtime's free.
-    let (owned, drive) = (record.clone(), root_drive.to_path_buf());
+    let (owned, drive, fstype) = (
+        record.clone(),
+        root_drive.to_path_buf(),
+        root_fstype.to_string(),
+    );
     let written = Arc::clone(&config);
     let console = tokio::task::spawn_blocking(move || {
-        prepare_jail(&written, &owned, &drive)?;
+        prepare_jail(&written, &owned, &drive, &fstype)?;
         create_cgroup(&written, &owned)?;
         let console = console_path(&written, &owned.execution_id);
         fs::File::create(&console).map_err(context(format!("creating {}", console.display())))
@@ -132,7 +138,7 @@ pub struct Firecracker {
 
 impl Firecracker {
     // of is the process with pid as it is now, or None when there is none.
-    fn of(pid: i32) -> Option<Firecracker> {
+    pub(crate) fn of(pid: i32) -> Option<Firecracker> {
         start_time(pid).map(|started| Firecracker { pid, started })
     }
 
@@ -142,9 +148,9 @@ impl Firecracker {
         start_time(self.pid) == Some(self.started)
     }
 
-    // stopped waits for a killed Firecracker to exit, as its cgroup cannot be
-    // removed until then, failing after STOP_WAIT.
-    async fn stopped(&self) -> io::Result<()> {
+    // stopped waits for the process to exit, as a killed one does before its
+    // cgroup can be removed, failing after STOP_WAIT.
+    pub async fn stopped(&self) -> io::Result<()> {
         tokio::time::timeout(STOP_WAIT, self.exited())
             .await
             .map_err(|_| io::Error::other(format!("Firecracker {} did not exit", self.pid)))
@@ -210,8 +216,13 @@ fn link_or_copy(from: &Path, to: &Path) -> io::Result<()> {
 // prepare_jail fills a microVM's jail before the jailer starts it, since
 // Firecracker boots from its configuration as soon as it runs: the kernel and
 // initramfs, the root drive as a device node only Firecracker's user may open,
-// and the configuration.
-fn prepare_jail(config: &Config, record: &Record, root_drive: &Path) -> io::Result<()> {
+// and the configuration, naming the drive's filesystem.
+fn prepare_jail(
+    config: &Config,
+    record: &Record,
+    root_drive: &Path,
+    root_fstype: &str,
+) -> io::Result<()> {
     let root = jail_dir(config, &record.execution_id).join("root");
     fs::create_dir_all(&root).map_err(context(format!("creating {}", root.display())))?;
     link_or_copy(&config.kernel, &jailed(&root, KERNEL)).map_err(context(format!(
@@ -240,15 +251,15 @@ fn prepare_jail(config: &Config, record: &Record, root_drive: &Path) -> io::Resu
     )?;
     chown(&node, Some(config.uid), Some(config.gid))?;
 
-    let firecracker = serde_json::to_vec_pretty(&firecracker_config(config, record))?;
+    let firecracker = serde_json::to_vec_pretty(&firecracker_config(config, record, root_fstype))?;
     fs::write(jailed(&root, CONFIG_FILE), firecracker)
 }
 
 // firecracker_config is the configuration a microVM boots from. The boot
-// arguments name the image's drive for vagabond-init, give the kernel the
-// guest's address and nameserver, and turn a guest reboot or kernel panic into
-// Firecracker exiting.
-fn firecracker_config(config: &Config, record: &Record) -> Value {
+// arguments name the image's drive and its filesystem for vagabond-init, give
+// the kernel the guest's address and nameserver, and turn a guest reboot or
+// kernel panic into Firecracker exiting.
+fn firecracker_config(config: &Config, record: &Record, root_fstype: &str) -> Value {
     let slot = &record.slot;
     let ip = format!(
         "{}::{}:{}::eth0:off:{}",
@@ -257,10 +268,8 @@ fn firecracker_config(config: &Config, record: &Record) -> Value {
         slot.subnet.netmask(),
         config.dns
     );
-    let boot_args = format!(
-        "console=ttyS0 reboot=k panic=1 root=/dev/vda rootfstype={} ip={ip}",
-        config.root_fstype
-    );
+    let boot_args =
+        format!("console=ttyS0 reboot=k panic=1 root=/dev/vda rootfstype={root_fstype} ip={ip}");
     json!({
         "boot-source": {
             "kernel_image_path": KERNEL,
@@ -344,25 +353,6 @@ fn memory_max(memory: i64, overhead: u64) -> String {
 mod tests {
     use super::*;
     use crate::network::Slot;
-    use clap::Parser;
-
-    // config is the daemon's flags with only the required ones given, as an
-    // operator who takes every default starts it.
-    fn config() -> Config {
-        Config::parse_from([
-            "vagabond-firecracker",
-            "--kernel",
-            "/boot/vmlinux",
-            "--initramfs",
-            "/boot/initramfs",
-            "--uid",
-            "10000",
-            "--gid",
-            "10000",
-            "--uplink",
-            "eth0",
-        ])
-    }
 
     // record is a microVM at 1500 millicores and 512 MiB in the pool's second
     // slot, as Submit saves it before launching.
@@ -409,15 +399,14 @@ mod tests {
     #[test]
     fn prepare_jail_refuses_a_drive_that_is_no_block_device() {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = config();
-        config.chroot_base = dir.path().join("jails");
+        let mut config = Config::sample(dir.path());
         config.kernel = dir.path().join("vmlinux");
         config.initramfs = dir.path().join("initramfs");
         let drive = dir.path().join("rootfs.img");
         for file in [&config.kernel, &config.initramfs, &drive] {
             fs::write(file, "boot").unwrap();
         }
-        let err = prepare_jail(&config, &record(&config), &drive).unwrap_err();
+        let err = prepare_jail(&config, &record(&config), &drive, "ext4").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         let root = jail_dir(&config, "exec-1").join("root");
         assert!(root.join("vmlinux").exists());
@@ -444,8 +433,7 @@ mod tests {
     #[tokio::test]
     async fn remove_stops_firecracker_and_deletes_the_jail() {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = config();
-        config.chroot_base = dir.path().to_path_buf();
+        let config = Config::sample(dir.path());
         let mut stand_in = std::process::Command::new("sleep")
             .arg("30")
             .spawn()
@@ -468,8 +456,8 @@ mod tests {
     // sizes the microVM from its record.
     #[test]
     fn firecracker_config_boots_the_microvm_as_recorded() {
-        let config = config();
-        let fc = firecracker_config(&config, &record(&config));
+        let config = Config::sample(Path::new("/var/lib/vagabond-firecracker"));
+        let fc = firecracker_config(&config, &record(&config), "ext4");
         assert_eq!(fc["boot-source"]["kernel_image_path"], "/vmlinux");
         assert_eq!(fc["boot-source"]["initrd_path"], "/initramfs");
         let boot_args = fc["boot-source"]["boot_args"].as_str().unwrap();

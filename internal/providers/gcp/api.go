@@ -73,16 +73,14 @@ func (p *Provider) execution(ctx context.Context, jobName string) (*runExecution
 	url := p.cfg.jobURL(p.runURL, jobName) + "/executions"
 	if err := p.call(ctx, http.MethodGet, url, nil, &out); err != nil {
 		if errors.Is(err, plugin.ErrNotFound) {
-			return nil, plugin.Internal(
-				fmt.Errorf("%w: job %s does not exist", plugin.ErrUnknownExecution, jobName))
+			return nil, plugin.Internal(plugin.UnknownExecution("job %s does not exist", jobName))
 		}
 
 		return nil, err
 	}
 
 	if len(out.Executions) == 0 {
-		return nil, plugin.Infrastructure(
-			fmt.Errorf("%w: job %s has no execution", plugin.ErrUnknownExecution, jobName))
+		return nil, plugin.Infrastructure(plugin.UnknownExecution("job %s has no execution", jobName))
 	}
 
 	newest := &out.Executions[0]

@@ -129,18 +129,21 @@ impl Record {
         }
     }
 
-    // held is the execution as Held lists it: what it declared, and whether it
-    // is still using it, which an accepted one is about to.
-    pub fn held(&self) -> Held {
+    // held is the execution as Held lists it: what it takes of the node, what
+    // it declared and each microVM's overhead, and whether it still does, as an
+    // accepted one is about to, and an ended one does until its Firecracker has
+    // exited.
+    pub fn held(&self, overhead: &Resources) -> Held {
         let resources = Resources {
-            cpu: self.cpu,
-            memory: self.memory,
+            cpu: self.cpu + overhead.cpu,
+            memory: self.memory + overhead.memory,
             ..Default::default()
         };
+        let firecracker = self.firecracker.as_ref().is_some_and(Firecracker::running);
         Held {
             execution_id: self.execution_id.clone(),
             resources: MessageField::some(resources),
-            running: self.ended.is_none(),
+            running: self.ended.is_none() || firecracker,
             ..Default::default()
         }
     }
@@ -225,7 +228,7 @@ mod tests {
     // it no longer runs.
     #[test]
     fn a_finished_execution_reports_how_it_went() {
-        assert!(Record::sample().held().running);
+        assert!(Record::sample().held(&Resources::default()).running);
 
         let mut record = Record::sample();
         let started = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
@@ -242,9 +245,26 @@ mod tests {
         assert_eq!(result.exit_code, Some(3));
         assert_eq!(result.duration.seconds, 90);
 
-        let held = record.held();
+        let held = record.held(&Resources::default());
         assert_eq!((held.resources.cpu, held.resources.memory), (1000, 512));
         assert!(!held.running);
+    }
+
+    // Held charges each microVM its overhead, and an ended one until its
+    // Firecracker has exited, as its memory is the cgroup's until then.
+    #[test]
+    fn held_counts_the_overhead_until_firecracker_exits() {
+        let overhead = Resources {
+            memory: 32,
+            ..Default::default()
+        };
+        let mut record = Record::sample();
+        record.ended = Some(SystemTime::now());
+        record.firecracker = Firecracker::of(std::process::id() as i32);
+
+        let held = record.held(&overhead);
+        assert_eq!((held.resources.cpu, held.resources.memory), (1000, 544));
+        assert!(held.running);
     }
 
     // all returns every saved record and passes over a directory holding none.

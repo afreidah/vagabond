@@ -28,10 +28,24 @@ CARGO_LLVM_COV_VERSION ?= 0.9.1
 # compiler, rustfmt and clippy.
 FC_CRATE       := rust/vagabond-firecracker
 
+# What a microVM boots, and the root drive the microVM tests give it, pinned
+# with checksums and fetched once into the crate's target directory. The kernel
+# is Firecracker's own test kernel, which has the IP autoconfig, vsock and
+# virtio disk the guest init needs built in. KVM_IMAGE is what the
+# vagabond-firecracker image takes from here.
+KVM_DIR          := $(FC_CRATE)/target/kvm
+FC_VERSION       := v1.18.0
+FC_SHA256        := 1ac8eec866dd5eea14efecf6323e22b23eea24054545338a5b34bc5bca6623cd
+FC_KERNEL        := firecracker-ci/v1.15/x86_64/vmlinux-6.1.155
+FC_KERNEL_SHA256 := e20e46d0c36c55c0d1014eb20576171b3f3d922260d9f792017aeff53af3d4f2
+ALPINE_ROOTFS    := alpine-minirootfs-3.20.10-x86_64.tar.gz
+ALPINE_SHA256    := 0d44a414245f043ae56872a23762e6c9bee585da2cbe4aa81cbd0331eaf53223
+KVM_IMAGE        := $(addprefix $(KVM_DIR)/,firecracker jailer vmlinux)
+
 # Injected into internal/version at link time, so a built binary reports what it
 # actually is rather than whatever string was last committed. Read from
-# .version, which CI requires a pull request to bump when it changes Go, SQL or
-# the site; dev when the file is missing.
+# .version, which CI requires a pull request to bump when it changes anything
+# an image is built from; dev when the file is missing.
 VERSION        ?= $(shell cat .version 2>/dev/null || echo dev)
 COMMIT         ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null)
 VERSION_PKG    := github.com/afreidah/vagabond/internal/version
@@ -56,7 +70,7 @@ NO_PKGS_MSG    := no Go packages yet, skipping
 REGISTRY       ?= $(or $(DOCKER_REGISTRY),registry.example.com)
 IMAGE          := $(REGISTRY)/vagabond
 WEB_IMAGE      := $(REGISTRY)/vagabond-web
-WEB_TAG        ?= $(VERSION)
+FC_IMAGE       := $(REGISTRY)/vagabond-firecracker
 PLATFORMS      := linux/amd64,linux/arm64
 
 
@@ -107,19 +121,31 @@ builder: ## Ensure the buildx builder exists
 		docker buildx create --name vagabond-builder --driver-opt network=host --use
 	@docker buildx inspect --bootstrap
 
+# image builds $(1) from the Dockerfile $(2), with the flags $(3), from the
+# repository: for the local architecture into Docker, or for the platforms $(4)
+# pushed, tagged with latest as well as the version, so a deployment can pin
+# one or follow the other.
+comma := ,
+image = docker buildx build --pull -f $(2) $(3) \
+	--build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) -t $(1):$(VERSION) \
+	$(if $(4),--platform $(4) -t $(1):latest --output type=image$(comma)push=true,--load) .
+
 docker: ## Build the vagabond image for the local architecture
-	docker build --pull --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) \
-		-t $(IMAGE):$(VERSION) .
+	$(call image,$(IMAGE),Dockerfile)
 
 scan: docker ## Scan the local vagabond image with Trivy
 	trivy image --severity CRITICAL,HIGH $(IMAGE):$(VERSION)
 
-# Tagged with the version and with latest, so a deployment can pin one or
-# follow the other.
 push: builder ## Build and push the multi-arch vagabond image
-	docker buildx build --pull --platform $(PLATFORMS) \
-		--build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) \
-		-t $(IMAGE):$(VERSION) -t $(IMAGE):latest --output type=image,push=true .
+	$(call image,$(IMAGE),Dockerfile,,$(PLATFORMS))
+
+# amd64 alone, and handed Firecracker, the jailer and the kernel as fetched and
+# checked here.
+firecracker-docker: $(KVM_IMAGE) ## Build the vagabond-firecracker image
+	$(call image,$(FC_IMAGE),$(FC_CRATE)/Dockerfile,--build-context kvm=$(KVM_DIR))
+
+firecracker-push: builder $(KVM_IMAGE) ## Build and push the vagabond-firecracker image
+	$(call image,$(FC_IMAGE),$(FC_CRATE)/Dockerfile,--build-context kvm=$(KVM_DIR),linux/amd64)
 
 ##@ Quality
 
@@ -188,18 +214,6 @@ coverage: ## Write coverage.out from the unit tests
 integration-coverage: ## Write integration-coverage.out from the integration tests (requires Docker)
 	$(GO) test $(COVER_FLAGS) -tags=integration -timeout 10m -coverprofile=integration-coverage.out ./...
 
-# The executor drives the host's containerd, which needs root. Built as the
-# user and run with sudo, so the build cache stays the user's.
-containerd-test: ## Run the containerd executor tests (requires root and containerd)
-	$(GO) test -c -race -tags=containerd -o bin/executor.test ./internal/agent/executor
-	sudo ./bin/executor.test -test.v -test.timeout 5m
-
-# The profile is written as root, so it is handed back to the user after.
-containerd-coverage: ## Write containerd-coverage.out from the containerd executor tests (requires root and containerd)
-	$(GO) test -c $(COVER_FLAGS) -tags=containerd -o bin/executor.test ./internal/agent/executor
-	sudo ./bin/executor.test -test.v -test.timeout 5m -test.coverprofile=containerd-coverage.out
-	sudo chown "$$(id -u):$$(id -g)" containerd-coverage.out
-
 # cargo-llvm-cov builds the crate instrumented with the toolchain's llvm-tools
 # and writes LCOV, the format SonarCloud reads for Rust.
 rust-coverage: ## Write rust-coverage.lcov from the Rust crate's tests
@@ -208,17 +222,6 @@ rust-coverage: ## Write rust-coverage.lcov from the Rust crate's tests
 # -------------------------------------------------------------------------
 # FIRECRACKER TESTS
 # -------------------------------------------------------------------------
-
-# What the microVM tests boot, pinned with checksums and fetched once into the
-# crate's target directory. The kernel is Firecracker's own test kernel, which
-# has the IP autoconfig, vsock and virtio disk the guest init needs built in.
-KVM_DIR          := $(FC_CRATE)/target/kvm
-FC_VERSION       := v1.18.0
-FC_SHA256        := 1ac8eec866dd5eea14efecf6323e22b23eea24054545338a5b34bc5bca6623cd
-FC_KERNEL        := firecracker-ci/v1.15/x86_64/vmlinux-6.1.155
-FC_KERNEL_SHA256 := e20e46d0c36c55c0d1014eb20576171b3f3d922260d9f792017aeff53af3d4f2
-ALPINE_ROOTFS    := alpine-minirootfs-3.20.10-x86_64.tar.gz
-ALPINE_SHA256    := 0d44a414245f043ae56872a23762e6c9bee585da2cbe4aa81cbd0331eaf53223
 
 # fetch downloads $(1) to the target and fails unless its sha256 is $(2). It
 # goes through a partial file, so an interrupted download never counts as done.
@@ -261,12 +264,20 @@ MKFS_EXT4 ?= /usr/sbin/mkfs.ext4
 $(KVM_DIR)/rootfs.ext4: $(KVM_DIR)/$(ALPINE_ROOTFS)
 	truncate -s 64M $@.part && $(MKFS_EXT4) -q -F -d $< $@.part && mv $@.part $@
 
+# What a microVM boots, which vagabond-firecracker runs from, and with the root
+# drive the microVM tests copy, what they need.
+KVM_BOOT  := $(KVM_IMAGE) $(KVM_DIR)/initramfs.cpio.gz
+KVM_FILES := $(KVM_BOOT) $(KVM_DIR)/rootfs.ext4
+
+# finally runs $(1), then $(2) whether or not $(1) passed, and exits as $(1)
+# did, so a test run as root still hands back what it wrote, or clears what it
+# started, when it fails.
+finally = $(1); status=$$?; $(2); exit $$status
+
 # The tests launch Firecracker through the jailer, which needs root. cargo
 # builds them as the user and runs each test binary through sudo as its
 # runner, so the build cache stays the user's; env hands the binary where the
 # files above are.
-KVM_FILES := $(addprefix $(KVM_DIR)/,firecracker jailer vmlinux initramfs.cpio.gz rootfs.ext4)
-
 firecracker-test: $(KVM_FILES) ## Boot microVMs through vagabond-firecracker (requires root, /dev/kvm and a network uplink)
 	cd $(FC_CRATE) && \
 		CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="sudo env VAGABOND_KVM_DIR=$(abspath $(KVM_DIR))" \
@@ -274,13 +285,46 @@ firecracker-test: $(KVM_FILES) ## Boot microVMs through vagabond-firecracker (re
 
 # The same tests instrumented, the daemon they start included. sudo keeps
 # LLVM_PROFILE_FILE, without which nothing is written, and the profiles written
-# as root are handed back to the user, whether or not the tests passed, so the
-# next run can clear them.
+# as root are handed back to the user so the next run can clear them.
 firecracker-coverage: $(KVM_FILES) ## Write firecracker-coverage.lcov from the microVM tests (requires root, /dev/kvm and a network uplink)
-	cd $(FC_CRATE) && \
+	cd $(FC_CRATE) && $(call finally, \
 		CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="sudo --preserve-env=LLVM_PROFILE_FILE env VAGABOND_KVM_DIR=$(abspath $(KVM_DIR))" \
-		cargo llvm-cov --lcov --output-path $(CURDIR)/firecracker-coverage.lcov --test kvm -- --ignored; \
-		status=$$?; sudo chown -R "$$(id -u):$$(id -g)" target/llvm-cov-target; exit $$status
+		cargo llvm-cov --lcov --output-path $(CURDIR)/firecracker-coverage.lcov --test kvm -- --ignored, \
+		sudo chown -R "$$(id -u):$$(id -g)" target/llvm-cov-target)
+
+# -------------------------------------------------------------------------
+# EXECUTOR TESTS
+# -------------------------------------------------------------------------
+
+# The agent's executors are tested against a containerd and a
+# vagabond-firecracker of their own, apart from anything the host runs, which
+# executor-env starts as root and executor-env-down clears away. The tests find
+# them by the sockets in EXECUTOR_SOCKETS, and skip without them.
+EXECUTOR_ENV     = sudo env KVM_DIR=$(abspath $(KVM_DIR)) DAEMON=$(abspath $(FC_CRATE))/target/debug/vagabond-firecracker scripts/executor-env.sh
+EXECUTOR_SOCKETS = VAGABOND_CONTAINERD=/run/vagabond-test/containerd.sock VAGABOND_FIRECRACKER=/run/vagabond-test/firecracker.sock
+
+firecracker-daemon:
+	cd $(FC_CRATE) && cargo build --bin vagabond-firecracker
+
+executor-env: firecracker-daemon $(KVM_BOOT) ## Start the executor tests' containerd and vagabond-firecracker (requires root, /dev/kvm, containerd and dmsetup)
+	$(EXECUTOR_ENV) up
+
+executor-env-down: ## Stop the executor tests' containerd and vagabond-firecracker, and clear what they left
+	$(EXECUTOR_ENV) down
+
+# Both executors' tests are one binary, built as the user and run with sudo so
+# the build cache stays the user's, and the environment is cleared after.
+executor-test: executor-env ## Run the executor tests against their own containerd and vagabond-firecracker (requires root and /dev/kvm)
+	$(GO) test -c -race -tags=containerd,firecracker -o bin/executor.test ./internal/agent/executor
+	$(call finally, \
+		sudo env $(EXECUTOR_SOCKETS) ./bin/executor.test -test.v -test.timeout 10m, \
+		$(EXECUTOR_ENV) down)
+
+executor-coverage: executor-env ## Write executor-coverage.out from the executor tests (requires root and /dev/kvm)
+	$(GO) test -c $(COVER_FLAGS) -tags=containerd,firecracker -o bin/executor.test ./internal/agent/executor
+	$(call finally, \
+		sudo env $(EXECUTOR_SOCKETS) ./bin/executor.test -test.v -test.timeout 10m -test.coverprofile=executor-coverage.out, \
+		$(EXECUTOR_ENV) down; sudo chown "$$(id -u):$$(id -g)" executor-coverage.out)
 
 # -------------------------------------------------------------------------
 # SECURITY
@@ -332,11 +376,10 @@ web-build: ## Build the project site into web/public
 	cd web && hugo --minify
 
 web-docker: ## Build the site image for the local architecture
-	docker build --pull --build-arg VERSION=$(WEB_TAG) -f web/Dockerfile -t $(WEB_IMAGE):$(WEB_TAG) .
+	$(call image,$(WEB_IMAGE),web/Dockerfile)
 
 web-push: builder ## Build and push the multi-arch site image
-	docker buildx build --pull --platform $(PLATFORMS) --build-arg VERSION=$(WEB_TAG) -f web/Dockerfile \
-		-t $(WEB_IMAGE):$(WEB_TAG) -t $(WEB_IMAGE):latest --output type=image,push=true .
+	$(call image,$(WEB_IMAGE),web/Dockerfile,,$(PLATFORMS))
 
 ##@ Tools
 
@@ -364,7 +407,7 @@ $(MOCKGEN):
 
 clean: ## Remove build and coverage artifacts
 	$(GO) clean
-	rm -f coverage.out integration-coverage.out vagabond rust-coverage.lcov firecracker-coverage.lcov
+	rm -f coverage.out integration-coverage.out executor-coverage.out vagabond rust-coverage.lcov firecracker-coverage.lcov
 	rm -rf bin
 
-.PHONY: help build install uninstall builder docker scan push fmt fmt-check vet lint rust-fmt rust-fmt-check rust-lint test test-fast rust-test rust-audit integration-test coverage integration-coverage containerd-test containerd-coverage rust-coverage firecracker-init firecracker-test firecracker-coverage govulncheck check generate generate-check web-serve web-build web-docker web-push tools clean
+.PHONY: help build install uninstall builder docker scan push firecracker-docker firecracker-push fmt fmt-check vet lint rust-fmt rust-fmt-check rust-lint test test-fast rust-test rust-audit integration-test coverage integration-coverage rust-coverage firecracker-init firecracker-test firecracker-coverage firecracker-daemon executor-env executor-env-down executor-test executor-coverage govulncheck check generate generate-check web-serve web-build web-docker web-push tools clean

@@ -3,9 +3,10 @@
 #
 # Author: Alex Freidah
 #
-# Generates the agent protocol's Go bindings beside the proto. The plugins run
-# through `go tool`, so their versions are pinned by go.mod. The executor
-# protocol is ttRPC and only Rust speaks it so far, so it is left out here.
+# Generates the agent and executor protocols' Go bindings beside the protos. The
+# plugins run through `go tool`, so their versions are pinned by go.mod. The
+# agent protocol is gRPC and the executor protocol ttRPC, so each service gets
+# stubs from its own plugin only.
 # -------------------------------------------------------------------------------
 
 version: v2
@@ -16,9 +17,14 @@ plugins:
   - local: ["go", "tool", "protoc-gen-go-grpc"]
     out: .
     opt: paths=source_relative
+    exclude_types:
+      - vagabond.agent.v1.Executor
+  - local: ["go", "tool", "protoc-gen-go-ttrpc"]
+    out: .
+    opt: paths=source_relative
+    types:
+      - vagabond.agent.v1.Executor
 inputs:
   - directory: .
     paths:
       - internal/agentrpc
-    exclude_paths:
-      - internal/agentrpc/executor.proto

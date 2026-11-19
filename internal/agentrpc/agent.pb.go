@@ -38,7 +38,8 @@ const (
 // connects and again whenever its workloads change. capacity is the smallest
 // of the host's resources, the agent's cgroup limits, and its flags. held is
 // every workload it still holds, so a server knows what is placed where and
-// how much of the node is in use, after either side restarts.
+// how much of the node is in use, after either side restarts. executors are
+// what the node runs workloads with. Field 6 listed runtimes.
 type NodeRegisterRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -46,9 +47,9 @@ type NodeRegisterRequest struct {
 	Labels        map[string]string      `protobuf:"bytes,3,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Architecture  string                 `protobuf:"bytes,4,opt,name=architecture,proto3" json:"architecture,omitempty"`
 	Capacity      *Resources             `protobuf:"bytes,5,opt,name=capacity,proto3" json:"capacity,omitempty"`
-	Runtimes      []string               `protobuf:"bytes,6,rep,name=runtimes,proto3" json:"runtimes,omitempty"`
 	Version       string                 `protobuf:"bytes,7,opt,name=version,proto3" json:"version,omitempty"`
 	Held          []*Held                `protobuf:"bytes,8,rep,name=held,proto3" json:"held,omitempty"`
+	Executors     []*NodeExecutor        `protobuf:"bytes,9,rep,name=executors,proto3" json:"executors,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -118,13 +119,6 @@ func (x *NodeRegisterRequest) GetCapacity() *Resources {
 	return nil
 }
 
-func (x *NodeRegisterRequest) GetRuntimes() []string {
-	if x != nil {
-		return x.Runtimes
-	}
-	return nil
-}
-
 func (x *NodeRegisterRequest) GetVersion() string {
 	if x != nil {
 		return x.Version
@@ -139,8 +133,70 @@ func (x *NodeRegisterRequest) GetHeld() []*Held {
 	return nil
 }
 
-// Held is one workload on a node: what it declared, and whether it is still
-// running and so still using that much of the node.
+func (x *NodeRegisterRequest) GetExecutors() []*NodeExecutor {
+	if x != nil {
+		return x.Executors
+	}
+	return nil
+}
+
+// NodeExecutor is an executor a node runs workloads with, and what each of its
+// workloads takes of the node beyond its declared resources.
+type NodeExecutor struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Overhead      *Resources             `protobuf:"bytes,2,opt,name=overhead,proto3" json:"overhead,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NodeExecutor) Reset() {
+	*x = NodeExecutor{}
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NodeExecutor) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NodeExecutor) ProtoMessage() {}
+
+func (x *NodeExecutor) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NodeExecutor.ProtoReflect.Descriptor instead.
+func (*NodeExecutor) Descriptor() ([]byte, []int) {
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *NodeExecutor) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *NodeExecutor) GetOverhead() *Resources {
+	if x != nil {
+		return x.Overhead
+	}
+	return nil
+}
+
+// Held is one workload on a node: what it takes of the node, its declared
+// resources with its executor's overhead, and whether it is still running and
+// so still using that much.
 type Held struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ExecutionId   string                 `protobuf:"bytes,1,opt,name=execution_id,json=executionId,proto3" json:"execution_id,omitempty"`
@@ -152,7 +208,7 @@ type Held struct {
 
 func (x *Held) Reset() {
 	*x = Held{}
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[1]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -164,7 +220,7 @@ func (x *Held) String() string {
 func (*Held) ProtoMessage() {}
 
 func (x *Held) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[1]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -177,7 +233,7 @@ func (x *Held) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Held.ProtoReflect.Descriptor instead.
 func (*Held) Descriptor() ([]byte, []int) {
-	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{1}
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Held) GetExecutionId() string {
@@ -212,7 +268,7 @@ type Resources struct {
 
 func (x *Resources) Reset() {
 	*x = Resources{}
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[2]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -224,7 +280,7 @@ func (x *Resources) String() string {
 func (*Resources) ProtoMessage() {}
 
 func (x *Resources) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[2]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -237,7 +293,7 @@ func (x *Resources) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Resources.ProtoReflect.Descriptor instead.
 func (*Resources) Descriptor() ([]byte, []int) {
-	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{2}
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Resources) GetCpu() int64 {
@@ -266,7 +322,7 @@ type NodeRegisterResponse struct {
 
 func (x *NodeRegisterResponse) Reset() {
 	*x = NodeRegisterResponse{}
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[3]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -278,7 +334,7 @@ func (x *NodeRegisterResponse) String() string {
 func (*NodeRegisterResponse) ProtoMessage() {}
 
 func (x *NodeRegisterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[3]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -291,7 +347,7 @@ func (x *NodeRegisterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeRegisterResponse.ProtoReflect.Descriptor instead.
 func (*NodeRegisterResponse) Descriptor() ([]byte, []int) {
-	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{3}
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *NodeRegisterResponse) GetRelease() []string {
@@ -301,8 +357,9 @@ func (x *NodeRegisterResponse) GetRelease() []string {
 	return nil
 }
 
-// Workload is a task already translated to what a container needs: the server
-// decodes the job, the agent only runs it.
+// Workload is a task already translated to what a node runs: the server
+// decodes the job, the agent only runs it, with the executor it names. Field 8
+// named a runtime.
 type Workload struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Image         string                 `protobuf:"bytes,1,opt,name=image,proto3" json:"image,omitempty"`
@@ -312,14 +369,14 @@ type Workload struct {
 	WorkingDir    string                 `protobuf:"bytes,5,opt,name=working_dir,json=workingDir,proto3" json:"working_dir,omitempty"`
 	Resources     *Resources             `protobuf:"bytes,6,opt,name=resources,proto3" json:"resources,omitempty"`
 	Timeout       *durationpb.Duration   `protobuf:"bytes,7,opt,name=timeout,proto3" json:"timeout,omitempty"`
-	Runtime       string                 `protobuf:"bytes,8,opt,name=runtime,proto3" json:"runtime,omitempty"`
+	Executor      string                 `protobuf:"bytes,9,opt,name=executor,proto3" json:"executor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Workload) Reset() {
 	*x = Workload{}
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[4]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -331,7 +388,7 @@ func (x *Workload) String() string {
 func (*Workload) ProtoMessage() {}
 
 func (x *Workload) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[4]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -344,7 +401,7 @@ func (x *Workload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Workload.ProtoReflect.Descriptor instead.
 func (*Workload) Descriptor() ([]byte, []int) {
-	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{4}
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Workload) GetImage() string {
@@ -396,9 +453,9 @@ func (x *Workload) GetTimeout() *durationpb.Duration {
 	return nil
 }
 
-func (x *Workload) GetRuntime() string {
+func (x *Workload) GetExecutor() string {
 	if x != nil {
-		return x.Runtime
+		return x.Executor
 	}
 	return ""
 }
@@ -413,7 +470,7 @@ type SubmitRequest struct {
 
 func (x *SubmitRequest) Reset() {
 	*x = SubmitRequest{}
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[5]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -425,7 +482,7 @@ func (x *SubmitRequest) String() string {
 func (*SubmitRequest) ProtoMessage() {}
 
 func (x *SubmitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[5]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -438,7 +495,7 @@ func (x *SubmitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitRequest.ProtoReflect.Descriptor instead.
 func (*SubmitRequest) Descriptor() ([]byte, []int) {
-	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{5}
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SubmitRequest) GetExecutionId() string {
@@ -467,7 +524,7 @@ type Submission struct {
 
 func (x *Submission) Reset() {
 	*x = Submission{}
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[6]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -479,7 +536,7 @@ func (x *Submission) String() string {
 func (*Submission) ProtoMessage() {}
 
 func (x *Submission) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[6]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -492,7 +549,7 @@ func (x *Submission) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Submission.ProtoReflect.Descriptor instead.
 func (*Submission) Descriptor() ([]byte, []int) {
-	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{6}
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Submission) GetState() string {
@@ -518,7 +575,7 @@ type ExecutionRequest struct {
 
 func (x *ExecutionRequest) Reset() {
 	*x = ExecutionRequest{}
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[7]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -530,7 +587,7 @@ func (x *ExecutionRequest) String() string {
 func (*ExecutionRequest) ProtoMessage() {}
 
 func (x *ExecutionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[7]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -543,7 +600,7 @@ func (x *ExecutionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecutionRequest.ProtoReflect.Descriptor instead.
 func (*ExecutionRequest) Descriptor() ([]byte, []int) {
-	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{7}
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ExecutionRequest) GetExecutionId() string {
@@ -565,7 +622,7 @@ type ExecutionStatus struct {
 
 func (x *ExecutionStatus) Reset() {
 	*x = ExecutionStatus{}
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[8]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -577,7 +634,7 @@ func (x *ExecutionStatus) String() string {
 func (*ExecutionStatus) ProtoMessage() {}
 
 func (x *ExecutionStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[8]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -590,7 +647,7 @@ func (x *ExecutionStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecutionStatus.ProtoReflect.Descriptor instead.
 func (*ExecutionStatus) Descriptor() ([]byte, []int) {
-	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{8}
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ExecutionStatus) GetState() string {
@@ -633,7 +690,7 @@ type ExecutionResult struct {
 
 func (x *ExecutionResult) Reset() {
 	*x = ExecutionResult{}
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[9]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -645,7 +702,7 @@ func (x *ExecutionResult) String() string {
 func (*ExecutionResult) ProtoMessage() {}
 
 func (x *ExecutionResult) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[9]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -658,7 +715,7 @@ func (x *ExecutionResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecutionResult.ProtoReflect.Descriptor instead.
 func (*ExecutionResult) Descriptor() ([]byte, []int) {
-	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{9}
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ExecutionResult) GetExitCode() int32 {
@@ -688,7 +745,7 @@ type LogsRequest struct {
 
 func (x *LogsRequest) Reset() {
 	*x = LogsRequest{}
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[10]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -700,7 +757,7 @@ func (x *LogsRequest) String() string {
 func (*LogsRequest) ProtoMessage() {}
 
 func (x *LogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[10]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -713,7 +770,7 @@ func (x *LogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogsRequest.ProtoReflect.Descriptor instead.
 func (*LogsRequest) Descriptor() ([]byte, []int) {
-	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{10}
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *LogsRequest) GetExecutionId() string {
@@ -739,7 +796,7 @@ type LogChunk struct {
 
 func (x *LogChunk) Reset() {
 	*x = LogChunk{}
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[11]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -751,7 +808,7 @@ func (x *LogChunk) String() string {
 func (*LogChunk) ProtoMessage() {}
 
 func (x *LogChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[11]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -764,7 +821,7 @@ func (x *LogChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogChunk.ProtoReflect.Descriptor instead.
 func (*LogChunk) Descriptor() ([]byte, []int) {
-	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{11}
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *LogChunk) GetData() []byte {
@@ -782,7 +839,7 @@ type Empty struct {
 
 func (x *Empty) Reset() {
 	*x = Empty{}
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[12]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -794,7 +851,7 @@ func (x *Empty) String() string {
 func (*Empty) ProtoMessage() {}
 
 func (x *Empty) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_agentrpc_agent_proto_msgTypes[12]
+	mi := &file_internal_agentrpc_agent_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -807,26 +864,29 @@ func (x *Empty) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Empty.ProtoReflect.Descriptor instead.
 func (*Empty) Descriptor() ([]byte, []int) {
-	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{12}
+	return file_internal_agentrpc_agent_proto_rawDescGZIP(), []int{13}
 }
 
 var File_internal_agentrpc_agent_proto protoreflect.FileDescriptor
 
 const file_internal_agentrpc_agent_proto_rawDesc = "" +
 	"\n" +
-	"\x1dinternal/agentrpc/agent.proto\x12\x11vagabond.agent.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x85\x03\n" +
+	"\x1dinternal/agentrpc/agent.proto\x12\x11vagabond.agent.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb8\x03\n" +
 	"\x13NodeRegisterRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04pool\x18\x02 \x01(\tR\x04pool\x12J\n" +
 	"\x06labels\x18\x03 \x03(\v22.vagabond.agent.v1.NodeRegisterRequest.LabelsEntryR\x06labels\x12\"\n" +
 	"\farchitecture\x18\x04 \x01(\tR\farchitecture\x128\n" +
-	"\bcapacity\x18\x05 \x01(\v2\x1c.vagabond.agent.v1.ResourcesR\bcapacity\x12\x1a\n" +
-	"\bruntimes\x18\x06 \x03(\tR\bruntimes\x12\x18\n" +
+	"\bcapacity\x18\x05 \x01(\v2\x1c.vagabond.agent.v1.ResourcesR\bcapacity\x12\x18\n" +
 	"\aversion\x18\a \x01(\tR\aversion\x12+\n" +
-	"\x04held\x18\b \x03(\v2\x17.vagabond.agent.v1.HeldR\x04held\x1a9\n" +
+	"\x04held\x18\b \x03(\v2\x17.vagabond.agent.v1.HeldR\x04held\x12=\n" +
+	"\texecutors\x18\t \x03(\v2\x1f.vagabond.agent.v1.NodeExecutorR\texecutors\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x7f\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x06\x10\aR\bruntimes\"\\\n" +
+	"\fNodeExecutor\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x128\n" +
+	"\boverhead\x18\x02 \x01(\v2\x1c.vagabond.agent.v1.ResourcesR\boverhead\"\x7f\n" +
 	"\x04Held\x12!\n" +
 	"\fexecution_id\x18\x01 \x01(\tR\vexecutionId\x12:\n" +
 	"\tresources\x18\x02 \x01(\v2\x1c.vagabond.agent.v1.ResourcesR\tresources\x12\x18\n" +
@@ -835,7 +895,7 @@ const file_internal_agentrpc_agent_proto_rawDesc = "" +
 	"\x03cpu\x18\x01 \x01(\x03R\x03cpu\x12\x16\n" +
 	"\x06memory\x18\x02 \x01(\x03R\x06memory\"0\n" +
 	"\x14NodeRegisterResponse\x12\x18\n" +
-	"\arelease\x18\x01 \x03(\tR\arelease\"\xea\x02\n" +
+	"\arelease\x18\x01 \x03(\tR\arelease\"\xfb\x02\n" +
 	"\bWorkload\x12\x14\n" +
 	"\x05image\x18\x01 \x01(\tR\x05image\x12\x18\n" +
 	"\acommand\x18\x02 \x03(\tR\acommand\x12\x12\n" +
@@ -844,11 +904,11 @@ const file_internal_agentrpc_agent_proto_rawDesc = "" +
 	"\vworking_dir\x18\x05 \x01(\tR\n" +
 	"workingDir\x12:\n" +
 	"\tresources\x18\x06 \x01(\v2\x1c.vagabond.agent.v1.ResourcesR\tresources\x123\n" +
-	"\atimeout\x18\a \x01(\v2\x19.google.protobuf.DurationR\atimeout\x12\x18\n" +
-	"\aruntime\x18\b \x01(\tR\aruntime\x1a6\n" +
+	"\atimeout\x18\a \x01(\v2\x19.google.protobuf.DurationR\atimeout\x12\x1a\n" +
+	"\bexecutor\x18\t \x01(\tR\bexecutor\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"k\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\b\x10\tR\aruntime\"k\n" +
 	"\rSubmitRequest\x12!\n" +
 	"\fexecution_id\x18\x01 \x01(\tR\vexecutionId\x127\n" +
 	"\bworkload\x18\x02 \x01(\v2\x1b.vagabond.agent.v1.WorkloadR\bworkload\"C\n" +
@@ -900,57 +960,60 @@ func file_internal_agentrpc_agent_proto_rawDescGZIP() []byte {
 	return file_internal_agentrpc_agent_proto_rawDescData
 }
 
-var file_internal_agentrpc_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_internal_agentrpc_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_internal_agentrpc_agent_proto_goTypes = []any{
 	(*NodeRegisterRequest)(nil),   // 0: vagabond.agent.v1.NodeRegisterRequest
-	(*Held)(nil),                  // 1: vagabond.agent.v1.Held
-	(*Resources)(nil),             // 2: vagabond.agent.v1.Resources
-	(*NodeRegisterResponse)(nil),  // 3: vagabond.agent.v1.NodeRegisterResponse
-	(*Workload)(nil),              // 4: vagabond.agent.v1.Workload
-	(*SubmitRequest)(nil),         // 5: vagabond.agent.v1.SubmitRequest
-	(*Submission)(nil),            // 6: vagabond.agent.v1.Submission
-	(*ExecutionRequest)(nil),      // 7: vagabond.agent.v1.ExecutionRequest
-	(*ExecutionStatus)(nil),       // 8: vagabond.agent.v1.ExecutionStatus
-	(*ExecutionResult)(nil),       // 9: vagabond.agent.v1.ExecutionResult
-	(*LogsRequest)(nil),           // 10: vagabond.agent.v1.LogsRequest
-	(*LogChunk)(nil),              // 11: vagabond.agent.v1.LogChunk
-	(*Empty)(nil),                 // 12: vagabond.agent.v1.Empty
-	nil,                           // 13: vagabond.agent.v1.NodeRegisterRequest.LabelsEntry
-	nil,                           // 14: vagabond.agent.v1.Workload.EnvEntry
-	(*durationpb.Duration)(nil),   // 15: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil), // 16: google.protobuf.Timestamp
+	(*NodeExecutor)(nil),          // 1: vagabond.agent.v1.NodeExecutor
+	(*Held)(nil),                  // 2: vagabond.agent.v1.Held
+	(*Resources)(nil),             // 3: vagabond.agent.v1.Resources
+	(*NodeRegisterResponse)(nil),  // 4: vagabond.agent.v1.NodeRegisterResponse
+	(*Workload)(nil),              // 5: vagabond.agent.v1.Workload
+	(*SubmitRequest)(nil),         // 6: vagabond.agent.v1.SubmitRequest
+	(*Submission)(nil),            // 7: vagabond.agent.v1.Submission
+	(*ExecutionRequest)(nil),      // 8: vagabond.agent.v1.ExecutionRequest
+	(*ExecutionStatus)(nil),       // 9: vagabond.agent.v1.ExecutionStatus
+	(*ExecutionResult)(nil),       // 10: vagabond.agent.v1.ExecutionResult
+	(*LogsRequest)(nil),           // 11: vagabond.agent.v1.LogsRequest
+	(*LogChunk)(nil),              // 12: vagabond.agent.v1.LogChunk
+	(*Empty)(nil),                 // 13: vagabond.agent.v1.Empty
+	nil,                           // 14: vagabond.agent.v1.NodeRegisterRequest.LabelsEntry
+	nil,                           // 15: vagabond.agent.v1.Workload.EnvEntry
+	(*durationpb.Duration)(nil),   // 16: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil), // 17: google.protobuf.Timestamp
 }
 var file_internal_agentrpc_agent_proto_depIdxs = []int32{
-	13, // 0: vagabond.agent.v1.NodeRegisterRequest.labels:type_name -> vagabond.agent.v1.NodeRegisterRequest.LabelsEntry
-	2,  // 1: vagabond.agent.v1.NodeRegisterRequest.capacity:type_name -> vagabond.agent.v1.Resources
-	1,  // 2: vagabond.agent.v1.NodeRegisterRequest.held:type_name -> vagabond.agent.v1.Held
-	2,  // 3: vagabond.agent.v1.Held.resources:type_name -> vagabond.agent.v1.Resources
-	14, // 4: vagabond.agent.v1.Workload.env:type_name -> vagabond.agent.v1.Workload.EnvEntry
-	2,  // 5: vagabond.agent.v1.Workload.resources:type_name -> vagabond.agent.v1.Resources
-	15, // 6: vagabond.agent.v1.Workload.timeout:type_name -> google.protobuf.Duration
-	4,  // 7: vagabond.agent.v1.SubmitRequest.workload:type_name -> vagabond.agent.v1.Workload
-	16, // 8: vagabond.agent.v1.ExecutionStatus.started_at:type_name -> google.protobuf.Timestamp
-	16, // 9: vagabond.agent.v1.ExecutionStatus.ended_at:type_name -> google.protobuf.Timestamp
-	15, // 10: vagabond.agent.v1.ExecutionResult.duration:type_name -> google.protobuf.Duration
-	0,  // 11: vagabond.agent.v1.Node.Register:input_type -> vagabond.agent.v1.NodeRegisterRequest
-	5,  // 12: vagabond.agent.v1.AgentExecutions.Submit:input_type -> vagabond.agent.v1.SubmitRequest
-	7,  // 13: vagabond.agent.v1.AgentExecutions.Status:input_type -> vagabond.agent.v1.ExecutionRequest
-	7,  // 14: vagabond.agent.v1.AgentExecutions.Result:input_type -> vagabond.agent.v1.ExecutionRequest
-	7,  // 15: vagabond.agent.v1.AgentExecutions.Cancel:input_type -> vagabond.agent.v1.ExecutionRequest
-	7,  // 16: vagabond.agent.v1.AgentExecutions.Release:input_type -> vagabond.agent.v1.ExecutionRequest
-	10, // 17: vagabond.agent.v1.AgentExecutions.StreamLogs:input_type -> vagabond.agent.v1.LogsRequest
-	3,  // 18: vagabond.agent.v1.Node.Register:output_type -> vagabond.agent.v1.NodeRegisterResponse
-	6,  // 19: vagabond.agent.v1.AgentExecutions.Submit:output_type -> vagabond.agent.v1.Submission
-	8,  // 20: vagabond.agent.v1.AgentExecutions.Status:output_type -> vagabond.agent.v1.ExecutionStatus
-	9,  // 21: vagabond.agent.v1.AgentExecutions.Result:output_type -> vagabond.agent.v1.ExecutionResult
-	12, // 22: vagabond.agent.v1.AgentExecutions.Cancel:output_type -> vagabond.agent.v1.Empty
-	12, // 23: vagabond.agent.v1.AgentExecutions.Release:output_type -> vagabond.agent.v1.Empty
-	11, // 24: vagabond.agent.v1.AgentExecutions.StreamLogs:output_type -> vagabond.agent.v1.LogChunk
-	18, // [18:25] is the sub-list for method output_type
-	11, // [11:18] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	14, // 0: vagabond.agent.v1.NodeRegisterRequest.labels:type_name -> vagabond.agent.v1.NodeRegisterRequest.LabelsEntry
+	3,  // 1: vagabond.agent.v1.NodeRegisterRequest.capacity:type_name -> vagabond.agent.v1.Resources
+	2,  // 2: vagabond.agent.v1.NodeRegisterRequest.held:type_name -> vagabond.agent.v1.Held
+	1,  // 3: vagabond.agent.v1.NodeRegisterRequest.executors:type_name -> vagabond.agent.v1.NodeExecutor
+	3,  // 4: vagabond.agent.v1.NodeExecutor.overhead:type_name -> vagabond.agent.v1.Resources
+	3,  // 5: vagabond.agent.v1.Held.resources:type_name -> vagabond.agent.v1.Resources
+	15, // 6: vagabond.agent.v1.Workload.env:type_name -> vagabond.agent.v1.Workload.EnvEntry
+	3,  // 7: vagabond.agent.v1.Workload.resources:type_name -> vagabond.agent.v1.Resources
+	16, // 8: vagabond.agent.v1.Workload.timeout:type_name -> google.protobuf.Duration
+	5,  // 9: vagabond.agent.v1.SubmitRequest.workload:type_name -> vagabond.agent.v1.Workload
+	17, // 10: vagabond.agent.v1.ExecutionStatus.started_at:type_name -> google.protobuf.Timestamp
+	17, // 11: vagabond.agent.v1.ExecutionStatus.ended_at:type_name -> google.protobuf.Timestamp
+	16, // 12: vagabond.agent.v1.ExecutionResult.duration:type_name -> google.protobuf.Duration
+	0,  // 13: vagabond.agent.v1.Node.Register:input_type -> vagabond.agent.v1.NodeRegisterRequest
+	6,  // 14: vagabond.agent.v1.AgentExecutions.Submit:input_type -> vagabond.agent.v1.SubmitRequest
+	8,  // 15: vagabond.agent.v1.AgentExecutions.Status:input_type -> vagabond.agent.v1.ExecutionRequest
+	8,  // 16: vagabond.agent.v1.AgentExecutions.Result:input_type -> vagabond.agent.v1.ExecutionRequest
+	8,  // 17: vagabond.agent.v1.AgentExecutions.Cancel:input_type -> vagabond.agent.v1.ExecutionRequest
+	8,  // 18: vagabond.agent.v1.AgentExecutions.Release:input_type -> vagabond.agent.v1.ExecutionRequest
+	11, // 19: vagabond.agent.v1.AgentExecutions.StreamLogs:input_type -> vagabond.agent.v1.LogsRequest
+	4,  // 20: vagabond.agent.v1.Node.Register:output_type -> vagabond.agent.v1.NodeRegisterResponse
+	7,  // 21: vagabond.agent.v1.AgentExecutions.Submit:output_type -> vagabond.agent.v1.Submission
+	9,  // 22: vagabond.agent.v1.AgentExecutions.Status:output_type -> vagabond.agent.v1.ExecutionStatus
+	10, // 23: vagabond.agent.v1.AgentExecutions.Result:output_type -> vagabond.agent.v1.ExecutionResult
+	13, // 24: vagabond.agent.v1.AgentExecutions.Cancel:output_type -> vagabond.agent.v1.Empty
+	13, // 25: vagabond.agent.v1.AgentExecutions.Release:output_type -> vagabond.agent.v1.Empty
+	12, // 26: vagabond.agent.v1.AgentExecutions.StreamLogs:output_type -> vagabond.agent.v1.LogChunk
+	20, // [20:27] is the sub-list for method output_type
+	13, // [13:20] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_internal_agentrpc_agent_proto_init() }
@@ -958,14 +1021,14 @@ func file_internal_agentrpc_agent_proto_init() {
 	if File_internal_agentrpc_agent_proto != nil {
 		return
 	}
-	file_internal_agentrpc_agent_proto_msgTypes[9].OneofWrappers = []any{}
+	file_internal_agentrpc_agent_proto_msgTypes[10].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_agentrpc_agent_proto_rawDesc), len(file_internal_agentrpc_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   15,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

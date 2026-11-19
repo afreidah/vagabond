@@ -14,6 +14,7 @@ package pool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -26,6 +27,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 
 	"github.com/afreidah/vagabond/internal/agent"
+	"github.com/afreidah/vagabond/internal/agent/agenttest"
 	"github.com/afreidah/vagabond/internal/agent/executor"
 	"github.com/afreidah/vagabond/internal/agent/executor/executortest"
 	"github.com/afreidah/vagabond/internal/agent/fingerprint"
@@ -34,6 +36,7 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/nodes"
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -64,12 +67,12 @@ func newHarness(t *testing.T, unwanted nodes.Unwanted) *harness {
 
 	go func() { _ = conns.Serve(t.Context(), listener, unwanted, slog.New(slog.DiscardHandler)) }()
 
-	return &harness{conns: conns, pool: provider(t, "", conns), address: listener.Addr().String()}
+	return &harness{conns: conns, pool: provider(t, TypeContainerd, "", conns), address: listener.Addr().String()}
 }
 
-// provider builds homelab over conns from a config block's source, which may
-// be empty.
-func provider(t *testing.T, src string, conns *nodes.Conns) *Provider {
+// provider builds homelab of providerType over conns from a config block's
+// source, which may be empty.
+func provider(t *testing.T, providerType, src string, conns *nodes.Conns) *Provider {
 	t.Helper()
 
 	var body hcl.Body
@@ -83,7 +86,7 @@ func provider(t *testing.T, src string, conns *nodes.Conns) *Provider {
 		body = f.Body
 	}
 
-	p, diags := New("homelab", body, conns)
+	p, diags := New("homelab", providerType, body, conns)
 	if diags.HasErrors() {
 		t.Fatalf("New() = %s", diags.Error())
 	}
@@ -96,48 +99,16 @@ func provider(t *testing.T, src string, conns *nodes.Conns) *Provider {
 func (h *harness) join(t *testing.T, name string, memory int64, exec *executortest.Fake) func() {
 	t.Helper()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
+	stop := agenttest.Run(t, &agent.Config{Server: h.address, Pool: "homelab", Name: name},
+		fingerprint.Node{Architecture: "amd64", CPU: 8000, Memory: memory}, exec)
 
-	a := agent.New(&agent.Config{Server: h.address, Pool: "homelab", Name: name},
-		fingerprint.Node{Architecture: "amd64", CPU: 8000, Memory: memory},
-		exec, slog.New(slog.DiscardHandler))
-
-	go func() {
-		defer close(done)
-		_ = a.Run(ctx)
-	}()
-
-	stop := func() {
-		cancel()
-		<-done
-	}
-
-	t.Cleanup(stop)
-
-	await(t, name+" to join", func() bool {
+	testkit.Eventually(t, 5*time.Second, name+" to join", func() bool {
 		_, ok := h.conns.Get(name)
 
 		return ok
 	})
 
 	return stop
-}
-
-// await polls cond until it holds, or fails the test after five seconds.
-func await(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	t.Fatalf("timed out waiting for %s", what)
 }
 
 // task is a container task declaring memory MiB.
@@ -161,7 +132,7 @@ func task(t *testing.T, memory int) *job.Task {
 func (h *harness) place(t *testing.T, node string, memory int) execution.ID {
 	t.Helper()
 
-	id := newExecutionID(t)
+	id := testkit.NewID(t)
 	on := h.pool.Target(node)
 
 	if err := on.(plugin.Reserver).Reserve(id, task(t, memory)); err != nil {
@@ -212,18 +183,6 @@ func (h *harness) freeMemory(t *testing.T, name string) int {
 	return 0
 }
 
-// newExecutionID mints an execution ID.
-func newExecutionID(t *testing.T) execution.ID {
-	t.Helper()
-
-	id, err := execution.NewID()
-	if err != nil {
-		t.Fatalf("NewID() = %v", err)
-	}
-
-	return id
-}
-
 // -------------------------------------------------------------------------
 // CONFIGURATION
 // -------------------------------------------------------------------------
@@ -231,17 +190,17 @@ func newExecutionID(t *testing.T) execution.ID {
 // The block is optional: the pool defaults to the label and placement to
 // spread, and an unknown placement is refused.
 func TestNew_Config(t *testing.T) {
-	if p := provider(t, "", nodes.New()); p.cfg.Pool != "homelab" || p.cfg.Placement != PlacementSpread {
+	if p := provider(t, TypeContainerd, "", nodes.New()); p.cfg.Pool != "homelab" || p.cfg.Placement != PlacementSpread {
 		t.Errorf("defaults = %+v, want pool homelab and spread", p.cfg)
 	}
 
-	if p := provider(t, "pool = \"lab\"\nplacement = \"pack\"", nodes.New()); p.cfg.Pool != "lab" || p.cfg.Placement != PlacementPack {
+	if p := provider(t, TypeFirecracker, "pool = \"lab\"\nplacement = \"pack\"", nodes.New()); p.cfg.Pool != "lab" || p.cfg.Placement != PlacementPack {
 		t.Errorf("config = %+v, want pool lab and pack", p.cfg)
 	}
 
 	for _, src := range []string{`placement = "random"`, `colour = "red"`} {
 		f, _ := hclsyntax.ParseConfig([]byte(src), "test.hcl", hcl.InitialPos)
-		if p, diags := New("homelab", f.Body, nodes.New()); p != nil || !diags.HasErrors() {
+		if p, diags := New("homelab", TypeContainerd, f.Body, nodes.New()); p != nil || !diags.HasErrors() {
 			t.Errorf("New(%s) = %v, %s; want refused", src, p, diags.Error())
 		}
 	}
@@ -268,13 +227,55 @@ func TestPool_CapabilitiesFollowNodes(t *testing.T) {
 	}
 
 	member := &caps.Members[0].Capabilities
-	if !member.SupportsArch(job.ArchAMD64) || *member.MaxResources.Memory != 4096 {
+	if !member.SupportsArch(job.ArchAMD64) || *member.MaxResources.Memory != 4096 || member.Isolation != plugin.IsolationContainer {
 		t.Errorf("member = %+v", member)
 	}
 
 	// Admission sizes an undeclared task as placement does.
-	if member.DefaultResources != defaultResources || caps.DefaultResources != defaultResources {
-		t.Errorf("default resources = %+v and %+v, want %+v", member.DefaultResources, caps.DefaultResources, defaultResources)
+	if member.DefaultResources != defaultResources {
+		t.Errorf("default resources = %+v, want %+v", member.DefaultResources, defaultResources)
+	}
+}
+
+// A firecracker provider is made of the pool's nodes running firecracker
+// alone. It publishes their isolation and room after the microVM's overhead,
+// charges the overhead when it reserves, and names its executor to the node.
+func TestPool_FirecrackerTakesItsNodesAndOverhead(t *testing.T) {
+	h := newHarness(t, nil)
+	vm := &executortest.Fake{Name: TypeFirecracker, Overhead: &agentrpc.Resources{Memory: 32}}
+
+	h.join(t, "box1", 4096, &executortest.Fake{})
+	h.join(t, "box2", 4096, vm)
+
+	micro := provider(t, TypeFirecracker, "", h.conns)
+
+	caps, err := micro.LiveCapabilities()
+	if err != nil || len(caps.Members) != 1 || caps.Members[0].Name != "box2" {
+		t.Fatalf("LiveCapabilities() = %+v, %v; want box2 alone", caps, err)
+	}
+
+	member := &caps.Members[0].Capabilities
+	if *member.MaxResources.Memory != 4064 || member.Isolation != plugin.IsolationVM {
+		t.Errorf("member = %+v, want 4064 MiB of room and vm isolation", member)
+	}
+
+	id := testkit.NewID(t)
+	on := micro.Target("box2")
+
+	if err := on.(plugin.Reserver).Reserve(id, task(t, 4064)); err != nil {
+		t.Fatalf("Reserve() = %v", err)
+	}
+
+	if _, memory := h.conns.Free("box2"); memory != 0 {
+		t.Errorf("free after reserving 4064 MiB with 32 overhead = %d MiB, want 0", memory)
+	}
+
+	if _, err := on.Submit(t.Context(), id, task(t, 4064)); err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+
+	if got := vm.Workload(id.String()).GetExecutor(); got != TypeFirecracker {
+		t.Errorf("the node was sent a workload for %q, want %q", got, TypeFirecracker)
 	}
 }
 
@@ -309,8 +310,8 @@ func TestPool_FullNodePublishesZeroRoom(t *testing.T) {
 	}
 
 	room := caps.Members[0].Capabilities.MaxResources
-	if room.Memory == nil || *room.Memory != 0 || caps.MaxResources.Memory == nil || *caps.MaxResources.Memory != 0 {
-		t.Errorf("room = %+v, summary = %+v; want memory limits of zero", room, caps.MaxResources)
+	if room.Memory == nil || *room.Memory != 0 {
+		t.Errorf("room = %+v; want a memory limit of zero", room)
 	}
 }
 
@@ -333,7 +334,7 @@ func TestPool_RoomIsTakenAndReturned(t *testing.T) {
 
 	refused := []string{"box1", "gone"}
 	for _, node := range refused {
-		if err := h.pool.Target(node).(plugin.Reserver).Reserve(newExecutionID(t), task(t, 2048)); !errors.Is(err, plugin.ErrNoRoom) {
+		if err := h.pool.Target(node).(plugin.Reserver).Reserve(testkit.NewID(t), task(t, 2048)); !errors.Is(err, plugin.ErrNoRoom) {
 			t.Errorf("Reserve() on %s = %v, want ErrNoRoom", node, err)
 		}
 	}
@@ -342,7 +343,7 @@ func TestPool_RoomIsTakenAndReturned(t *testing.T) {
 		t.Fatalf("Release() = %v", err)
 	}
 
-	await(t, "the room to come back", func() bool { return h.freeMemory(t, "box1") == 4096 })
+	testkit.Eventually(t, 5*time.Second, "the room to come back", func() bool { return h.freeMemory(t, "box1") == 4096 })
 }
 
 // A node that refuses a submission, here for room its own count lacks, gives
@@ -366,7 +367,7 @@ func TestPool_RefusedSubmissionUnreserves(t *testing.T) {
 	}
 
 	for name, s := range submissions {
-		id := newExecutionID(t)
+		id := testkit.NewID(t)
 
 		if err := on.(plugin.Reserver).Reserve(id, task(t, 1024)); err != nil {
 			t.Fatalf("Reserve() = %v", err)
@@ -380,6 +381,20 @@ func TestPool_RefusedSubmissionUnreserves(t *testing.T) {
 		if free := h.freeMemory(t, "box1"); free != 4096 {
 			t.Errorf("free after the submission %s = %d MiB, want all of it", name, free)
 		}
+	}
+}
+
+// A workload the node finds no node could run, such as one with an image
+// reference that does not parse, fails as internal rather than moving on.
+func TestPool_AWorkloadNoNodeCouldRunStays(t *testing.T) {
+	h := newHarness(t, nil)
+	h.join(t, "box1", 4096, &executortest.Fake{Pull: func(context.Context, string) error {
+		return fmt.Errorf("%w: image %q", executor.ErrInvalid, "Not A Reference")
+	}})
+
+	_, err := h.pool.Target("box1").Submit(t.Context(), testkit.NewID(t), task(t, 1024))
+	if failure, ok := errors.AsType[*plugin.Error](err); !ok || failure.Class != plugin.ClassInternal {
+		t.Errorf("Submit() = %v, want an internal failure", err)
 	}
 }
 
@@ -402,7 +417,7 @@ func TestPool_NodeLeavingMidRun(t *testing.T) {
 	}
 
 	stop()
-	await(t, "box1 to leave", func() bool { _, ok := h.conns.Get("box1"); return !ok })
+	testkit.Eventually(t, 5*time.Second, "box1 to leave", func() bool { _, ok := h.conns.Get("box1"); return !ok })
 
 	if _, err := on.Status(t.Context(), id); !plugin.Reroutable(err) {
 		t.Errorf("Status() of a gone node = %v, want an infrastructure failure", err)
@@ -440,12 +455,12 @@ func TestPool_UnwantedWorkloadsAreReleased(t *testing.T) {
 	exec := &executortest.Fake{}
 
 	for _, id := range []string{"old-1", "kept"} {
-		_ = exec.Submit(t.Context(), id, &executor.Spec{})
+		_ = exec.Submit(t.Context(), id, &agentrpc.Workload{})
 	}
 
 	h.join(t, "box1", 4096, exec)
 
-	await(t, "old-1 to be released", func() bool { return exec.Workload("old-1") == nil })
+	testkit.Eventually(t, 5*time.Second, "old-1 to be released", func() bool { return exec.Workload("old-1") == nil })
 
 	if exec.Workload("kept") == nil {
 		t.Error("a wanted workload was released")

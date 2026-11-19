@@ -42,7 +42,12 @@ func (p *Provider) Status(ctx context.Context, id execution.ID) (execution.Statu
 		return execution.Status{}, p.failure(id, err)
 	}
 
-	return st.Execution(id, p.now()), nil
+	out, err := st.Execution(id, p.now())
+	if err != nil {
+		return execution.Status{}, plugin.Internal(fmt.Errorf("node %s: %w", p.node, err))
+	}
+
+	return out, nil
 }
 
 // Result returns a finished execution's exit code and run time from its node.
@@ -150,14 +155,18 @@ func (p *Provider) connected() (*nodes.Conn, error) {
 }
 
 // failure maps a node's answer to the plugin's errors: a node that does not
-// hold the execution is ErrUnknownExecution, anything else is the node failing
-// to answer.
+// hold the execution is ErrUnknownExecution, a workload no node could run is
+// internal, and anything else is the node failing to answer, which sends the
+// work to another.
 func (p *Provider) failure(id execution.ID, err error) error {
-	if status.Code(err) == codes.NotFound {
-		return fmt.Errorf("%w: %s on node %s", plugin.ErrUnknownExecution, id, p.node)
+	switch status.Code(err) {
+	case codes.NotFound:
+		return plugin.UnknownExecution("%s on node %s", id, p.node)
+	case codes.InvalidArgument:
+		return plugin.Internal(fmt.Errorf("node %s: %w", p.node, err))
+	default:
+		return plugin.Infrastructure(fmt.Errorf("node %s: %w", p.node, err))
 	}
-
-	return plugin.Infrastructure(fmt.Errorf("node %s: %w", p.node, err))
 }
 
 // request names id to its node.

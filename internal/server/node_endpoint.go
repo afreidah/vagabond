@@ -70,11 +70,18 @@ func (s *Server) listNodes(_ http.ResponseWriter, _ *http.Request) (any, error) 
 		node := conn.Node
 		freeCPU, freeMemory := s.nodeConns.Free(node.GetName())
 
+		// Workloads still running, not finished ones held until released.
 		running := 0
 		for _, h := range node.GetHeld() {
 			if h.GetRunning() {
 				running++
 			}
+		}
+
+		// What the node runs workloads with, by name.
+		executors := make([]string, 0, len(node.GetExecutors()))
+		for _, e := range node.GetExecutors() {
+			executors = append(executors, e.GetName())
 		}
 
 		out = append(out, api.NodeListStub{
@@ -87,7 +94,7 @@ func (s *Server) listNodes(_ http.ResponseWriter, _ *http.Request) (any, error) 
 			Memory:       node.GetCapacity().GetMemory(),
 			UsedCPU:      node.GetCapacity().GetCpu() - freeCPU,
 			UsedMemory:   node.GetCapacity().GetMemory() - freeMemory,
-			Runtimes:     node.GetRuntimes(),
+			Executors:    executors,
 			Version:      node.GetVersion(),
 			Executions:   running,
 			Connected:    conn.Established.UTC(),

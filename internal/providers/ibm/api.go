@@ -155,8 +155,7 @@ func (p *Provider) getJobRun(ctx context.Context, name string) (*jobRun, error) 
 
 	err := p.call(ctx, http.MethodGet, p.cfg.jobRunURL(p.apiURL, name), nil, &run)
 	if errors.Is(err, plugin.ErrNotFound) {
-		return nil, plugin.Internal(fmt.Errorf("%w: job run %s does not exist",
-			plugin.ErrUnknownExecution, name))
+		return nil, plugin.Internal(plugin.UnknownExecution("job run %s does not exist", name))
 	}
 
 	if err != nil {

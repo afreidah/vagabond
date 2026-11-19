@@ -34,6 +34,7 @@ import (
 	"github.com/afreidah/vagabond/internal/server"
 	"github.com/afreidah/vagabond/internal/state/postgres"
 	"github.com/afreidah/vagabond/internal/state/postgres/pgtest"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -152,7 +153,7 @@ func (h *harness) serve(opts ...server.Option) *api.Client {
 func (h *harness) spend(provider, pool string, amount, limit int64) {
 	h.t.Helper()
 
-	id := newID(h.t)
+	id := testkit.NewID(h.t)
 	period := quota.PeriodMonthly.Key(time.Now())
 
 	fits, _, err := h.store.Reserve(context.Background(), &ledger.Reservation{
@@ -214,18 +215,6 @@ func await(t *testing.T, client *api.Client, id string) *api.Dispatch {
 	t.Fatalf("dispatch %s did not end within %s", id, runTimeout)
 
 	return nil
-}
-
-// newID mints an execution ID.
-func newID(t *testing.T) execution.ID {
-	t.Helper()
-
-	id, err := execution.NewID()
-	if err != nil {
-		t.Fatalf("NewID() = %v", err)
-	}
-
-	return id
 }
 
 // writeJob puts a job file in a temporary directory and returns its path.

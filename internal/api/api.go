@@ -200,8 +200,8 @@ type Billed struct {
 
 // NodeListStub is one connected node as GET /v1/nodes lists it. CPU is
 // millicores and Memory MiB, what the agent may use; UsedCPU and UsedMemory
-// are what its running workloads declared, and Executions how many there are,
-// as the agent last reported.
+// are what its running workloads take, and Executions how many there are, as
+// the agent last reported. Executors names what it runs workloads with.
 type NodeListStub struct {
 	Name         string
 	Pool         string
@@ -212,7 +212,7 @@ type NodeListStub struct {
 	Memory       int64
 	UsedCPU      int64
 	UsedMemory   int64
-	Runtimes     []string
+	Executors    []string
 	Version      string
 	Executions   int
 	Connected    time.Time

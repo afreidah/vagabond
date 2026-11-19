@@ -180,20 +180,17 @@ impl Daemon {
         Record::load(&self.dir.path().join("state"), id).unwrap()
     }
 
-    // stopped waits up to ten seconds for the execution's Firecracker to have
-    // exited, taking the process from the record the daemon saved for it.
+    // stopped waits for the execution's Firecracker to have exited, taking the
+    // process from the record the daemon saved for it.
     async fn stopped(&self, id: &str) {
         let firecracker = self
             .record(id)
             .firecracker
             .expect("the microVM was launched");
-        for _ in 0..100 {
-            if !firecracker.running() {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        panic!("{id}'s Firecracker still runs");
+        firecracker
+            .stopped()
+            .await
+            .unwrap_or_else(|err| panic!("{id}: {err}"));
     }
 }
 
@@ -349,6 +346,7 @@ fn workload(id: &str, drive: &Drive, args: &[&str]) -> ExecutorSubmitRequest {
         }),
         timeout: MessageField::some(Duration::from_secs(60).into()),
         root_drive: drive.device.display().to_string(),
+        root_fstype: "ext4".into(),
         cgroup: CGROUP.into(),
         ..Default::default()
     }
@@ -395,6 +393,44 @@ async fn listening(address: SocketAddr) {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     panic!("nothing listens on {address}");
+}
+
+// A workload runs as the user and groups the agent resolved from its image.
+#[tokio::test]
+#[ignore = "boots microVMs, which needs root and /dev/kvm; run make firecracker-test"]
+async fn a_workload_runs_as_its_images_user() {
+    let daemon = Daemon::start().await;
+    let drive = Drive::new();
+    let mut run = workload("user", &drive, &["/bin/sh", "-c", "id -u; id -g; id -G"]);
+    let process = run.process.mut_or_insert_default();
+    (process.uid, process.gid, process.additional_gids) = (1000, 1000, vec![1001, 1002]);
+    daemon.client.submit(context(), &run).await.unwrap();
+
+    assert_eq!(
+        output(&daemon.client, "user").await,
+        "1000\n1000\n1000 1001 1002\n"
+    );
+}
+
+// A working directory the image lacks is made, parents and all, owned by root,
+// and the workload starts in it.
+#[tokio::test]
+#[ignore = "boots microVMs, which needs root and /dev/kvm; run make firecracker-test"]
+async fn a_missing_working_directory_is_made() {
+    let daemon = Daemon::start().await;
+    let drive = Drive::new();
+    let mut run = workload(
+        "workdir",
+        &drive,
+        &["/bin/sh", "-c", "pwd; stat -c '%u %a' ."],
+    );
+    run.process.mut_or_insert_default().working_dir = "/work/space".into();
+    daemon.client.submit(context(), &run).await.unwrap();
+
+    assert_eq!(
+        output(&daemon.client, "workdir").await,
+        "/work/space\n0 755\n"
+    );
 }
 
 // A command runs in a microVM booted from the root drive, and its output and

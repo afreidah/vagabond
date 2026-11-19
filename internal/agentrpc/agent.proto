@@ -32,20 +32,32 @@ service Node {
 // connects and again whenever its workloads change. capacity is the smallest
 // of the host's resources, the agent's cgroup limits, and its flags. held is
 // every workload it still holds, so a server knows what is placed where and
-// how much of the node is in use, after either side restarts.
+// how much of the node is in use, after either side restarts. executors are
+// what the node runs workloads with. Field 6 listed runtimes.
 message NodeRegisterRequest {
+  reserved 6;
+  reserved "runtimes";
+
   string name = 1;
   string pool = 2;
   map<string, string> labels = 3;
   string architecture = 4;
   Resources capacity = 5;
-  repeated string runtimes = 6;
   string version = 7;
   repeated Held held = 8;
+  repeated NodeExecutor executors = 9;
 }
 
-// Held is one workload on a node: what it declared, and whether it is still
-// running and so still using that much of the node.
+// NodeExecutor is an executor a node runs workloads with, and what each of its
+// workloads takes of the node beyond its declared resources.
+message NodeExecutor {
+  string name = 1;
+  Resources overhead = 2;
+}
+
+// Held is one workload on a node: what it takes of the node, its declared
+// resources with its executor's overhead, and whether it is still running and
+// so still using that much.
 message Held {
   string execution_id = 1;
   Resources resources = 2;
@@ -78,9 +90,13 @@ service AgentExecutions {
   rpc StreamLogs(LogsRequest) returns (stream LogChunk);
 }
 
-// Workload is a task already translated to what a container needs: the server
-// decodes the job, the agent only runs it.
+// Workload is a task already translated to what a node runs: the server
+// decodes the job, the agent only runs it, with the executor it names. Field 8
+// named a runtime.
 message Workload {
+  reserved 8;
+  reserved "runtime";
+
   string image = 1;
   repeated string command = 2;
   repeated string args = 3;
@@ -88,7 +104,7 @@ message Workload {
   string working_dir = 5;
   Resources resources = 6;
   google.protobuf.Duration timeout = 7;
-  string runtime = 8;
+  string executor = 9;
 }
 
 message SubmitRequest {

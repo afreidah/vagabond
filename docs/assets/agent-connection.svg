@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
   <title id="title">The agent connection</title>
-  <desc id="desc">The agent dials one mutual TLS connection to the server, multiplexed with yamux, and presents a certificate whose common name is its node name. The agent calls the server's Node service to register under that name; the server calls the agent's AgentExecutions service to run workloads. The agent starts workloads on the node's containerd, inside the agent's cgroup.</desc>
+  <desc id="desc">The agent dials one mutual TLS connection to the server, multiplexed with yamux, and presents a certificate whose common name is its node name. The agent calls the server's Node service to register under that name and its executors; the server calls the agent's AgentExecutions service to run workloads. The agent starts each workload on the node's containerd, or through vagabond-firecracker in a microVM, inside the agent's cgroup.</desc>
   <defs>
     <style>
       .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:20px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:13px;fill:#c9ccd3}.micro{font-size:13px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}.frame{fill:none;stroke:#9a9ea6;stroke-width:2;stroke-dasharray:7 6}.box{fill:#0d0e12;stroke:#9a9ea6;stroke-width:1.5}
@@ -19,36 +19,42 @@
     </g>
 
     <!-- Connection -->
-    <rect x="330" y="160" width="390" height="180" rx="24" class="frame"/>
-    <text x="525" y="148" text-anchor="middle" class="micro">MUTUAL TLS · YAMUX · AGENT DIALS</text>
-    <path class="line" marker-end="url(#arrow)" d="M712 215H338"/>
-    <text x="525" y="200" text-anchor="middle" class="mono">Node.Register</text>
-    <text x="525" y="240" text-anchor="middle" class="small" style="fill:#9a9ea6">on connect, on change, every 10s</text>
-    <path class="line" marker-end="url(#arrow)" d="M338 285H712"/>
-    <text x="525" y="270" text-anchor="middle" class="mono">AgentExecutions</text>
-    <text x="525" y="310" text-anchor="middle" class="small" style="fill:#9a9ea6">Submit · Status · Result</text>
-    <text x="525" y="330" text-anchor="middle" class="small" style="fill:#9a9ea6">Cancel · Release · StreamLogs</text>
+    <rect x="330" y="160" width="340" height="180" rx="24" class="frame"/>
+    <text x="500" y="148" text-anchor="middle" class="micro">MUTUAL TLS · YAMUX · AGENT DIALS</text>
+    <path class="line" marker-end="url(#arrow)" d="M662 215H338"/>
+    <text x="500" y="200" text-anchor="middle" class="mono">Node.Register</text>
+    <text x="500" y="240" text-anchor="middle" class="small" style="fill:#9a9ea6">on connect, on change, every 10s</text>
+    <path class="line" marker-end="url(#arrow)" d="M338 285H662"/>
+    <text x="500" y="270" text-anchor="middle" class="mono">AgentExecutions</text>
+    <text x="500" y="310" text-anchor="middle" class="small" style="fill:#9a9ea6">Submit · Status · Result</text>
+    <text x="500" y="330" text-anchor="middle" class="small" style="fill:#9a9ea6">Cancel · Release · StreamLogs</text>
 
     <!-- Node -->
-    <rect x="740" y="30" width="430" height="440" rx="30" class="frame"/>
-    <text x="770" y="62" class="micro">NODE</text>
+    <rect x="690" y="30" width="480" height="440" rx="30" class="frame"/>
+    <text x="720" y="62" class="micro">NODE</text>
 
-    <rect x="770" y="80" width="370" height="96" rx="20" class="card"/>
-    <text x="800" y="114" class="label">vagabond agent</text>
-    <text x="800" y="140" class="small">presents its node certificate</text>
-    <text x="800" y="162" class="small">refuses what does not fit</text>
+    <rect x="715" y="80" width="430" height="96" rx="20" class="card"/>
+    <text x="745" y="114" class="label">vagabond agent</text>
+    <text x="745" y="140" class="small">presents its node certificate</text>
+    <text x="745" y="162" class="small">refuses what does not fit</text>
 
-    <path class="line" marker-end="url(#arrow)" d="M955 176V208"/>
+    <path class="line" marker-end="url(#arrow)" d="M800 176V208"/>
+    <path class="line" marker-end="url(#arrow)" d="M1022 176V208"/>
 
-    <rect x="770" y="208" width="370" height="80" rx="20" class="card"/>
-    <text x="800" y="244" class="label">containerd</text>
-    <text x="800" y="268" class="small">namespace vagabond · runc</text>
+    <rect x="715" y="208" width="170" height="80" rx="20" class="card"/>
+    <text x="735" y="244" class="label">containerd</text>
+    <text x="735" y="268" class="small">containers · runc</text>
 
-    <path class="line" marker-end="url(#arrow)" d="M955 288V320"/>
+    <rect x="900" y="208" width="245" height="80" rx="20" class="card"/>
+    <text x="918" y="244" class="label" style="font-size:17px">vagabond-firecracker</text>
+    <text x="918" y="268" class="small">a microVM per workload</text>
 
-    <rect x="770" y="320" width="370" height="124" rx="20" class="frame" style="stroke:#fd7300"/>
-    <text x="800" y="350" class="micro">AGENT'S CGROUP · ITS CAPACITY</text>
-    <rect x="800" y="366" width="96" height="56" rx="10" class="box"/><rect x="908" y="366" width="96" height="56" rx="10" class="box"/><rect x="1016" y="366" width="96" height="56" rx="10" class="box"/>
-    <g class="mono" text-anchor="middle"><text x="848" y="399">workload</text><text x="956" y="399">workload</text><text x="1064" y="399">workload</text></g>
+    <path class="line" marker-end="url(#arrow)" d="M800 288V320"/>
+    <path class="line" marker-end="url(#arrow)" d="M1022 288V320"/>
+
+    <rect x="715" y="320" width="430" height="124" rx="20" class="frame" style="stroke:#fd7300"/>
+    <text x="745" y="350" class="micro">AGENT'S CGROUP · ITS CAPACITY</text>
+    <rect x="740" y="366" width="120" height="56" rx="10" class="box"/><rect x="870" y="366" width="120" height="56" rx="10" class="box"/><rect x="1000" y="366" width="120" height="56" rx="10" class="box"/>
+    <g class="mono" text-anchor="middle"><text x="800" y="399">container</text><text x="930" y="399">container</text><text x="1060" y="399">microVM</text></g>
   </g>
 </svg>

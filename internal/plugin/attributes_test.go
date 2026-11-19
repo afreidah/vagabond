@@ -100,25 +100,17 @@ func TestCapabilities_AttributesAreDerived(t *testing.T) {
 // ATTRIBUTE QUERIES
 // -------------------------------------------------------------------------
 
-// Only the architecture and driver attributes are sets.
-func TestSetValued(t *testing.T) {
-	tests := []struct {
-		name string
-		want bool
-	}{
-		{name: AttrArchitecture, want: true},
-		{name: AttrDrivers, want: true},
-		{name: AttrMaxDuration, want: false},
-		{name: AttrInternetEgress, want: false},
-		{name: "provider.unknown", want: false},
+// Isolation is published as the provider gives it, and left out when it gives
+// none, so a constraint on it matches nothing that did not say.
+func TestAttributes_PublishIsolationOnlyWhenKnown(t *testing.T) {
+	vm := Capabilities{Isolation: IsolationVM}
+	if got := vm.Attributes()[AttrIsolation]; got != IsolationVM {
+		t.Errorf("%s = %q, want %q", AttrIsolation, got, IsolationVM)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := SetValued(tt.name); got != tt.want {
-				t.Errorf("SetValued(%q) = %v, want %v", tt.name, got, tt.want)
-			}
-		})
+	var unknown Capabilities
+	if got, ok := unknown.Attributes()[AttrIsolation]; ok {
+		t.Errorf("%s = %q with no isolation given, want it left out", AttrIsolation, got)
 	}
 }
 

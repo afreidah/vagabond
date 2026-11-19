@@ -1,11 +1,11 @@
 ---
 title: "Agents and Pools"
 linkTitle: "Agents and Pools"
-description: "Interactive diagram of an agent node from startup to running workloads, and the containerd provider that admits, places and tracks work on it."
+description: "Interactive diagram of an agent node from startup to running workloads, as containers or in microVMs, and the containerd and firecracker providers that admit, place and track work on it."
 weight: 5
 ---
 
-How an agent node joins a pool and runs workloads: startup and capacity, the connection to the server, live pool membership and per-node admission, ranking and the room reserved on a node, the `AgentExecutions` calls down to containerd, what happens when a node drops, and the workloads the server tells a node to release. **Hover over any component** for implementation details.
+How an agent node joins a pool and runs workloads: startup and capacity, the connection to the server, live pool membership and per-node admission, ranking and the room reserved on a node, the `AgentExecutions` calls down to the executor holding each workload, containerd or vagabond-firecracker, what happens when a node drops, and the workloads the server tells a node to release. **Hover over any component** for implementation details.
 
 {{< diagram >}}
 
@@ -18,24 +18,33 @@ window.vagabondDiagram = {
     '        FP --> CGROUP{"-cgroup-parent<br>set?"}:::decision',
     '        CGROUP -->|no| DELEGATE[Delegate own cgroup:<br>leaf + controllers]:::process',
     '        CGROUP -->|yes| CTRD',
-    '        DELEGATE --> CTRD[containerd check,<br>log dir, Recover]:::process',
-    '        CTRD --> DIAL[Dial the server:<br>mTLS + yamux]:::process',
+    '        DELEGATE --> CTRD[containerd: log dir,<br>Recover timeouts]:::process',
+    '        CTRD --> INFO[Each executor Info:<br>name, overhead]:::process',
+    '        INFO --> DIAL[Dial the server:<br>mTLS + yamux]:::process',
     '        DIAL --> REPORT[Node.Register:<br>workload report]:::background',
     '    end',
     '',
     '    subgraph WORKLOADS ["Node: workloads"]',
     '        EXECEP[AgentExecutions<br>endpoint]:::process',
-    '        EXECEP -->|Submit| FITS{Fits the<br>node room?}:::filter',
+    '        EXECEP -->|Submit| ROUTER{Executor the<br>workload names?}:::filter',
+    '        ROUTER -->|none on the node| NOEXEC[FailedPrecondition]:::reject',
+    '        ROUTER -->|its executor| FITS{"Fits the node room,<br>overhead included?"}:::filter',
     '        FITS -->|no| REXH[ResourceExhausted]:::reject',
-    '        FITS -->|yes| EXECUTOR',
-    '        EXECEP -->|"Status, Result,<br>Cancel, Release"| EXECUTOR[containerd<br>executor]:::process',
-    '        EXECEP -->|StreamLogs| STREAMLOGS["StreamLogs:<br>seek offset, poll 250 ms"]:::process',
+    '        FITS -->|containerd| CEXEC',
+    '        FITS -->|firecracker| FEXEC',
+    '        EXECEP -->|"Status, Result,<br>Cancel, Release"| HOLDING[Each executor in turn:<br>the one holding it]:::process',
+    '        HOLDING --> CEXEC[containerd<br>executor]:::process',
+    '        HOLDING --> FEXEC[firecracker<br>executor]:::process',
+    '        EXECEP -->|StreamLogs| STREAMLOGS["StreamLogs: from the<br>executor holding it"]:::process',
     '        EXECEP -->|changed| REPORT',
-    '        EXECUTOR --> TIMEOUT[Timeout<br>watcher]:::background',
-    '        EXECUTOR --> WORKLOAD[Workload container:<br>vagabond namespace]:::success',
+    '        CEXEC --> TIMEOUT[Timeout<br>watcher]:::background',
+    '        CEXEC --> WORKLOAD[Workload container:<br>vagabond namespace]:::success',
     '        TIMEOUT -->|SIGTERM, SIGKILL| WORKLOAD',
     '        WORKLOAD -->|stdout, stderr| LOGFILE[("Log file:<br>data-dir/logs")]:::storage',
+    '        FEXEC -->|"devmapper snapshot,<br>executor protocol"| DAEMON[vagabond-firecracker]:::process',
+    '        DAEMON --> MICROVM[Workload microVM:<br>jail, cgroup, tap]:::success',
     '        STREAMLOGS --> LOGFILE',
+    '        STREAMLOGS -->|ReadLogs| DAEMON',
     '    end',
     '',
     '    subgraph SERVERSIDE [Server]',
@@ -44,7 +53,7 @@ window.vagabondDiagram = {
     '        NODEEP -->|yes| CONNS[(nodes.Conns:<br>nodes and their room)]:::storage',
     '        NODEEP -->|yes, answer| UNWANTED["release[]:<br>workloads nothing needs"]:::process',
     '        CONNS --> NODESTATUS["node status<br>GET /v1/nodes"]:::process',
-    '        CONNS --> POOLCAPS[containerd provider:<br>one member per node]:::process',
+    '        CONNS --> POOLCAPS[containerd and firecracker<br>providers: a member per node]:::process',
     '        DISPATCH([Dispatch]):::entry --> ADMIT{Admission<br>per node}:::filter',
     '        POOLCAPS --> ADMIT',
     '        ADMIT -->|each passing node| PLACE[Ranked candidates:<br>labels, then placement]:::process',
@@ -72,7 +81,7 @@ window.vagabondDiagram = {
     AGENT: {
       title: 'vagabond agent',
       badge: 'entry', badgeText: 'entry point',
-      body: '<p>Runs on a node the operator owns, apart from the server (<code>internal/cli/agent.go</code>). Flags: <code>-server</code> (default <code>127.0.0.1:4748</code>), <code>-pool</code> (default <code>default</code>), <code>-name</code>, repeatable <code>-label key=value</code>, <code>-cpu</code>, <code>-memory</code>, <code>-containerd</code>, <code>-data-dir</code>, <code>-cgroup-parent</code>, <code>-log-level</code>.</p><p>With <code>-tls-ca</code>, <code>-tls-cert</code> and <code>-tls-key</code> (all three or none) the node name is the certificate&rsquo;s common name, and a <code>-name</code> that differs is refused. Without TLS the name defaults to the hostname.</p><p>Every step up to dialling exits with status 1 on failure, before the node registers. A server that cannot be reached is not a startup failure.</p><p><a href="../../docs/agent/#flags">Agent flags &rarr;</a></p>'
+      body: '<p>Runs on a node the operator owns, apart from the server (<code>internal/cli/agent.go</code>). Flags: <code>-server</code> (default <code>127.0.0.1:4748</code>), <code>-pool</code> (default <code>default</code>), <code>-name</code>, repeatable <code>-label key=value</code>, <code>-cpu</code>, <code>-memory</code>, <code>-containerd</code>, <code>-firecracker</code>, <code>-data-dir</code>, <code>-cgroup-parent</code>, <code>-log-level</code>.</p><p>With <code>-firecracker</code> the node runs workloads in microVMs as well as containers, through vagabond-firecracker on that socket.</p><p>With <code>-tls-ca</code>, <code>-tls-cert</code> and <code>-tls-key</code> (all three or none) the node name is the certificate&rsquo;s common name, and a <code>-name</code> that differs is refused. Without TLS the name defaults to the hostname.</p><p>Every step up to dialling exits with status 1 on failure, before the node registers. A server that cannot be reached is not a startup failure.</p><p><a href="../../docs/agent/#flags">Agent flags &rarr;</a></p>'
     },
     FP: {
       title: 'Fingerprint the Node',
@@ -90,9 +99,14 @@ window.vagabondDiagram = {
       body: '<p><code>agent.Delegate</code>. cgroup v2 lets a group hold processes or hand controllers to children, not both, so the agent:</p><p>1. uses the parent when its cgroup already ends in <code>/agent</code> (restarted inside its own leaf)<br>2. refuses the root <code>/</code> (a container without <code>--cgroupns=host</code>)<br>3. creates <code>&lt;cgroup&gt;/agent</code> and moves its own PID into it<br>4. enables <code>cpu</code> and <code>memory</code> in each ancestor&rsquo;s <code>cgroup.subtree_control</code> down to <code>&lt;cgroup&gt;</code>&rsquo;s parent; runc enables them in <code>&lt;cgroup&gt;</code> itself when it creates a workload</p><p>Any refusal is <code>cannot manage cgroups under &lt;path&gt;</code>, naming the fixes: <code>Delegate=yes</code> under systemd, or a writable <code>/sys/fs/cgroup</code> with <code>--cgroupns=host</code>.</p><p><a href="../../docs/agent/#cgroup-delegation">Cgroup delegation &rarr;</a></p>'
     },
     CTRD: {
-      title: 'containerd Check, Log Directory, Recover',
+      title: 'containerd: Log Directory, Recover',
       badge: 'process', badgeText: 'executor',
-      body: '<p><code>executor.New</code> connects to containerd on <code>-containerd</code> (default <code>/run/containerd/containerd.sock</code>) in the <code>vagabond</code> namespace and creates <code>&lt;data-dir&gt;/logs</code>, mode <code>0750</code> (default data dir <code>/var/lib/vagabond</code>). <code>Check</code> asks containerd for its version, so a socket nobody answers on fails here.</p><p><code>Recover</code> lists every container in the namespace and re-arms each timeout from its <code>vagabond.timeout</code> and <code>vagabond.started</code> labels; one already past its deadline is stopped at once. Workloads belong to containerd, so they outlive an agent restart.</p><p>The agent then logs <code>node</code> with its name, pool, cpu, memory and cgroup parent, and dials.</p>'
+      body: '<p><code>executor.New</code> connects to containerd on <code>-containerd</code> (default <code>/run/containerd/containerd.sock</code>) in the <code>vagabond</code> namespace and creates <code>&lt;data-dir&gt;/logs</code>, mode <code>0750</code> (default data dir <code>/var/lib/vagabond</code>).</p><p><code>Recover</code> lists every container in the namespace and re-arms each timeout from its <code>vagabond.timeout</code> and <code>vagabond.started</code> labels; one already past its deadline is stopped at once. Workloads belong to containerd, so they outlive an agent restart.</p><p>With <code>-firecracker</code>, <code>executor.NewFirecracker</code> connects to containerd again for the <code>vagabond-firecracker</code> namespace, where its images&rsquo; snapshots live. The agent then logs <code>node</code> with its name, pool, cpu, memory and cgroup parent.</p>'
+    },
+    INFO: {
+      title: 'Each Executor&rsquo;s Info',
+      badge: 'process', badgeText: 'executors',
+      body: '<p><code>agent.New</code> asks every executor what it is: containerd answers once it gives its version; the firecracker executor once containerd&rsquo;s introspection shows the devmapper snapshotter loaded, and vagabond-firecracker answers <code>Info</code>. One that does not answer, or two under one name, stop the agent before it registers.</p><p>Each answers with its name and its overhead, what each of its workloads takes of the node beyond what it declared: none for containerd, <code>--vmm-overhead</code> of memory for a microVM. These are the <code>executors</code> the node registers.</p><p><a href="../../docs/agent/#startup-sequence">Startup sequence &rarr;</a></p>'
     },
     DIAL: {
       title: 'Dial the Server',
@@ -102,32 +116,62 @@ window.vagabondDiagram = {
     REPORT: {
       title: 'Node.Register: Workload Report',
       badge: 'background', badgeText: 'agent loop',
-      body: '<p>Sends <code>name</code>, <code>pool</code>, <code>labels</code>, <code>architecture</code>, <code>capacity</code>, <code>runtimes</code>, <code>version</code> and <code>held[]</code>: every container in the namespace, with its declared CPU and memory from its labels and whether its task still runs.</p><p>Sent on connecting, after a <code>Submit</code> starts a workload, after every <code>Cancel</code> or <code>Release</code>, and every 10 s, which catches a workload finishing on its own. One pending signal covers any number of changes. A failed first registration ends the session; a failed later one logs <code>reporting workloads</code> and the next report carries everything.</p><p>Each report is answered with <code>release[]</code>, the held workloads the server has no use for. The agent releases each through its own <code>Release</code> and logs <code>released a workload the server has no use for</code>; a failed one warns <code>releasing a workload the server has no use for</code> and is answered again on the next report.</p><p>The first report after an agent or server restart lists every workload still held, so the node&rsquo;s room counts them at once.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
+      body: '<p>Sends <code>name</code>, <code>pool</code>, <code>labels</code>, <code>architecture</code>, <code>capacity</code>, <code>version</code>, <code>executors[]</code>, each with its overhead, and <code>held[]</code>: every workload its executors hold, with what it takes, its declared CPU and memory plus its executor&rsquo;s overhead, and whether it still runs. A microVM counts as running until its Firecracker has exited.</p><p>Sent on connecting, after a <code>Submit</code> starts a workload, after every <code>Cancel</code> or <code>Release</code>, and every 10 s, which catches a workload finishing on its own. One pending signal covers any number of changes. A failed first registration ends the session; a failed later one logs <code>reporting workloads</code> and the next report carries everything.</p><p>Each report is answered with <code>release[]</code>, the held workloads the server has no use for. The agent releases each through its own <code>Release</code> and logs <code>released a workload the server has no use for</code>; a failed one warns <code>releasing a workload the server has no use for</code> and is answered again on the next report.</p><p>The first report after an agent or server restart lists every workload still held, so the node&rsquo;s room counts them at once.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
     },
     EXECEP: {
       title: 'AgentExecutions Endpoint',
       badge: 'process', badgeText: 'agent',
-      body: '<p>Served by the agent on the session it opened (<code>internal/agent/executions_endpoint.go</code>): <code>Submit</code>, <code>Status</code>, <code>Result</code>, <code>Cancel</code>, <code>Release</code> and <code>StreamLogs</code>, each translated to the executor.</p><p><code>Submit</code> carries the workload the server already decoded: <code>image</code>, <code>command</code>, <code>args</code>, <code>env</code>, <code>working_dir</code>, <code>resources</code>, <code>timeout</code>, and an empty <code>runtime</code> that defaults to <code>io.containerd.runc.v2</code>. It answers with the state reached and the provider ID.</p><p>A container the node does not hold is <code>NotFound</code>, which the server reads as an unknown execution. Any other executor error is <code>Internal</code>, an infrastructure failure on the server.</p><p><a href="../../docs/agent/#rpcs">Agent RPCs &rarr;</a></p>'
+      body: '<p>Served by the agent on the session it opened (<code>internal/agent/executions_endpoint.go</code>): <code>Submit</code>, <code>Status</code>, <code>Result</code>, <code>Cancel</code>, <code>Release</code> and <code>StreamLogs</code>, each passed to the executor that runs the workload, in the wire messages it came in.</p><p><code>Submit</code> carries the workload the server already decoded: <code>image</code>, <code>command</code>, <code>args</code>, <code>env</code>, <code>working_dir</code>, <code>resources</code>, <code>timeout</code>, and <code>executor</code>, the provider&rsquo;s type. It answers with the state reached and the provider ID.</p><p>An execution no executor holds is <code>NotFound</code>, which the server reads as an unknown execution. An executor the node lacks is <code>FailedPrecondition</code>, and a workload no node could run, such as a bad image reference, <code>InvalidArgument</code>. Any other executor error is <code>Internal</code>, an infrastructure failure on the server.</p><p><a href="../../docs/agent/#rpcs">Agent RPCs &rarr;</a></p>'
+    },
+    ROUTER: {
+      title: 'Executor the Workload Names?',
+      badge: 'filter', badgeText: 'routing',
+      body: '<p>The workload&rsquo;s <code>executor</code> picks one of the executors the agent started with, and with it the overhead its charge carries. The first check of a <code>Submit</code>, so a workload for an executor the node lacks reserves nothing.</p><p><a href="../../docs/agent/#workloads">Workloads &rarr;</a></p>'
+    },
+    NOEXEC: {
+      title: 'FailedPrecondition',
+      badge: 'reject', badgeText: 'no executor',
+      body: '<p><code>the node has no such executor: "&lt;name&gt;"</code></p><p>The server drops its reservation and fails the attempt as infrastructure, as for a node gone, so dispatch may go on to another node.</p>'
+    },
+    HOLDING: {
+      title: 'Each Executor in Turn',
+      badge: 'process', badgeText: 'routing',
+      body: '<p>An execution is on one executor at most, so <code>Status</code>, <code>Result</code>, <code>Cancel</code> and <code>StreamLogs</code> ask each in turn, and the first that holds it answers; <code>NotFound</code> only when none does. Nothing remembers where each execution went, so this holds after a restart too.</p><p><code>Release</code> goes to every executor, each taking one it does not hold as released already.</p>'
     },
     FITS: {
       title: 'Fits the Node Room?',
       badge: 'filter', badgeText: 'room check',
-      body: '<p>The agent checks room itself, since its count can be tighter than the server&rsquo;s. Under a lock it computes what is free with <code>agentrpc.Free</code>, the function the server counts room with: capacity, less the declared CPU and memory of its running workloads, less in-flight submissions it does not report running. The new workload must fit what is left.</p><p>The in-flight reservation is recorded before the lock is released, so the image pull runs outside it, and dropped when <code>Submit</code> returns. A concurrent submission for the same execution waits for the one in flight.</p><p>An execution already held under the same ID is a resubmission: it always fits and starts nothing new. A finished workload keeps its container until released but no longer counts.</p>'
+      body: '<p>The agent checks room itself, since its count can be tighter than the server&rsquo;s. It reads what its executors hold outside the lock, so a slow daemon holds up nothing else, then under the lock computes what is free with <code>agentrpc.Free</code>, the function the server counts room with: capacity, less what its running workloads take, less in-flight submissions it does not report running. The new workload, its declared size plus its executor&rsquo;s overhead, must fit what is left. A submission that settled while the held list was read sends it back for a fresh one.</p><p>The in-flight reservation is recorded before the lock is released, so the image pull runs outside it, and dropped when <code>Submit</code> returns. A concurrent submission for the same execution waits for the one in flight.</p><p>An execution already held under the same ID is a resubmission: it always fits and starts nothing new. A finished workload keeps its container until released but no longer counts.</p>'
     },
     REXH: {
       title: 'ResourceExhausted',
       badge: 'reject', badgeText: 'node full',
       body: '<p><code>the node has &lt;cpu&gt; millicores and &lt;mem&gt; MiB free; the workload needs &lt;cpu&gt; and &lt;mem&gt;</code></p><p>The server drops its reservation on the node, and the attempt fails as infrastructure: <code>node &lt;name&gt;: rpc error: code = ResourceExhausted desc = ...</code>. Dispatch tries another candidate only when the task&rsquo;s <code>retry</code> block allows rerouting. Any other <code>Submit</code> error is handled the same way, as <code>node &lt;name&gt;: ...</code>.</p><p>The server&rsquo;s own room count normally refuses first, before anything is recorded, without spending an attempt.</p><p><a href="../../docs/agent/#refusal-and-retry">Refusal and retry &rarr;</a></p>'
     },
-    EXECUTOR: {
+    CEXEC: {
       title: 'containerd Executor',
       badge: 'process', badgeText: 'executor',
-      body: '<p><code>Containerd.Submit</code> leaves an existing container under the execution ID alone, since the ID is the idempotency key. Otherwise it normalises and pulls the image (<code>alpine</code> &rarr; <code>docker.io/library/alpine:latest</code>, no registry credentials), creates the container and snapshot under the execution ID, and starts the task.</p><p>The OCI spec is the image config, then <code>command</code> / <code>args</code>, <code>env</code> and working directory. <code>memory</code> MiB is the memory limit, <code>cpu</code> a CFS quota of <code>cpu &times; 100</code> &micro;s per 100000 &micro;s, in cgroup <code>&lt;parent&gt;/&lt;execution-id&gt;</code>, on the host network with the host&rsquo;s <code>resolv.conf</code> and <code>hosts</code>.</p><p><code>Cancel</code> labels <code>vagabond.cancelled=true</code> and sends <code>SIGTERM</code>, <code>SIGKILL</code> 10 s later. <code>Release</code> deletes the task, container, snapshot and log file; releasing one the node does not hold succeeds.</p>'
+      body: '<p><code>Containerd.Submit</code> leaves an existing container under the execution ID alone, since the ID is the idempotency key. Otherwise it normalises and pulls the image (<code>alpine</code> &rarr; <code>docker.io/library/alpine:latest</code>, no registry credentials), creates the container and snapshot under the execution ID, and starts the task. A start that fails removes what it made, so a retry starts afresh; an image reference that does not parse is <code>InvalidArgument</code>.</p><p>The OCI spec is the image config, then <code>command</code> / <code>args</code>, <code>env</code> and working directory. <code>memory</code> MiB is the memory limit, <code>cpu</code> a CFS quota of <code>cpu &times; 100</code> &micro;s per 100000 &micro;s, in cgroup <code>&lt;parent&gt;/&lt;execution-id&gt;</code>, on the host network with the host&rsquo;s <code>resolv.conf</code> and <code>hosts</code>.</p><p><code>Cancel</code> labels <code>vagabond.cancelled=true</code> and sends <code>SIGTERM</code>, <code>SIGKILL</code> 10 s later. <code>Release</code> deletes the task, container, snapshot and log file; releasing one the node does not hold succeeds.</p>'
+    },
+    FEXEC: {
+      title: 'firecracker Executor',
+      badge: 'process', badgeText: 'executor',
+      body: '<p><code>executor.Firecracker</code>. <code>Submit</code> leaves an execution the daemon already holds alone. Otherwise it pulls the image through containerd into a devmapper snapshot, through the same container creation the containerd executor uses, so the image&rsquo;s process and user resolve the same way, and hands vagabond-firecracker the process, the snapshot&rsquo;s block device and filesystem type, and the agent&rsquo;s cgroup. A refused hand-over deletes the snapshot.</p><p>Every other call goes straight to the daemon over the executor protocol, ttRPC, its <code>NotFound</code> read as an execution it does not hold. A connection found closed is dialled again, backing off 1 s to 30 s.</p><p><a href="../firecracker/">Firecracker diagram &rarr;</a></p>'
+    },
+    DAEMON: {
+      title: 'vagabond-firecracker',
+      badge: 'process', badgeText: 'daemon',
+      body: '<p>The daemon beside the agent, reached on <code>-firecracker</code>. It runs each workload in a microVM of its own, keeps every record, watches timeouts and follows output itself, so its microVMs outlive the agent and the daemon both.</p><p><code>Held</code> reports each microVM at its declared size plus <code>--vmm-overhead</code>, running until its Firecracker exits; <code>ReadLogs</code> serves the output from an offset.</p><p><a href="../../docs/firecracker/">vagabond-firecracker &rarr;</a></p>'
+    },
+    MICROVM: {
+      title: 'Workload MicroVM',
+      badge: 'success', badgeText: 'Firecracker',
+      body: '<p>A Firecracker microVM with its own kernel, in a jail and a cgroup of its own under the agent&rsquo;s, its root drive the snapshot, on a tap behind NAT. <code>vagabond-init</code> runs the workload as the image&rsquo;s user and serves its output and exit over vsock.</p><p><a href="../firecracker/">Firecracker diagram &rarr;</a></p>'
     },
     TIMEOUT: {
       title: 'Timeout Watcher',
       badge: 'background', badgeText: 'agent goroutine',
-      body: '<p>One goroutine per workload that declares a <code>timeout</code>, started by <code>Submit</code> and, after a restart, by <code>Recover</code>. At <code>vagabond.started</code> plus the timeout it sends <code>SIGTERM</code>, then <code>SIGKILL</code> 10 s later if the process has not exited.</p><p>A timed-out workload is not labelled cancelled: it ends <code>failed</code> with its exit status, or <code>succeeded</code> if it exits 0 on <code>SIGTERM</code>. No timeout means no watcher.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
+      body: '<p>One goroutine per container that declares a <code>timeout</code>; vagabond-firecracker watches its microVMs&rsquo; timeouts itself. Each is started by <code>Submit</code> and, after a restart, by <code>Recover</code>. At <code>vagabond.started</code> plus the timeout it sends <code>SIGTERM</code>, then <code>SIGKILL</code> 10 s later if the process has not exited.</p><p>A timed-out workload is not labelled cancelled: it ends <code>failed</code> with its exit status, or <code>succeeded</code> if it exits 0 on <code>SIGTERM</code>. No timeout means no watcher.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
     },
     WORKLOAD: {
       title: 'Workload Container',
@@ -142,7 +186,7 @@ window.vagabondDiagram = {
     STREAMLOGS: {
       title: 'StreamLogs',
       badge: 'process', badgeText: 'live output',
-      body: '<p>Takes <code>execution_id</code> and <code>offset</code>, the bytes the server already has. <code>Containerd.Logs</code> opens the log file, seeks to <code>offset</code>, and sends what is there as <code>LogChunk</code>s, reading the workload&rsquo;s state between copies and waiting 250 ms while it runs.</p><p>Once the workload is terminal, or released mid-stream, it sends whatever the file still holds and ends the stream. No log file is <code>Internal</code>. An agent that predates <code>offset</code> streams from the start.</p><p>The provider&rsquo;s <code>ReadLogs</code> is this stream from offset 0, which ends once the workload has, so the server captures a workload&rsquo;s whole output through it before releasing.</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
+      body: '<p>Takes <code>execution_id</code> and <code>offset</code>, the bytes the server already has, and asks each executor in turn; one that does not hold the execution answers so before writing anything. <code>Containerd.Logs</code> opens the log file, seeks to <code>offset</code>, and sends what is there as <code>LogChunk</code>s, reading the workload&rsquo;s state between copies and waiting 250 ms while it runs. The firecracker executor reads <code>ReadLogs</code> from the daemon until it says the output has ended, waiting 250 ms only when a read brought nothing new.</p><p>Once the workload is terminal, or released mid-stream, it sends what is left and ends the stream. A container with no log yet has written nothing.</p><p>The provider&rsquo;s <code>ReadLogs</code> is this stream from offset 0, which ends once the workload has, so the server captures a workload&rsquo;s whole output through it before releasing.</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
     },
     LISTEN: {
       title: 'Agent Listener',
@@ -162,17 +206,17 @@ window.vagabondDiagram = {
     CONNS: {
       title: 'nodes.Conns',
       badge: 'storage', badgeText: 'in memory',
-      body: '<p>Every connected node by name: its last report, an <code>AgentExecutions</code> client on its session, the address it connected from, and when that session registered; and the room reserved on each node, by execution ID. Per server process.</p><p><code>Report</code>: a first report adds the node, which the server logs as <code>node registered</code> with <code>held=&lt;n&gt;</code>; a later one on the same session replaces what it reported; one under the same name on a new session closes the old session and replaces it. A report drops the reservation of every workload it lists.</p><p>Room is counted here once per node, whatever providers draw on it. <code>Free</code> is capacity, less the declared size of running workloads, less reservations the node does not report running, through <code>agentrpc.Free</code>, the function the agent checks with. <code>Reserve</code> checks and holds in one locked step; <code>Unreserve</code> gives the room back.</p><p><code>Remove</code> on session close forgets the nodes registered on it. A node that already reconnected is not removed when its old session closes.</p>'
+      body: '<p>Every connected node by name: its last report, an <code>AgentExecutions</code> client on its session, the address it connected from, and when that session registered; and the room reserved on each node, by execution ID. Per server process.</p><p><code>Report</code>: a first report adds the node, which the server logs as <code>node registered</code> with <code>held=&lt;n&gt;</code>; a later one on the same session replaces what it reported; one under the same name on a new session closes the old session and replaces it. A report drops the reservation of every workload it lists.</p><p>Room is counted here once per node, whatever providers draw on it. <code>Free</code> is capacity, less what running workloads take, their declared size and their executor&rsquo;s overhead, less reservations the node does not report running, through <code>agentrpc.Free</code>, the function the agent checks with. <code>Reserve</code> checks and holds in one locked step; <code>Unreserve</code> gives the room back.</p><p><code>Remove</code> on session close forgets the nodes registered on it. A node that already reconnected is not removed when its old session closes.</p>'
     },
     NODESTATUS: {
       title: 'node status / GET /v1/nodes',
       badge: 'process', badgeText: 'read',
-      body: '<p><code>vagabond node status</code> and <code>GET /v1/nodes</code> list the connected nodes by name: pool, address, labels, architecture, capacity, used CPU and memory, runtimes, version, running workloads, and when the session registered, in UTC.</p><p>Used figures are capacity less <code>nodes.Conns.Free</code>: the declared sizes of running workloads as of the node&rsquo;s last report, plus this server&rsquo;s reservations on the node that it does not report running yet.</p><p><a href="../../docs/agent/#node-status">Node status &rarr;</a></p>'
+      body: '<p><code>vagabond node status</code> and <code>GET /v1/nodes</code> list the connected nodes by name: pool, address, labels, architecture, executors, capacity, used CPU and memory, version, running workloads, and when the session registered, in UTC.</p><p>Used figures are capacity less <code>nodes.Conns.Free</code>: what running workloads take as of the node&rsquo;s last report, plus this server&rsquo;s reservations on the node that it does not report running yet.</p><p><a href="../../docs/agent/#node-status">Node status &rarr;</a></p>'
     },
     POOLCAPS: {
-      title: 'containerd Provider: Live Capabilities',
-      badge: 'process', badgeText: 'containerd provider',
-      body: '<p><code>pool.Provider.LiveCapabilities</code> builds the provider from <code>Conns.InPool</code> on every plan (<code>plugin.Live</code>), not from the periodic refresh, so a node is schedulable once it registers and gone once its session closes. The pool is the <code>config</code> block&rsquo;s <code>pool</code>, default the provider&rsquo;s label. No node is an error, <code>no nodes have joined pool "&lt;pool&gt;"</code>, and the provider is unhealthy.</p><p>Each node is one member with its own snapshot: driver <code>container</code>, its architecture, <code>max_cpu</code> and <code>max_memory</code> as the room <code>Conns.Free</code> says it has left (0 when full), internet, private network and arbitrary images, a default size of 1000 millicores / 1024 MiB, and its labels as <code>node.label.&lt;key&gt;</code>.</p><p>Members are in <code>placement</code> order: <code>spread</code> (default) puts the most free memory first, <code>pack</code> the least, ties by name. Two providers may draw on one pool; a node&rsquo;s room is counted once.</p><p><a href="../../docs/agent/#node-attributes">Node attributes &rarr;</a></p>'
+      title: 'Node Providers: Live Capabilities',
+      badge: 'process', badgeText: 'node provider',
+      body: '<p><code>pool.Provider.LiveCapabilities</code>, behind both the <code>containerd</code> and the <code>firecracker</code> type, builds the provider from <code>Conns.InPool</code> on every plan (<code>plugin.Live</code>), not from the periodic refresh: the pool&rsquo;s nodes that run its type&rsquo;s executor. A node is schedulable once it registers and gone once its session closes. The pool is the <code>config</code> block&rsquo;s <code>pool</code>, default the provider&rsquo;s label. No node is an error, <code>no nodes running &lt;type&gt; have joined pool "&lt;pool&gt;"</code>, and the provider is unhealthy.</p><p>Each node is one member with its own snapshot: driver <code>container</code>, its architecture, <code>max_cpu</code> and <code>max_memory</code> as the room <code>Conns.Free</code> says it has left after the executor&rsquo;s overhead (0 when full), internet, private network and arbitrary images, <code>isolation</code> <code>container</code> or <code>vm</code>, a default size of 1000 millicores / 1024 MiB, and its labels as <code>node.label.&lt;key&gt;</code>.</p><p>Members are in <code>placement</code> order: <code>spread</code> (default) puts the most free memory first, <code>pack</code> the least, ties by name. Two providers may draw on one pool; a node&rsquo;s room is counted once.</p><p><a href="../../docs/agent/#node-attributes">Node attributes &rarr;</a></p>'
     },
     DISPATCH: {
       title: 'Dispatch',
@@ -192,7 +236,7 @@ window.vagabondDiagram = {
     RESERVE: {
       title: 'Room on the Node?',
       badge: 'filter', badgeText: 'node room',
-      body: '<p>After the candidate&rsquo;s quota is reserved, <code>Provider.Reserve</code> calls <code>Conns.Reserve</code>, which checks and holds the task&rsquo;s size on the node in one locked step: its <code>resources</code>, 1000 millicores and 1024 MiB for unset or zero.</p><p><b>No room, or not connected</b>: <code>plugin.ErrNoRoom</code>, <code>no room on the node: node &lt;name&gt; has &lt;cpu&gt; millicores and &lt;mem&gt; MiB free; the task needs &lt;cpu&gt; and &lt;mem&gt;</code> or <code>no room on the node: node &lt;name&gt; is not connected</code>. A refusal: the quota reservation is dropped, nothing is recorded, no attempt is spent, and dispatch goes on to the next candidate.</p><p><b>Held</b>: the execution is recorded with its node, then <code>Submit</code> is sent to it. The reservation is dropped when the node&rsquo;s report includes the workload, after 2 minutes, when the task does not translate or <code>Submit</code> fails, and on <code>Release</code>.</p><p><a href="../../docs/agent/#reservations">Reservations &rarr;</a></p>'
+      body: '<p>After the candidate&rsquo;s quota is reserved, <code>Provider.Reserve</code> calls <code>Conns.Reserve</code>, which checks and holds the task&rsquo;s charge on the node in one locked step: its <code>resources</code>, 1000 millicores and 1024 MiB for unset or zero, plus the overhead the node registered for the provider&rsquo;s executor.</p><p><b>No room, or not connected</b>: <code>plugin.ErrNoRoom</code>, <code>no room on the node: node &lt;name&gt; has &lt;cpu&gt; millicores and &lt;mem&gt; MiB free; the task needs &lt;cpu&gt; and &lt;mem&gt;</code> or <code>no room on the node: node &lt;name&gt; is not connected</code>. A refusal: the quota reservation is dropped, nothing is recorded, no attempt is spent, and dispatch goes on to the next candidate.</p><p><b>Held</b>: the execution is recorded with its node, then <code>Submit</code> is sent to it. The reservation is dropped when the node&rsquo;s report includes the workload, after 2 minutes, when the task does not translate or <code>Submit</code> fails, and on <code>Release</code>.</p><p><a href="../../docs/agent/#reservations">Reservations &rarr;</a></p>'
     },
     RECORD: {
       title: 'Execution Record: Node',
@@ -202,12 +246,12 @@ window.vagabondDiagram = {
     UNWANTED: {
       title: 'Answer: release[]',
       badge: 'process', badgeText: 'cleanup',
-      body: '<p>Every <code>Node.Register</code> is answered with <code>NodeRegisterResponse.release</code>: the held workloads whose execution is released, was never recorded, or whose ID is not an execution ID. The server reads each held execution&rsquo;s record with the store&rsquo;s <code>Get</code>.</p><p>A record it cannot read is kept, so a server that cannot reach its store releases nothing.</p><p>The agent releases each through its own <code>Release</code>: the task killed, the container, snapshot and log file deleted. It logs <code>released a workload the server has no use for</code>. An agent that predates <code>release</code> ignores it and keeps what it holds.</p><p><a href="../../docs/agent/#releasing-what-nothing-needs">Releasing what nothing needs &rarr;</a></p>'
+      body: '<p>Every <code>Node.Register</code> is answered with <code>NodeRegisterResponse.release</code>: the held workloads whose execution is released, was never recorded, or whose ID is not an execution ID. The server reads each held execution&rsquo;s record with the store&rsquo;s <code>Get</code>.</p><p>A record it cannot read is kept, so a server that cannot reach its store releases nothing.</p><p>The agent releases each through its own <code>Release</code>, on every executor: a container&rsquo;s task killed, and the container, snapshot and log file deleted; a microVM removed with all vagabond-firecracker kept for it. It logs <code>released a workload the server has no use for</code>. An agent that predates <code>release</code> ignores it and keeps what it holds.</p><p><a href="../../docs/agent/#releasing-what-nothing-needs">Releasing what nothing needs &rarr;</a></p>'
     },
     POOLEXEC: {
       title: 'Node Executions',
-      badge: 'process', badgeText: 'containerd provider',
-      body: '<p><code>Status</code>, <code>Result</code>, <code>Cancel</code>, <code>Release</code> and <code>StreamLogs</code> each go to the node the execution&rsquo;s record names, through the provider <code>plugin.Target</code> returns for that node (<code>internal/providers/pool/executions.go</code>), after a server restart as before it.</p><p><code>Release</code> drops any reservation first. A <code>NotFound</code> from the node is an unknown execution; any other error is infrastructure, <code>node &lt;name&gt;: ...</code>.</p>'
+      badge: 'process', badgeText: 'node provider',
+      body: '<p><code>Status</code>, <code>Result</code>, <code>Cancel</code>, <code>Release</code> and <code>StreamLogs</code> each go to the node the execution&rsquo;s record names, through the provider <code>plugin.Target</code> returns for that node (<code>internal/providers/pool/executions.go</code>), after a server restart as before it.</p><p><code>Release</code> drops any reservation first. A <code>NotFound</code> from the node is an unknown execution, an <code>InvalidArgument</code> an internal failure that is not rerouted; any other error is infrastructure, <code>node &lt;name&gt;: ...</code>. A state name the node sends that is no state is an internal failure too.</p>'
     },
     GRACE: {
       title: 'Node Connected?',

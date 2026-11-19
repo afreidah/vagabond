@@ -19,7 +19,7 @@ time.
 | Cloud Run Jobs | `internal/providers/gcp` | Asynchronous family, a paged `LogReader`, a `LogStreamer` that lists what was logged before its tail, `Releaser`, `Recredentialer`, raw HTTP against `httptest` |
 | Code Engine Jobs | `internal/providers/ibm` | Asynchronous family, `LogReader` and `LogStreamer` over one log, `Releaser`, a `Recredentialer` whose token refusals are unauthorized, a fixed size table, two APIs behind one token |
 | AWS Lambda | `internal/providers/aws` | Synchronous family, the `NotSupported` embeds, `Result.Billed`, output in `Result.Logs`, `Recredentialer`, a cloud SDK against `httptest` |
-| containerd | `internal/providers/pool` | `Live`, `Targeter` and `Reserver`, `LogStreamer` with `offset` and `LogReader` on top of it, `Releaser`, `Capabilities.Members`, an optional config block |
+| containerd, firecracker | `internal/providers/pool` | One package behind two types, `Live`, `Targeter` and `Reserver`, `LogStreamer` with `offset` and `LogReader` on top of it, `Releaser`, `Capabilities.Members`, an optional config block |
 | Fakes | `internal/plugin/fake.go` | The smallest implementations of both families |
 
 ## Package boundaries
@@ -361,6 +361,7 @@ decides without calling the provider.
 | `InternetEgress` | `bool` | `provider.internet` | `network-unsupported` | No egress |
 | `PrivateNetwork` | `bool` | `provider.private_network` | `network-unsupported` | No private network |
 | `ArbitraryImages` | `bool` | `provider.arbitrary_images` | `image-unsupported` for a task naming `image` | Runs only its own images |
+| `Isolation` | `string`, `plugin.IsolationVM` or `plugin.IsolationContainer` | `provider.isolation` | `constraint-unmet`, when a job constrains it | Unstated, and not published |
 | `EstimatedCost` | `job.Cost` | `provider.estimated_cost` | `cost-policy` | Free |
 | `ObservedAt` | `time.Time` | none | Shown in plans | Never observed |
 | `Members` | `[]plugin.Member` | none | Each member judged separately, and a candidate of its own | Not a provider made of nodes |
@@ -499,10 +500,14 @@ func decodeConfig(name string, body hcl.Body) (*Config, hcl.Diagnostics)
 - **Return `hcl.Diagnostics`, never `error`,** so the CLI prints the file and
   line.
 
-Driver `config` in the task is read with helpers on `*job.Task`:
+A container plugin reads its task once with `plugin.ContainerOf`, which the
+built-in container providers share; anything else in the driver `config` is
+read with helpers on `*job.Task`:
 
 | Helper | Returns |
 |---|---|
+| `plugin.ContainerOf(task, defaults)` | `(plugin.Container, error)`: the image, `command`, `args`, environment, working directory, size with `defaults` for what the task leaves unset, and timeout; a task with no image, or an `env` or `timeout` that does not evaluate, is `plugin.Internal` |
+| `plugin.CloudContainer(plugin.Cloud{...})` | The capabilities of a managed container platform from its maximum, default size, longest run and isolation, so admission sizes a task as `ContainerOf` does |
 | `task.ConfigString(name)` | `(string, bool)`: a string attribute evaluated against the job's variables |
 | `task.ConfigStrings(name)` | `([]string, bool)`: a list of strings; false when absent or empty |
 | `task.Environment()` | `(map[string]string, hcl.Diagnostics)`: the `env` block plus `VAGABOND_META_<KEY>` per job `meta` key |
@@ -670,33 +675,28 @@ func New(_ context.Context, name string, body hcl.Body, credentials []byte) (*Pr
 // Name returns the routing identifier from the provider block's label.
 func (p *Provider) Name() string { return p.name }
 
-// Capabilities reports fixed platform limits; nothing varies by account.
+// platform is the platform's fixed limits; nothing varies by account.
+var platform = plugin.Cloud{
+	Max:         plugin.Resources{CPU: 4000, Memory: 8192},
+	Default:     plugin.Resources{CPU: 1000, Memory: 2048},
+	MaxDuration: time.Hour,
+	Isolation:   plugin.IsolationContainer,
+}
+
+// Capabilities reports the platform as admission needs it.
 func (p *Provider) Capabilities(context.Context) (plugin.Capabilities, error) {
-	return plugin.Capabilities{
-		Drivers:         []job.DriverName{job.DriverContainer},
-		Architectures:   []job.Arch{job.ArchAMD64},
-		MaxResources:    plugin.Limits{CPU: new(4000), Memory: new(8192)},
-		MaxDuration:     time.Hour,
-		InternetEgress:  true,
-		ArbitraryImages: true,
-		ObservedAt:      time.Now(),
-	}, nil
+	return plugin.CloudContainer(platform), nil
 }
 
 // Submit starts a run named after the execution ID, so a retry of the same
 // ID collides rather than starting a second run.
 func (p *Provider) Submit(ctx context.Context, id execution.ID, task *job.Task) (plugin.Submission, error) {
-	image, ok := task.ConfigString(job.ConfigImage)
-	if !ok {
-		return plugin.Submission{}, plugin.Internal(fmt.Errorf("task %q names no image", task.Name))
+	c, err := plugin.ContainerOf(task, platform.Default)
+	if err != nil {
+		return plugin.Submission{}, err
 	}
 
-	env, diags := task.Environment()
-	if diags.HasErrors() {
-		return plugin.Submission{}, plugin.Internal(fmt.Errorf("task %q env: %s", task.Name, diags.Error()))
-	}
-
-	run := map[string]any{"name": runName(id), "image": image, "env": env}
+	run := map[string]any{"name": runName(id), "image": c.Image, "env": c.Env, "memory_mib": c.Memory}
 	if err := p.call(ctx, http.MethodPost, "/runs", run, nil); err != nil {
 		return plugin.Submission{}, err
 	}
@@ -715,7 +715,7 @@ func (p *Provider) Status(ctx context.Context, id execution.ID) (execution.Statu
 	if err := p.call(ctx, http.MethodGet, "/runs/"+runName(id), nil, &run); err != nil {
 		// Only the platform saying "no such run" wraps ErrUnknownExecution.
 		if errors.Is(err, plugin.ErrNotFound) {
-			return execution.Status{}, plugin.Internal(fmt.Errorf("%w: %s", plugin.ErrUnknownExecution, id))
+			return execution.Status{}, plugin.Internal(plugin.UnknownExecution("run %s", runName(id)))
 		}
 
 		return execution.Status{}, err

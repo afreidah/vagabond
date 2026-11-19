@@ -214,7 +214,8 @@ provider "aws-lambda" {
 | `cloud-run` | [Google Cloud Run Jobs](providers/cloud-run.md) | required: `project`, `region`, `runtime_service_account` | required: service account JSON key |
 | `code-engine` | [IBM Code Engine Jobs](providers/code-engine.md) | required: `region`, `project_id`; optional: `image_secret` | required: IAM API key |
 | `lambda` | [AWS Lambda](providers/lambda.md) | required: `region` | optional: `credential_process` JSON; without it, the AWS SDK default chain |
-| `containerd` | The [agent](agent.md#pools) nodes connected to this server that joined its pool | optional: `pool`, `placement` | resolved, unused |
+| `containerd` | Containers on the [agent](agent.md#pools) nodes connected to this server that joined its pool | optional: `pool`, `placement` | resolved, unused |
+| `firecracker` | Firecracker microVMs on the agent nodes that joined its pool and run [vagabond-firecracker](firecracker.md) | optional: `pool`, `placement` | resolved, unused |
 | `fake-container` | In-memory container provider | ignored | resolved, unused |
 | `fake-function` | In-memory function provider | ignored | resolved, unused |
 | `fake-worker` | In-memory worker provider | ignored | resolved, unused |
@@ -226,10 +227,12 @@ Any other value is `Unknown provider type`, listing the known types.
 The fakes run admission, ranking and dispatch with no cloud account.
 `examples/config.hcl` uses them.
 
-### `containerd` provider
+### `containerd` and `firecracker` providers
 
 A provider made of the agent nodes that joined a pool with `vagabond agent
--pool <name>`, each node a candidate of its own:
+-pool <name>`, each node a candidate of its own. A `containerd` provider runs
+its work as containers, a `firecracker` provider in microVMs, on the nodes
+whose agents run with `-firecracker`. Both take the same settings:
 
 ```hcl
 provider "homelab" {
@@ -257,9 +260,14 @@ provider "homelab" {
 - `enabled`, `meta` and `pool` quota blocks apply to the provider as a whole.
 - Its capabilities are read from the connected nodes on every plan, not on the
   one-minute refresh, so a node that joins is schedulable at once.
-- With no connected nodes in its pool it is unhealthy and rejected as
-  `provider-unhealthy`.
-- Two providers may draw on one pool; a node's room is counted once.
+- With no connected nodes in its pool running its executor it is unhealthy
+  and rejected as `provider-unhealthy`.
+- Two providers may draw on one pool; a node's room is counted once, so a
+  `containerd` and a `firecracker` provider on one pool share each node's
+  room. The second sets `pool`, since it defaults to the label.
+- A `firecracker` provider charges each workload Firecracker's overhead too,
+  the `--vmm-overhead` each node registers, and publishes
+  `provider.isolation = "vm"`; a `containerd` one publishes `"container"`.
 - An agent joining a pool no provider draws on connects, but nothing
   schedules onto it.
 

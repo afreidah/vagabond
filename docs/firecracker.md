@@ -1,7 +1,7 @@
 ---
 title: "vagabond-firecracker"
 seoTitle: "vagabond-firecracker: Workloads in Firecracker MicroVMs"
-description: "The vagabond-firecracker daemon and its guest init: requirements, flags, kernel and initramfs, microVM sizing, networking, restarts, the executor protocol, logging, troubleshooting and testing."
+description: "The vagabond-firecracker daemon and its guest init: requirements, flags, deployment, kernel and initramfs, microVM sizing, networking, restarts, the executor protocol, logging, troubleshooting and testing."
 weight: 520
 ---
 
@@ -16,8 +16,12 @@ its output and exit back over vsock.
 MicroVMs belong to their Firecracker processes, not to the daemon: they keep
 running when the daemon stops, and the daemon takes them back when it starts.
 
-The agent does not drive the daemon in this release. `make firecracker-test`
-drives it directly, through the same protocol ([Testing](#testing)).
+The agent drives it when started with `-firecracker <socket>`: it pulls each
+workload's image through the node's containerd into a devmapper snapshot,
+resolves the image's process and user as containerd would, and hands the
+daemon the snapshot's block device as the root drive ([Agent](agent.md)).
+
+![The agent pulls each image through containerd into a devmapper snapshot and resolves its process and user, then calls vagabond-firecracker over the executor protocol, ttRPC on a socket only root can open. The daemon gives each workload a jail, a cgroup, and a tap behind NAT, and starts Firecracker through the jailer, its memory limited to what the workload declared plus Firecracker's overhead. The microVM boots into vagabond-init, which mounts the snapshot as its root drive, runs the workload as the image's user, and talks to the daemon over vsock.](assets/firecracker.svg)
 
 Both programs build from one Rust crate, `rust/vagabond-firecracker`:
 
@@ -42,6 +46,7 @@ Both programs build from one Rust crate, `rust/vagabond-firecracker`:
 | `--chroot-base` on a filesystem that allows device files (not mounted `nodev`) | first `Submit` | `Internal` `Firecracker exited while booting: ...` |
 | `<chroot-base>/firecracker/<execution ID>/root/v.sock` within 107 bytes | each `Submit` | `InvalidArgument` `<path> is too long for a Unix socket; shorten --chroot-base` |
 | The root drive a block device | each `Submit` | `InvalidArgument` `root drive <path> is not a block device` |
+| The root drive's filesystem type one plain word, such as `ext4` | each `Submit` | `InvalidArgument` `root drive filesystem "<type>" is not one word, such as ext4` |
 
 The default `--chroot-base` of `/srv/jailer` leaves room for execution IDs of
 up to 71 characters, past the 64 the jailer accepts. A tmpfs `/tmp` is
@@ -50,8 +55,8 @@ usually mounted `nodev`, so jails cannot live there.
 ## Flags
 
 ```bash
-vagabond-firecracker --kernel /usr/local/share/vagabond-firecracker/vmlinux \
-  --initramfs /usr/local/share/vagabond-firecracker/initramfs.cpio.gz \
+vagabond-firecracker --kernel /usr/share/vagabond-firecracker/vmlinux \
+  --initramfs /usr/share/vagabond-firecracker/initramfs.cpio.gz \
   --uid 990 --gid 990 --uplink eth0
 ```
 
@@ -61,7 +66,6 @@ vagabond-firecracker --kernel /usr/local/share/vagabond-firecracker/vmlinux \
 | `--state-dir <path>` | `/var/lib/vagabond-firecracker` | Each execution's record, output and console, one directory per execution. Created if missing. |
 | `--kernel <path>` | required | Guest kernel every microVM boots. Hard-linked into each jail, or copied when the jail is on another filesystem. |
 | `--initramfs <path>` | required | Initramfs holding `vagabond-init` as `/init`. Linked or copied like the kernel. |
-| `--root-fstype <type>` | `ext4` | Filesystem of the root drives, passed to the guest kernel as `rootfstype=`. |
 | `--firecracker <path>` | `/usr/bin/firecracker` | Firecracker binary the jailer runs. Its file name is part of every jail's path. |
 | `--jailer <path>` | `/usr/bin/jailer` | Jailer each microVM starts through. |
 | `--uid <uid>` | required | User Firecracker runs as inside its jail. Give it to nothing else on the node. |
@@ -94,6 +98,40 @@ vagabond-firecracker --kernel /usr/local/share/vagabond-firecracker/vmlinux \
 
 Steps 2 to 5 log `failed error=...` and exit 1 on failure.
 
+## Deployment
+
+The `vagabond-firecracker` image, amd64 only, holds the daemon,
+`vagabond-init` packed as `/usr/share/vagabond-firecracker/initramfs.cpio.gz`,
+Firecracker and its jailer at `/usr/bin`, where the flags look by default, and
+Firecracker's test kernel at `/usr/share/vagabond-firecracker/vmlinux`: the
+same pinned files the tests boot. Its entrypoint passes `--kernel` and
+`--initramfs`; the deployment gives the rest.
+
+```bash
+docker run -d --name vagabond-firecracker --restart unless-stopped \
+  --privileged --network host --pid host --cgroupns host \
+  -v /dev:/dev \
+  -v /run/vagabond-firecracker:/run/vagabond-firecracker \
+  -v /var/lib/vagabond-firecracker:/var/lib/vagabond-firecracker \
+  -v /srv/jailer:/srv/jailer \
+  <registry>/vagabond-firecracker:<version> --uid 990 --gid 990 --uplink eth0
+```
+
+| Setting | Why |
+|---|---|
+| `--privileged` | `/dev/kvm`, a writable `/sys/fs/cgroup`, device nodes in the jails, and the network changes in [Networking](#networking) |
+| `--network host` | The taps, the nftables table and the Docker rules belong on the host, where microVM traffic flows |
+| `--pid host` | Each record keeps Firecracker's host pid, so a restarted daemon finds it, and the microVMs are not ended with the container |
+| `--cgroupns host` | Each microVM's cgroup is made under the path the agent names, a host path |
+| `/dev` mounted | Each root drive is a devmapper device made after the container started, which a privileged container's own `/dev` does not show |
+| `/run/vagabond-firecracker` mounted | The socket, which the agent names with `-firecracker` |
+| `--state-dir` and `--chroot-base` mounted | Records and output outlive the container, and the jails, which hold device nodes, sit on a filesystem that allows them |
+
+Start the agent with `-firecracker /run/vagabond-firecracker/executor.sock`
+once the daemon serves: it refuses to start when the daemon does not answer
+([Agent](agent.md#flags)). Under systemd, order the agent's unit after the
+daemon's, with `Requires=`.
+
 ## Kernel
 
 Firecracker boots an uncompressed `vmlinux` or a `bzImage` on x86_64, and
@@ -107,7 +145,7 @@ since the initramfs holds none:
 | `CONFIG_VSOCKETS`, `CONFIG_VIRTIO_VSOCKETS` | The guest protocol |
 | `CONFIG_IP_PNP` | The static address and name server given in `ip=` |
 | `CONFIG_DEVTMPFS`, `CONFIG_TMPFS`, `CONFIG_PROC_FS`, `CONFIG_SYSFS` | The filesystems `vagabond-init` mounts |
-| `CONFIG_EXT4_FS`, or the filesystem `--root-fstype` names | The root drive |
+| `CONFIG_EXT4_FS`, or the filesystem the agent's devmapper snapshotter makes (its `fs_type`) | The root drive |
 | `CONFIG_SERIAL_8250`, `CONFIG_SERIAL_8250_CONSOLE` | The guest's console in `console.log` |
 
 Firecracker's own test kernels have all of them. The tests boot
@@ -126,26 +164,17 @@ console=ttyS0 reboot=k panic=1 root=/dev/vda rootfstype=ext4 ip=172.16.0.2::172.
 | `console=ttyS0` | The guest's console on the serial port, which Firecracker writes to `console.log` |
 | `reboot=k` | A guest reboot ends Firecracker, which is how Shutdown, and `vagabond-init` exiting, end the microVM |
 | `panic=1` | A kernel panic reboots after 1 second, ending Firecracker the same way |
-| `root=/dev/vda`, `rootfstype=` | The root drive and its filesystem, read by `vagabond-init`; the kernel runs the initramfs's `/init` and mounts nothing itself |
+| `root=/dev/vda`, `rootfstype=` | The root drive and the filesystem the `Submit` names for it, read by `vagabond-init`; the kernel runs the initramfs's `/init` and mounts nothing itself |
 | `ip=<guest>::<host>:<netmask>::eth0:off:<dns>` | Kernel IP autoconfiguration: the microVM's address, its gateway, no DHCP, and `--dns` as its name server |
 
 ## Initramfs
 
 The initramfs is `vagabond-init` alone, as `/init`, built static against musl
-so it needs no libraries. `rust-toolchain.toml` pins the compiler and installs
-the musl target on first use.
-
-```bash
-cd rust/vagabond-firecracker
-cargo build --release --target x86_64-unknown-linux-musl --bin vagabond-init
-mkdir -p initramfs
-cp target/x86_64-unknown-linux-musl/release/vagabond-init initramfs/init
-(cd initramfs && echo init | cpio --quiet -o -H newc -R 0:0) | gzip > initramfs.cpio.gz
-```
-
-`make rust/vagabond-firecracker/target/kvm/initramfs.cpio.gz` does the same.
-`-R 0:0` makes `/init` root's without building as root. The kernel's own
-built-in initramfs supplies `/dev/console` underneath.
+so it needs no libraries, and packed with `cpio -R 0:0`, which makes `/init`
+root's without building as root. The image builds it in its own build stage;
+`make rust/vagabond-firecracker/target/kvm/initramfs.cpio.gz` builds the same
+for the tests, with the compiler and musl target `rust-toolchain.toml` pins.
+The kernel's own built-in initramfs supplies `/dev/console` underneath.
 
 ## Inside the microVM
 
@@ -177,10 +206,10 @@ The workload is the request's `process`:
 |---|---|
 | `args` | The first is the program, the rest its arguments. A program without a `/` is looked up in the `PATH` that `env` sets, so give one or an absolute path. |
 | `env` | The whole environment; nothing is inherited from `vagabond-init` |
-| `working_dir` | Where it starts; `/` when empty |
+| `working_dir` | Where it starts; `/` when empty. One the image lacks is made, parents included, owned by root with mode `0755`, so a non-root user can enter it but not write to it. |
+| `uid`, `gid`, `additional_gids` | The user and groups it runs as: the image's `USER` as the agent resolves it, root when the image names none. The groups are set first, then the group, then the user. |
 
-It runs as root inside the microVM, the microVM being its boundary. Standard
-input is `/dev/null`; standard output and error share one pipe, so the output
+Standard input is `/dev/null`; standard output and error share one pipe, so the output
 is both, in the order written. Its exit is its code, or 128 plus the signal
 that killed it: 143 for `SIGTERM`, 137 for `SIGKILL`.
 
@@ -382,7 +411,9 @@ with exit 143 or 137.
 ### Cancel
 
 `Cancel` marks the execution cancelled, then stops its workload as a timeout
-does. An execution that has already ended is marked all the same.
+does. An execution that has already ended is marked all the same. One
+cancelled while its microVM boots, before the workload can be signalled, is
+stopped as soon as the workload starts.
 
 ### End
 
@@ -422,6 +453,9 @@ At start, the daemon takes back every execution that has not ended:
 - Any other has its microVM removed and is ended without an exit, so it
   reports `failed` and `Release` clears it. It logs `lost the microVM`.
 
+An execution that ended, but whose Firecracker still runs because the daemon
+stopped between saving the end and shutting the guest down, has its microVM
+removed, so it holds no more of the node. It logs `removing an ended microVM`.
 Finished executions report as saved. Firecracker is known by its pid and its
 start time from `/proc/<pid>/stat` together, since a pid is reused once its
 process is gone but never with the same start time; the daemon never signals
@@ -433,23 +467,24 @@ a process that merely took over a Firecracker's pid.
 
 Package `vagabond.agent.v1`, defined in `internal/agentrpc/executor.proto`
 with the agent protocol's messages wherever they mean the same thing. ttRPC on
-the Unix socket at `--socket`. The crate's `build.rs` generates the Rust code;
-`make generate` leaves `executor.proto` out of the Go bindings.
+the Unix socket at `--socket`. The crate's `build.rs` generates the Rust code,
+and `make generate` the Go client the agent's firecracker executor uses.
 
 | RPC | Request | Response |
 |---|---|---|
-| `Submit` | `execution_id`, `process` (`args`, `env`, `working_dir`), `resources` (`cpu` millicores, `memory` MiB), `timeout`, `root_drive`, `cgroup` | `state`, `provider_id`: the execution ID |
-| `Status` | `execution_id` | `state`, `provider_id`, `started_at`, `ended_at` |
-| `Result` | `execution_id` | `exit_code`, unset if it never exited; `duration` from start to end |
-| `Cancel` | `execution_id` | empty |
-| `Release` | `execution_id` | empty |
+| `Submit` | `execution_id`, `process` (`args`, `env`, `working_dir`, `uid`, `gid`, `additional_gids`), `resources` (`cpu` millicores, `memory` MiB), `timeout`, `root_drive`, `root_fstype`, `cgroup` | `state`, `provider_id`: the execution ID |
 | `ReadLogs` | `execution_id`, `offset` | `data`, `ended` |
-| `Held` | empty | `held[]`: every execution held, ended or not, with its declared `resources` and `running` while it has not ended |
+| `Held` | empty | `held[]`: every execution held, ended or not, with its declared `resources` plus `--vmm-overhead` of memory, and `running` until its Firecracker has exited |
+| `Info` | empty | `name`, `firecracker`, and `overhead`, `--vmm-overhead` as memory, which the agent registers and the server adds to each reservation |
+
+`Status`, `Result`, `Cancel` and `Release` take an `execution_id` and answer
+as the agent's own do ([RPCs](agent.md#rpcs)).
 
 `Submit` refuses, with `InvalidArgument`, an execution ID that is not 1 to 64
 letters, digits and hyphens; no `memory`; a negative `timeout`; no `args`; no
-`root_drive` or `cgroup`; and, from the steps that follow, a socket path too
-long and a root drive that is no block device.
+`root_drive` or `cgroup`; a `root_fstype` that is not one plain word; and,
+from the steps that follow, a socket path too long and a root drive that is
+no block device.
 
 | Code | Returned when |
 |---|---|
@@ -487,8 +522,8 @@ for a call before `Start`, `Internal` for anything else.
   on the node.
 - Firecracker runs jailed: chrooted into the jail, as `--uid` and `--gid`,
   in the microVM's cgroup, under Firecracker's default seccomp filters.
-- The workload runs as root inside the microVM. Its boundary is the microVM
-  and the network rules in [Networking](#networking).
+- The workload runs as the image's user, root when it names none. Its
+  boundary is the microVM and the network rules in [Networking](#networking).
 - Output is kept whole, with no cap: a workload can fill the filesystem
   `--state-dir` is on.
 - Run one daemon per node. A second removes the first's socket as it starts,
@@ -507,11 +542,13 @@ levels.
 | `failed error=` | error | Startup failed; exits 1 |
 | `recovered` | info | A microVM was taken back at start |
 | `lost the microVM` | warn | A microVM could not be taken back and is ended |
+| `removing an ended microVM` | info | An ended execution's microVM still ran at start |
 | `reconnecting to the guest error=` | warn | Why taking it back failed |
 | `started cid= tap=` | info | A workload started |
 | `starting the microVM error=` | warn | A `Submit` failed after its record was saved |
 | `removing the microVM error=`, `forgetting the execution error=` | warn | Cleaning up after a failure, or a `Release`, failed |
 | `cancelling` | info | `Cancel` |
+| `stopping a workload cancelled before it was supervised` | info | A `Cancel` came while the microVM booted, or before a restart |
 | `timed out` | info | A workload reached its timeout |
 | `killing the workload` | info, warn with `error=` | The 10 second grace passed with the workload still running |
 | `stopping the workload error=` | warn | Signalling a timed-out workload failed |
@@ -535,7 +572,6 @@ levels.
 | `Internal writing /sys/fs/cgroup/<cgroup>/<id>/memory.max: ...` | `cpu` and `memory` not delegated to the request's cgroup | Add them to its parent's `cgroup.subtree_control`; under systemd, `Delegate=yes`. |
 | `Firecracker exited while booting: ... Cannot load kernel ...` | `--kernel` is not a kernel Firecracker can load | Point it at a `vmlinux`. |
 | `Firecracker exited while booting: ...` naming `/dev/kvm` | No KVM, or `--chroot-base` mounted `nodev` | Load `kvm_intel` or `kvm_amd`; move `--chroot-base`. |
-| `Firecracker exited while booting: vagabond-init: mounting /dev/vda at /mnt/root as ext4: Invalid argument (os error 22)` | The root drive holds no such filesystem | Match `--root-fstype` to the drives. |
 | `... as xfs: No such device (os error 19)` | The guest kernel lacks that filesystem | Build it in. |
 | `... vagabond-init: reading /proc/net/pnp: No such file or directory (os error 2)` | Guest kernel without `CONFIG_IP_PNP` | Build it in. |
 | `... vagabond-init: serving vsock port 1024: ...` | Guest kernel without vsock | Build in `CONFIG_VSOCKETS` and `CONFIG_VIRTIO_VSOCKETS`. |
@@ -550,6 +586,8 @@ make rust-test              # unit tests; the microVM tests are skipped
 make rust-coverage          # the same, into rust-coverage.lcov, as CI runs it
 make firecracker-test       # the microVM tests, booting real microVMs
 make firecracker-coverage   # the same, into firecracker-coverage.lcov, as CI runs it
+make executor-test          # the agent's executors against a containerd and daemon of their own
+make executor-coverage      # the same, into executor-coverage.out, as CI runs it
 ```
 
 `firecracker-test` fetches Firecracker v1.18.0, its jailer, Firecracker's
@@ -575,6 +613,15 @@ run they make, and remove when each test ends:
 the tests start writes its coverage too, and hands the profiles written as
 root back to your user.
 
-CI's `firecracker` job runs `make firecracker-coverage` on the runner's KVM,
-and fails first if `/dev/kvm` is missing, so a run cannot pass having booted
-nothing. Its report joins `rust-coverage.lcov` in SonarCloud.
+`executor-test` builds the daemon, then `scripts/executor-env.sh` starts it
+beside a containerd of its own, with the devmapper snapshotter on a thin pool
+over loop devices, apart from anything the host runs. The agent's containerd
+and firecracker executor tests run against both as one binary through
+`sudo`, and the environment is cleared after, pass or fail;
+`make executor-env-down` clears what an interrupted run left. They need root,
+`/dev/kvm`, `containerd` and `dmsetup`.
+
+CI's `firecracker` job runs `make firecracker-coverage`, then
+`make executor-coverage`, on the runner's KVM, and fails first if `/dev/kvm`
+is missing, so a run cannot pass having booted nothing. Its reports join
+`rust-coverage.lcov` and the Go profiles in SonarCloud.
