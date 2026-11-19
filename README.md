@@ -141,8 +141,10 @@ See [quickstart.md](docs/quickstart.md). `make install` puts the binary on your
 | `node status` | Connected agent nodes |
 | `provider status [name]` | Configured providers and their quota left; one provider's pools in full |
 | `agent` | Run the agent on a node that executes workloads ([agent.md](docs/agent.md)) |
+| `execution list` | A namespace's recent executions, narrowed by job, state and provider |
 | `execution status <id>` | One execution's record and result |
 | `execution logs <id>` | One execution's stored output, or with `-f` its live output |
+| `dispatch status <id>` | One run and every execution it created |
 | `server [-dev]` | Serve the [HTTP API](docs/api.md) and accept agents |
 
 ## Job file

@@ -182,10 +182,11 @@ func (q *Queries) HoldsExecution(ctx context.Context, arg HoldsExecutionParams) 
 const listDispatchExecutions = `-- name: ListDispatchExecutions :many
 SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated, dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms, node FROM executions
 WHERE dispatch_id = $1
-ORDER BY created_at
+ORDER BY created_at, id
 `
 
-// Every execution of one dispatch, in the order they were created.
+// Every execution of one dispatch, in the order they were created. created_at
+// is the ID's millisecond, so the ID, a UUIDv7, orders a tie.
 func (q *Queries) ListDispatchExecutions(ctx context.Context, dispatchID string) ([]Execution, error) {
 	rows, err := q.db.Query(ctx, listDispatchExecutions, dispatchID)
 	if err != nil {
@@ -237,22 +238,34 @@ func (q *Queries) ListDispatchExecutions(ctx context.Context, dispatchID string)
 	return items, nil
 }
 
-const listJobExecutions = `-- name: ListJobExecutions :many
+const listExecutions = `-- name: ListExecutions :many
 SELECT id, namespace, job, job_version, task, provider, attempt, previous_id, state, provider_id, failure, created_at, started_at, ended_at, updated_at, exit_code, duration_ms, billed_cpu, billed_memory, billed_ms, logs_truncated, dispatch_id, cpu, memory, released_at, reason, logs_start, logs_at, timeout_ms, node FROM executions
-WHERE namespace = $1 AND job = $2
-ORDER BY created_at DESC
-LIMIT $3
+WHERE namespace = $1
+  AND ($2::text = '' OR job = $2::text)
+  AND ($3::text = '' OR state = $3::text)
+  AND ($4::text = '' OR provider = $4::text)
+ORDER BY created_at DESC, id DESC
+LIMIT $5
 `
 
-type ListJobExecutionsParams struct {
+type ListExecutionsParams struct {
 	Namespace string
 	Job       string
+	State     string
+	Provider  string
 	MaxRows   int32
 }
 
-// A job's most recent executions, newest first.
-func (q *Queries) ListJobExecutions(ctx context.Context, arg ListJobExecutionsParams) ([]Execution, error) {
-	rows, err := q.db.Query(ctx, listJobExecutions, arg.Namespace, arg.Job, arg.MaxRows)
+// A namespace's most recent executions, newest first, narrowed by each of job,
+// state and provider that is not empty.
+func (q *Queries) ListExecutions(ctx context.Context, arg ListExecutionsParams) ([]Execution, error) {
+	rows, err := q.db.Query(ctx, listExecutions,
+		arg.Namespace,
+		arg.Job,
+		arg.State,
+		arg.Provider,
+		arg.MaxRows,
+	)
 	if err != nil {
 		return nil, err
 	}

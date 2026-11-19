@@ -211,7 +211,7 @@ the run waits after acceptance:
 
 ```shell
 ==> dispatch 01a0c3f1-9e02-7a44-8c1d-6b2e3f4a5b6c of "go-test"
-==> test accepted on gcp-cloud-run
+==> test accepted on gcp-cloud-run (execution 01a0c3f1-9e0b-7c31-b2f4-0d5e8a1c6f27)
 fake execution output
 ^CJob "go-test" was interrupted. The execution was stopped.
 ```
@@ -250,7 +250,7 @@ providers are rejected with `driver-unsupported` and `cloudflare-workers` with
 
 ```shell
 ==> dispatch 01a0c3f2-4b17-7d09-a1e3-8c5d2f6e7a90 of "hello"
-==> greet succeeded on aws-lambda in 1s
+==> greet succeeded on aws-lambda in 1s (execution 01a0c3f2-4b21-7e5a-9c07-3f1b6d2e8a44)
 ```
 
 Output format:
@@ -263,6 +263,7 @@ Output format:
 | `==> <task> succeeded on <provider> in <duration>` | The task exited 0 |
 | `==> <task> failed (exit N) on <provider> in <duration>` | The task exited non-zero |
 | `...: <reason>` | Appended when the platform ended the task and said why |
+| `... (execution <id>)` | Appended to the first line that reports an execution, state or verdict |
 | `Job "<job>" did not run: <error>` | The dispatch ended `unanswered` |
 
 Progress lines go to stderr and task output to stdout, so redirecting stdout
@@ -317,7 +318,7 @@ left as written, since values arrive at dispatch.
 
 ```shell
 ==> dispatch 01a0c3f3-0c5a-7f21-9d84-3e7b1a2c4d5f of "hello"
-==> greet succeeded on aws-lambda in 1s
+==> greet succeeded on aws-lambda in 1s (execution 01a0c3f3-0c61-7b3e-8a27-5f9c0d1e2b3a)
 ```
 
 `job dispatch` reports and exits as `job run` does. Metadata rules:
@@ -360,13 +361,11 @@ VERSION  REGISTERED
 1        2026-09-28 14:05:02Z
 
 Recent executions
-DISPATCH  VERSION  TASK   PROVIDER    STATE      CREATED
-1a2c4d5f  1        greet  aws-lambda  succeeded  2026-09-28 14:05:19Z
+ID                                    TASK   PROVIDER    NODE  ATTEMPT  STATE      CREATED
+01a0c3f3-0c61-7b3e-8a27-5f9c0d1e2b3a  greet  aws-lambda  -     1        succeeded  2026-09-28 14:05:19Z
 ```
 
-`DISPATCH` is the last eight characters of the dispatch ID. IDs are UUIDv7, so
-their leading characters are a timestamp shared by runs started close together.
-Times are UTC.
+`NODE` is `-` for a provider not made of agent nodes. Times are UTC.
 
 `job stop hello` deregisters the job (`Job "hello" stopped in namespace
 "default".`). Its versions are kept, its status reads `stopped`, and
@@ -374,16 +373,21 @@ registering it again makes a new version and makes it dispatchable again.
 
 ## Read an execution
 
-An execution is one attempt of one task on one provider. The CLI does not print
-execution IDs; read them from the dispatch record in the API:
+An execution is one attempt of one task on one provider. `job run` and
+`job dispatch` print each execution's ID as they first report it, as above.
+`execution list` finds one afterwards, newest first, with `-job`, `-state` and
+`-provider` to narrow it:
 
 ```bash
-curl -s http://127.0.0.1:4747/v1/dispatch/01a0c3f3-0c5a-7f21-9d84-3e7b1a2c4d5f | jq -r '.Executions[].ID'
+./vagabond execution list -limit 1
 ```
 
 ```shell
-01a0c3f3-0c61-7b3e-8a27-5f9c0d1e2b3a
+ID                                    JOB    TASK   PROVIDER    NODE  ATTEMPT  STATE      CREATED
+01a0c3f3-0c61-7b3e-8a27-5f9c0d1e2b3a  hello  greet  aws-lambda  -     1        succeeded  2026-09-28 14:05:19Z
 ```
+
+`dispatch status <id>` shows one run and every execution it created.
 
 **`execution status`** prints the execution's record. Fields the execution does
 not have yet are left out: `Started` appears once it reached `running`, and

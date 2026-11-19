@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
@@ -222,6 +223,22 @@ func (s *Server) namespace(r *http.Request, j *job.Job) (string, error) {
 	}
 
 	return ns, nil
+}
+
+// count parses ?name= as a whole number of at least zero, answering 400 for
+// anything else, and def when it is absent.
+func count(r *http.Request, name string, def int64) (int64, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return def, nil
+	}
+
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 0 {
+		return 0, badRequest(fmt.Errorf("%s %q is not a whole number of at least zero", name, raw))
+	}
+
+	return n, nil
 }
 
 // executionID parses the {id} path value, answering 400 for one that is not an

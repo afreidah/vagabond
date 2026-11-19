@@ -14,11 +14,50 @@ package server
 import (
 	"fmt"
 	"net/http"
-	"strconv"
 
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/plugin"
 )
+
+// maxListed is the most executions one listing answers with.
+const maxListed = 1000
+
+// -------------------------------------------------------------------------
+// LISTING
+// -------------------------------------------------------------------------
+
+// listExecutions answers with a namespace's most recent executions, newest
+// first, narrowed by ?job=, ?state= and ?provider=, and at most ?limit= of
+// them: recentExecutions when it is absent, never more than maxListed.
+func (s *Server) listExecutions(_ http.ResponseWriter, r *http.Request) (any, error) {
+	ns, err := s.namespace(r, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	query := r.URL.Query()
+	f := execution.Filter{Namespace: ns, Job: query.Get("job"), Provider: query.Get("provider")}
+
+	if raw := query.Get("state"); raw != "" {
+		if f.State, err = execution.ParseState(raw); err != nil {
+			return nil, badRequest(err)
+		}
+	}
+
+	limit, err := count(r, "limit", recentExecutions)
+	if err != nil {
+		return nil, err
+	}
+
+	f.Limit = int(min(limit, maxListed))
+
+	runs, err := s.executions.ListExecutions(r.Context(), f)
+	if err != nil {
+		return nil, err
+	}
+
+	return executionsOf(runs), nil
+}
 
 // -------------------------------------------------------------------------
 // STATUS
@@ -90,12 +129,9 @@ func (s *Server) logsRequest(r *http.Request) (*execution.Record, int64, error) 
 		return nil, 0, err
 	}
 
-	var offset int64
-
-	if raw := r.URL.Query().Get("offset"); raw != "" {
-		if offset, err = strconv.ParseInt(raw, 10, 64); err != nil || offset < 0 {
-			return nil, 0, badRequest(fmt.Errorf("offset %q is not a byte count", raw))
-		}
+	offset, err := count(r, "offset", 0)
+	if err != nil {
+		return nil, 0, err
 	}
 
 	rec, err := s.executions.Get(r.Context(), id)

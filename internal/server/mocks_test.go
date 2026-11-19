@@ -413,6 +413,21 @@ func (mr *MockserverExecutionsMockRecorder) GetDispatch(ctx, id any) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDispatch", reflect.TypeOf((*MockserverExecutions)(nil).GetDispatch), ctx, id)
 }
 
+// ListExecutions mocks base method.
+func (m *MockserverExecutions) ListExecutions(ctx context.Context, f execution.Filter) ([]*execution.Record, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListExecutions", ctx, f)
+	ret0, _ := ret[0].([]*execution.Record)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListExecutions indicates an expected call of ListExecutions.
+func (mr *MockserverExecutionsMockRecorder) ListExecutions(ctx, f any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListExecutions", reflect.TypeOf((*MockserverExecutions)(nil).ListExecutions), ctx, f)
+}
+
 // Ping mocks base method.
 func (m *MockserverExecutions) Ping(ctx context.Context) error {
 	m.ctrl.T.Helper()
@@ -536,21 +551,6 @@ func (m *MockserverJobs) Job(ctx context.Context, namespace, name string) (*jobs
 func (mr *MockserverJobsMockRecorder) Job(ctx, namespace, name any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Job", reflect.TypeOf((*MockserverJobs)(nil).Job), ctx, namespace, name)
-}
-
-// JobExecutions mocks base method.
-func (m *MockserverJobs) JobExecutions(ctx context.Context, namespace, job string, limit int) ([]*execution.Record, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "JobExecutions", ctx, namespace, job, limit)
-	ret0, _ := ret[0].([]*execution.Record)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// JobExecutions indicates an expected call of JobExecutions.
-func (mr *MockserverJobsMockRecorder) JobExecutions(ctx, namespace, job, limit any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "JobExecutions", reflect.TypeOf((*MockserverJobs)(nil).JobExecutions), ctx, namespace, job, limit)
 }
 
 // Jobs mocks base method.

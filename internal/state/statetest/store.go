@@ -36,10 +36,25 @@ type Store interface {
 	Create(ctx context.Context, r *execution.Record, lease execution.Lease) error
 	Save(ctx context.Context, r *execution.Record, lease execution.Lease) error
 	Get(ctx context.Context, id execution.ID) (*execution.Record, error)
+	DispatchExecutions(ctx context.Context, dispatch execution.ID) ([]*execution.Record, error)
+	ListExecutions(ctx context.Context, f execution.Filter) ([]*execution.Record, error)
 
 	AppendLog(ctx context.Context, id execution.ID, seq int64, data []byte, keepFrom int64, lease execution.Lease) error
 	ReadLog(ctx context.Context, id execution.ID, fromSeq int64, w io.Writer) error
 	PruneLogs(ctx context.Context, before time.Time) (int, error)
+}
+
+// rule is one promise a store makes, checked against a fresh store.
+type rule struct {
+	name  string
+	check func(t *testing.T, s Store)
+}
+
+// check runs each of rules against a fresh store from newStore.
+func check(t *testing.T, rules []rule, newStore func(t *testing.T) Store) {
+	for _, r := range rules {
+		t.Run(r.name, func(t *testing.T) { r.check(t, newStore(t)) })
+	}
 }
 
 // -------------------------------------------------------------------------
@@ -92,8 +107,10 @@ func dispatched(t *testing.T, s Store, leaseUntil time.Time) *execution.Dispatch
 }
 
 // recorded records an execution of d under d's lease, ended at ended when
-// that is set and running otherwise, and returns it.
-func recorded(t *testing.T, s Store, d *execution.Dispatch, ended time.Time) *execution.Record {
+// that is set and running otherwise, after each of changes, and returns it.
+func recorded(
+	t *testing.T, s Store, d *execution.Dispatch, ended time.Time, changes ...func(*execution.Record),
+) *execution.Record {
 	t.Helper()
 
 	id := newID(t)
@@ -113,6 +130,10 @@ func recorded(t *testing.T, s Store, d *execution.Dispatch, ended time.Time) *ex
 
 	if !ended.IsZero() {
 		r.State, r.StartedAt, r.EndedAt = execution.StateSucceeded, ended.Add(-time.Second), ended
+	}
+
+	for _, change := range changes {
+		change(r)
 	}
 
 	if err := s.Create(t.Context(), r, d.Lease()); err != nil {

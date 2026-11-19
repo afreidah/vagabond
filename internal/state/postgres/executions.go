@@ -144,16 +144,18 @@ func (s *Store) Get(ctx context.Context, id execution.ID) (*execution.Record, er
 	return recordOf(&row)
 }
 
-// JobExecutions returns a job's most recent executions, newest first, at most
-// limit of them.
-func (s *Store) JobExecutions(ctx context.Context, namespace, job string, limit int) ([]*execution.Record, error) {
-	rows, err := s.queries.ListJobExecutions(ctx, db.ListJobExecutionsParams{
-		Namespace: namespace,
-		Job:       job,
-		MaxRows:   int32(min(limit, math.MaxInt32)), //nolint:gosec // bounded above
+// ListExecutions returns the records f picks, newest first, at most f.Limit of
+// them.
+func (s *Store) ListExecutions(ctx context.Context, f execution.Filter) ([]*execution.Record, error) {
+	rows, err := s.queries.ListExecutions(ctx, db.ListExecutionsParams{
+		Namespace: f.Namespace,
+		Job:       f.Job,
+		State:     string(f.State),
+		Provider:  f.Provider,
+		MaxRows:   int32(min(f.Limit, math.MaxInt32)), //nolint:gosec // bounded above
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list executions of %s: %w", job, err)
+		return nil, fmt.Errorf("list executions in %s: %w", f.Namespace, err)
 	}
 
 	return recordsOf(rows)

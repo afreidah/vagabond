@@ -4,7 +4,7 @@
 // Author: Alex Freidah
 //
 // With no name, the jobs registered in a namespace. With one, that job's
-// versions and its most recent executions with the dispatch each belongs to.
+// versions and its most recent executions.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -104,8 +104,7 @@ func (c *JobStatusCommand) list(ctx context.Context, client *api.Client) int {
 	return ExitSuccess
 }
 
-// show prints one job's standing, its versions, and its recent executions with
-// the dispatch each belongs to.
+// show prints one job's standing, its versions, and its recent executions.
 func (c *JobStatusCommand) show(ctx context.Context, client *api.Client, name string) int {
 	status, err := client.JobStatus(ctx, c.namespace, name)
 	if err != nil {
@@ -114,9 +113,14 @@ func (c *JobStatusCommand) show(ctx context.Context, client *api.Client, name st
 
 	var b strings.Builder
 
-	_, _ = fmt.Fprintf(&b, "Name      = %s\nNamespace = %s\nVersion   = %d\nStatus    = %s\n\nVersions\n",
-		status.Name, status.Namespace, status.Version, standing(&status.Job))
+	b.WriteString(fields([][2]string{
+		{"Name", status.Name},
+		{"Namespace", status.Namespace},
+		{"Version", fmt.Sprintf("%d", status.Version)},
+		{"Status", standing(&status.Job)},
+	}))
 
+	b.WriteString("\n\nVersions\n")
 	b.WriteString(columns(func(w io.Writer) {
 		_, _ = fmt.Fprintln(w, "VERSION\tREGISTERED")
 
@@ -126,20 +130,7 @@ func (c *JobStatusCommand) show(ctx context.Context, client *api.Client, name st
 	}))
 
 	b.WriteString("\n\nRecent executions\n")
-
-	if len(status.Executions) == 0 {
-		b.WriteString("None.")
-	} else {
-		b.WriteString(columns(func(w io.Writer) {
-			_, _ = fmt.Fprintln(w, "DISPATCH\tVERSION\tTASK\tPROVIDER\tSTATE\tCREATED")
-
-			for i := range status.Executions {
-				e := &status.Executions[i]
-				_, _ = fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\t%s\n",
-					short(e.DispatchID), e.JobVersion, e.Task, e.Provider, e.State, stamp(e.Created))
-			}
-		}))
-	}
+	b.WriteString(executionTable(status.Executions, false))
 
 	c.Ui.Output(b.String())
 
@@ -159,14 +150,4 @@ func standing(j *api.Job) string {
 // stamp renders a time for a table, in UTC so every reader sees the same.
 func stamp(t time.Time) string {
 	return t.UTC().Format("2006-01-02 15:04:05Z")
-}
-
-// short keeps the last eight characters of an ID. IDs are UUIDv7, whose leading
-// characters are a timestamp that two runs a moment apart share.
-func short(id string) string {
-	if len(id) > 8 {
-		return id[len(id)-8:]
-	}
-
-	return id
 }

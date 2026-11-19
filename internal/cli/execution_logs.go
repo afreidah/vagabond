@@ -112,7 +112,7 @@ func (c *ExecutionLogsCommand) follow(ctx context.Context, client *api.Client, i
 	case errors.Is(err, context.Canceled):
 		return ExitSuccess
 	case err != nil:
-		return c.lost(err, "Execution "+id, id)
+		return c.lost(err, "execution", id)
 	}
 
 	f.rest(ctx, last)

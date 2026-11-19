@@ -136,3 +136,8 @@ func TestExecutions_LeaseContract(t *testing.T) {
 func TestExecutions_LogContract(t *testing.T) {
 	statetest.LogContract(t, func(*testing.T) statetest.Store { return NewExecutions() })
 }
+
+// The memory store keeps the listing rules every store keeps.
+func TestExecutions_ListContract(t *testing.T) {
+	statetest.ListContract(t, func(*testing.T) statetest.Store { return NewExecutions() })
+}

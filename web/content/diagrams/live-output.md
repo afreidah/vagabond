@@ -73,7 +73,7 @@ window.vagabondDiagram = {
     POLL: {
       title: 'Poll the Run',
       badge: 'process', badgeText: 'every 1 s',
-      body: '<p><code>job run</code> reads <code>GET /v1/dispatch/{id}</code> every second and goes through its executions: one with a result goes to the rest and the verdict; any other goes to <code>watch</code>, and a state change prints <code>==&gt; &lt;task&gt; &lt;state&gt; on &lt;provider&gt;</code>. The command ends when the dispatch leaves <code>running</code>.</p><p><code>execution logs -f</code> reads <code>GET /v1/execution/{id}</code> every second instead, and once the execution has a result or an end time prints the rest and exits 0.</p><p>Dispatch stores an execution&rsquo;s output before it records the result, so the output is there by the time the result is seen.</p>'
+      body: '<p><code>job run</code> reads <code>GET /v1/dispatch/{id}</code> every second and goes through its executions: one with a result goes to the rest and the verdict; any other goes to <code>watch</code>, and a state change prints <code>==&gt; &lt;task&gt; &lt;state&gt; on &lt;provider&gt;</code>, the first one for an execution with its ID. The command ends when the dispatch leaves <code>running</code>.</p><p><code>execution logs -f</code> reads <code>GET /v1/execution/{id}</code> every second instead, and once the execution has a result or an end time prints the rest and exits 0.</p><p>Dispatch stores an execution&rsquo;s output before it records the result, so the output is there by the time the result is seen.</p>'
     },
     WATCH: {
       title: 'Follow This Execution?',

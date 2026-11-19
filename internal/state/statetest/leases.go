@@ -26,19 +26,11 @@ import (
 
 // LeaseContract runs every lease rule against a fresh store from newStore.
 func LeaseContract(t *testing.T, newStore func(t *testing.T) Store) {
-	for _, r := range leaseRules {
-		t.Run(r.name, func(t *testing.T) { r.check(t, newStore(t)) })
-	}
-}
-
-// leaseRule is one promise about leases, checked against a fresh store.
-type leaseRule struct {
-	name  string
-	check func(t *testing.T, s Store)
+	check(t, leaseRules, newStore)
 }
 
 // leaseRules are the promises LeaseContract checks.
-var leaseRules = []leaseRule{
+var leaseRules = []rule{
 	{"the holder's writes land", holderWrites},
 	{"writing the same record twice changes nothing", rewriteIsIdempotent},
 	{"a claim refuses the old lease", claimRefusesOldLease},

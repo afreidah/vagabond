@@ -174,7 +174,12 @@ func providerNames(providers []api.ProviderListStub) []string {
 func providerDetail(p *api.ProviderListStub) string {
 	var out strings.Builder
 
-	_, _ = fmt.Fprintf(&out, "Name   = %s\nTier   = %d\nStatus = %s\n\n", p.Name, p.Tier, providerState(p))
+	out.WriteString(fields([][2]string{
+		{"Name", p.Name},
+		{"Tier", strconv.Itoa(p.Tier)},
+		{"Status", providerState(p)},
+	}))
+	out.WriteString("\n\n")
 
 	if len(p.Pools) == 0 {
 		out.WriteString("No quota pools.")

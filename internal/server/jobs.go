@@ -13,11 +13,12 @@ import (
 	"net/http"
 
 	"github.com/afreidah/vagabond/internal/api"
+	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/jobs"
 )
 
-// statusExecutions is how many recent executions a job's status carries.
-const statusExecutions = 20
+// recentExecutions is how many executions a job's status or a listing carries.
+const recentExecutions = 20
 
 // registerJob stores a job's source as a new version when it changed, and
 // answers with the version it is at.
@@ -88,7 +89,7 @@ func (s *Server) jobStatus(_ http.ResponseWriter, r *http.Request) (any, error) 
 		return nil, err
 	}
 
-	runs, err := s.jobs.JobExecutions(r.Context(), ns, name, statusExecutions)
+	runs, err := s.executions.ListExecutions(r.Context(), execution.Filter{Namespace: ns, Job: name, Limit: recentExecutions})
 	if err != nil {
 		return nil, err
 	}

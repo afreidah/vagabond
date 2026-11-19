@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -104,7 +105,7 @@ func (m *Meta) follow(ctx context.Context, client *api.Client, started *api.Disp
 	case errors.Is(err, context.Canceled):
 		return f.interrupted(started.Job, last)
 	case err != nil:
-		return m.lost(err, "Dispatch "+started.DispatchID, latest(last))
+		return m.lost(err, "dispatch", started.DispatchID)
 	}
 
 	return f.finished(last)
@@ -141,35 +142,18 @@ func (m *Meta) retrying(client *api.Client) *api.Client {
 	return client.Retrying(r)
 }
 
-// lost reports a follow that ended without the run's end and returns the exit
-// code. When the server stopped answering, the run may carry on without the
-// follow, so it says so and where to look: execution status for the latest
-// execution, when there is one.
-func (m *Meta) lost(err error, run, execution string) int {
+// lost reports a follow of the dispatch or execution id that ended without its
+// end, and returns the exit code. When the server stopped answering, the run
+// may carry on without the follow, so it says so and which status reads it.
+func (m *Meta) lost(err error, kind, id string) int {
 	code := m.apiFailure(err)
 
-	if !api.Unanswered(err) {
-		return code
+	if api.Unanswered(err) {
+		m.Ui.Error(fmt.Sprintf("%s%s %s may still be running. Check it with vagabond %s status %s.",
+			strings.ToUpper(kind[:1]), kind[1:], id, kind, id))
 	}
-
-	line := run + " may still be running."
-	if execution != "" {
-		line += " Check it with vagabond execution status " + execution + "."
-	}
-
-	m.Ui.Error(line)
 
 	return code
-}
-
-// latest is the ID of the run's most recent execution, empty before it has
-// one.
-func latest(d *api.Dispatch) string {
-	if d == nil || len(d.Executions) == 0 {
-		return ""
-	}
-
-	return d.Executions[len(d.Executions)-1].ID
 }
 
 // report prints every execution's state change, follows each one's output
@@ -190,8 +174,6 @@ func (f *follower) report(ctx context.Context, d *api.Dispatch) {
 			continue
 		}
 
-		f.states[e.ID] = e.State
-
 		line := fmt.Sprintf("==> %s %s on %s", e.Task, e.State, e.Provider)
 		if e.Attempt > 1 {
 			line += fmt.Sprintf(" (attempt %d)", e.Attempt)
@@ -201,8 +183,19 @@ func (f *follower) report(ctx context.Context, d *api.Dispatch) {
 			line += fmt.Sprintf(" (%s failure)", e.Failure)
 		}
 
-		f.Ui.Error(line)
+		f.Ui.Error(line + f.introduce(e))
+		f.states[e.ID] = e.State
 	}
+}
+
+// introduce is " (execution <id>)" when no line has reported e yet, so a run
+// names each execution once, and empty after.
+func (f *follower) introduce(e *api.Execution) string {
+	if _, seen := f.states[e.ID]; seen {
+		return ""
+	}
+
+	return " (execution " + e.ID + ")"
 }
 
 // result prints the rest of a finished execution's output, unless -no-logs,
@@ -218,7 +211,7 @@ func (f *follower) result(ctx context.Context, e *api.Execution) {
 		f.rest(ctx, e)
 	}
 
-	line := fmt.Sprintf("==> %s %s on %s in %s", e.Task, verdict(e), e.Provider, e.Duration)
+	line := fmt.Sprintf("==> %s %s on %s in %s", e.Task, verdict(e), e.Provider, e.Duration) + f.introduce(e)
 	if e.Reason != "" {
 		line += ": " + e.Reason
 	}

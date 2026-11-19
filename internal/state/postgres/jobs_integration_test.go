@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/jobs"
 	"github.com/afreidah/vagabond/internal/state/postgres"
 )
@@ -158,49 +157,6 @@ func TestJobs_NamespacesAndMissing(t *testing.T) {
 
 			if err := store.Stop(ctx, "default", "absent", time.Now()); !errors.Is(err, jobs.ErrNotFound) {
 				t.Errorf("Stop(absent) = %v, want ErrNotFound", err)
-			}
-		})
-	}
-}
-
-// A job's executions come back newest first, carrying their dispatch.
-func TestJobs_ExecutionsCarryTheirDispatch(t *testing.T) {
-	for _, e := range engines() {
-		t.Run(e.Name, func(t *testing.T) {
-			ctx := context.Background()
-			store := open(ctx, t, e)
-
-			dispatch, lease := leased(ctx, t, store)
-
-			var ids []execution.ID
-
-			for range 2 {
-				r := pendingRecord(t, dispatch)
-				r.Job = "go-test"
-				r.JobVersion = 3
-
-				if err := store.Create(ctx, r, lease); err != nil {
-					t.Fatalf("Create() = %v", err)
-				}
-
-				ids = append(ids, r.ID)
-
-				time.Sleep(2 * time.Millisecond)
-			}
-
-			runs, err := store.JobExecutions(ctx, "ci", "go-test", 10)
-			if err != nil {
-				t.Fatalf("JobExecutions() = %v", err)
-			}
-
-			if len(runs) != 2 || runs[0].ID != ids[1] {
-				t.Fatalf("JobExecutions() = %d records, want 2, newest first", len(runs))
-			}
-
-			for _, r := range runs {
-				if r.Dispatch != dispatch || r.JobVersion != 3 {
-					t.Errorf("record = %+v, want dispatch %s at version 3", r, dispatch)
-				}
 			}
 		})
 	}

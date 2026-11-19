@@ -196,7 +196,9 @@ Every write, the insert, each save and each output chunk, applies only while
 the execution's dispatch is held under the writer's `owner` and `epoch` and is
 not done; a write that matches no row is refused as stale. A save carries the
 whole record, `released_at` included, so making it twice changes nothing.
-Index `executions_job (namespace, job, created_at)` serves job status.
+Index `executions_job (namespace, job, created_at)` serves job status and an
+execution listing narrowed by job; a listing of a whole namespace reads its
+rows newest first without an index of its own.
 
 ### `execution_logs`
 
