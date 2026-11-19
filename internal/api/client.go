@@ -144,12 +144,12 @@ func (c *Client) Retrying(r Retries) *Client {
 
 // Register stores a job file as a new version when it changed.
 func (c *Client) Register(ctx context.Context, namespace, source string) (*RegisterResponse, error) {
-	return call[RegisterResponse](ctx, c, http.MethodPost, "/v1/jobs", namespace, RegisterRequest{Source: source})
+	return call[RegisterResponse](ctx, c, http.MethodPost, "/v1/jobs", inNamespace(namespace), RegisterRequest{Source: source})
 }
 
 // Jobs lists every job registered in namespace, stopped ones included.
 func (c *Client) Jobs(ctx context.Context, namespace string) ([]Job, error) {
-	jobs, err := call[[]Job](ctx, c, http.MethodGet, "/v1/jobs", namespace, nil)
+	jobs, err := call[[]Job](ctx, c, http.MethodGet, "/v1/jobs", inNamespace(namespace), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -159,12 +159,12 @@ func (c *Client) Jobs(ctx context.Context, namespace string) ([]Job, error) {
 
 // JobStatus reads a registered job with its versions and recent executions.
 func (c *Client) JobStatus(ctx context.Context, namespace, name string) (*JobStatus, error) {
-	return call[JobStatus](ctx, c, http.MethodGet, jobPath(name), namespace, nil)
+	return call[JobStatus](ctx, c, http.MethodGet, jobPath(name), inNamespace(namespace), nil)
 }
 
 // StopJob deregisters a job so it can no longer be dispatched.
 func (c *Client) StopJob(ctx context.Context, namespace, name string) (*Job, error) {
-	return call[Job](ctx, c, http.MethodDelete, jobPath(name), namespace, nil)
+	return call[Job](ctx, c, http.MethodDelete, jobPath(name), inNamespace(namespace), nil)
 }
 
 // -------------------------------------------------------------------------
@@ -175,33 +175,60 @@ func (c *Client) StopJob(ctx context.Context, namespace, name string) (*Job, err
 func (c *Client) Dispatch(
 	ctx context.Context, namespace, name string, meta map[string]string,
 ) (*DispatchResponse, error) {
-	return call[DispatchResponse](ctx, c, http.MethodPost, jobPath(name)+"/dispatch", namespace, DispatchRequest{Meta: meta})
+	return call[DispatchResponse](
+		ctx, c, http.MethodPost, jobPath(name)+"/dispatch", inNamespace(namespace), DispatchRequest{Meta: meta},
+	)
 }
 
 // Run starts a run of a job file without registering it.
 func (c *Client) Run(
 	ctx context.Context, namespace, source string, meta map[string]string,
 ) (*DispatchResponse, error) {
-	return call[DispatchResponse](ctx, c, http.MethodPost, "/v1/jobs/run", namespace, RunRequest{Source: source, Meta: meta})
+	return call[DispatchResponse](
+		ctx, c, http.MethodPost, "/v1/jobs/run", inNamespace(namespace), RunRequest{Source: source, Meta: meta},
+	)
 }
 
 // Plan shows where each task of a job file or registered job would run.
 func (c *Client) Plan(ctx context.Context, namespace string, req PlanRequest) (*Plan, error) {
-	return call[Plan](ctx, c, http.MethodPost, "/v1/jobs/plan", namespace, req)
+	return call[Plan](ctx, c, http.MethodPost, "/v1/jobs/plan", inNamespace(namespace), req)
 }
 
 // DispatchStatus reads a run and the executions it has created so far.
 func (c *Client) DispatchStatus(ctx context.Context, id string) (*Dispatch, error) {
-	return call[Dispatch](ctx, c, http.MethodGet, "/v1/dispatch/"+url.PathEscape(id), "", nil)
+	return call[Dispatch](ctx, c, http.MethodGet, "/v1/dispatch/"+url.PathEscape(id), nil, nil)
 }
 
 // -------------------------------------------------------------------------
 // EXECUTIONS
 // -------------------------------------------------------------------------
 
+// ListExecutions lists namespace's most recent executions, newest first, as f
+// narrows them.
+func (c *Client) ListExecutions(ctx context.Context, namespace string, f ExecutionFilter) ([]Execution, error) {
+	query := inNamespace(namespace)
+
+	for key, value := range map[string]string{"job": f.Job, "state": f.State, "provider": f.Provider} {
+		if value != "" {
+			query.Set(key, value)
+		}
+	}
+
+	if f.Limit > 0 {
+		query.Set("limit", strconv.Itoa(f.Limit))
+	}
+
+	list, err := call[[]Execution](ctx, c, http.MethodGet, "/v1/executions", query, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return *list, nil
+}
+
 // Execution reads one attempt.
 func (c *Client) Execution(ctx context.Context, id string) (*Execution, error) {
-	return call[Execution](ctx, c, http.MethodGet, executionPath(id), "", nil)
+	return call[Execution](ctx, c, http.MethodGet, executionPath(id), nil, nil)
 }
 
 // Logs copies an execution's stored output from byte offset on to w.
@@ -247,7 +274,7 @@ func (c *Client) copyLogs(ctx context.Context, id string, offset int64, follow b
 
 // Cancel stops an execution, and the whole run when the server is running it.
 func (c *Client) Cancel(ctx context.Context, id string) (*Execution, error) {
-	return call[Execution](ctx, c, http.MethodDelete, executionPath(id), "", nil)
+	return call[Execution](ctx, c, http.MethodDelete, executionPath(id), nil, nil)
 }
 
 // -------------------------------------------------------------------------
@@ -256,7 +283,7 @@ func (c *Client) Cancel(ctx context.Context, id string) (*Execution, error) {
 
 // Nodes lists the client nodes connected to the server.
 func (c *Client) Nodes(ctx context.Context) ([]NodeListStub, error) {
-	nodes, err := call[[]NodeListStub](ctx, c, http.MethodGet, "/v1/nodes", "", nil)
+	nodes, err := call[[]NodeListStub](ctx, c, http.MethodGet, "/v1/nodes", nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -270,7 +297,7 @@ func (c *Client) Nodes(ctx context.Context) ([]NodeListStub, error) {
 
 // Providers lists the configured providers and what each has used.
 func (c *Client) Providers(ctx context.Context) (*ProviderList, error) {
-	return call[ProviderList](ctx, c, http.MethodGet, "/v1/providers", "", nil)
+	return call[ProviderList](ctx, c, http.MethodGet, "/v1/providers", nil, nil)
 }
 
 // -------------------------------------------------------------------------
@@ -358,15 +385,9 @@ func (t *getsRetried) RoundTrip(req *http.Request) (*http.Response, error) {
 // TRANSPORT
 // -------------------------------------------------------------------------
 
-// call sends body as JSON, as ?namespace= when namespace is set, and decodes a
-// 2xx answer into a new T, nil on any failure.
-func call[T any](ctx context.Context, c *Client, method, path, namespace string, body any) (*T, error) {
-	var query url.Values
-
-	if namespace != "" {
-		query = url.Values{"namespace": {namespace}}
-	}
-
+// call sends body as JSON with query, and decodes a 2xx answer into a new T,
+// nil on any failure.
+func call[T any](ctx context.Context, c *Client, method, path string, query url.Values, body any) (*T, error) {
 	out := new(T)
 
 	if err := rest.Call(ctx, c.http, c.request(method, path, query, body), out); err != nil {
@@ -402,6 +423,16 @@ func (c *Client) failure(method, path string, err error) error {
 	}
 
 	return fmt.Errorf("%s %s: %w", method, path, err)
+}
+
+// inNamespace is the query naming namespace, empty when it is.
+func inNamespace(namespace string) url.Values {
+	query := url.Values{}
+	if namespace != "" {
+		query.Set("namespace", namespace)
+	}
+
+	return query
 }
 
 // jobPath is the route of one registered job.

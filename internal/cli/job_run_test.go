@@ -304,6 +304,59 @@ func TestExecutionStatus_Unknown(t *testing.T) {
 	}
 }
 
+// A finished run is found again without its ID: job run names its dispatch and
+// execution, execution list lists it as the flags narrow, and dispatch status
+// shows the run it belongs to.
+func TestExecutionList_FindsARun(t *testing.T) {
+	s := serve(t, functionConfig)
+
+	_, _, stderr := s.at([]string{"job", "run"}, writeJob(t, functionJob))
+
+	ids := uuid.FindAllString(stderr, -1)
+	if len(ids) != 2 || !strings.Contains(stderr, "(execution "+ids[1]+")") {
+		t.Fatalf("job run named %v, want its dispatch then its execution:\n%s", ids, stderr)
+	}
+
+	dispatch, execution := ids[0], ids[1]
+
+	code, list, errs := s.at([]string{"execution", "list"}, "-job", "hello", "-state", "succeeded")
+	if code != ExitSuccess || !strings.Contains(list, execution) || !strings.Contains(list, "JOB") {
+		t.Errorf("execution list: exit %d\n%s%s", code, list, errs)
+	}
+
+	if _, none, _ := s.at([]string{"execution", "list"}, "-provider", "elsewhere"); none != "No executions match.\n" {
+		t.Errorf("execution list -provider elsewhere = %q, want none", none)
+	}
+
+	code, shown, errs := s.at([]string{"dispatch", "status"}, dispatch)
+	if code != ExitSuccess || !strings.Contains(shown, "State     = succeeded") || !strings.Contains(shown, execution) {
+		t.Errorf("dispatch status: exit %d\n%s%s", code, shown, errs)
+	}
+}
+
+// execution list refuses a state that is not one and a limit that lists
+// nothing, and dispatch status an unknown dispatch.
+func TestExecutionList_Refusals(t *testing.T) {
+	s := serve(t, functionConfig)
+
+	cases := []struct {
+		words []string
+		args  []string
+		want  string
+	}{
+		{[]string{"execution", "list"}, []string{"-state", "done"}, "valid states are"},
+		{[]string{"execution", "list"}, []string{"-limit", "0"}, "-limit 0 lists nothing"},
+		{[]string{"execution", "list"}, []string{"extra"}, "takes no arguments"},
+		{[]string{"dispatch", "status"}, []string{"01920000-0000-7000-8000-000000000000"}, "not found"},
+	}
+
+	for _, c := range cases {
+		if code, _, stderr := s.at(c.words, c.args...); code != ExitFailure || !strings.Contains(stderr, c.want) {
+			t.Errorf("%v %v: exit %d, want %q in:\n%s", c.words, c.args, code, c.want, stderr)
+		}
+	}
+}
+
 // uuid finds an execution ID in text.
 var uuid = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 

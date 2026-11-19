@@ -217,6 +217,31 @@ func TestFollower_Watch(t *testing.T) {
 	}
 }
 
+// The first state line of each execution names it, and later ones do not, so
+// a retry is named on its own first line.
+func TestFollower_ReportNamesEachExecutionOnce(t *testing.T) {
+	ui := cli.NewMockUi()
+	f := (&Meta{Ui: ui}).newFollower(nil, true)
+
+	first := api.Execution{ID: "exec-1", Task: "make", Provider: "fn", State: executionPending, Attempt: 1}
+
+	f.report(t.Context(), &api.Dispatch{Executions: []api.Execution{first}})
+
+	first.State = "running"
+	f.report(t.Context(), &api.Dispatch{Executions: []api.Execution{first}})
+
+	retry := api.Execution{ID: "exec-2", Task: "make", Provider: "box", State: executionPending, Attempt: 2}
+	f.report(t.Context(), &api.Dispatch{Executions: []api.Execution{first, retry}})
+
+	want := "==> make pending on fn (execution exec-1)\n" +
+		"==> make running on fn\n" +
+		"==> make pending on box (attempt 2) (execution exec-2)\n"
+
+	if got := ui.ErrorWriter.String(); got != want {
+		t.Errorf("printed:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 // -------------------------------------------------------------------------
 // OUTAGES
 // -------------------------------------------------------------------------
@@ -259,7 +284,7 @@ func TestFollow_ServerGoneTooLong(t *testing.T) {
 
 	code := (&Meta{Ui: ui}).follow(t.Context(), client, &api.DispatchResponse{DispatchID: "d-1", Job: "ci"}, true)
 
-	want := "Dispatch d-1 may still be running. Check it with vagabond execution status e-1."
+	want := "Dispatch d-1 may still be running. Check it with vagabond dispatch status d-1."
 	if code != ExitFailure || !strings.Contains(ui.ErrorWriter.String(), want) {
 		t.Errorf("exit %d, stderr:\n%s\nwant failure saying %q", code, ui.ErrorWriter.String(), want)
 	}
@@ -351,18 +376,21 @@ func TestFollow_Interrupted(t *testing.T) {
 // VERDICT
 // -------------------------------------------------------------------------
 
-// The verdict line ends with the platform's reason when it gave one, and is
-// printed once however often the execution is seen.
+// The verdict line ends with the platform's reason when it gave one, names the
+// execution when no line has yet, and is printed once however often the
+// execution is seen.
 func TestFollower_Result(t *testing.T) {
 	const evicted = "Evicted: Pod ephemeral local storage usage exceeds the total limit of containers 400M."
 
 	tests := []struct {
 		name   string
 		reason string
+		seen   bool
 		want   string
 	}{
-		{"no reason", "", "==> make failed (exit 137) on ibm-code-engine in 35s\n"},
-		{"with a reason", evicted, "==> make failed (exit 137) on ibm-code-engine in 35s: " + evicted + "\n"},
+		{"no reason", "", true, "==> make failed (exit 137) on ibm-code-engine in 35s\n"},
+		{"with a reason", evicted, true, "==> make failed (exit 137) on ibm-code-engine in 35s: " + evicted + "\n"},
+		{"first seen ended", "", false, "==> make failed (exit 137) on ibm-code-engine in 35s (execution exec-1)\n"},
 	}
 
 	for _, tc := range tests {
@@ -373,6 +401,10 @@ func TestFollower_Result(t *testing.T) {
 			e := &api.Execution{
 				ID: "exec-1", Task: "make", Provider: "ibm-code-engine", State: executionFailed,
 				HasResult: true, ExitCode: new(137), Duration: 35 * time.Second, Reason: tc.reason,
+			}
+
+			if tc.seen {
+				f.states[e.ID] = "running"
 			}
 
 			f.result(t.Context(), e)

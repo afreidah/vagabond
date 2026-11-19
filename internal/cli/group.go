@@ -3,7 +3,8 @@
 //
 // Author: Alex Freidah
 //
-// The words that only group subcommands: job, node, provider, execution. Each is
+// The words that only group subcommands: job, node, provider, execution and
+// dispatch. Each is
 // registered as a command so it carries a synopsis in the top-level listing.
 // Without one the library synthesises a placeholder, and help shows a bare word
 // that tells a reader nothing.
@@ -64,11 +65,28 @@ Usage: vagabond provider <subcommand> [options] [args]
 	executionHelp = `
 Usage: vagabond execution <subcommand> [options] [args]
 
-  Read one execution: one attempt of one task on one provider.
+  Read executions: each one attempt of one task on one provider.
+
+  List the most recent executions:
+
+      $ vagabond execution list
 
   Show an execution's record:
 
       $ vagabond execution status <id>
+
+  Please see the individual subcommand help for detailed usage information.
+`
+
+	dispatchHelp = `
+Usage: vagabond dispatch <subcommand> [options] [args]
+
+  Read dispatches: each one run of a job, started by job run or job dispatch,
+  and the executions it created.
+
+  Show a dispatch and its executions:
+
+      $ vagabond dispatch status <id>
 
   Please see the individual subcommand help for detailed usage information.
 `

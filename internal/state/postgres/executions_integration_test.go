@@ -228,3 +228,14 @@ func TestExecutions_LogContract(t *testing.T) {
 		})
 	}
 }
+
+// Both engines keep the listing rules every store keeps.
+func TestExecutions_ListContract(t *testing.T) {
+	for _, e := range engines() {
+		t.Run(e.Name, func(t *testing.T) {
+			statetest.ListContract(t, func(t *testing.T) statetest.Store {
+				return open(t.Context(), t, e)
+			})
+		})
+	}
+}

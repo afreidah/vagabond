@@ -62,3 +62,22 @@ type Record struct {
 	LogsStart     int64
 	LogsTruncated bool
 }
+
+// Filter picks the records a listing returns: those in Namespace, narrowed by
+// each of Job, State and Provider that is set, newest first and at most Limit
+// of them.
+type Filter struct {
+	Namespace string
+	Job       string
+	State     State
+	Provider  string
+	Limit     int
+}
+
+// Matches reports whether r is a record the filter picks, its limit aside.
+func (f *Filter) Matches(r *Record) bool {
+	return r.Namespace == f.Namespace &&
+		(f.Job == "" || r.Job == f.Job) &&
+		(f.State == "" || r.State == f.State) &&
+		(f.Provider == "" || r.Provider == f.Provider)
+}

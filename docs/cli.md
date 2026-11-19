@@ -2,14 +2,13 @@
 title: "Command Line Interface"
 linkTitle: "CLI"
 seoTitle: "CLI Reference: Commands and Flags"
-description: "Every vagabond command and flag: job, execution, node and provider commands, the server and the agent, environment variables and exit codes."
+description: "Every vagabond command and flag: job, execution, dispatch, node and provider commands, the server and the agent, environment variables and exit codes."
 weight: 220
 ---
 
 One binary, `vagabond`, runs the server, the agent, and the commands that talk
-to a server. Commands are grouped by noun (`job`, `execution`, `node`,
-`provider`) and take
-single-dash flags.
+to a server. Commands are grouped by noun (`job`, `execution`, `dispatch`,
+`node`, `provider`) and take single-dash flags.
 
 ## Usage
 
@@ -23,6 +22,7 @@ Usage: vagabond [-version] [-help] <command> [<args>]
 
 Available commands are:
     agent            Run the agent that executes workloads on this node
+    dispatch         Interact with dispatches
     execution        Interact with executions
     job              Interact with jobs
     node             Interact with agent nodes
@@ -39,8 +39,10 @@ Available commands are:
 | [`job dispatch`](#job-dispatch) | Run a registered job by name | yes |
 | [`job status`](#job-status) | List registered jobs, or show one | yes |
 | [`job stop`](#job-stop) | Deregister a job so it can no longer be dispatched | yes |
+| [`execution list`](#execution-list) | List recent executions | yes |
 | [`execution status`](#execution-status) | Show one execution | yes |
 | [`execution logs`](#execution-logs) | Print an execution's output | yes |
+| [`dispatch status`](#dispatch-status) | Show one dispatch and its executions | yes |
 | [`node status`](#node-status) | List the connected agent nodes | yes |
 | [`provider status`](#provider-status) | List the providers and what each has left | yes |
 | [`server`](#server) | Run the Vagabond server | runs one |
@@ -392,6 +394,7 @@ to finish. The job is not registered. The server makes the same selection
 | `==> <task> <state> on <provider>` | An execution changed state: `pending`, `submitted`, `accepted`, `running`, `lost`, or `failed` or `cancelled` when it ended without a result |
 | `... (attempt <n>)` | Appended from the second attempt on |
 | `... (<class> failure)` | Appended when the execution failed without a result (`infrastructure`, `internal`) |
+| `... (execution <execution-id>)` | Appended to the first line that reports an execution, so each attempt's ID is printed once |
 | `==> <task> succeeded on <provider> in <duration>` | The task exited 0 |
 | `==> <task> failed (exit <n>) on <provider> in <duration>` | The task exited non-zero |
 | `...: <reason>` | Appended to either when the platform ended the task and said why: `Evicted: Pod ephemeral local storage usage exceeds ...`, `OOMKilled` |
@@ -400,14 +403,14 @@ to finish. The job is not registered. The server makes the same selection
 | `Could not read the output of <id>: <error>` | The stored output could not be fetched after the task finished; the verdict line still follows |
 | `Could not stop <id>: <error>` | After an interrupt, the cancel request failed; the interrupted line still follows |
 | `Lost contact with the server at <address>, retrying.` | A poll got no answer and is being retried |
-| `Dispatch <id> may still be running. Check it with vagabond execution status <execution-id>.` | After `Error: ...`, once the server stayed unreachable past the retries; without the second sentence before the run had an execution |
+| `Dispatch <id> may still be running. Check it with vagabond dispatch status <id>.` | After `Error: ...`, once the server stayed unreachable past the retries |
 | `Job "<job>" did not run: <error>` | The run ended with no answer; followed by `Run vagabond job plan to see where it can run.` |
 | `Job "<job>" was interrupted. The execution was stopped.` | Interrupted |
 
 ```shell
 $ vagabond job run -meta version=v1.4.2 go-test.vagabond.hcl
 ==> dispatch 01926f3a-7c40-7a55-8c11-2d4e7d03e612 of "go-test"
-==> test running on gcp-cloud-run
+==> test running on gcp-cloud-run (execution 01926f3a-7c4e-7b1a-9d2e-5b8f4c1e9a2f)
 ok  	example.com/service/api	0.412s
 ok  	example.com/service/store	1.087s
 ==> test succeeded on gcp-cloud-run in 1m42.318s
@@ -418,9 +421,9 @@ A reroute after an infrastructure failure:
 ```shell
 $ vagabond job run -meta version=v1.4.2 go-test.vagabond.hcl
 ==> dispatch 01926f3a-9e12-7c03-b5a0-6f1d4a8e2c77 of "go-test"
-==> test submitted on gcp-cloud-run
+==> test submitted on gcp-cloud-run (execution 01926f3a-9e1c-7d40-8b52-0a3c6e9f1d24)
 ==> test failed on gcp-cloud-run (infrastructure failure)
-==> test running on homelab (attempt 2)
+==> test running on homelab (attempt 2) (execution 01926f3b-03d1-7a96-a4e8-7c2b5f0d9e31)
 ok  	example.com/service/api	0.405s
 ==> test succeeded on homelab in 2m03.551s
 ```
@@ -495,7 +498,7 @@ takes no `-meta`; otherwise every key must be declared and every
 ```shell
 $ vagabond job dispatch -meta version=v1.4.2 go-test
 ==> dispatch 01926f3c-2b88-7f10-9e47-3c6a5d1e8b02 of "go-test"
-==> test running on homelab
+==> test running on homelab (execution 01926f3c-2b93-7c18-b0d6-4e8a1f7c3b55)
 ok  	example.com/service/api	0.398s
 ==> test succeeded on homelab in 58.204s
 
@@ -554,14 +557,14 @@ VERSION  REGISTERED
 1        2026-09-25 11:20:09Z
 
 Recent executions
-DISPATCH  VERSION  TASK  PROVIDER       STATE      CREATED
-4c1e9a2f  3        test  gcp-cloud-run  succeeded  2026-09-28 13:41:10Z
-b7d03e61  3        test  homelab        failed     2026-09-28 13:35:47Z
+ID                                    TASK  PROVIDER       NODE    ATTEMPT  STATE      CREATED
+01926f3a-7c4e-7b1a-9d2e-5b8f4c1e9a2f  test  gcp-cloud-run  -       1        succeeded  2026-09-28 13:41:10Z
+01926f37-5a02-7e61-8c4d-2b9f6e0a7d13  test  homelab        nuc-01  1        failed     2026-09-28 13:35:47Z
 ```
 
-`DISPATCH` is the last eight characters of the dispatch ID. IDs are UUIDv7,
-whose leading characters are a timestamp shared by runs started close
-together. With no executions the section reads `None.`
+The executions table is the one [`execution list`](#execution-list) prints,
+without its `JOB` column. `NODE` is `-` for a provider not made of nodes. With
+no executions the section reads `None.`
 
 ```shell
 $ vagabond job status unknown
@@ -594,9 +597,45 @@ Job "nightly-lint" stopped in namespace "default".
 
 ## Execution commands
 
-An execution is one attempt of one task on one provider. Execution IDs are
-listed in a dispatch's record, `GET /v1/dispatch/<id>` in the [API](api.md);
-`job run` and `job dispatch` print the dispatch ID.
+An execution is one attempt of one task on one provider. `job run` and
+`job dispatch` print each execution's ID as they first report it;
+[`execution list`](#execution-list) finds one afterwards, and
+[`dispatch status`](#dispatch-status) lists a run's.
+
+### `execution list`
+
+```text
+vagabond execution list [options]
+```
+
+Lists the namespace's most recent executions, newest first, across every job,
+registered or run from a file.
+
+| Flag | Default | Description |
+|---|---|---|
+| `-namespace <name>` | `$VAGABOND_NAMESPACE`, then `default` | Namespace |
+| `-job <name>` | all jobs | Only the job's executions |
+| `-state <state>` | all states | Only executions in the state: `pending`, `submitted`, `accepted`, `running`, `succeeded`, `failed`, `cancelled` or `lost` |
+| `-provider <name>` | all providers | Only executions on the provider. A name no execution ran on matches nothing |
+| `-limit <n>` | `20` | How many to list, at least 1; the server lists at most 1000 |
+
+| Exit | Meaning |
+|---|---|
+| `0` | Listed, including none matching |
+| `1` | Unknown state, `-limit` below 1, an argument, or server error |
+
+```shell
+$ vagabond execution list -job go-test
+ID                                    JOB      TASK  PROVIDER       NODE    ATTEMPT  STATE      CREATED
+01926f3c-2b93-7c18-b0d6-4e8a1f7c3b55  go-test  test  homelab        nuc-01  1        succeeded  2026-09-28 14:02:31Z
+01926f3a-7c4e-7b1a-9d2e-5b8f4c1e9a2f  go-test  test  gcp-cloud-run  -       1        succeeded  2026-09-28 13:41:10Z
+
+$ vagabond execution list -state running
+No executions match.
+
+$ vagabond execution list -state done
+Error: unknown execution state "done": valid states are pending, submitted, accepted, running, succeeded, failed, cancelled, lost
+```
 
 ### `execution status`
 
@@ -615,10 +654,11 @@ only the [client flags](#connecting-to-the-server).
 | `Dispatch` | Dispatch ID shared by the run's executions |
 | `Task` | Task name |
 | `Provider` | Provider it was sent to |
+| `Node` | Agent node it ran on, for a provider made of nodes |
 | `Attempt` | Attempt number within the task, from 1 |
 | `Previous` | Execution ID of the previous attempt |
 | `State` | `pending`, `submitted`, `accepted`, `running`, `succeeded`, `failed`, `cancelled` or `lost` |
-| `Provider ID` | The provider's own identifier: Cloud Run execution name, Lambda function, or pool node name |
+| `Provider ID` | The provider's own identifier: Cloud Run execution name, Lambda function, or for an agent pool the execution ID, which names the workload on its node |
 | `Failure` | Failure class when it failed without a result: `infrastructure` or `internal` |
 | `Created`, `Started`, `Ended` | Timestamps |
 | `Duration` | Run time, once there is a result |
@@ -627,19 +667,20 @@ only the [client flags](#connecting-to-the-server).
 | `Billed` | What the provider reported billing: millicores, MiB and duration |
 
 ```shell
-$ vagabond execution status 01926f3a-7c4e-7b1a-9d2e-5b8f4c1e9a2f
-ID          = 01926f3a-7c4e-7b1a-9d2e-5b8f4c1e9a2f
+$ vagabond execution status 01926f3c-2b93-7c18-b0d6-4e8a1f7c3b55
+ID          = 01926f3c-2b93-7c18-b0d6-4e8a1f7c3b55
 Namespace   = default
 Job         = go-test (version 3)
-Dispatch    = 01926f3a-7c40-7a55-8c11-2d4e4c1e9a2f
+Dispatch    = 01926f3c-2b88-7f10-9e47-3c6a5d1e8b02
 Task        = test
 Provider    = homelab
+Node        = nuc-01
 Attempt     = 1
 State       = succeeded
-Provider ID = nuc-01
-Created     = 2026-09-28 13:41:10Z
-Started     = 2026-09-28 13:41:11Z
-Ended       = 2026-09-28 13:42:09Z
+Provider ID = 01926f3c-2b93-7c18-b0d6-4e8a1f7c3b55
+Created     = 2026-09-28 14:02:31Z
+Started     = 2026-09-28 14:02:32Z
+Ended       = 2026-09-28 14:03:30Z
 Duration    = 58.204s
 Exit Code   = 0
 ```
@@ -677,10 +718,10 @@ retries the command exits 1 with
 | `-f` | `false` | Follow the output until the execution ends |
 
 ```shell
-$ vagabond execution logs 01926f3a-7c4e-7b1a-9d2e-5b8f4c1e9a2f
+$ vagabond execution logs 01926f3c-2b93-7c18-b0d6-4e8a1f7c3b55
 ok  	example.com/service/api	0.398s
 
-$ vagabond execution logs -f 01926f3a-7c4e-7b1a-9d2e-5b8f4c1e9a2f
+$ vagabond execution logs -f 01926f3c-2b93-7c18-b0d6-4e8a1f7c3b55
 === RUN   TestStore
 --- PASS: TestStore (1.04s)
 ok  	example.com/service/store	1.087s
@@ -690,6 +731,52 @@ ok  	example.com/service/store	1.087s
 |---|---|
 | `0` | Printed, or nothing stored; with `-f`, the execution ended or the follow was interrupted |
 | `1` | Not found, server error, wrong number of arguments, or with `-f` the server unreachable past the retries |
+
+## Dispatch commands
+
+A dispatch is one run of a job, started by `job run` or `job dispatch`, which
+print its ID first. It holds every execution the run created: each task's
+attempts.
+
+### `dispatch status`
+
+```text
+vagabond dispatch status [options] <id>
+```
+
+Prints one dispatch's record, then its executions oldest first in the table
+[`execution list`](#execution-list) prints, without its `JOB` column. Fields
+with no value yet are left out. Takes only the
+[client flags](#connecting-to-the-server).
+
+| Field | Description |
+|---|---|
+| `ID` | Dispatch ID |
+| `Namespace` | Namespace of the job |
+| `Job` | Job name and version (version 0 for a `job run` of an unregistered file) |
+| `State` | `running`, `succeeded`, `failed` or `unanswered` |
+| `Error` | Why an `unanswered` run got no answer |
+| `Created`, `Ended` | Timestamps |
+
+```shell
+$ vagabond dispatch status 01926f3a-9e12-7c03-b5a0-6f1d4a8e2c77
+ID        = 01926f3a-9e12-7c03-b5a0-6f1d4a8e2c77
+Namespace = default
+Job       = go-test (version 3)
+State     = succeeded
+Created   = 2026-09-28 13:44:02Z
+Ended     = 2026-09-28 13:46:31Z
+
+Executions
+ID                                    TASK  PROVIDER       NODE    ATTEMPT  STATE      CREATED
+01926f3a-9e1c-7d40-8b52-0a3c6e9f1d24  test  gcp-cloud-run  -       1        failed     2026-09-28 13:44:02Z
+01926f3b-03d1-7a96-a4e8-7c2b5f0d9e31  test  homelab        nuc-01  2        succeeded  2026-09-28 13:44:28Z
+```
+
+| Exit | Meaning |
+|---|---|
+| `0` | Printed |
+| `1` | Not found, server error, or wrong number of arguments |
 
 ## Node commands
 

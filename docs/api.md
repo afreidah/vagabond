@@ -105,7 +105,7 @@ Every non-2xx response from a route in the table below has this body:
 | Status | Cause |
 |---|---|
 | 200 | Success. Every route answers 200; none use 201 or 204 |
-| 400 | Unreadable or oversized body; invalid job file (with `Diagnostics`); metadata the job does not permit; conflicting or undeclared namespace; malformed dispatch or execution ID; plan with both `Source` and `Name`; an `offset` that is not a byte count |
+| 400 | Unreadable or oversized body; invalid job file (with `Diagnostics`); metadata the job does not permit; conflicting or undeclared namespace; malformed dispatch or execution ID; plan with both `Source` and `Name`; an `offset` or `limit` that is not a whole number of at least zero; an unknown `state` |
 | 401 | No verified client certificate, on a server whose `tls` block names a `ca`. Body `this server requires a client certificate`. Never on `/v1/health` |
 | 404 | Job not registered in the namespace; no such dispatch or execution |
 | 409 | Dispatching or planning (by `Name`) a stopped job |
@@ -152,6 +152,7 @@ What happens to dispatches already running: [dispatch](dispatch.md).
 | `POST` | `/v1/jobs/run` | [Run a job file](#run-a-job-file) |
 | `GET` | `/v1/dispatch/{id}` | [Read a dispatch](#read-a-dispatch) |
 | `POST` | `/v1/jobs/plan` | [Plan a job](#plan-a-job) |
+| `GET` | `/v1/executions` | [List executions](#list-executions) |
 | `GET` | `/v1/execution/{id}` | [Read an execution](#read-an-execution) |
 | `GET` | `/v1/execution/{id}/logs` | [Read execution logs](#read-execution-logs) |
 | `DELETE` | `/v1/execution/{id}` | [Cancel an execution](#cancel-an-execution) |
@@ -625,6 +626,61 @@ and `JobStatus`.
 | `cancelled` | yes | Cancelled |
 | `lost` | no | Stopped answering after submission; the server keeps asking until it reaches its real outcome, or records it `failed` once it has been `lost` 24 hours and still cannot be asked |
 
+### List executions
+
+`GET /v1/executions`
+
+A namespace's most recent executions across every job, registered or run from
+a file, newest first. Each filter that is set narrows the list; together they
+must all match.
+
+| Parameter | In | Default | Description |
+|---|---|---|---|
+| `namespace` | query | the server's default | Namespace; one the configuration does not declare is a 400 |
+| `job` | query | all jobs | Only the job's executions |
+| `state` | query | all states | Only executions in the [state](#execution-object) |
+| `provider` | query | all providers | Only executions on the provider. A name no execution ran on matches nothing, since an execution outlives a provider removed from the configuration |
+| `limit` | query | `20` | How many to return; above 1000 returns 1000, and 0 returns none |
+
+Response: an array of [`Execution`](#execution-object), `[]` when none match.
+
+Errors: 400 (`unknown execution state "<value>": valid states are pending, submitted, accepted, running, succeeded, failed, cancelled, lost`; `limit "<value>" is not a whole number of at least zero`; undeclared namespace), 503.
+
+```bash
+curl -s 'http://127.0.0.1:4747/v1/executions?job=go-test&state=succeeded&limit=1'
+```
+
+```json
+[
+  {
+    "ID": "0192a4c8-8a01-7c55-a1b2-c3d4e5f60718",
+    "Namespace": "default",
+    "Job": "go-test",
+    "JobVersion": 3,
+    "DispatchID": "0192a4c8-7f3e-7b21-9c4d-5e6f7a8b9c0d",
+    "Task": "test",
+    "Provider": "homelab",
+    "Node": "nuc-01",
+    "Attempt": 1,
+    "PreviousID": "",
+    "State": "succeeded",
+    "ProviderID": "0192a4c8-8a01-7c55-a1b2-c3d4e5f60718",
+    "Failure": "",
+    "Created": "2026-09-28T13:41:10.012Z",
+    "Started": "2026-09-28T13:41:11.204Z",
+    "Ended": "2026-09-28T13:42:09.416Z",
+    "Updated": "2026-09-28T13:42:09.416Z",
+    "HasResult": true,
+    "ExitCode": 0,
+    "Duration": 58204000000,
+    "Billed": null,
+    "Reason": "",
+    "LogsStart": 0,
+    "LogsTruncated": false
+  }
+]
+```
+
 ### Read an execution
 
 `GET /v1/execution/{id}`
@@ -695,7 +751,7 @@ arrives, flushing each write. Headers go out with the first output.
 - A provider that cannot stream, or an execution that has ended, gets the
   stored output as above, so a client can always ask to follow.
 
-Errors: 400 (malformed ID; `offset "<value>" is not a byte count`), 404, 416
+Errors: 400 (malformed ID; `offset "<value>" is not a whole number of at least zero`), 404, 416
 (`this provider's log stream cannot resume from an offset`), 503.
 
 ### Cancel an execution
@@ -1022,6 +1078,7 @@ client retries: a connection failure, or one of those four statuses.
 | `Run(ctx, namespace, source, meta)` | `POST /v1/jobs/run` |
 | `Plan(ctx, namespace, PlanRequest)` | `POST /v1/jobs/plan` |
 | `DispatchStatus(ctx, id)` | `GET /v1/dispatch/{id}` |
+| `ListExecutions(ctx, namespace, ExecutionFilter)` | `GET /v1/executions`; a filter field left empty, or `Limit` 0, is not sent |
 | `Execution(ctx, id)` | `GET /v1/execution/{id}` |
 | `Logs(ctx, id, offset, w)` | `GET /v1/execution/{id}/logs?offset=`, copied to `w` |
 | `FollowLogs(ctx, id, offset, w)` | `GET /v1/execution/{id}/logs?follow=true&offset=`, copied to `w` until the server ends the stream. An error means it broke |

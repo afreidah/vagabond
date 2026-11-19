@@ -221,6 +221,25 @@ func columns(write func(w io.Writer)) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// fields renders pairs as "Key = value" lines, aligned to the longest key and
+// leaving out a pair whose value is empty, with no trailing newline.
+func fields(pairs [][2]string) string {
+	width := 0
+	for _, p := range pairs {
+		width = max(width, len(p[0]))
+	}
+
+	var b strings.Builder
+
+	for _, p := range pairs {
+		if p[1] != "" {
+			_, _ = fmt.Fprintf(&b, "%-*s = %s\n", width, p[0], p[1])
+		}
+	}
+
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // uiWriter adapts a cli.Ui to io.Writer so the flag package can report through
 // it.
 type uiWriter struct {

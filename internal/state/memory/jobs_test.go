@@ -20,7 +20,7 @@ import (
 // A version is made only on a change, reformatting is not one, and a stopped
 // job is revived by registering it again.
 func TestJobs_RegisterVersionsOnChange(t *testing.T) {
-	s := NewJobs(NewExecutions())
+	s := NewJobs()
 	ctx := t.Context()
 	now := time.Now()
 
@@ -63,7 +63,7 @@ func TestJobs_RegisterVersionsOnChange(t *testing.T) {
 
 // Stopping or reading a job nobody registered is not found.
 func TestJobs_Unknown(t *testing.T) {
-	s := NewJobs(NewExecutions())
+	s := NewJobs()
 
 	if _, err := s.Job(t.Context(), "default", "ci"); !errors.Is(err, jobs.ErrNotFound) {
 		t.Errorf("Job() = %v, want ErrNotFound", err)

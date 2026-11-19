@@ -241,13 +241,28 @@ func (s *Executions) Get(_ context.Context, id execution.ID) (*execution.Record,
 // DispatchExecutions returns copies of every record of one dispatch, oldest
 // first.
 func (s *Executions) DispatchExecutions(_ context.Context, dispatch execution.ID) ([]*execution.Record, error) {
+	return s.matching(func(r *execution.Record) bool { return r.Dispatch == dispatch }), nil
+}
+
+// ListExecutions returns copies of the records f picks, newest first, at most
+// f.Limit of them.
+func (s *Executions) ListExecutions(_ context.Context, f execution.Filter) ([]*execution.Record, error) {
+	out := s.matching(f.Matches)
+	slices.Reverse(out)
+
+	return out[:min(f.Limit, len(out))], nil
+}
+
+// matching returns copies of the records keep picks, oldest first. IDs are
+// UUIDv7, so their order is the order they were created in.
+func (s *Executions) matching(keep func(*execution.Record) bool) []*execution.Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var out []*execution.Record
 
 	for id := range s.records {
-		if stored := s.records[id]; stored.Dispatch == dispatch {
+		if stored := s.records[id]; keep(&stored) {
 			r := clone(&stored)
 			out = append(out, &r)
 		}
@@ -257,29 +272,7 @@ func (s *Executions) DispatchExecutions(_ context.Context, dispatch execution.ID
 		return strings.Compare(a.ID.String(), b.ID.String())
 	})
 
-	return out, nil
-}
-
-// jobExecutions returns copies of a job's most recent records, newest first,
-// at most limit of them.
-func (s *Executions) jobExecutions(namespace, job string, limit int) []*execution.Record {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var out []*execution.Record
-
-	for id := range s.records {
-		if stored := s.records[id]; stored.Namespace == namespace && stored.Job == job {
-			r := clone(&stored)
-			out = append(out, &r)
-		}
-	}
-
-	slices.SortFunc(out, func(a, b *execution.Record) int {
-		return strings.Compare(b.ID.String(), a.ID.String())
-	})
-
-	return out[:min(limit, len(out))]
+	return out
 }
 
 // holds reports whether the dispatch of execution id is open and held under

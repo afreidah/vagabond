@@ -58,8 +58,17 @@ func Commands(meta *Meta) map[string]cli.CommandFactory {
 		"execution": func() (cli.Command, error) {
 			return &groupCommand{Meta: meta, synopsis: "Interact with executions", help: executionHelp}, nil
 		},
+		"execution list": func() (cli.Command, error) {
+			return &ExecutionListCommand{Meta: meta}, nil
+		},
 		"execution status": func() (cli.Command, error) {
 			return &ExecutionStatusCommand{Meta: meta}, nil
+		},
+		"dispatch": func() (cli.Command, error) {
+			return &groupCommand{Meta: meta, synopsis: "Interact with dispatches", help: dispatchHelp}, nil
+		},
+		"dispatch status": func() (cli.Command, error) {
+			return &DispatchStatusCommand{Meta: meta}, nil
 		},
 		"execution logs": func() (cli.Command, error) {
 			return &ExecutionLogsCommand{Meta: meta}, nil

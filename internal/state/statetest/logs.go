@@ -25,19 +25,11 @@ import (
 
 // LogContract runs every output rule against a fresh store from newStore.
 func LogContract(t *testing.T, newStore func(t *testing.T) Store) {
-	for _, r := range logRules {
-		t.Run(r.name, func(t *testing.T) { r.check(t, newStore(t)) })
-	}
-}
-
-// logRule is one promise about output, checked against a fresh store.
-type logRule struct {
-	name  string
-	check func(t *testing.T, s Store)
+	check(t, logRules, newStore)
 }
 
 // logRules are the promises LogContract checks.
-var logRules = []logRule{
+var logRules = []rule{
 	{"chunks read back in order", readsInOrder},
 	{"a write at chunk 0 starts over", startsOver},
 	{"the front drops past the ceiling", dropsTheFront},

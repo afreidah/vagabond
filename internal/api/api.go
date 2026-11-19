@@ -187,6 +187,16 @@ type Execution struct {
 	LogsTruncated bool
 }
 
+// ExecutionFilter is what GET /v1/executions narrows a listing by: each of
+// Job, State and Provider that is set, and at most Limit, the server's default
+// when 0.
+type ExecutionFilter struct {
+	Job      string
+	State    string
+	Provider string
+	Limit    int
+}
+
 // Billed is what the platform reported it charged.
 type Billed struct {
 	CPU      int

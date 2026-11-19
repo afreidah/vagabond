@@ -495,6 +495,83 @@ func TestPlan_File(t *testing.T) {
 	}
 }
 
+// ran runs helloJob from a file until its execution succeeds, and returns
+// that execution.
+func (h *harness) ran(t *testing.T) api.Execution {
+	t.Helper()
+
+	var started api.DispatchResponse
+
+	req := api.RunRequest{Source: helloJob, Meta: map[string]string{"version": "1"}}
+	if status := h.call(t, http.MethodPost, "/v1/jobs/run", req, &started); status != http.StatusOK {
+		t.Fatalf("run status = %d", status)
+	}
+
+	return h.awaitExecution(t, started.DispatchID, "succeeded")
+}
+
+// The listing is the namespace's newest first, cut at the limit and narrowed
+// by job, state and provider; a bad state or limit is a 400.
+func TestExecutions_List(t *testing.T) {
+	h := newHarness(t)
+
+	first, second := h.ran(t), h.ran(t)
+
+	cases := map[string][]string{
+		"":                           {second.ID, first.ID},
+		"?limit=1":                   {second.ID},
+		"?job=hello&state=succeeded": {second.ID, first.ID},
+		"?provider=fn":               {second.ID, first.ID},
+		"?job=other":                 {},
+		"?provider=box":              {},
+	}
+
+	for query, want := range cases {
+		var got []api.Execution
+
+		if status := h.call(t, http.MethodGet, "/v1/executions"+query, nil, &got); status != http.StatusOK {
+			t.Fatalf("GET /v1/executions%s = %d", query, status)
+		}
+
+		ids := make([]string, 0, len(got))
+		for i := range got {
+			ids = append(ids, got[i].ID)
+		}
+
+		if strings.Join(ids, ",") != strings.Join(want, ",") {
+			t.Errorf("GET /v1/executions%s = %v, want %v", query, ids, want)
+		}
+	}
+
+	for _, query := range []string{"?state=done", "?limit=-1", "?limit=many"} {
+		if status := h.call(t, http.MethodGet, "/v1/executions"+query, nil, nil); status != http.StatusBadRequest {
+			t.Errorf("GET /v1/executions%s = %d, want 400", query, status)
+		}
+	}
+}
+
+// A job's status carries its recent executions, read from the execution store.
+func TestJobStatus_CarriesExecutions(t *testing.T) {
+	h := newHarness(t)
+
+	run := h.ran(t)
+
+	h.jobs.EXPECT().Job(gomock.Any(), "default", "hello").
+		Return(&jobs.Job{Namespace: "default", Name: "hello", Version: 1}, nil)
+	h.jobs.EXPECT().Versions(gomock.Any(), "default", "hello").
+		Return([]*jobs.Version{{Version: 1, Created: time.Now()}}, nil)
+
+	var status api.JobStatus
+
+	if code := h.call(t, http.MethodGet, "/v1/job/hello", nil, &status); code != http.StatusOK {
+		t.Fatalf("GET /v1/job/hello = %d", code)
+	}
+
+	if len(status.Executions) != 1 || status.Executions[0].ID != run.ID || len(status.Versions) != 1 {
+		t.Errorf("status = %+v, want version 1 and execution %s", status, run.ID)
+	}
+}
+
 // An execution ID nothing recorded is a 404, and one that is not an ID a 400.
 func TestExecution_Missing(t *testing.T) {
 	h := newHarness(t)

@@ -19,7 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/jobs"
 )
 
@@ -33,21 +32,18 @@ type jobKey struct {
 	name      string
 }
 
-// Jobs holds registered jobs and every version of each. Executions are read
-// from the execution store the jobs run against.
+// Jobs holds registered jobs and every version of each.
 type Jobs struct {
-	mu         sync.Mutex
-	jobs       map[jobKey]jobs.Job
-	versions   map[jobKey][]jobs.Version
-	executions *Executions
+	mu       sync.Mutex
+	jobs     map[jobKey]jobs.Job
+	versions map[jobKey][]jobs.Version
 }
 
-// NewJobs returns an empty store reading executions from executions.
-func NewJobs(executions *Executions) *Jobs {
+// NewJobs returns an empty store.
+func NewJobs() *Jobs {
 	return &Jobs{
-		jobs:       make(map[jobKey]jobs.Job),
-		versions:   make(map[jobKey][]jobs.Version),
-		executions: executions,
+		jobs:     make(map[jobKey]jobs.Job),
+		versions: make(map[jobKey][]jobs.Version),
 	}
 }
 
@@ -168,12 +164,6 @@ func (s *Jobs) Versions(_ context.Context, namespace, name string) ([]*jobs.Vers
 	}
 
 	return out, nil
-}
-
-// JobExecutions returns a job's most recent executions, newest first, at most
-// limit of them.
-func (s *Jobs) JobExecutions(_ context.Context, namespace, job string, limit int) ([]*execution.Record, error) {
-	return s.executions.jobExecutions(namespace, job, limit), nil
 }
 
 // latest returns the newest version of a job the store holds.

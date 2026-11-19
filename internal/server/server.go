@@ -59,13 +59,14 @@ type serverLedger interface {
 	Refreshed() time.Time
 }
 
-// serverExecutions is where runs and attempts are recorded and read back,
-// where dispatches a dead owner left are claimed and cancels are requested,
-// where stored output is read and pruned, and whose reachability health
-// reports.
+// serverExecutions is where runs and attempts are recorded, read back and
+// listed, where dispatches a dead owner left are claimed and cancels are
+// requested, where stored output is read and pruned, and whose reachability
+// health reports.
 type serverExecutions interface {
 	dispatch.Executions
 	GetDispatch(ctx context.Context, id execution.ID) (*execution.Dispatch, error)
+	ListExecutions(ctx context.Context, f execution.Filter) ([]*execution.Record, error)
 	ClaimDispatches(
 		ctx context.Context, owner string, now, until time.Time, skip []execution.ID,
 	) ([]*execution.Dispatch, error)
@@ -75,15 +76,14 @@ type serverExecutions interface {
 	Ping(ctx context.Context) error
 }
 
-// serverJobs is where registered jobs live: storing versions, reading them
-// back, and the executions they produced.
+// serverJobs is where registered jobs live: storing versions and reading them
+// back.
 type serverJobs interface {
 	jobs.Reader
 	Register(ctx context.Context, namespace, name string, source []byte, now time.Time) (int64, bool, error)
 	Jobs(ctx context.Context, namespace string) ([]*jobs.Job, error)
 	Versions(ctx context.Context, namespace, name string) ([]*jobs.Version, error)
 	Stop(ctx context.Context, namespace, name string, now time.Time) error
-	JobExecutions(ctx context.Context, namespace, job string, limit int) ([]*execution.Record, error)
 }
 
 // -------------------------------------------------------------------------
@@ -216,6 +216,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("DELETE /v1/job/{name}", s.wrap(s.stopJob))
 	mux.HandleFunc("POST /v1/job/{name}/dispatch", s.wrap(s.dispatchJob))
 	mux.HandleFunc("GET /v1/dispatch/{id}", s.wrap(s.dispatchStatus))
+	mux.HandleFunc("GET /v1/executions", s.wrap(s.listExecutions))
 	mux.HandleFunc("GET /v1/execution/{id}", s.wrap(s.executionStatus))
 	mux.HandleFunc("GET /v1/execution/{id}/logs", s.executionLogs)
 	mux.HandleFunc("DELETE /v1/execution/{id}", s.wrap(s.cancelExecution))

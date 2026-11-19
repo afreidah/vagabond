@@ -158,6 +158,7 @@ func TestClientCommands_WrongArgumentsExplainThemselves(t *testing.T) {
 		{args: []string{"job", "status", "one", "two"}, want: "at most one argument: [name]"},
 		{args: []string{"execution", "status"}, want: "one argument: <id>"},
 		{args: []string{"execution", "logs"}, want: "one argument: <id>"},
+		{args: []string{"dispatch", "status"}, want: "one argument: <id>"},
 		{args: []string{"node", "status", "extra"}, want: "no arguments."},
 		{args: []string{"provider", "status", "one", "two"}, want: "at most one argument: [name]"},
 	}
@@ -206,7 +207,8 @@ func TestRun_GroupsExplainThemselves(t *testing.T) {
 		{group: "job", want: "vagabond job validate"},
 		{group: "node", want: "vagabond node status"},
 		{group: "provider", want: "vagabond provider status"},
-		{group: "execution", want: "vagabond execution status"},
+		{group: "execution", want: "vagabond execution list"},
+		{group: "dispatch", want: "vagabond dispatch status"},
 	}
 
 	for _, tt := range tests {

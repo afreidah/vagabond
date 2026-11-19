@@ -252,9 +252,7 @@ func devServer(
 		return nil, err
 	}
 
-	executions := memory.NewExecutions()
-
-	return server.New(reg, led, executions, memory.NewJobs(executions), logger, opts...), nil
+	return server.New(reg, led, memory.NewExecutions(), memory.NewJobs(), logger, opts...), nil
 }
 
 // storeServer connects to the store, migrates it, and builds a server over it

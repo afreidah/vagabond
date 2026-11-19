@@ -64,14 +64,19 @@ SELECT EXISTS (
 SELECT * FROM executions WHERE id = @id;
 
 -- name: ListDispatchExecutions :many
--- Every execution of one dispatch, in the order they were created.
+-- Every execution of one dispatch, in the order they were created. created_at
+-- is the ID's millisecond, so the ID, a UUIDv7, orders a tie.
 SELECT * FROM executions
 WHERE dispatch_id = @dispatch_id
-ORDER BY created_at;
+ORDER BY created_at, id;
 
--- name: ListJobExecutions :many
--- A job's most recent executions, newest first.
+-- name: ListExecutions :many
+-- A namespace's most recent executions, newest first, narrowed by each of job,
+-- state and provider that is not empty.
 SELECT * FROM executions
-WHERE namespace = @namespace AND job = @job
-ORDER BY created_at DESC
+WHERE namespace = @namespace
+  AND (@job::text = '' OR job = @job::text)
+  AND (@state::text = '' OR state = @state::text)
+  AND (@provider::text = '' OR provider = @provider::text)
+ORDER BY created_at DESC, id DESC
 LIMIT @max_rows;
