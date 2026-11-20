@@ -244,6 +244,10 @@ Standard input is `/dev/null`; standard output and error share one pipe, so the 
 is both, in the order written. Its exit is its code, or 128 plus the signal
 that killed it: 143 for `SIGTERM`, 137 for `SIGKILL`.
 
+When the program exits, every other process in the microVM is killed, as in a
+container, so a process it left in the background, even in a session of its
+own, cannot keep the execution running. The exit is still the program's own.
+
 ## MicroVMs
 
 ### Sizing
@@ -435,9 +439,9 @@ empty. The output is kept whole until `Release`.
 ### Timeouts
 
 A workload's timeout runs from its saved start, so a restarted daemon keeps
-the same deadline; zero means none. At the deadline the workload is sent
-`SIGTERM`, then `SIGKILL` 10 seconds later if it still runs. It ends `failed`,
-with exit 143 or 137.
+the same deadline; zero means none. At the deadline every process of the
+workload is sent `SIGTERM`, then `SIGKILL` 10 seconds later if its program
+still runs. It ends `failed`, with exit 143 or 137.
 
 ### Cancel
 
@@ -471,9 +475,10 @@ an execution the daemon does not hold succeeds.
   console.log   the jailer's errors and Firecracker's output, the guest's console included
 ```
 
-Each change to a record is written to a temporary file and renamed over the
-last, so a crash leaves the old record whole, and a record is saved before
-anything it describes is made.
+Each change to a record is written to a temporary file, synced to disk, and
+renamed over the last, its directory synced after, so a crash or a power loss
+leaves the old record whole, and a record is saved before anything it
+describes is made.
 
 At start, the daemon takes back every execution that has not ended:
 

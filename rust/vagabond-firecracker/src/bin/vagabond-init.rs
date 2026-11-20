@@ -156,8 +156,9 @@ impl GuestService {
     }
 
     // collect takes every exit waiting and publishes the workload's, as its
-    // code or 128 plus the signal that killed it, under the pid lock so a
-    // workload that exits right after starting still matches its pid.
+    // code or 128 plus the signal that killed it, then kills whatever it left
+    // running, under the pid lock so a workload that exits right after
+    // starting still matches its pid.
     fn collect(&self) {
         let pid = self.pid.lock().expect("pid lock poisoned");
         // One SIGCHLD can stand for several exits, so take them until none is left.
@@ -169,15 +170,19 @@ impl GuestService {
             };
             if Some(exited) == *pid {
                 self.exit.send_replace(Some(code));
+
+                // Nothing the workload started outlives it, so none holds its output open.
+                let _ = kill(everyone(exited), Signal::SIGKILL);
             }
         }
     }
 }
 
 // spawn starts the workload with only its own environment, stdout and stderr
-// sharing one pipe, as the image's user, and returns its pid and the pipe's
-// read end. The groups are set before the group, and the group before the
-// user, as each needs the root the next gives up.
+// sharing one pipe, as the image's user, leading a process group of its own,
+// and returns its pid and the pipe's read end. The groups are set before the
+// group, and the group before the user, as each needs the root the next gives
+// up.
 fn spawn(process: &Process) -> std::io::Result<(Pid, pipe::Receiver)> {
     let (program, args) = process.args.split_first().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "no program to run")
@@ -191,7 +196,8 @@ fn spawn(process: &Process) -> std::io::Result<(Pid, pipe::Receiver)> {
         .envs(&process.env)
         .stdin(Stdio::null())
         .stdout(output.try_clone()?)
-        .stderr(output);
+        .stderr(output)
+        .process_group(0);
 
     // A working directory the image lacks is made, owned by root and 0755 under
     // init's umask, so the task starts in it as it would in a container.
@@ -224,6 +230,18 @@ fn spawn(process: &Process) -> std::io::Result<(Pid, pipe::Receiver)> {
     }
     let child = command.spawn()?;
     Ok((Pid::from_raw(child.id() as i32), receiver))
+}
+
+// everyone is what a signal for the whole workload goes to: as PID 1, every
+// process but init, so a child that left the workload's group is reached too;
+// otherwise, as in tests, the workload's group, since -1 would reach the
+// caller's every process.
+fn everyone(workload: Pid) -> Pid {
+    if std::process::id() == 1 {
+        Pid::from_raw(-1)
+    } else {
+        Pid::from_raw(-workload.as_raw())
+    }
 }
 
 // internal turns a failure inside init into the status the daemon receives,
@@ -304,8 +322,8 @@ impl Guest for GuestService {
         })
     }
 
-    // signal sends the requested signal to the workload while it runs; once it
-    // has exited, there is nothing to signal.
+    // signal sends the requested signal to every process of the workload while
+    // its first runs; once that has exited, the rest are gone with it.
     async fn signal(&self, _ctx: &TtrpcContext, request: SignalRequest) -> ttrpc::Result<Empty> {
         let requested = Signal::try_from(request.signal).map_err(invalid_argument)?;
         // The pid lock keeps the reaper from collecting the exit, which frees the
@@ -313,7 +331,7 @@ impl Guest for GuestService {
         let pid = self.pid.lock().expect("pid lock poisoned");
         let workload = pid.ok_or_else(not_started)?;
         if self.exit.borrow().is_none() {
-            kill(workload, requested).map_err(internal)?;
+            kill(everyone(workload), requested).map_err(internal)?;
         }
         Ok(Empty::new())
     }
@@ -467,6 +485,17 @@ mod tests {
         assert_eq!(read_all(&served.client).await, b"hi\n");
         let exit = served.client.wait(context(), &Empty::new()).await.unwrap();
         assert_eq!(exit.code, 3);
+    }
+
+    // A child the workload leaves running is killed when the workload exits, so
+    // the output still ends and Wait returns the workload's own code.
+    #[tokio::test]
+    async fn leftover_child_ends_with_the_workload() {
+        let served = serve().await;
+        start(&served, "sleep 30 & echo hi").await;
+        assert_eq!(read_all(&served.client).await, b"hi\n");
+        let exit = served.client.wait(context(), &Empty::new()).await.unwrap();
+        assert_eq!(exit.code, 0);
     }
 
     // Signal reaches a running workload, one killed by a signal exits with 128

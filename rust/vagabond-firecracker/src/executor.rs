@@ -451,17 +451,17 @@ impl Executor {
             .cloned()
     }
 
-    // forget drops an execution's record and deletes its directory, output and
-    // console with it.
+    // forget deletes an execution's directory, its output and console with it,
+    // then drops its record, under the lock so no save remakes the directory in
+    // between. A failed delete keeps the record for Release to try again.
     fn forget(&self, execution_id: &str) -> io::Result<()> {
-        self.records
-            .lock()
-            .expect("records lock poisoned")
-            .remove(execution_id);
+        let mut records = self.records.lock().expect("records lock poisoned");
         match std::fs::remove_dir_all(self.config.state_dir.join(execution_id)) {
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-            result => result,
+            Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+            _ => {}
         }
+        records.remove(execution_id);
+        Ok(())
     }
 }
 
@@ -1212,6 +1212,22 @@ mod tests {
 
         assert_eq!(executor.record(&request.execution_id), None);
         assert!(!dir.path().join(&request.execution_id).exists());
+    }
+
+    // A delete that fails keeps the record, so a later Release can try again. A
+    // file where the directory should be fails to delete, even as root.
+    #[test]
+    fn forget_keeps_the_record_when_the_delete_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let executor = Executor::new(Config::sample(dir.path())).unwrap();
+        let record = executor.admit(&request()).unwrap().unwrap();
+        let path = dir.path().join(&record.execution_id);
+        std::fs::remove_dir_all(&path).unwrap();
+        std::fs::write(&path, b"").unwrap();
+
+        assert!(executor.forget(&record.execution_id).is_err());
+
+        assert_eq!(executor.record(&record.execution_id), Some(record));
     }
 
     // An execution the executor holds no record of cannot be updated.

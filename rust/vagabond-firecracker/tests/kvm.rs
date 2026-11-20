@@ -463,6 +463,34 @@ async fn a_command_runs_in_a_microvm() {
         .unwrap();
 }
 
+// A process the workload leaves running in a session of its own is killed when
+// the workload exits, so the run still ends, with the workload's own code.
+#[tokio::test]
+#[ignore = "boots microVMs, which needs root and /dev/kvm; run make firecracker-test"]
+async fn a_leftover_process_ends_with_the_workload() {
+    let daemon = Daemon::start().await;
+    let drive = Drive::new();
+    let run = workload(
+        "leftover",
+        &drive,
+        &["/bin/sh", "-c", "setsid sleep 300 & sleep 1; echo hi"],
+    );
+    daemon.client.submit(context(), &run).await.unwrap();
+
+    assert_eq!(output(&daemon.client, "leftover").await, "hi\n");
+    let result = daemon
+        .client
+        .result(context(), &execution("leftover"))
+        .await
+        .unwrap();
+    assert_eq!(result.exit_code, Some(0));
+    daemon
+        .client
+        .release(context(), &execution("leftover"))
+        .await
+        .unwrap();
+}
+
 // Cancel stops the workload, which ends cancelled with the exit SIGTERM gives
 // it, and the microVM stops with it.
 #[tokio::test]

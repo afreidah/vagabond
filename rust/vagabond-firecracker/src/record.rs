@@ -8,7 +8,7 @@
 // them and can still answer for one that has stopped.
 // -------------------------------------------------------------------------------
 
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
@@ -48,13 +48,22 @@ pub struct Record {
 
 impl Record {
     // save writes the record under state_dir, replacing the last one through a
-    // rename, so a crash mid-write leaves the old record whole.
+    // rename, the file and both directories synced, so a crash or a power loss
+    // mid-write leaves the old record whole.
     pub fn save(&self, state_dir: &Path) -> io::Result<()> {
         let dir = state_dir.join(&self.execution_id);
         std::fs::create_dir_all(&dir)?;
+
+        // Synced before the rename, so the record it replaces is never swapped for a partial one.
         let temp = dir.join("record.json.tmp");
-        std::fs::write(&temp, serde_json::to_vec_pretty(self)?)?;
-        std::fs::rename(temp, dir.join("record.json"))
+        let mut file = std::fs::File::create(&temp)?;
+        file.write_all(&serde_json::to_vec_pretty(self)?)?;
+        file.sync_all()?;
+        std::fs::rename(temp, dir.join("record.json"))?;
+
+        // The rename, and a directory just made, last only once their directories are synced.
+        std::fs::File::open(&dir)?.sync_all()?;
+        std::fs::File::open(state_dir)?.sync_all()
     }
 
     // load reads the record of one execution back from under state_dir, an
