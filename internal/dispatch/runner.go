@@ -21,6 +21,7 @@ import (
 	"github.com/afreidah/vagabond/internal/backoff"
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
+	"github.com/afreidah/vagabond/internal/panics"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
 )
@@ -85,9 +86,10 @@ func (r *runner) wait() answer {
 
 // run drives the execution to the end of its steps. Work that acts on the
 // provider stops when ctx ends or the dispatch is cancelled; the steps after
-// it run however the run ends.
+// it run however the run ends. A panic fails the execution as internal.
 func (r *runner) run(ctx context.Context) {
 	defer r.lease.runners.Done()
+	defer panics.Catch(ctx, r.d.logger, "execution "+r.rec.ID.String(), r.panicked)
 
 	work := context.WithoutCancel(ctx)
 
@@ -509,6 +511,33 @@ func (r *runner) answer(a *answer) {
 		a.rec = r.rec
 		r.answered <- *a
 	})
+}
+
+// panicked answers the task with an internal failure for a panic in this
+// runner, after one attempt to record the execution failed. Settling and
+// releasing are skipped, since they could panic the same way: the execution's
+// quota stays reserved and its workload as the provider has it.
+func (r *runner) panicked(err error) {
+	r.recordPanic()
+	r.answer(&answer{state: r.rec.State, err: plugin.Internal(err)})
+}
+
+// recordPanic writes the record failed as internal, once and within
+// recordTimeout, and only logs a panic of its own. A record already terminal
+// keeps its verdict.
+func (r *runner) recordPanic() {
+	defer panics.Catch(context.Background(), r.d.logger, "recording panicked execution "+r.rec.ID.String(), nil)
+
+	if r.rec.To(execution.StateFailed, r.d.now()) != nil {
+		return
+	}
+
+	r.rec.Failure = string(plugin.ClassInternal)
+
+	ctx, cancel := context.WithTimeout(context.Background(), recordTimeout)
+	defer cancel()
+
+	_ = r.d.executions.Save(ctx, &r.rec, r.lease.key)
 }
 
 // move advances the record to next, leaving it as it is for a move the state

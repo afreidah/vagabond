@@ -158,7 +158,7 @@ serializable transaction.
 | `error` | Why an `unanswered` run got no answer; `''` otherwise |
 | `tasks` | Tasks the job declares |
 | `owner` | Process holding the lease, `server:<host>:<pid>` |
-| `epoch` | Claims of the lease: `1` when the dispatch starts, one more at each claim |
+| `epoch` | Claims of the lease: `1` when the dispatch starts, one more at each claim. A claim to `7` ends the dispatch rather than resuming it ([Resuming](dispatch.md#resuming)) |
 | `lease_until` | Lease expiry; renewed every 20s to 60s ahead until the dispatch is done |
 | `ended_at` | When the verdict was written; null while running |
 | `cancel_requested_at` | When a server that does not hold the dispatch asked for it to be cancelled; the first request's time is kept. Null otherwise |

@@ -17,6 +17,7 @@ import (
 	"fmt"
 
 	"github.com/afreidah/vagabond/internal/execution"
+	"github.com/afreidah/vagabond/internal/panics"
 	"github.com/afreidah/vagabond/internal/plugin"
 )
 
@@ -26,11 +27,24 @@ import (
 
 // Resume takes a claimed dispatch to its end and returns its verdict and why.
 // A dispatch whose executions cannot be read is left open, so its lease lapses
-// and the next claim tries again.
+// and the next claim tries again. One claimed past maxResumes is ended without
+// running anything, and a panic ends it unanswered.
 func (d *Dispatcher) Resume(
 	ctx context.Context, claimed *execution.Dispatch,
-) (execution.DispatchState, string, error) {
+) (state execution.DispatchState, reason string, err error) {
 	l := d.hold(ctx, claimed.ID, claimed.Lease())
+	origin := Origin{
+		Namespace: claimed.Namespace, Job: claimed.Job, JobVersion: claimed.JobVersion, Dispatch: claimed.ID, lease: l,
+	}
+
+	if claimed.Epoch-1 > maxResumes {
+		return d.abandon(ctx, claimed, origin)
+	}
+
+	defer panics.Catch(ctx, d.logger, "resuming dispatch "+claimed.ID.String(), func(p error) {
+		state, reason, err = execution.DispatchUnanswered, p.Error(), nil
+		d.end(ctx, origin, state, reason)
+	})
 
 	// A cancel asked for while no process held the dispatch is acted on at once
 	if !claimed.CancelRequested.IsZero() {
@@ -67,14 +81,36 @@ func (d *Dispatcher) Resume(
 		return claimed.State, claimed.Error, nil
 	}
 
-	state, reason := ended(claimed.Tasks, records)
-
-	origin := Origin{
-		Namespace: claimed.Namespace, Job: claimed.Job, JobVersion: claimed.JobVersion, Dispatch: claimed.ID, lease: l,
-	}
+	state, reason = ended(claimed.Tasks, records)
 	d.end(ctx, origin, state, reason)
 
 	return state, reason, nil
+}
+
+// maxResumes is how many times a dispatch is resumed before a claim ends it
+// instead. A dispatch that ends its server in a way no recover catches, such
+// as a fatal runtime error, would otherwise end every server that claims it.
+const maxResumes = 5
+
+// abandon ends a dispatch claimed past maxResumes without starting any of its
+// executions, which are left as their records stand: unanswered when it had no
+// verdict, and closed under the verdict it had otherwise.
+func (d *Dispatcher) abandon(
+	ctx context.Context, claimed *execution.Dispatch, origin Origin,
+) (execution.DispatchState, string, error) {
+	reason := fmt.Sprintf("abandoned after %d resumes without finishing", maxResumes)
+	d.logger.ErrorContext(ctx, "abandoning dispatch", "dispatch", claimed.ID, "epoch", claimed.Epoch, "reason", reason)
+
+	if claimed.State != execution.DispatchRunning {
+		defer origin.lease.release()
+		d.close(context.WithoutCancel(ctx), origin.lease)
+
+		return claimed.State, claimed.Error, nil
+	}
+
+	d.end(ctx, origin, execution.DispatchUnanswered, reason)
+
+	return execution.DispatchUnanswered, reason, nil
 }
 
 // restore builds a runner for a record of a claimed dispatch, on the node the

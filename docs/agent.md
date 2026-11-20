@@ -690,6 +690,10 @@ executors, and an older agent refuses a workload naming one.
 | Transport errors | Connection dropped mid-call | Infrastructure failure |
 | `Canceled`, `DeadlineExceeded` | The server's call ended first, including a `Submit` waiting on another in flight for the same execution | Infrastructure failure |
 
+A panic in a handler on either side, the agent's or the server's `Node`
+service, answers `Internal` (`internal error in <method>`) and is logged at
+error with its stack; the session and the process carry on.
+
 ## Security
 
 | `agent_bind` | Agent connection | Who can register |

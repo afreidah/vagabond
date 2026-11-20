@@ -26,6 +26,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/backoff"
+	"github.com/afreidah/vagabond/internal/panics"
 )
 
 // -------------------------------------------------------------------------
@@ -107,9 +108,12 @@ func (c *Conns) handle(ctx context.Context, conn net.Conn, e *endpoint) {
 		return
 	}
 
-	// The agent calls this endpoint down the session it opened.
+	// The agent calls this endpoint down the session it opened; a handler's panic answers Internal.
 	e.session = session
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(panics.UnaryServerInterceptor(e.logger)),
+		grpc.ChainStreamInterceptor(panics.StreamServerInterceptor(e.logger)),
+	)
 	agentrpc.RegisterNodeServer(srv, e)
 
 	go func() { _ = session.Serve(srv) }()

@@ -14,6 +14,7 @@ import (
 	"context"
 
 	"github.com/afreidah/vagabond/internal/execution"
+	"github.com/afreidah/vagabond/internal/panics"
 )
 
 // claim takes over every dispatch whose lease lapsed and resumes each in the
@@ -47,6 +48,7 @@ func (s *Server) resume(ctx context.Context, d *execution.Dispatch) {
 	go func() {
 		defer s.untrack(d.ID)
 		defer cancel()
+		defer panics.Catch(runCtx, logger, "resumed dispatch "+d.ID.String(), nil)
 
 		state, reason, err := s.dispatcher.Resume(runCtx, d)
 		if err != nil {

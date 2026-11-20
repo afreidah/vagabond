@@ -25,6 +25,7 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/ledger"
+	"github.com/afreidah/vagabond/internal/panics"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/scheduler"
@@ -284,15 +285,18 @@ func (d *Dispatcher) close(ctx context.Context, l *lease) {
 // Run executes every task in a job, in declaration order, under the dispatch
 // Begin recorded. Tasks read as steps, so the first that fails or cannot be
 // dispatched stops the job; the outcome holds what ran even alongside an error.
+// A panic ends the run with it as an internal error.
 func (d *Dispatcher) Run(
 	ctx context.Context, origin Origin, j *job.Job, eval *hcl.EvalContext,
-) (*JobOutcome, error) {
+) (outcome *JobOutcome, err error) {
 	if origin.Dispatch.IsZero() {
 		return nil, plugin.Internal(errors.New("run of a dispatch that was never begun"))
 	}
 
+	defer panics.Catch(ctx, d.logger, "dispatch "+origin.Dispatch.String(), func(p error) { err = plugin.Internal(p) })
+
 	origin.Job = j.Name
-	outcome := &JobOutcome{Job: j.Name, Dispatch: origin.Dispatch}
+	outcome = &JobOutcome{Job: j.Name, Dispatch: origin.Dispatch}
 
 	for i := range j.Tasks {
 		task := &j.Tasks[i]

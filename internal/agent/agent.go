@@ -24,6 +24,7 @@ import (
 	"github.com/afreidah/vagabond/internal/agent/fingerprint"
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/backoff"
+	"github.com/afreidah/vagabond/internal/panics"
 )
 
 // -------------------------------------------------------------------------
@@ -122,8 +123,11 @@ func (a *Agent) connect(ctx context.Context) error {
 	changed := make(chan struct{}, 1)
 	local := newExecutions(a.exec, &agentrpc.Resources{Cpu: a.node.CPU, Memory: a.node.Memory}, changed)
 
-	// The server calls this endpoint down the session the agent opened.
-	srv := grpc.NewServer()
+	// The server calls this endpoint down the session the agent opened; a handler's panic answers Internal.
+	srv := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(panics.UnaryServerInterceptor(a.logger)),
+		grpc.ChainStreamInterceptor(panics.StreamServerInterceptor(a.logger)),
+	)
 	agentrpc.RegisterAgentExecutionsServer(srv, local)
 
 	go func() { _ = session.Serve(srv) }()

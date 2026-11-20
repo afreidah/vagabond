@@ -20,6 +20,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/api"
 	"github.com/afreidah/vagabond/internal/execution"
+	"github.com/afreidah/vagabond/internal/panics"
 	"github.com/afreidah/vagabond/internal/plugin"
 )
 
@@ -79,8 +80,10 @@ func (s *Server) follow(
 }
 
 // endFollow re-reads id's record until it has ended, then calls stop once the
-// linger has passed. A shutdown stops it at once.
+// linger has passed. A shutdown stops it at once, and a panic stops it then.
 func (s *Server) endFollow(ctx context.Context, stop context.CancelFunc, id execution.ID) {
+	defer panics.Catch(ctx, s.logger, "following the output of "+id.String(), func(error) { stop() })
+
 	ended := false
 
 	for {

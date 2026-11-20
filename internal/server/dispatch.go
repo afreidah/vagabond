@@ -22,6 +22,7 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobs"
 	"github.com/afreidah/vagabond/internal/jobspec"
+	"github.com/afreidah/vagabond/internal/panics"
 )
 
 // -------------------------------------------------------------------------
@@ -129,6 +130,7 @@ func (s *Server) launch(
 	go func() {
 		defer s.untrack(id)
 		defer cancel()
+		defer panics.Catch(runCtx, logger, "dispatch "+id.String(), nil)
 
 		outcome, err := s.dispatcher.Run(runCtx, origin, j, jobspec.EvalContext(meta))
 		s.dispatcher.Finish(runCtx, origin, outcome, err)

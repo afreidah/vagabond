@@ -110,7 +110,7 @@ Every non-2xx response from a route in the table below has this body:
 | 404 | Job not registered in the namespace; no such dispatch or execution |
 | 409 | Dispatching or planning (by `Name`) a stopped job |
 | 416 | `GET /v1/execution/{id}/logs?follow=true` on a running execution whose provider cannot place its stream at `offset`: on Cloud Run, a backfill that failed or stopped at its page cap. Sent before any output |
-| 500 | Anything else: a store error other than an unreachable store, an internal error. Logged by the server |
+| 500 | Anything else: a store error other than an unreachable store, an internal error. Logged by the server. A panic in a handler is `{"Error":"internal error"}`, never the panic value, and is logged with its stack; one in a live output stream already begun cuts the connection instead ([Panics](dispatch.md#panics)) |
 | 503 | The store is unreachable: connection refused, broken or timed out. Nothing was written; the same request can be retried once the store is back. Other store errors are 500 |
 
 Error messages carry the identifier, for example
