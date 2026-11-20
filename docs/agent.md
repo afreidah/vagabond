@@ -1,15 +1,15 @@
 ---
 title: "Agent"
 seoTitle: "Agent: Running Workloads on Your Own Nodes"
-description: "The vagabond agent: flags, capacity, cgroup delegation, deployment, pools, workloads, node status, the agent protocol and troubleshooting."
+description: "The vagabond agent: flags, capacity, cgroup delegation, deployment, pools and placement, the executor contract, node status, the agent protocol and troubleshooting."
 weight: 510
 ---
 
 `vagabond agent` runs on a node you own, apart from the server. It dials the
 server's `agent_bind` address, registers the node into a named pool, and runs
 the workloads the server sends it with the node's executors: as containers on
-the node's containerd, and, with `-firecracker`, in Firecracker microVMs
-through [vagabond-firecracker](firecracker.md). The server schedules onto the
+the node's containerd ([containerd](containerd.md)), and, with `-firecracker`,
+in Firecracker microVMs ([Firecracker](firecracker.md)). The server schedules onto the
 pool's nodes through providers of type `containerd` and `firecracker`, each
 node a candidate of its own. `vagabond node status` lists the nodes connected
 now and how much of each is in use.
@@ -71,13 +71,13 @@ The full CLI reference is in [CLI](cli.md).
 2. Read the node: architecture, host CPU and memory, the agent's cgroup and
    the limits above it ([Capacity](#capacity)).
 3. Delegate the agent's cgroup, unless `-cgroup-parent` is set
-   ([Cgroup delegation](#cgroup-delegation)).
+   ([cgroup delegation](#cgroup-delegation)).
 4. Connect to containerd and create `<data-dir>/logs`.
 5. With `-firecracker`, start vagabond-firecracker, its log on the agent's
    stderr, and wait up to 30s for it to serve; then connect to containerd
    again for the `vagabond-firecracker` namespace.
 6. Re-arm the timeout of every workload already in the `vagabond` namespace
-   ([Agent restarts](#agent-restarts)).
+   ([Agent restarts](containerd.md#agent-restarts)).
 7. Log the node, then ask each executor what it is: containerd answers by its
    version; vagabond-firecracker by `Info`, once containerd's devmapper
    snapshotter is found loaded. What they answer, each executor's name and
@@ -128,7 +128,7 @@ checks on the agent and the server, not by the kernel. With `-cgroup-parent`,
 workloads are under that parent instead, so its limits apply, not those of the
 agent's chain that capacity is read from.
 
-## Cgroup delegation
+## cgroup delegation
 
 cgroup v2 lets a cgroup either hold processes or hand controllers to children,
 not both. At startup the agent prepares its own cgroup to parent workloads:
@@ -574,7 +574,8 @@ never does is `failed` 24 hours after it became `lost`, charged as reserved
 ### Releasing what nothing needs
 
 Every report is answered with the held workloads the server has no use for,
-and the agent releases each as [Release](#release) does:
+and the agent releases each as its executor's `Release` does
+([containerd](containerd.md#release), [Firecracker](firecracker.md#release)):
 
 - one whose execution is released
 - one no execution was recorded under, or whose ID is no execution's
@@ -587,8 +588,14 @@ the next report.
 
 ## Workloads
 
-Each workload runs on the executor its provider's type names. Every executor
-keeps the same contract, which the server relies on:
+Each workload runs on the executor its provider's type names:
+
+| Provider type | Executor | Runs each workload |
+|---|---|---|
+| `containerd` | [containerd](containerd.md) | As a container on the node's containerd, sharing its kernel and network |
+| `firecracker` | [Firecracker](firecracker.md) | In a Firecracker microVM with its own kernel, behind NAT |
+
+Every executor keeps the same contract, which the server relies on:
 
 | | Every executor |
 |---|---|
@@ -600,125 +607,10 @@ keeps the same contract, which the server relies on:
 | Release | Deletes everything kept for it; one not held is released already |
 | Restarts | Workloads outlive the agent, which finds them again when it starts |
 
-The rest of this section is containerd's. A microVM differs in its own
-kernel, the network behind NAT rather than the host's, memory charged with
-Firecracker's overhead, and a workload that is not PID 1, so `SIGTERM` ends a
-plain `sh -c` at once with 143; see
-[vagabond-firecracker](firecracker.md#workloads).
-
-One container per execution, on the node's containerd.
-
-| Property | Value |
-|---|---|
-| containerd namespace | `vagabond` |
-| Container and snapshot ID | The execution ID |
-| Runtime | `io.containerd.runc.v2` |
-| cgroup | `<parent>/<execution-id>`, parent from [delegation](#cgroup-delegation) or `-cgroup-parent` |
-| Network | Host network namespace |
-| `/etc/resolv.conf`, `/etc/hosts` | The host's |
-| Mounts | containerd's default OCI spec; no host paths or volumes from the job |
-| Image | Pulled and unpacked on every new submission for the node's platform, name normalised (`alpine` -> `docker.io/library/alpine:latest`). Layers already on the node are not downloaded again, but the reference is always resolved against the registry, so an unreachable registry fails the submission even for a cached image. No registry credentials are passed. Images are never removed; delete them with `ctr -n vagabond images rm <ref>`. |
-| Snapshotter | containerd's default, `overlayfs`, unless the `vagabond` namespace carries a `containerd.io/defaults/snapshotter` label |
-| User | The image's |
-
-### Process
-
-| Task `config` | Process |
-|---|---|
-| `image` only | Image `ENTRYPOINT` + `CMD` |
-| `args` | Image `ENTRYPOINT` + `args` |
-| `command` | `command` alone |
-| `command` and `args` | `command` + `args` |
-
-- **Environment:** the image's environment, then the task's `env` block and
-  `VAGABOND_META_*` variables from `meta`; the task's values win on the same
-  name. See [`env` block](job-specification.md#env-block).
-- **Working directory:** the task's `working_directory`, else the image's.
-  One the image lacks is made by runc, owned by root with mode `0755`.
-- **Limits:** `memory` MiB becomes the container's memory limit; `cpu`
-  millicores becomes a CFS quota of `cpu * 100` us per 100000 us period.
-
-### Labels
-
-State lives on the container as labels, so it survives the agent:
-
-| Label | Value |
-|---|---|
-| `vagabond.started` | RFC 3339 time, set just before the task starts |
-| `vagabond.timeout` | Task timeout as a Go duration, `0s` for none |
-| `vagabond.cpu` | Declared millicores |
-| `vagabond.memory` | Declared MiB |
-| `vagabond.cancelled` | `true` once cancelled |
-
-### States
-
-| containerd | Execution state |
-|---|---|
-| Container without a task, never started | `accepted` |
-| Container whose task went after it started, as after a host restart | `failed`, with no exit code |
-| Task created, not started | `accepted` |
-| Task running, paused or other | `running` |
-| Task stopped, `vagabond.cancelled=true` | `cancelled` |
-| Task stopped, exit 0 | `succeeded` |
-| Task stopped, non-zero exit | `failed` |
-
-`Submit` answers with the state the workload reached. The server records a
-terminal answer as `running`; the next status poll reports the terminal state
-with its result.
-
-### Output
-
-- containerd writes stdout and stderr to `<data-dir>/logs/<execution-id>.log`.
-  The file is neither rotated nor capped; it grows until `Release` deletes it.
-- `Result` carries the exit code and run time only. Once the workload ends the
-  server reads its whole output through `AgentExecutions.StreamLogs` from
-  offset 0, before `Release` deletes the file, and stores it
-  ([Dispatch](dispatch.md#output)).
-- While the workload runs, the server streams its output through
-  `AgentExecutions.StreamLogs`, from the byte offset the client asks for, so a
-  `?follow=true` request ([API](api.md#read-execution-logs)) shows it live and
-  a reopened stream resumes where the last one stopped.
-- The stream ends when the workload ends, or when it is released mid-stream,
-  after copying whatever the log file still holds.
-
-### Timeouts
-
-A task `timeout` is enforced by the agent, measured from `vagabond.started`.
-When it passes, the agent sends `SIGTERM` to the workload's first process, PID
-1 in its own PID namespace, then `SIGKILL` 10 seconds later if it has not
-exited. PID 1 ignores `SIGTERM` unless it installs a handler, so a plain
-`sleep` or `sh -c` workload is killed at 10 seconds. A timed-out workload is not labelled cancelled: it
-ends `failed` with its exit status, or `succeeded` if it exits 0 on `SIGTERM`.
-No `timeout` means no limit.
-
-### Cancellation
-
-`Cancel` labels the container `vagabond.cancelled=true`, sends `SIGTERM`, and
-returns. `SIGKILL` follows after 10 seconds if the process is still running.
-The workload ends `cancelled` whatever its exit code. Cancelling a container
-with no task only sets the label. Cancelling a workload that already exited
-also sets the label, so its state becomes `cancelled` whatever it exited with.
-`SIGTERM` goes to the first process only, as for [Timeouts](#timeouts).
-
-### Release
-
-`Release` deletes the task (killing it if still running), the container, its
-snapshot, and its log file. Releasing an execution the node does not hold
-succeeds. The execution's runner releases it last, after its output is
-captured, however it ended ([Release](dispatch.md#release)). While the node is
-offline the server records the execution released without calling it, and
-the node releases the workload when it returns; see
-[Releasing what nothing needs](#releasing-what-nothing-needs).
-
-### Agent restarts
-
-On startup the agent lists every container in the `vagabond` namespace and
-re-arms each timeout from its labels, with the time remaining since
-`vagabond.started`; one already past is stopped at once. Its first report to
-the server lists every container held, so the server counts their room again
-and answers with any it has no use for. Every container in the `vagabond`
-namespace is reported as held; one without `vagabond.cpu` and
-`vagabond.memory` labels counts as zero size.
+How each executor keeps it, and where it differs, is on its own page. A
+microVM differs from a container in its own kernel, its network behind NAT,
+its memory charged with Firecracker's overhead, and a workload that is not
+PID 1, so `SIGTERM` ends a plain `sh -c` at once with 143.
 
 ## Node status
 

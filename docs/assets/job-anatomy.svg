@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
+  <title id="title">A job file and what reads each part</title>
+  <desc id="desc">A job file holds one job. Its parameterized block is checked when a run is submitted, against the metadata the run supplies. Its routing block, with the providers list, constraints and affinities, and each task's resources and timeout are read by admission and ranking to choose a provider for the task. Each task's config and env are handed to the chosen provider, which runs the image sized by resources and stops it at timeout.</desc>
+  <defs>
+    <style>
+      .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:20px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.code{font-size:14px;font-weight:700;fill:#f8fafc;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.micro{font-size:13px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}.inner{fill:#1f2229;stroke:#9a9ea6;stroke-width:1.5}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#fd7300"/></marker>
+  </defs>
+  <g class="t">
+    <!-- Connections -->
+    <path class="line" marker-end="url(#arrow)" d="M530 135H650V70H770"/>
+    <path class="line" marker-end="url(#arrow)" d="M530 200H650V200H770"/>
+    <path class="line" marker-end="url(#arrow)" d="M530 339H700V240H770"/>
+    <path class="line" marker-end="url(#arrow)" d="M530 391H700V400H770"/>
+
+    <!-- Job -->
+    <rect x="20" y="20" width="540" height="460" rx="30" class="core"/>
+    <text x="50" y="58" class="micro">JOB FILE</text>
+    <text x="50" y="92" class="code">job "static-analysis" {</text>
+
+    <rect x="50" y="110" width="480" height="50" rx="12" class="inner"/>
+    <text x="70" y="141" class="code">parameterized { meta_required }</text>
+
+    <rect x="50" y="175" width="480" height="50" rx="12" class="inner"/>
+    <text x="70" y="206" class="code">routing { providers, constraint, affinity }</text>
+
+    <rect x="50" y="240" width="480" height="220" rx="16" class="inner"/>
+    <text x="70" y="272" class="code">task "make" {</text>
+    <text x="90" y="300" class="code">driver = "container"</text>
+    <text x="90" y="326" class="code">resources { cpu, memory }</text>
+    <text x="90" y="352" class="code">timeout = "20m"</text>
+    <text x="90" y="378" class="code">config { image, command, args }</text>
+    <text x="90" y="404" class="code">env { ... }</text>
+    <text x="70" y="436" class="code">}</text>
+
+    <!-- Submission -->
+    <rect x="774" y="20" width="406" height="100" rx="24" class="card"/>
+    <text x="804" y="54" class="micro">SUBMISSION</text>
+    <text x="804" y="86" class="label">is the metadata complete?</text>
+
+    <!-- Admission -->
+    <rect x="774" y="150" width="406" height="140" rx="24" class="card"/>
+    <text x="804" y="184" class="micro">ADMISSION AND RANKING</text>
+    <text x="804" y="216" class="label">which provider runs it</text>
+    <text x="804" y="244" class="small">against each provider's limits,</text>
+    <text x="804" y="266" class="small">quota, attributes and tier</text>
+
+    <!-- Provider -->
+    <rect x="774" y="330" width="406" height="140" rx="24" class="card" style="stroke-width:3"/>
+    <text x="804" y="364" class="micro">THE CHOSEN PROVIDER</text>
+    <text x="804" y="396" class="label">how it runs</text>
+    <text x="804" y="424" class="small">the image, command, args and env,</text>
+    <text x="804" y="448" class="small">sized by resources, cut off at timeout</text>
+  </g>
+</svg>

@@ -95,7 +95,7 @@ window.vagabondDiagram = {
       body: '<p>Workloads are created under one parent cgroup, so the kernel holds their sum to its limits as well as each to its own.</p><p><b>Set</b>: workloads go under the operator&rsquo;s parent. The agent neither checks nor prepares it and skips delegation; runc enables controllers along the path as it creates each workload. A parent that holds processes fails the first <code>Submit</code> with <code>creating the task</code>.</p><p><b>Unset</b>: the agent delegates its own cgroup. Capacity is read from the agent&rsquo;s own cgroup chain either way.</p>'
     },
     DELEGATE: {
-      title: 'Delegate Own Cgroup',
+      title: 'Delegate Own cgroup',
       badge: 'process', badgeText: 'cgroup v2',
       body: '<p><code>agent.Delegate</code>. cgroup v2 lets a group hold processes or hand controllers to children, not both, so the agent:</p><p>1. uses the parent when its cgroup already ends in <code>/agent</code> (restarted inside its own leaf)<br>2. refuses the root <code>/</code> (a container without <code>--cgroupns=host</code>)<br>3. creates <code>&lt;cgroup&gt;/agent</code> and moves its own PID into it<br>4. enables <code>cpu</code> and <code>memory</code> in each ancestor&rsquo;s <code>cgroup.subtree_control</code> down to <code>&lt;cgroup&gt;</code>&rsquo;s parent; runc enables them in <code>&lt;cgroup&gt;</code> itself when it creates a workload</p><p>Any refusal is <code>cannot manage cgroups under &lt;path&gt;</code>, naming the fixes: <code>Delegate=yes</code> under systemd, or a writable <code>/sys/fs/cgroup</code> with <code>--cgroupns=host</code>.</p><p><a href="../../docs/agent/#cgroup-delegation">Cgroup delegation &rarr;</a></p>'
     },

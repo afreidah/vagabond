@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+  <title id="title">CI runs on free cloud quota</title>
+  <desc id="desc">A CI workflow dispatches the static-analysis job on every push. The server admits only the providers whose pools hold the run, and under strict tiers tries tier 0 first. In tier 0, gcp-cloud-run has used 15,307 of 192,000 vCPU-seconds and 29,897 of 360,000 GB-seconds this month, and ibm-code-engine 6,886 of 80,000 vCPU-seconds and 12,824 of 149,011 GB-seconds. In tier 1, homelab has no quota pools.</desc>
+  <defs>
+    <style>
+      .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:20px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.muted{font-size:13px;font-weight:600;fill:#9a9ea6}.micro{font-size:13px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.dash{fill:none;stroke:#9a9ea6;stroke-width:2.5;stroke-dasharray:7 6;stroke-linecap:round;stroke-linejoin:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}.mutedcard{fill:#15171c;stroke:#9a9ea6;stroke-width:2;stroke-dasharray:7 6}.used{fill:#fd7300}.free{fill:none;stroke:#9a9ea6;stroke-width:1.5}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#fd7300"/></marker>
+    <marker id="arrow-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#9a9ea6"/></marker>
+  </defs>
+  <g class="t">
+    <!-- Connections -->
+    <path class="line" marker-end="url(#arrow)" d="M240 260H286"/>
+    <path class="line" marker-end="url(#arrow)" d="M550 260H585V105H616"/>
+    <path class="line" marker-end="url(#arrow)" d="M550 260H616"/>
+    <path class="dash" marker-end="url(#arrow-grey)" d="M585 268V415H616"/>
+
+    <!-- CI -->
+    <rect x="20" y="180" width="220" height="160" rx="24" class="card"/>
+    <text x="130" y="216" text-anchor="middle" class="micro">CI WORKFLOW</text>
+    <text x="130" y="256" text-anchor="middle" class="label">on push</text>
+    <text x="130" y="286" text-anchor="middle" class="small">job dispatch</text>
+    <text x="130" y="308" text-anchor="middle" class="small">static-analysis</text>
+
+    <!-- Server -->
+    <rect x="290" y="140" width="260" height="240" rx="34" class="core"/>
+    <text x="420" y="182" text-anchor="middle" class="micro">SERVER</text>
+    <text x="420" y="222" text-anchor="middle" class="label">admission</text>
+    <g class="small" text-anchor="middle" style="fill:#f8fafc">
+      <text x="420" y="266">do the pools</text>
+      <text x="420" y="288">hold the run?</text>
+      <text x="420" y="330">tiers: strict,</text>
+      <text x="420" y="352">tier 0 first</text>
+    </g>
+
+    <!-- gcp-cloud-run -->
+    <rect x="620" y="40" width="560" height="130" rx="24" class="card" style="stroke-width:3"/>
+    <text x="650" y="88" class="label">gcp-cloud-run</text>
+    <text x="650" y="114" class="small">tier 0</text>
+    <text x="650" y="138" class="muted">used this month</text>
+    <text x="885" y="69" text-anchor="end" class="small">cpu</text>
+    <rect x="900" y="57" width="250" height="14" rx="4" class="free"/><rect x="900" y="57" width="20" height="14" rx="4" class="used"/>
+    <text x="900" y="93" class="muted">15,307 of 192,000 vCPU-s</text>
+    <text x="885" y="125" text-anchor="end" class="small">memory</text>
+    <rect x="900" y="113" width="250" height="14" rx="4" class="free"/><rect x="900" y="113" width="21" height="14" rx="4" class="used"/>
+    <text x="900" y="149" class="muted">29,897 of 360,000 GB-s</text>
+
+    <!-- ibm-code-engine -->
+    <rect x="620" y="195" width="560" height="130" rx="24" class="card"/>
+    <text x="650" y="243" class="label">ibm-code-engine</text>
+    <text x="650" y="269" class="small">tier 0</text>
+    <text x="650" y="293" class="muted">used this month</text>
+    <text x="885" y="224" text-anchor="end" class="small">cpu</text>
+    <rect x="900" y="212" width="250" height="14" rx="4" class="free"/><rect x="900" y="212" width="22" height="14" rx="4" class="used"/>
+    <text x="900" y="248" class="muted">6,886 of 80,000 vCPU-s</text>
+    <text x="885" y="280" text-anchor="end" class="small">memory</text>
+    <rect x="900" y="268" width="250" height="14" rx="4" class="free"/><rect x="900" y="268" width="22" height="14" rx="4" class="used"/>
+    <text x="900" y="304" class="muted">12,824 of 149,011 GB-s</text>
+
+    <!-- homelab -->
+    <rect x="620" y="350" width="560" height="130" rx="24" class="mutedcard"/>
+    <text x="650" y="398" class="label" style="fill:#c9ccd3">homelab</text>
+    <text x="650" y="424" class="small">tier 1, no quota pools</text>
+    <text x="650" y="448" class="muted">behind every admitted tier 0 provider</text>
+  </g>
+</svg>

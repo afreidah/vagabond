@@ -26,8 +26,9 @@ backend, and records what it used.
 | | [Deployment](deployment.md) | Running the server and agents |
 | | [Database](database.md) | Postgres and CockroachDB, migrations, schema |
 | | [Background services](background-services.md) | Every periodic loop the server and agent run |
-| Own nodes | [Agent](agent.md) | Pools of your own nodes, running work on containerd or in microVMs |
-| | [vagabond-firecracker](firecracker.md) | The daemon that runs an agent's workloads in Firecracker microVMs |
+| Own nodes | [Agent](agent.md) | The agent, its pools, and how work is placed on their nodes |
+| | [containerd](containerd.md) | The `containerd` provider: workloads in containers on the node's containerd |
+| | [Firecracker](firecracker.md) | The `firecracker` provider: workloads in Firecracker microVMs, through vagabond-firecracker |
 | Providers | [Cloud Run Jobs](providers/cloud-run.md) | The `cloud-run` provider |
 | | [Code Engine Jobs](providers/code-engine.md) | The `code-engine` provider |
 | | [AWS Lambda](providers/lambda.md) | The `lambda` provider |

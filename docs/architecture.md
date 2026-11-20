@@ -286,6 +286,8 @@ agents, so any server on the same store can resume a dispatch another left.
 - [Database](database.md)
 - [Background services](background-services.md)
 - [Agent](agent.md)
+- [containerd](containerd.md)
+- [Firecracker](firecracker.md)
 - [Cloud Run](providers/cloud-run.md)
 - [Code Engine](providers/code-engine.md)
 - [Lambda](providers/lambda.md)
