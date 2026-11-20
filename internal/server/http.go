@@ -24,6 +24,7 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobs"
+	"github.com/afreidah/vagabond/internal/panics"
 	"github.com/afreidah/vagabond/internal/state"
 )
 
@@ -190,6 +191,51 @@ func (r *statusRecorder) WriteHeader(status int) {
 // live output stream through the request log.
 func (r *statusRecorder) Unwrap() http.ResponseWriter {
 	return r.ResponseWriter
+}
+
+// recoverRequests answers a handler's panic with a 500 in the API's error
+// body, never the panic value. A response already under way cannot change its
+// status, so its connection is cut instead.
+func (s *Server) recoverRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := &startedWriter{ResponseWriter: w}
+
+		defer panics.Catch(r.Context(), s.logger, r.Method+" "+r.URL.Path, func(error) {
+			if started.started {
+				panic(http.ErrAbortHandler)
+			}
+
+			write(w, http.StatusInternalServerError, api.Error{Error: "internal error"})
+		})
+
+		next.ServeHTTP(started, r)
+	})
+}
+
+// startedWriter records whether a response has begun, which decides whether
+// a panic can still be answered with a status.
+type startedWriter struct {
+	http.ResponseWriter
+	started bool
+}
+
+// WriteHeader marks the response begun before passing status on.
+func (w *startedWriter) WriteHeader(status int) {
+	w.started = true
+	w.ResponseWriter.WriteHeader(status)
+}
+
+// Write marks the response begun before passing p on.
+func (w *startedWriter) Write(p []byte) (int, error) {
+	w.started = true
+
+	return w.ResponseWriter.Write(p)
+}
+
+// Unwrap exposes the writer underneath, so a ResponseController can flush a
+// live output stream through it.
+func (w *startedWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 // logRequests logs every request at debug level with its status and how long

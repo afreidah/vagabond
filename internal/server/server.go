@@ -198,9 +198,9 @@ func New(
 	return s
 }
 
-// Handler returns the route table behind the request log.
+// Handler returns the route table behind panic recovery and the request log.
 func (s *Server) Handler() http.Handler {
-	return s.logRequests(s.routes())
+	return s.logRequests(s.recoverRequests(s.routes()))
 }
 
 // routes is the route table. The job routes take ?namespace=, defaulting to
@@ -264,7 +264,7 @@ func (s *Server) ServeListener(ctx context.Context, listener net.Listener, tlsCo
 	}
 
 	httpServer := &http.Server{
-		Handler:           s.logRequests(routes),
+		Handler:           s.logRequests(s.recoverRequests(routes)),
 		ReadHeaderTimeout: headerTimeout,
 		TLSConfig:         tlsConfig,
 	}

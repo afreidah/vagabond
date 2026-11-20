@@ -16,6 +16,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/afreidah/vagabond/internal/panics"
 )
 
 // -------------------------------------------------------------------------
@@ -39,18 +41,20 @@ const (
 func (s *Server) startUpkeep(ctx context.Context) *sync.WaitGroup {
 	var wg sync.WaitGroup
 
-	wg.Go(func() { every(ctx, capabilitiesInterval, s.refreshCapabilities) })
-	wg.Go(func() { every(ctx, usageInterval, s.refreshUsage) })
-	wg.Go(func() { every(ctx, reapInterval, s.reap) })
-	wg.Go(func() { every(ctx, s.claimEvery, s.claim) })
-	wg.Go(func() { every(ctx, pruneInterval, s.prune) })
+	wg.Go(func() { s.every(ctx, "refreshing provider capabilities", capabilitiesInterval, s.refreshCapabilities) })
+	wg.Go(func() { s.every(ctx, "refreshing quota usage", usageInterval, s.refreshUsage) })
+	wg.Go(func() { s.every(ctx, "reaping reservations", reapInterval, s.reap) })
+	wg.Go(func() { s.every(ctx, "claiming dispatches", s.claimEvery, s.claim) })
+	wg.Go(func() { s.every(ctx, "pruning stored output", pruneInterval, s.prune) })
 
 	return &wg
 }
 
 // every calls fn each interval until ctx is done. The first call is one
-// interval in; a task that needs a pass at startup gets it before serving.
-func every(ctx context.Context, interval time.Duration, fn func(context.Context)) {
+// interval in; a task that needs a pass at startup gets it before serving. A
+// panic in one call is logged as what panicked, and the next tick runs as any
+// other.
+func (s *Server) every(ctx context.Context, what string, interval time.Duration, fn func(context.Context)) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -59,9 +63,16 @@ func every(ctx context.Context, interval time.Duration, fn func(context.Context)
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			fn(ctx)
+			s.tick(ctx, what, fn)
 		}
 	}
+}
+
+// tick calls fn once, logging a panic in it rather than ending the loop.
+func (s *Server) tick(ctx context.Context, what string, fn func(context.Context)) {
+	defer panics.Catch(ctx, s.logger, what, nil)
+
+	fn(ctx)
 }
 
 // refreshCapabilities asks every provider what it can do. One that fails is

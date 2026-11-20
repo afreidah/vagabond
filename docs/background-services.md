@@ -59,7 +59,10 @@ one interval after startup. Capability refresh, usage refresh, the reaper and
 the claim each ran once before serving; output retention has no startup pass,
 so its first pass is 1h in.
 A failure is logged and waits for the next tick; one loop failing never stops
-another.
+another. A panic in a tick is logged at error as `recovered a panic`, with
+the loop named in `in` and the stack, and the next tick runs as usual. Panics
+in the per-dispatch and per-execution services end only their own dispatch or
+execution ([Panics](dispatch.md#panics)).
 
 ### Capability refresh
 

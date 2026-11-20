@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/afreidah/vagabond/internal/execution"
+	"github.com/afreidah/vagabond/internal/panics"
 )
 
 // -------------------------------------------------------------------------
@@ -76,13 +77,15 @@ type lease struct {
 }
 
 // hold starts renewing key on dispatch id. Renewal runs on its own context so
-// a cancelled run keeps its lease until its executions are done.
+// a cancelled run keeps its lease until its executions are done. A panic in
+// renewal loses the lease, which stops the run's writes.
 func (d *Dispatcher) hold(ctx context.Context, id execution.ID, key execution.Lease) *lease {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	l := &lease{id: id, key: key, stop: cancel, done: make(chan struct{}), cancelled: make(chan struct{})}
 
 	go func() {
 		defer close(l.done)
+		defer panics.Catch(ctx, d.logger, "renewing the lease on dispatch "+id.String(), func(error) { l.lose() })
 
 		ticker := time.NewTicker(d.leaseRenew)
 		defer ticker.Stop()

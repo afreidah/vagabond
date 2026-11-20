@@ -485,9 +485,41 @@ record does not show done:
 If the executions cannot be read, the resume stops and the dispatch stays
 open; its lease lapses and the next claim tries again.
 
+**Resume limit:** a dispatch is resumed at most 5 times. The claim after
+that, `epoch` 7, ends it without restoring any runner or calling any
+provider, and leaves its executions as their records stand. One that kept
+ending every server that claimed it, as a fatal runtime error that no
+[panic recovery](#panics) catches would, stops doing so.
+
+| Dispatch at the claim past the limit | Ends |
+|---|---|
+| `running` | `unanswered`, `Error` `abandoned after 5 resumes without finishing` |
+| Its verdict already written | Closed with that verdict |
+
 Server log lines: `dispatch resumed` (with `epoch`, the claim's), then
 `resumed dispatch finished` (with `state` and `reason`) once every execution
-is released, or `resuming dispatch` at warn with the error.
+is released, or `resuming dispatch` at warn with the error. A dispatch past
+the limit logs `abandoning dispatch` at error, with `epoch` and `reason`.
+
+## Panics
+
+A panic ends the unit of work it happened in, never the server. Each is
+logged at error as `recovered a panic`, with `in` naming the work, the panic
+value and the stack:
+
+| Panic in | Ends |
+|---|---|
+| A dispatch's run, admission and ranking included | The dispatch, `unanswered`, `Error` `panic in dispatch <id>: <value>`. Its executions carry on to release |
+| Resuming a dispatch | The dispatch, `unanswered`, with the panic as its `Error` |
+| An execution's runner | The execution: recorded `failed`, `Failure` `internal`, once, unless already terminal, and its task answered with an internal failure, which is not rerouted. Settling and releasing are skipped, since they could panic the same way: its quota stays reserved and its workload stays as the provider has it, both logged under its ID |
+| Lease renewal | The lease, as if lost: the run's next write is refused and its runners stop, and the dispatch is left for a claim |
+| A [background loop](background-services.md)'s tick | That tick; the next runs as usual |
+| An API request | The request: `500` with `{"Error":"internal error"}`, never the panic value, or a cut connection when a live output stream had already begun |
+| A call from an agent, or to one | The call: `Internal`, `internal error in <method>` |
+
+A fatal runtime error, such as a concurrent map write, and the process being
+killed for its memory cannot be recovered; they end the server, and the
+[resume limit](#resuming) bounds how often one dispatch can do it.
 
 ## Store outage
 
