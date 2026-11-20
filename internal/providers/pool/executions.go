@@ -98,8 +98,26 @@ func (p *Provider) Release(ctx context.Context, id execution.ID) error {
 }
 
 // StreamLogs copies an execution's output from byte offset on, from its node to
-// w as it is written, until the workload ends or ctx does.
+// w as it is written, until the workload ends or ctx does. Output the node no
+// longer holds, as it keeps only the end of long output, is plugin.ErrNoResume.
 func (p *Provider) StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error {
+	return p.copyLogs(ctx, id, offset, w, func(int64) error { return plugin.ErrNoResume })
+}
+
+// ReadLogs copies a finished execution's whole output from its node, placed
+// through w.StartsAt when the node kept only its end. The node's stream ends
+// once the workload has, so this is the stream from the start. Release deletes
+// the log, so this precedes it.
+func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w execution.LogWriter) error {
+	return p.copyLogs(ctx, id, 0, w, w.StartsAt)
+}
+
+// copyLogs copies the node's stream of an execution's output from offset on to
+// w, calling jumped with where a chunk begins whenever that is past where the
+// last ended.
+func (p *Provider) copyLogs(
+	ctx context.Context, id execution.ID, offset int64, w io.Writer, jumped func(offset int64) error,
+) error {
 	conn, err := p.connected()
 	if err != nil {
 		return err
@@ -126,17 +144,21 @@ func (p *Provider) StreamLogs(ctx context.Context, id execution.ID, offset int64
 			return p.failure(id, err)
 		}
 
+		// An older agent sends no offset, and drops none of the output
+		if at := chunk.GetOffset(); at > offset {
+			if err := jumped(at); err != nil {
+				return err
+			}
+
+			offset = at
+		}
+
 		if _, err := out.Write(chunk.GetData()); err != nil {
 			return err
 		}
-	}
-}
 
-// ReadLogs copies a finished execution's whole output from its node. The
-// node's stream ends once the workload has, so this is the stream from the
-// start. Release deletes the log, so this precedes it.
-func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w io.Writer) error {
-	return p.StreamLogs(ctx, id, 0, w)
+		offset += int64(len(chunk.GetData()))
+	}
 }
 
 // -------------------------------------------------------------------------

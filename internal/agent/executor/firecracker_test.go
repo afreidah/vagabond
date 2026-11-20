@@ -130,7 +130,7 @@ func TestFirecracker_RunsAWorkload(t *testing.T) {
 
 	var logs strings.Builder
 
-	if err := f.Logs(t.Context(), id, 0, &logs); err != nil || !strings.Contains(logs.String(), "hello from a microVM") {
+	if err := f.Logs(t.Context(), id, 0, &execution.PlacedWriter{Writer: &logs}); err != nil || !strings.Contains(logs.String(), "hello from a microVM") {
 		t.Errorf("Logs() = %q, %v", logs.String(), err)
 	}
 
@@ -191,7 +191,7 @@ func TestFirecracker_SubmitTwiceStartsOnce(t *testing.T) {
 
 	var logs strings.Builder
 
-	if err := f.Logs(t.Context(), id, 0, &logs); err != nil || logs.String() != "once\n" {
+	if err := f.Logs(t.Context(), id, 0, &execution.PlacedWriter{Writer: &logs}); err != nil || logs.String() != "once\n" {
 		t.Errorf("Logs() = %q, %v; want the first workload alone", logs.String(), err)
 	}
 }
@@ -203,7 +203,7 @@ func TestFirecracker_LogsOfAnUnknownWorkload(t *testing.T) {
 
 	var logs strings.Builder
 
-	if err := f.Logs(t.Context(), "exec-elsewhere", 0, &logs); !errors.Is(err, ErrUnknown) || logs.Len() > 0 {
+	if err := f.Logs(t.Context(), "exec-elsewhere", 0, &execution.PlacedWriter{Writer: &logs}); !errors.Is(err, ErrUnknown) || logs.Len() > 0 {
 		t.Errorf("Logs() = %q, %v; want nothing and ErrUnknown", logs.String(), err)
 	}
 }

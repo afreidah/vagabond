@@ -91,7 +91,7 @@ func writeEntry(w io.Writer, entry *logEntry) error {
 // ReadLogs writes what a finished job's container printed. Both streams arrive
 // interleaved in timestamp order, as a failed build reads. The entries outlive
 // the job, so Release destroys nothing this reads.
-func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w io.Writer) error {
+func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w execution.LogWriter) error {
 	out := plugin.LogOutput(w)
 
 	err := p.listEntries(ctx, jobName(id), func(entry *logEntry) error { return writeEntry(out, entry) })

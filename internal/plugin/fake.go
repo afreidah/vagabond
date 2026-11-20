@@ -185,7 +185,7 @@ func (p *FakeContainerProvider) StreamLogs(ctx context.Context, id execution.ID,
 }
 
 // ReadLogs writes a recorded run's whole output.
-func (p *FakeContainerProvider) ReadLogs(ctx context.Context, id execution.ID, w io.Writer) error {
+func (p *FakeContainerProvider) ReadLogs(ctx context.Context, id execution.ID, w execution.LogWriter) error {
 	if _, err := p.Status(ctx, id); err != nil {
 		return err
 	}

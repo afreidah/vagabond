@@ -251,7 +251,7 @@ func readLogs(t *testing.T, p *Provider, id execution.ID) string {
 
 	var out strings.Builder
 
-	if err := p.ReadLogs(t.Context(), id, &out); err != nil {
+	if err := p.ReadLogs(t.Context(), id, &execution.PlacedWriter{Writer: &out}); err != nil {
 		t.Fatalf("ReadLogs failed: %v", err)
 	}
 

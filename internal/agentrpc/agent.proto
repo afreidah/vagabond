@@ -148,8 +148,11 @@ message LogsRequest {
   int64 offset = 2;
 }
 
+// LogChunk is part of a workload's output, its data beginning at offset in the
+// whole: where the last chunk ended, or further on past output the node dropped.
 message LogChunk {
   bytes data = 1;
+  int64 offset = 2;
 }
 
 message Empty {}

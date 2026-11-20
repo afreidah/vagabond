@@ -240,7 +240,7 @@ is absent.
 | Interface | Method | Called by | When |
 |---|---|---|---|
 | `LogStreamer` | `StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error` | Server | While a client follows a running execution's output |
-| `LogReader` | `ReadLogs(ctx context.Context, id execution.ID, w io.Writer) error` | Execution runner | Once the execution ends, however it ended, after `Result` and before the result is recorded and `Release`; not after a failed `Submit` |
+| `LogReader` | `ReadLogs(ctx context.Context, id execution.ID, w execution.LogWriter) error` | Execution runner | Once the execution ends, however it ended, after `Result` and before the result is recorded and `Release`; not after a failed `Submit` |
 | `Releaser` | `Release(ctx context.Context, id execution.ID) error` | Execution runner | Last, for every ending: after `Result`, `ReadLogs` and the settle |
 | `Recredentialer` | `Recredential(ctx context.Context, credential []byte) error` | Registry, for the execution runner | After a runner call (`Submit`, `Status`, `Result`, `ReadLogs`, `Cancel`, `Release`) failed with `ErrUnauthorized`, when the provider block has a `credentials` block; at most once a minute per provider |
 | `Live` | `LiveCapabilities() (Capabilities, error)` | Registry | On every plan, in place of the refreshed snapshot |
@@ -275,6 +275,10 @@ is absent.
 - Write a finished execution's whole output to `w`, from the first byte. Write
   as it is read rather than collecting it: dispatch stores it in 256 KiB
   chunks as it arrives and keeps the end past the server's `max_log_mib`.
+- A platform that keeps only the end of long output, knowing where that end
+  begins, calls `w.StartsAt(offset)` before writing it, with `offset` a
+  multiple of 256 KiB (`execution.LogChunk`), as agent nodes do. One that
+  cannot say where it begins writes what it has as the whole.
 - Return an error when what was written is not all of it: a body cut short, a
   page cap reached, the output already gone. Write what arrived first;
   `plugin.CopyAll` copies a body and reports a failed read as infrastructure.
@@ -852,7 +856,8 @@ Cover at least:
 | Non-zero exit | Result returned, no error |
 | Cancel twice, or after the resource is gone | `nil` |
 | Missing config block, empty attribute, bad credential | Diagnostics from `New` |
-| `ReadLogs` of a long output | All of it, in order, and an error after what arrived when it is cut short |
+| `ReadLogs` of a long output | All of it, in order, and an error after what arrived when it is cut short, read into an `execution.PlacedWriter` |
+| `ReadLogs` of output the platform kept only the end of | The `PlacedWriter`'s `Start`, where that end begins |
 
 **Compile-time assertions** for every interface the plugin means to satisfy:
 

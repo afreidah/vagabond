@@ -106,15 +106,22 @@ with its result.
 ## Output
 
 - containerd writes stdout and stderr to `<data-dir>/logs/<execution-id>.log`.
-  The file is neither rotated nor capped; it grows until `Release` deletes it.
+  Every 10 seconds the agent frees the front of a log longer than
+  `-max-log-mib`, 16 MiB by default, in whole 256 KiB chunks, as the server
+  drops stored output. The freed bytes are a hole: they take no disk, and the
+  file keeps its length, so offsets still count from the first byte the
+  workload printed. The rest goes when `Release` deletes the file.
 - `Result` carries the exit code and run time only. Once the workload ends the
-  server reads its whole output through `AgentExecutions.StreamLogs` from
-  offset 0, before `Release` deletes the file, and stores it
-  ([Dispatch](dispatch.md#output)).
+  server reads its output through `AgentExecutions.StreamLogs` from offset 0,
+  before `Release` deletes the file, and stores it
+  ([Dispatch](dispatch.md#output)). When the front was dropped, the stream
+  begins where the kept part does, and the stored copy's `LogsStart` is there.
 - While the workload runs, the server streams its output through
   `AgentExecutions.StreamLogs`, from the byte offset the client asks for, so a
   `?follow=true` request ([API](api.md#read-execution-logs)) shows it live and
-  a reopened stream resumes where the last one stopped.
+  a reopened stream resumes where the last one stopped. A stream from before
+  the kept part is answered `416`, and the client finishes from the stored copy
+  once the workload ends.
 - The stream ends when the workload ends, or when it is released mid-stream,
   after copying whatever the log file still holds.
 

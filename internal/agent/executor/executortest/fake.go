@@ -25,14 +25,16 @@ import (
 
 // Fake holds workloads in memory. Each runs until released, or ends at once
 // with ExitCode when Finish is set; Cancel ends one cancelled. Output is what
-// every workload printed. Pull runs before a submission is held, as an image
-// pull does, and may block or fail it; Started runs once it is held, before
-// Submit returns. It registers as Name, containerd when empty, each workload
-// taking Overhead on top of what it declared.
+// every workload printed, of which only the part from Start is kept. Pull runs
+// before a submission is held, as an image pull does, and may block or fail
+// it; Started runs once it is held, before Submit returns. It registers as
+// Name, containerd when empty, each workload taking Overhead on top of what it
+// declared.
 type Fake struct {
 	Finish   bool
 	ExitCode int
 	Output   string
+	Start    int64
 	Pull     func(ctx context.Context, id string) error
 	Started  func(id string)
 	Name     string
@@ -131,10 +133,19 @@ func (f *Fake) Release(_ context.Context, id string) error {
 	return nil
 }
 
-// Logs writes a held workload's output from offset on.
-func (f *Fake) Logs(_ context.Context, id string, offset int64, w io.Writer) error {
+// Logs writes a held workload's output from offset on, placed at Start first
+// when offset is before it.
+func (f *Fake) Logs(_ context.Context, id string, offset int64, w execution.LogWriter) error {
 	if _, err := f.state(id); err != nil {
 		return err
+	}
+
+	if offset < f.Start {
+		if err := w.StartsAt(f.Start); err != nil {
+			return err
+		}
+
+		offset = f.Start
 	}
 
 	_, err := io.WriteString(w, f.Output[min(offset, int64(len(f.Output))):])

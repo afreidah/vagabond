@@ -32,6 +32,7 @@ import (
 	"github.com/afreidah/vagabond/internal/agent/fingerprint"
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/config"
+	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/version"
 )
 
@@ -120,6 +121,10 @@ Agent Options:
     Where workload output is kept. Defaults to /var/lib/vagabond; in a
     container it must be the same path inside and out.
 
+  -max-log-mib <MiB>
+    How much of each workload's output the node keeps, its front dropped past
+    it. At least the server's max_log_mib, or the server keeps less. Default 16.
+
   -tls-ca <path>, -tls-cert <path>, -tls-key <path>
     Mutual TLS with a server that has agent_tls: the CA file or directory the
     server's certificate chains to, and this agent's certificate and key. All
@@ -150,6 +155,7 @@ func (c *AgentCommand) Run(args []string) int {
 		certs                                                       tlsFlags
 		firecracker                                                 bool
 		vmm                                                         executor.DaemonConfig
+		maxLogMiB                                                   int
 	)
 
 	host, _ := os.Hostname()
@@ -167,6 +173,7 @@ func (c *AgentCommand) Run(args []string) int {
 	flags.IntVar(&vmm.GID, "firecracker-gid", 990, "the group Firecracker runs as")
 	flags.StringVar(&vmm.Uplink, "firecracker-uplink", "", "the interface microVM traffic leaves through")
 	flags.StringVar(&dataDir, "data-dir", defaultDataDir, "where workload output is kept")
+	flags.IntVar(&maxLogMiB, "max-log-mib", int(execution.DefaultMaxLogBytes>>20), "MiB of each workload's output kept")
 	flags.StringVar(&cgroupParent, "cgroup-parent", "", "a cgroup to create workloads under")
 	flags.StringVar(&logLevel, "log-level", "info", "debug, info, warn or error")
 	certs.register(flags, tlsFlags{})
@@ -185,6 +192,12 @@ func (c *AgentCommand) Run(args []string) int {
 		return c.Errorf("Invalid -log-level %q: use debug, info, warn or error.", logLevel)
 	}
 
+	if maxLogMiB < 1 {
+		return c.Errorf("Invalid -max-log-mib %d: a node keeps at least 1 MiB of each workload's output.", maxLogMiB)
+	}
+
+	logger := slog.New(slog.NewTextHandler(c.ErrStream, &slog.HandlerOptions{Level: level}))
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -200,8 +213,9 @@ func (c *AgentCommand) Run(args []string) int {
 		}
 	}
 
-	exec, err := executor.New(executor.Config{
+	exec, err := executor.New(&executor.Config{
 		Socket: socket, Namespace: workloadNamespace, DataDir: dataDir, Cgroup: parent,
+		MaxLogBytes: int64(maxLogMiB) << 20, Logger: logger,
 	})
 	if err != nil {
 		return c.Errorf("%s", err)
@@ -215,6 +229,7 @@ func (c *AgentCommand) Run(args []string) int {
 	// exit stops the agent rather than leave it running without them.
 	if firecracker {
 		vmm.Binary, vmm.Dir, vmm.LogLevel = "vagabond-firecracker", filepath.Join(dataDir, "firecracker"), logLevel
+		vmm.MaxLogMiB = maxLogMiB
 
 		var (
 			vm   *executor.Firecracker
@@ -234,7 +249,6 @@ func (c *AgentCommand) Run(args []string) int {
 		return c.Errorf("Finding workloads from before: %s", err)
 	}
 
-	logger := slog.New(slog.NewTextHandler(c.ErrStream, &slog.HandlerOptions{Level: level}))
 	logger.InfoContext(ctx, "node", "name", name, "pool", pool, "cpu", node.CPU, "memory", node.Memory, "cgroup", parent)
 
 	cfg := agent.Config{

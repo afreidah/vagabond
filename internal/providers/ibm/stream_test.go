@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/testkit"
 )
@@ -173,7 +174,7 @@ func TestReadLogs_ReadsTheWholeLog(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := p.ReadLogs(t.Context(), id, &out); err != nil {
+	if err := p.ReadLogs(t.Context(), id, &execution.PlacedWriter{Writer: &out}); err != nil {
 		t.Fatalf("ReadLogs() = %v", err)
 	}
 
@@ -199,7 +200,7 @@ func TestReadLogs_PodGone(t *testing.T) {
 
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList()))
 
-	if err := p.ReadLogs(t.Context(), testkit.NewID(t), io.Discard); !plugin.Reroutable(err) {
+	if err := p.ReadLogs(t.Context(), testkit.NewID(t), &execution.PlacedWriter{Writer: io.Discard}); !plugin.Reroutable(err) {
 		t.Fatalf("ReadLogs() = %v, want an infrastructure failure", err)
 	}
 }
@@ -215,7 +216,7 @@ func TestReadLogs_NeverStarted(t *testing.T) {
 
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList(waitingPod(podName))))
 
-	if err := p.ReadLogs(t.Context(), id, io.Discard); err != nil {
+	if err := p.ReadLogs(t.Context(), id, &execution.PlacedWriter{Writer: io.Discard}); err != nil {
 		t.Fatalf("ReadLogs() = %v", err)
 	}
 
@@ -241,7 +242,7 @@ func TestReadLogs_CutConnection(t *testing.T) {
 
 	var out bytes.Buffer
 
-	if err := p.ReadLogs(t.Context(), id, &out); !plugin.Reroutable(err) {
+	if err := p.ReadLogs(t.Context(), id, &execution.PlacedWriter{Writer: &out}); !plugin.Reroutable(err) {
 		t.Fatalf("ReadLogs() = %v, want an infrastructure failure", err)
 	}
 
@@ -263,14 +264,14 @@ func TestReadLogs_Refusals(t *testing.T) {
 	f.on("GET "+podsPath()+"/"+podName+"/log",
 		reply(http.StatusForbidden, map[string]any{"kind": "Status", "message": "forbidden", "reason": "Forbidden", "code": 403}))
 
-	if err := p.ReadLogs(t.Context(), id, io.Discard); !errors.Is(err, plugin.ErrUnauthorized) {
+	if err := p.ReadLogs(t.Context(), id, &execution.PlacedWriter{Writer: io.Discard}); !errors.Is(err, plugin.ErrUnauthorized) {
 		t.Errorf("ReadLogs() = %v, want unauthorized", err)
 	}
 
 	g, q := newFakeIBM(t)
 	g.on("GET "+podsPath(), reply(http.StatusServiceUnavailable, map[string]any{"message": "unavailable"}))
 
-	if err := q.ReadLogs(t.Context(), id, io.Discard); !plugin.Reroutable(err) {
+	if err := q.ReadLogs(t.Context(), id, &execution.PlacedWriter{Writer: io.Discard}); !plugin.Reroutable(err) {
 		t.Errorf("ReadLogs() = %v, want an infrastructure failure", err)
 	}
 }

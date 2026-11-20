@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
+use nix::fcntl::{FallocateFlags, fallocate};
 use nix::sys::signal::Signal;
 use protobuf::MessageField;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
@@ -54,6 +55,10 @@ const STOP_GRACE: Duration = Duration::from_secs(10);
 
 // MAX_LOG_READ caps how much output one ReadLogs returns.
 const MAX_LOG_READ: u64 = 64 * 1024;
+
+// LOG_CHUNK is what the front of a long log is dropped in whole pieces of: the
+// server's chunk of stored output, so the daemon keeps what the server stores.
+const LOG_CHUNK: u64 = 256 << 10;
 
 // RECONNECT_PATIENCE is how long a recovered microVM's guest, booted long ago,
 // gets to answer before it is taken for dead.
@@ -410,13 +415,14 @@ impl Executor {
 
     // follow copies the workload's output to its log, each chunk written before
     // the next is read, appending so a restarted daemon carries on where the log
-    // ends, then waits for the exit code.
+    // ends, its front dropped past the cap, then waits for the exit code.
     async fn follow(&self, id: &str, guest: &GuestClient) -> io::Result<i32> {
         let mut log = tokio::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(self.output_path(id))
             .await?;
+        let mut freed = 0;
         loop {
             let context = ttrpc::context::with_timeout(0);
             let output = guest
@@ -424,6 +430,7 @@ impl Executor {
                 .await
                 .map_err(io::Error::other)?;
             log.write_all(&output.data).await?;
+            freed = self.trim(id, &log, freed).await;
             if output.ended {
                 break;
             }
@@ -434,6 +441,28 @@ impl Executor {
             .await
             .map_err(io::Error::other)?
             .code)
+    }
+
+    // trim frees the front of an execution's log, before where its kept part
+    // begins, as a hole: its length stays, so offsets into it still count from
+    // the first byte. Given how far it is freed already, it gives how far it is
+    // now; a failure is logged, and the log grows on.
+    async fn trim(&self, id: &str, log: &tokio::fs::File, freed: u64) -> u64 {
+        let start = match log.metadata().await {
+            Ok(metadata) => kept_from(metadata.len(), self.max_log()),
+            Err(err) => {
+                warn!(execution = %id, error = %err, "reading the size of the output");
+                return freed;
+            }
+        };
+        if start <= freed {
+            return freed;
+        }
+        let flags = FallocateFlags::FALLOC_FL_PUNCH_HOLE | FallocateFlags::FALLOC_FL_KEEP_SIZE;
+        if let Err(err) = fallocate(log, flags, 0, start as i64) {
+            warn!(execution = %id, error = %err, "dropping the front of the output");
+        }
+        start
     }
 
     // output_path is where an execution's output is kept.
@@ -545,20 +574,23 @@ impl ExecutorService for Executor {
         Ok(Empty::new())
     }
 
-    // read_logs returns an execution's output from an offset, whatever is there
-    // now up to MAX_LOG_READ, ended once the workload has ended and all of it
-    // has been read.
+    // read_logs returns an execution's output from an offset, or from where its
+    // kept part begins when the offset is before it, whatever is there now up to
+    // MAX_LOG_READ, ended once the workload has ended and all of it has been read.
     async fn read_logs(&self, _ctx: &TtrpcContext, request: LogsRequest) -> ttrpc::Result<Output> {
         let record = self.known(&request.execution_id)?;
         let offset = u64::try_from(request.offset)
             .map_err(|_| refusal(Code::INVALID_ARGUMENT, "an offset cannot be negative"))?;
         let path = self.output_path(&record.execution_id);
-        let (data, size) = read_from(&path, offset).await.map_err(failure)?;
+        let (data, offset, size) = read_from(&path, offset, self.max_log())
+            .await
+            .map_err(failure)?;
         // The supervisor saves the end after its last write, so an ended log is whole.
         let ended = record.ended.is_some() && offset + data.len() as u64 >= size;
         Ok(Output {
             data,
             ended,
+            offset: offset as i64,
             ..Default::default()
         })
     }
@@ -599,6 +631,12 @@ impl Executor {
         }
     }
 
+    // max_log is how many bytes of each workload's output are kept, the front
+    // of a longer log dropped.
+    fn max_log(&self) -> u64 {
+        self.config.max_log_mib << 20
+    }
+
     // known is an execution's record, or the status for one the executor does
     // not hold, the one place an execution is reported unknown.
     fn known(&self, id: &str) -> ttrpc::Result<Record> {
@@ -624,19 +662,38 @@ fn failure(err: io::Error) -> ttrpc::Error {
     refusal(code, err)
 }
 
-// read_from reads up to MAX_LOG_READ of a log from offset, with the log's size.
-// A log not written yet is empty.
-async fn read_from(path: &Path, offset: u64) -> io::Result<(Vec<u8>, u64)> {
+// kept_from is where the kept part of a log size bytes long begins: past limit,
+// its front is dropped in whole chunks, so at most limit is kept.
+fn kept_from(size: u64, limit: u64) -> u64 {
+    size.saturating_sub(limit).div_ceil(LOG_CHUNK) * LOG_CHUNK
+}
+
+// read_from reads up to MAX_LOG_READ of a log from offset, or from where its
+// kept part begins when offset is before it, giving the data, where it begins
+// and the log's size. A read overtaken by the front being dropped, which may
+// have taken what it read, gives only where the kept part now begins. A log not
+// written yet is empty.
+async fn read_from(path: &Path, offset: u64, limit: u64) -> io::Result<(Vec<u8>, u64, u64)> {
     let mut file = match tokio::fs::File::open(path).await {
         Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), offset, 0)),
         Err(err) => return Err(err),
     };
-    let size = file.metadata().await?.len();
+    let offset = offset.max(kept_from(file.metadata().await?.len(), limit));
     file.seek(io::SeekFrom::Start(offset)).await?;
     let mut data = Vec::new();
-    file.take(MAX_LOG_READ).read_to_end(&mut data).await?;
-    Ok((data, size))
+    (&mut file)
+        .take(MAX_LOG_READ)
+        .read_to_end(&mut data)
+        .await?;
+
+    // Measured after the read, so a front dropped meanwhile is seen.
+    let size = file.metadata().await?.len();
+    let now = kept_from(size, limit);
+    if now > offset {
+        return Ok((Vec::new(), now, size));
+    }
+    Ok((data, offset, size))
 }
 
 // signal sends a signal to a workload through its guest.
@@ -1104,6 +1161,79 @@ mod tests {
             let output = client.read_logs(context(), &logs).await.unwrap();
             assert_eq!((output.data.as_slice(), output.ended), (want, true));
         }
+    }
+
+    // kept_from keeps all of a log within the limit, and past it drops the front
+    // in whole chunks, so no more than the limit is kept.
+    #[test]
+    fn kept_from_drops_whole_chunks_past_the_limit() {
+        let limit = 4 * LOG_CHUNK;
+        assert_eq!(kept_from(limit, limit), 0);
+        assert_eq!(kept_from(limit + 1, limit), LOG_CHUNK);
+        assert_eq!(kept_from(limit + LOG_CHUNK, limit), LOG_CHUNK);
+        assert_eq!(kept_from(limit + LOG_CHUNK + 1, limit), 2 * LOG_CHUNK);
+    }
+
+    // A read from before the kept part of a log past the cap begins where that
+    // part does, and says so; one within it begins where it was asked to.
+    #[tokio::test]
+    async fn read_logs_begins_at_the_kept_part() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::sample(dir.path());
+        config.max_log_mib = 1;
+        let executor = Executor::new(config).unwrap();
+        let mut printed = vec![b'x'; 1 << 20];
+        printed.extend_from_slice(b"the end\n");
+        let id = finished(&executor, &printed);
+        let (client, _server) = serve_executor(dir.path(), executor).await;
+        let end = printed.len() as i64 - 8;
+
+        for (asked, offset, data) in [
+            (0, LOG_CHUNK as i64, &b"x"[..]),
+            (end, end, &b"the end\n"[..]),
+        ] {
+            let logs = LogsRequest {
+                execution_id: id.clone(),
+                offset: asked,
+                ..Default::default()
+            };
+            let output = client.read_logs(context(), &logs).await.unwrap();
+            assert_eq!(output.offset, offset, "read from {asked}");
+            assert!(output.data.starts_with(data), "read from {asked}");
+        }
+    }
+
+    // trim frees the front of a log past the cap as a hole, its length kept, and
+    // gives how far it freed, so the next write past it frees no more.
+    #[tokio::test]
+    async fn trim_frees_the_front_past_the_cap() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::sample(dir.path());
+        config.max_log_mib = 1;
+        let executor = Executor::new(config).unwrap();
+        let path = dir.path().join("output.log");
+        let size = (1 << 20) + LOG_CHUNK + 8;
+        std::fs::write(&path, vec![b'x'; size as usize]).unwrap();
+        let before = std::fs::metadata(&path).unwrap().blocks();
+        let log = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .await
+            .unwrap();
+
+        let freed = executor.trim("exec-1", &log, 0).await;
+
+        assert_eq!(freed, 2 * LOG_CHUNK);
+        let after = std::fs::metadata(&path).unwrap();
+        assert_eq!(after.len(), size);
+        assert!(
+            after.blocks() < before,
+            "{} blocks, {before} before",
+            after.blocks()
+        );
+        assert_eq!(executor.trim("exec-1", &log, freed).await, freed);
     }
 
     // A running execution has no result yet, reads the output it has so far as

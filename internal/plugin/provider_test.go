@@ -231,11 +231,11 @@ func TestProvider_ContainerResultIsFetched(t *testing.T) {
 
 	var logs strings.Builder
 
-	if err := p.ReadLogs(t.Context(), id, &logs); err != nil || logs.String() != fakeOutput {
+	if err := p.ReadLogs(t.Context(), id, &execution.PlacedWriter{Writer: &logs}); err != nil || logs.String() != fakeOutput {
 		t.Errorf("ReadLogs() = %q, %v; want the run's output", logs.String(), err)
 	}
 
-	if err := p.ReadLogs(t.Context(), testkit.NewID(t), &logs); err == nil {
+	if err := p.ReadLogs(t.Context(), testkit.NewID(t), &execution.PlacedWriter{Writer: &logs}); err == nil {
 		t.Error("ReadLogs() of an unknown run succeeded")
 	}
 }

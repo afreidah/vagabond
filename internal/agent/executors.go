@@ -14,10 +14,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 
 	"github.com/afreidah/vagabond/internal/agent/executor"
 	"github.com/afreidah/vagabond/internal/agentrpc"
+	"github.com/afreidah/vagabond/internal/execution"
 )
 
 // errNoExecutor reports a workload naming an executor the node does not run.
@@ -33,7 +33,7 @@ type Executor interface {
 	Result(ctx context.Context, id string) (*agentrpc.ExecutionResult, error)
 	Cancel(ctx context.Context, id string) error
 	Release(ctx context.Context, id string) error
-	Logs(ctx context.Context, id string, offset int64, w io.Writer) error
+	Logs(ctx context.Context, id string, offset int64, w execution.LogWriter) error
 	Held(ctx context.Context) ([]*agentrpc.Held, error)
 }
 

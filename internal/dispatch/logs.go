@@ -15,6 +15,7 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/afreidah/vagabond/internal/execution"
@@ -124,7 +125,7 @@ func (s *logSink) flush() error {
 		return nil
 	}
 
-	s.keep = execution.KeepFrom(s.end, s.limit)
+	s.keep = max(s.keep, execution.KeepFrom(s.end, s.limit))
 
 	if err := s.store(s.seq, s.buf, s.keep); err != nil {
 		return err
@@ -132,6 +133,19 @@ func (s *logSink) flush() error {
 
 	s.seq++
 	s.buf = s.buf[:0]
+
+	return nil
+}
+
+// StartsAt places what is written next at offset, the provider having dropped
+// what came before. A node drops whole chunks, so offset must begin one, after
+// what was written so far and with no chunk part written.
+func (s *logSink) StartsAt(offset int64) error {
+	if offset%execution.LogChunk != 0 || offset < s.end || len(s.buf) > 0 {
+		return fmt.Errorf("output cannot be placed at byte %d after %d bytes", offset, s.end)
+	}
+
+	s.seq, s.end, s.keep = offset/execution.LogChunk, offset, offset/execution.LogChunk
 
 	return nil
 }

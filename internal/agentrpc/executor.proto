@@ -58,10 +58,12 @@ message Process {
 }
 
 // Output is a workload's output from the offset asked for, and whether it has
-// ended with all of it read.
+// ended with all of it read. Its data begins at offset: the one asked for, or
+// further on past output the daemon dropped.
 message Output {
   bytes data = 1;
   bool ended = 2;
+  int64 offset = 3;
 }
 
 message HeldList {

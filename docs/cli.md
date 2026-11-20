@@ -397,7 +397,7 @@ to finish. The job is not registered. The server makes the same selection
 | `==> <task> succeeded on <provider> in <duration>` | The task exited 0 |
 | `==> <task> failed (exit <n>) on <provider> in <duration>` | The task exited non-zero |
 | `...: <reason>` | Appended to either when the platform ended the task and said why: `Evicted: Pod ephemeral local storage usage exceeds ...`, `OOMKilled` |
-| `<n> bytes of output were not kept: the server keeps the end of long output.` | Output past the server's `max_log_mib` was dropped from the front before it could stream; what follows starts after the gap |
+| `<n> bytes of output were not kept: only the end of long output is kept.` | Output past the server's `max_log_mib`, or past the node's `-max-log-mib` on an agent node, was dropped from the front before it could stream; what follows starts after the gap |
 | `The provider gave only part of the output.` | The provider's output could not all be read, or arrived cut, as a function's tail does |
 | `Could not read the output of <id>: <error>` | The stored output could not be fetched after the task finished; the verdict line still follows |
 | `Could not stop <id>: <error>` | After an interrupt, the cancel request failed; the interrupted line still follows |

@@ -247,7 +247,7 @@ func (e *executions) Release(ctx context.Context, req *agentrpc.ExecutionRequest
 // written, until it ends or the server stops listening.
 func (e *executions) StreamLogs(req *agentrpc.LogsRequest, stream agentrpc.AgentExecutions_StreamLogsServer) error {
 	return failure(e.exec.holding(func(exec Executor) error {
-		return exec.Logs(stream.Context(), req.GetExecutionId(), req.GetOffset(), chunkWriter{stream})
+		return exec.Logs(stream.Context(), req.GetExecutionId(), req.GetOffset(), &chunkWriter{stream, req.GetOffset()})
 	}))
 }
 
@@ -274,16 +274,29 @@ func failure(err error) error {
 	}
 }
 
-// chunkWriter sends each write as a log chunk.
+// chunkWriter sends each write as a log chunk, with offset, where its data
+// begins in the workload's output.
 type chunkWriter struct {
 	stream agentrpc.AgentExecutions_StreamLogsServer
+	offset int64
 }
 
 // Write sends p, copied, since the stream may hold it past the call.
-func (w chunkWriter) Write(p []byte) (int, error) {
-	if err := w.stream.Send(&agentrpc.LogChunk{Data: append([]byte(nil), p...)}); err != nil {
+func (w *chunkWriter) Write(p []byte) (int, error) {
+	chunk := &agentrpc.LogChunk{Data: append([]byte(nil), p...), Offset: w.offset}
+	if err := w.stream.Send(chunk); err != nil {
 		return 0, err
 	}
 
+	w.offset += int64(len(p))
+
 	return len(p), nil
+}
+
+// StartsAt has the next chunk begin at offset, past output the executor
+// dropped.
+func (w *chunkWriter) StartsAt(offset int64) error {
+	w.offset = offset
+
+	return nil
 }

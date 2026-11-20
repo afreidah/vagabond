@@ -282,8 +282,8 @@ func (f *follower) start(ctx context.Context, id string) *live {
 }
 
 // rest prints what of a finished execution's stored output did not stream, and
-// warns of output that is not there to print: dropped past the server's
-// ceiling before it could stream, or never given by the provider.
+// warns of output that is not there to print: dropped past the server's or the
+// node's ceiling before it could stream, or never given by the provider.
 func (f *follower) rest(ctx context.Context, e *api.Execution) {
 	out := &output{mu: &f.stdout, w: f.Stdout}
 
@@ -298,7 +298,7 @@ func (f *follower) rest(ctx context.Context, e *api.Execution) {
 	streamed := out.written()
 
 	if dropped := e.LogsStart - streamed; dropped > 0 {
-		f.Ui.Warn(fmt.Sprintf("%d bytes of output were not kept: the server keeps the end of long output.", dropped))
+		f.Ui.Warn(fmt.Sprintf("%d bytes of output were not kept: only the end of long output is kept.", dropped))
 	}
 
 	if err := f.client.Logs(ctx, e.ID, streamed, out); err != nil {

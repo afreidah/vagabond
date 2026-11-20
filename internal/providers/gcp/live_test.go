@@ -136,7 +136,7 @@ args    = ["-c", "echo hello-stdout; echo hello-stderr >&2; exit 3"]
 
 	var logs strings.Builder
 
-	if err := p.ReadLogs(t.Context(), id, &logs); err != nil {
+	if err := p.ReadLogs(t.Context(), id, &execution.PlacedWriter{Writer: &logs}); err != nil {
 		t.Fatalf("ReadLogs failed: %v", err)
 	}
 
@@ -212,7 +212,7 @@ args    = ["-c", "seq 1 12000; sleep 45; echo the-end"]
 
 	var whole strings.Builder
 
-	if err := p.ReadLogs(t.Context(), id, &whole); err != nil {
+	if err := p.ReadLogs(t.Context(), id, &execution.PlacedWriter{Writer: &whole}); err != nil {
 		t.Fatalf("ReadLogs failed: %v", err)
 	}
 

@@ -7,12 +7,16 @@
 // chunks numbered from the start of the output, so a byte offset names its
 // chunk and a read from any offset needs no index. Past the ceiling the oldest
 // chunks are dropped, since the end of a build is where it failed; positions
-// still count from the first byte the task printed.
+// still count from the first byte the task printed, and a reader of output
+// whose front was dropped says where what it writes begins.
 // -------------------------------------------------------------------------------
 
 package execution
 
-import "time"
+import (
+	"io"
+	"time"
+)
 
 // LogChunk is how much output one stored chunk holds. Chunk k holds bytes
 // k*LogChunk up to (k+1)*LogChunk of the whole output.
@@ -43,4 +47,27 @@ func PlaceLogs(start, offset int64) (seq, skip int64) {
 	offset = max(offset, start)
 
 	return offset / LogChunk, offset % LogChunk
+}
+
+// LogWriter is where output read from a byte offset is written. A reader whose
+// output continues past where its last write ended, as the bytes between were
+// dropped, first calls StartsAt with where what it writes next begins.
+type LogWriter interface {
+	io.Writer
+	StartsAt(offset int64) error
+}
+
+// PlacedWriter is a LogWriter over any writer, recording where the output
+// written to it last began.
+type PlacedWriter struct {
+	io.Writer
+	Start int64
+}
+
+// StartsAt records offset as where the output written next begins. It never
+// fails.
+func (p *PlacedWriter) StartsAt(offset int64) error {
+	p.Start = offset
+
+	return nil
 }

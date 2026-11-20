@@ -17,6 +17,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -43,7 +44,7 @@ func newTestExecutor(t *testing.T) *Containerd {
 		t.Skip("VAGABOND_CONTAINERD names no containerd; make executor-test starts one")
 	}
 
-	c, err := New(Config{
+	c, err := New(&Config{
 		Socket:    socket,
 		Namespace: "vagabond-test",
 		DataDir:   t.TempDir(),
@@ -138,6 +139,48 @@ func (g *gatedWriter) Write(p []byte) (int, error) {
 // TESTS
 // -------------------------------------------------------------------------
 
+// A workload printing past the cap keeps only the end: a read from its first
+// byte is placed where the kept part begins, and the front is freed on disk.
+func TestContainerd_KeepsTheEndOfLongOutput(t *testing.T) {
+	cfg := newTestExecutor(t).cfg
+	cfg.MaxLogBytes = 4 * execution.LogChunk
+
+	c, err := New(&cfg)
+	if err != nil {
+		t.Fatalf("New() = %v", err)
+	}
+
+	t.Cleanup(func() { _ = c.Close() })
+
+	id := "exec-long-" + time.Now().Format("150405.000")
+	printed := 6 * execution.LogChunk
+
+	run(t, c, id, fmt.Sprintf("yes x | head -c %d; echo the end", printed), 0)
+	finished(t, c, id)
+
+	var logs strings.Builder
+
+	w := &execution.PlacedWriter{Writer: &logs}
+
+	if err := c.Logs(t.Context(), id, 0, w); err != nil || !strings.HasSuffix(logs.String(), "x\nthe end\n") {
+		t.Fatalf("Logs() = %d bytes, %v; want the end", logs.Len(), err)
+	}
+
+	size := int64(printed + len("the end\n"))
+	if start := execution.KeepFrom(size, cfg.MaxLogBytes) * execution.LogChunk; w.Start != start || int64(logs.Len()) != size-start {
+		t.Errorf("Logs() placed at %d with %d bytes, want at %d with %d", w.Start, logs.Len(), start, size-start)
+	}
+
+	// The front is freed by the next pass of the trimming loop
+	for deadline := time.Now().Add(2 * logTrim); allocated(t, c.logPath(id)) >= size; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the front of %s was not freed", c.logPath(id))
+		}
+
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 // A workload runs, exits with its own code, and its output and duration come
 // back; released, it is gone.
 func TestContainerd_RunsAWorkload(t *testing.T) {
@@ -157,7 +200,7 @@ func TestContainerd_RunsAWorkload(t *testing.T) {
 
 	var logs strings.Builder
 
-	if err := c.Logs(t.Context(), id, 0, &logs); err != nil || !strings.Contains(logs.String(), "hello from vagabond") {
+	if err := c.Logs(t.Context(), id, 0, &execution.PlacedWriter{Writer: &logs}); err != nil || !strings.Contains(logs.String(), "hello from vagabond") {
 		t.Errorf("Logs() = %q, %v", logs.String(), err)
 	}
 
@@ -210,7 +253,7 @@ func TestContainerd_LogsOfAnUnknownWorkload(t *testing.T) {
 
 	var logs strings.Builder
 
-	if err := c.Logs(t.Context(), "exec-elsewhere", 0, &logs); !errors.Is(err, ErrUnknown) || logs.Len() > 0 {
+	if err := c.Logs(t.Context(), "exec-elsewhere", 0, &execution.PlacedWriter{Writer: &logs}); !errors.Is(err, ErrUnknown) || logs.Len() > 0 {
 		t.Errorf("Logs() = %q, %v; want nothing and ErrUnknown", logs.String(), err)
 	}
 }
@@ -256,7 +299,7 @@ func TestContainerd_LogsFromAnOffset(t *testing.T) {
 
 	var rest strings.Builder
 
-	if err := c.Logs(t.Context(), id, 6, &rest); err != nil || rest.String() != "from vagabond\n" {
+	if err := c.Logs(t.Context(), id, 6, &execution.PlacedWriter{Writer: &rest}); err != nil || rest.String() != "from vagabond\n" {
 		t.Errorf("Logs() from offset 6 = %q, %v; want the rest of the line", rest.String(), err)
 	}
 }
@@ -272,7 +315,7 @@ func TestContainerd_LogsFollowsThroughRelease(t *testing.T) {
 	w := &gatedWriter{first: make(chan struct{}), open: make(chan struct{})}
 	done := make(chan error, 1)
 
-	go func() { done <- c.Logs(t.Context(), id, 0, w) }()
+	go func() { done <- c.Logs(t.Context(), id, 0, &execution.PlacedWriter{Writer: w}) }()
 
 	select {
 	case <-w.first:
@@ -318,7 +361,7 @@ func TestContainerd_SurvivesARestart(t *testing.T) {
 		t.Fatalf("Close() = %v", err)
 	}
 
-	second, err := New(first.cfg)
+	second, err := New(&first.cfg)
 	if err != nil {
 		t.Fatalf("New() = %v", err)
 	}
@@ -339,7 +382,7 @@ func TestContainerd_SurvivesARestart(t *testing.T) {
 
 	var logs strings.Builder
 
-	if err := second.Logs(t.Context(), id, 0, &logs); err != nil || !strings.Contains(logs.String(), "after the restart") {
+	if err := second.Logs(t.Context(), id, 0, &execution.PlacedWriter{Writer: &logs}); err != nil || !strings.Contains(logs.String(), "after the restart") {
 		t.Errorf("Logs() = %q, %v; want the output from before the restart", logs.String(), err)
 	}
 }
