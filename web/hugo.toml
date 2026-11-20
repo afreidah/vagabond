@@ -3,7 +3,7 @@
 #
 # Author: Alex Freidah
 #
-# The project site: a landing page and the diagrams from web/content, and the
+# The project site: a landing page, guides and diagrams from web/content, and the
 # documentation from the repository's docs/, mounted in place so the same
 # Markdown renders on GitHub and here. The Hextra theme is a Hugo module, pinned
 # in web/go.mod.
@@ -69,22 +69,26 @@ enableRobotsTXT = true
     pageRef = "/docs"
     weight = 1
   [[menu.main]]
+    name = "Guides"
+    pageRef = "/guides"
+    weight = 2
+  [[menu.main]]
     name = "Diagrams"
     pageRef = "/diagrams"
-    weight = 2
+    weight = 3
   [[menu.main]]
     name = "alexfreidah.com"
     url = "https://alexfreidah.com"
-    weight = 3
+    weight = 4
   [[menu.main]]
     name = "Search"
-    weight = 4
+    weight = 5
     [menu.main.params]
       type = "search"
   [[menu.main]]
     name = "GitHub"
     url = "https://github.com/afreidah/vagabond"
-    weight = 5
+    weight = 6
     [menu.main.params]
       icon = "github"
 

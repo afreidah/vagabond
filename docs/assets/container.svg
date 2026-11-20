@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 440" role="img" aria-labelledby="title desc">
+  <title id="title">A workload in a container</title>
+  <desc id="desc">The agent submits a workload to the node's containerd in the vagabond namespace, keyed by its execution ID. containerd pulls the image, unpacks it into an overlayfs snapshot, and runs the task's process under runc as the image's user, on the host network, in the cgroup parent/execution-id. containerd writes its output to data-dir/logs/execution-id.log, which the agent streams to the server, live and once the workload ends.</desc>
+  <defs>
+    <style>
+      .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:20px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.micro{font-size:13px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#fd7300"/></marker>
+  </defs>
+  <g class="t">
+    <!-- Connections -->
+    <path class="line" marker-end="url(#arrow)" d="M240 220H296"/>
+    <path class="line" marker-end="url(#arrow)" d="M560 160H590V140H616"/>
+    <path class="line" marker-end="url(#arrow)" d="M560 280H590V340H616"/>
+    <path class="line" marker-end="url(#arrow)" d="M920 340H950V275H976"/>
+
+    <!-- Agent -->
+    <rect x="20" y="140" width="220" height="160" rx="24" class="card"/>
+    <text x="130" y="176" text-anchor="middle" class="micro">AGENT</text>
+    <text x="130" y="214" text-anchor="middle" class="label">Submit</text>
+    <text x="130" y="244" text-anchor="middle" class="small">execution ID, image,</text>
+    <text x="130" y="266" text-anchor="middle" class="small">process, limits</text>
+
+    <!-- containerd -->
+    <rect x="300" y="90" width="260" height="260" rx="34" class="core"/>
+    <text x="430" y="132" text-anchor="middle" class="micro">CONTAINERD</text>
+    <text x="430" y="172" text-anchor="middle" class="label" style="font-size:18px">namespace vagabond</text>
+    <g class="small" text-anchor="middle" style="fill:#f8fafc">
+      <text x="430" y="218">pulls the image</text>
+      <text x="430" y="244">overlayfs snapshot</text>
+      <text x="430" y="270">runtime runc v2</text>
+    </g>
+
+    <!-- Container -->
+    <rect x="620" y="40" width="300" height="200" rx="24" class="card" style="stroke-width:3"/>
+    <text x="650" y="76" class="micro">CONTAINER</text>
+    <text x="650" y="110" class="label">&lt;execution-id&gt;</text>
+    <g class="small">
+      <text x="650" y="144">the task's process</text>
+      <text x="650" y="168">as the image's user</text>
+      <text x="650" y="192">host network</text>
+      <text x="650" y="216">cgroup &lt;parent&gt;/&lt;id&gt;</text>
+    </g>
+
+    <!-- Log -->
+    <rect x="620" y="280" width="300" height="120" rx="24" class="card"/>
+    <text x="650" y="316" class="micro">OUTPUT</text>
+    <text x="650" y="350" class="label">&lt;data-dir&gt;/logs/</text>
+    <text x="650" y="376" class="small">&lt;execution-id&gt;.log</text>
+
+    <!-- Server -->
+    <rect x="980" y="200" width="200" height="150" rx="24" class="card"/>
+    <text x="1080" y="236" text-anchor="middle" class="micro">SERVER</text>
+    <text x="1080" y="272" text-anchor="middle" class="label">StreamLogs</text>
+    <text x="1080" y="300" text-anchor="middle" class="small">live, then the</text>
+    <text x="1080" y="322" text-anchor="middle" class="small">stored copy</text>
+  </g>
+</svg>

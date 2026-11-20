@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 50 1200 320" role="img" aria-labelledby="title desc">
+  <title id="title">The thin pool under the microVMs' root drives</title>
+  <desc id="desc">Two sparse files, data and meta, are attached to loop devices. At boot, before containerd starts, dmsetup builds the thin pool containerd-thinpool over them. containerd's devmapper snapshotter carves one thin snapshot per image from the pool, and each microVM boots with its snapshot as its root drive.</desc>
+  <defs>
+    <style>
+      .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:20px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.micro{font-size:13px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#fd7300"/></marker>
+  </defs>
+  <g class="t">
+    <!-- Connections -->
+    <path class="line" marker-end="url(#arrow)" d="M200 210H246"/>
+    <path class="line" marker-end="url(#arrow)" d="M430 210H476"/>
+    <path class="line" marker-end="url(#arrow)" d="M700 210H746"/>
+    <path class="line" marker-end="url(#arrow)" d="M950 210H996"/>
+
+    <!-- Sparse files -->
+    <rect x="20" y="100" width="180" height="220" rx="24" class="card"/>
+    <text x="110" y="136" text-anchor="middle" class="micro">SPARSE FILES</text>
+    <text x="110" y="182" text-anchor="middle" class="label">data</text>
+    <text x="110" y="206" text-anchor="middle" class="small">50G, 0 on disk</text>
+    <text x="110" y="252" text-anchor="middle" class="label">meta</text>
+    <text x="110" y="276" text-anchor="middle" class="small">1G</text>
+
+    <!-- Loop devices -->
+    <rect x="250" y="100" width="180" height="220" rx="24" class="card"/>
+    <text x="340" y="136" text-anchor="middle" class="micro">LOOP DEVICES</text>
+    <text x="340" y="182" text-anchor="middle" class="label">/dev/loop0</text>
+    <text x="340" y="206" text-anchor="middle" class="small">data</text>
+    <text x="340" y="252" text-anchor="middle" class="label">/dev/loop1</text>
+    <text x="340" y="276" text-anchor="middle" class="small">meta</text>
+
+    <!-- Thin pool -->
+    <rect x="480" y="80" width="220" height="260" rx="34" class="core"/>
+    <text x="590" y="122" text-anchor="middle" class="micro">DM THIN POOL</text>
+    <text x="590" y="166" text-anchor="middle" class="label" style="font-size:17px">containerd-thinpool</text>
+    <g class="small" text-anchor="middle" style="fill:#f8fafc">
+      <text x="590" y="214">64 KiB blocks</text>
+      <text x="590" y="246">made at boot,</text>
+      <text x="590" y="268">before containerd</text>
+    </g>
+
+    <!-- Snapshots -->
+    <rect x="750" y="100" width="200" height="220" rx="24" class="card"/>
+    <text x="850" y="136" text-anchor="middle" class="micro">SNAPSHOTS</text>
+    <text x="850" y="182" text-anchor="middle" class="label">one per image</text>
+    <text x="850" y="214" text-anchor="middle" class="small">containerd's</text>
+    <text x="850" y="236" text-anchor="middle" class="small">devmapper snapshotter</text>
+    <text x="850" y="268" text-anchor="middle" class="small">10GB thin, ext4</text>
+
+    <!-- MicroVM -->
+    <rect x="1000" y="100" width="180" height="220" rx="24" class="card" style="stroke-width:3"/>
+    <text x="1090" y="136" text-anchor="middle" class="micro">MICROVM</text>
+    <text x="1090" y="182" text-anchor="middle" class="label">/dev/vda</text>
+    <text x="1090" y="214" text-anchor="middle" class="small">its root drive,</text>
+    <text x="1090" y="236" text-anchor="middle" class="small">mounted by</text>
+    <text x="1090" y="258" text-anchor="middle" class="small">vagabond-init</text>
+  </g>
+</svg>

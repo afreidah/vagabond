@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 460" role="img" aria-labelledby="title desc">
+  <title id="title">The agent's cgroup and its workloads' cgroup</title>
+  <desc id="desc">Under /sys/fs/cgroup, the agent runs in its Nomad task's cgroup, whose cpu.max from cpu_hard_limit and memory limit are the node's capacity: 2010 millicores and 4608 MiB. Workloads run under /vagabond instead, made by the prestart task with cpu.max 200000 100000, memory.max 4608 MiB, and cpu and memory handed to its children. runc creates one cgroup per workload under /vagabond, named by its execution ID.</desc>
+  <defs>
+    <style>
+      .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:20px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.micro{font-size:13px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#fd7300"/></marker>
+  </defs>
+  <g class="t">
+    <!-- Connections -->
+    <path class="line" marker-end="url(#arrow)" d="M220 230H255V115H296"/>
+    <path class="line" marker-end="url(#arrow)" d="M220 230H255V335H296"/>
+    <path class="line" marker-end="url(#arrow)" d="M680 300H715V260H756"/>
+    <path class="line" marker-end="url(#arrow)" d="M680 370H715V380H756"/>
+
+    <!-- Root -->
+    <rect x="20" y="170" width="200" height="120" rx="24" class="card"/>
+    <text x="120" y="210" text-anchor="middle" class="micro">CGROUP V2</text>
+    <text x="120" y="248" text-anchor="middle" class="label">/sys/fs/cgroup</text>
+
+    <!-- Agent -->
+    <rect x="300" y="40" width="380" height="150" rx="24" class="card"/>
+    <text x="330" y="76" class="micro">NOMAD TASK</text>
+    <text x="330" y="110" class="label">the agent</text>
+    <text x="330" y="138" class="small">cpu.max and memory limit from Nomad</text>
+    <text x="330" y="162" class="small">read as capacity: 2010m, 4608 MiB</text>
+
+    <!-- Workloads parent -->
+    <rect x="300" y="250" width="380" height="170" rx="34" class="core"/>
+    <text x="330" y="288" class="micro">MADE BY THE PRESTART TASK</text>
+    <text x="330" y="324" class="label">/vagabond</text>
+    <g class="small" style="fill:#f8fafc">
+      <text x="330" y="354">cpu.max 200000 100000: two cores</text>
+      <text x="330" y="378">memory.max 4608 MiB</text>
+      <text x="330" y="402">+cpu +memory for its children</text>
+    </g>
+
+    <!-- Workloads -->
+    <rect x="760" y="220" width="420" height="80" rx="20" class="card" style="stroke-width:3"/>
+    <text x="790" y="254" class="label">&lt;execution-id&gt;</text>
+    <text x="790" y="280" class="small">one per workload, made by runc</text>
+    <rect x="760" y="340" width="420" height="80" rx="20" class="card"/>
+    <text x="790" y="374" class="label">&lt;execution-id&gt;</text>
+    <text x="790" y="400" class="small">held to the task's cpu and memory</text>
+  </g>
+</svg>

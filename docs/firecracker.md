@@ -1,9 +1,37 @@
 ---
-title: "vagabond-firecracker"
-seoTitle: "vagabond-firecracker: Workloads in Firecracker MicroVMs"
-description: "The vagabond-firecracker daemon and its guest init: requirements, flags, deployment, kernel and initramfs, microVM sizing, networking, restarts, the executor protocol, logging, troubleshooting and testing."
+title: "Firecracker"
+seoTitle: "Firecracker: Workloads in MicroVMs on Your Own Nodes"
+description: "The Firecracker executor: the firecracker provider, and the vagabond-firecracker daemon and its guest init: requirements, flags, deployment, kernel and initramfs, microVM sizing, networking, restarts, the executor protocol, logging, troubleshooting and testing."
 weight: 520
 ---
+
+The Firecracker executor runs each workload in a Firecracker microVM with its
+own kernel, on an agent node started with `-firecracker`. A provider of type
+`firecracker` sends tasks to the agents of its pool that run this executor.
+The agent itself, its pools, and how the server places work on a pool's nodes
+are in [Agent](agent.md). The other executor, for containers, is
+[containerd](containerd.md).
+
+## Provider
+
+```hcl
+provider "homelab-vm" {
+  type = "firecracker"
+
+  config {
+    pool = "homelab"
+  }
+}
+```
+
+The settings, `pool` and `placement`, and how the provider behaves with no
+nodes connected, are in [Declaring a provider](agent.md#declaring-a-provider).
+`pool` defaults to the provider's label, so a provider sharing a pool with a
+`containerd` one names it, as here. Its nodes publish `provider.isolation` as
+`vm`, and each workload takes `--vmm-overhead` of memory from a node's room on
+top of its declared size ([Sizing](#sizing)).
+
+## vagabond-firecracker
 
 `vagabond-firecracker` runs on a KVM node, started by the agent, and runs each
 workload in a Firecracker microVM of its own, with its own kernel, where a

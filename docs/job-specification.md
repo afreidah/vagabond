@@ -436,6 +436,7 @@ with `constraint-unmet`:
 ```hcl
 constraint {
   attribute = "provider.isolation"
+  operator  = "="
   value     = "vm"
 }
 ```
@@ -530,7 +531,7 @@ task "test" {
 
 | Driver | Contract | Providers offering it |
 |---|---|---|
-| `container` | Run an arbitrary container image to completion; the exit status is the result | Cloud Run (`cloud-run`), Code Engine (`code-engine`), pool (`pool`) |
+| `container` | Run an arbitrary container image to completion; the exit status is the result | Cloud Run (`cloud-run`), Code Engine (`code-engine`), agent nodes (`containerd`, `firecracker`) |
 | `function` | Invoke a predeployed function that implements the platform's handler contract | Lambda (`lambda`) |
 | `worker` | Invoke a predeployed constrained executor, such as an edge or Wasm runtime | None; every provider rejects it with `driver-unsupported` |
 
@@ -567,7 +568,7 @@ rejected with `image-unsupported`. A non-string `image` fails admission with
 
 #### `container` driver
 
-Read by the Cloud Run and `containerd` providers.
+Read by the Cloud Run, Code Engine, `containerd` and `firecracker` providers.
 
 ```hcl
 config {
@@ -709,7 +710,7 @@ against CPU- and memory-metered pools. See [quotas](quotas.md).
 | Provider | Omitted `cpu` | Omitted `memory` | How values are applied |
 |---|---|---|---|
 | Cloud Run | 1000 | 2048 | CPU rounded up to whole vCPUs (minimum 1); memory in MiB. Limits 8000 millicores, 32768 MiB |
-| Pool | 1000 | 1024 | Passed to the agent as the workload's cgroup limits. Limit is the largest node's capacity |
+| `containerd`, `firecracker` | 1000 | 1024 | Passed to the agent as the workload's cgroup limits, and for a microVM its vCPUs and memory. Limit is the largest node's capacity |
 | Lambda | - | - | Not applied; the function's own configuration decides. Limits 6000 millicores, 10240 MiB |
 
 **Validation:**
@@ -738,7 +739,7 @@ timeout = "15m"
 | Provider | Omitted | Limit |
 |---|---|---|
 | Cloud Run | 24h | 24h |
-| Pool | No timeout; the agent never stops the workload | none |
+| `containerd`, `firecracker` | No timeout; the agent never stops the workload | none |
 | Lambda | Not applied; the function's configured timeout decides | 15m |
 
 **Validation:**
@@ -771,7 +772,7 @@ provider. A provider lacking a required capability is rejected with
 |---|---|---|
 | Cloud Run | `true` | `false` |
 | Lambda | `true` | `false` |
-| Pool | `true` | `true` |
+| `containerd`, `firecracker` | `true` | `true` |
 
 ### `execution` block
 

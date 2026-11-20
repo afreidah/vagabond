@@ -368,8 +368,7 @@ to finish. The job is not registered. The server makes the same selection
   regardless. A `404`, `400` or `500` is not retried.
 - A server still unreachable after the retries ends the command with the
   error and exit 1, and says the run may still be going:
-  `Dispatch <id> may still be running. Check it with vagabond execution status <execution-id>.`,
-  naming the latest execution once there is one.
+  `Dispatch <id> may still be running. Check it with vagabond dispatch status <id>.`
 - Interrupting the command (SIGINT or SIGTERM) cancels the unfinished
   execution on the server, waiting up to 30 seconds for the cancel, then exits
   2.
@@ -980,7 +979,8 @@ into a pool, and runs the workloads the server sends on the node's containerd,
 and in Firecracker microVMs through vagabond-firecracker with `-firecracker`,
 until SIGINT or SIGTERM. Workloads keep running when the agent stops, and it
 finds them again when it starts. See [agent](agent.md) for requirements,
-cgroup setup and pools.
+cgroup setup and pools, and [containerd](containerd.md) and
+[Firecracker](firecracker.md) for each executor's workloads.
 
 **Requirements** (checked before the node registers): cgroup v2, access to
 containerd's socket, and permission to create cgroups under the agent's own
@@ -1017,7 +1017,7 @@ namespace `vagabond`.
 | Message | Cause |
 |---|---|
 | `Reading the node: ...` | Host CPU, memory or cgroup could not be read |
-| Cgroup delegation error | No `-cgroup-parent` and the agent's cgroup cannot be delegated |
+| cgroup delegation error | No `-cgroup-parent` and the agent's cgroup cannot be delegated |
 | containerd error | Socket missing or not reachable |
 | `... devmapper snapshotter ...` | `-firecracker` given, and containerd has no working devmapper snapshotter |
 | `vagabond-firecracker at <socket> does not answer: ...` | `-firecracker` given, and the daemon is not serving |

@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 540" role="img" aria-labelledby="title desc">
+  <title id="title">The server as a Nomad job</title>
+  <desc id="desc">Nomad's templates render the server's files into the task's secrets directory: config.hcl with the database credentials from Vault KV, the cloud credentials, and the agent listener's certificate from Vault PKI. The vagabond server reads them at start, stores its state in Postgres through HAProxy on port 5433, and serves the API on 4747 and agents on 4748. Consul registers it as vagabond and checks /v1/health every 10 seconds. Clients reach the API and agents the agent listener at vagabond.service.consul.</desc>
+  <defs>
+    <style>
+      .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:20px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.micro{font-size:13px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.dash{fill:none;stroke:#9a9ea6;stroke-width:2.5;stroke-dasharray:7 6;stroke-linecap:round;stroke-linejoin:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#fd7300"/></marker>
+    <marker id="arrow-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#9a9ea6"/></marker>
+  </defs>
+  <g class="t">
+    <!-- Connections -->
+    <path class="line" marker-end="url(#arrow)" d="M280 105H310V150H336"/>
+    <path class="line" marker-end="url(#arrow)" d="M280 265H310V220H336"/>
+    <path class="line" marker-end="url(#arrow)" d="M590 185H646"/>
+    <path class="line" marker-end="url(#arrow)" d="M910 150H940V85H966"/>
+    <path class="dash" marker-end="url(#arrow-grey)" d="M970 230H914"/>
+    <path class="line" marker-end="url(#arrow)" d="M640 410V360H740V314"/>
+    <path class="line" marker-end="url(#arrow)" d="M920 410V360H820V314"/>
+
+    <!-- Vault KV -->
+    <rect x="20" y="40" width="260" height="130" rx="24" class="card"/>
+    <text x="150" y="76" text-anchor="middle" class="micro">VAULT KV</text>
+    <text x="150" y="114" text-anchor="middle" class="label">secret/vagabond/*</text>
+    <text x="150" y="144" text-anchor="middle" class="small">database, cloud credentials</text>
+
+    <!-- Vault PKI -->
+    <rect x="20" y="200" width="260" height="130" rx="24" class="card"/>
+    <text x="150" y="236" text-anchor="middle" class="micro">VAULT PKI</text>
+    <text x="150" y="274" text-anchor="middle" class="label">pki_vagabond</text>
+    <text x="150" y="304" text-anchor="middle" class="small">agent listener certificate</text>
+
+    <!-- Templates -->
+    <rect x="340" y="60" width="250" height="250" rx="24" class="card"/>
+    <text x="465" y="96" text-anchor="middle" class="micro">NOMAD TEMPLATES</text>
+    <text x="465" y="134" text-anchor="middle" class="label">secrets/</text>
+    <g class="small" text-anchor="middle">
+      <text x="465" y="174">config.hcl</text>
+      <text x="465" y="198">gcp-dispatcher.json</text>
+      <text x="465" y="222">ibm-api-key</text>
+      <text x="465" y="246">agent-listener.pem</text>
+      <text x="465" y="270">and its key and CA</text>
+    </g>
+
+    <!-- Server -->
+    <rect x="650" y="110" width="260" height="200" rx="34" class="core"/>
+    <text x="780" y="150" text-anchor="middle" class="micro">NOMAD JOB</text>
+    <text x="780" y="190" text-anchor="middle" class="label">vagabond server</text>
+    <g class="small" text-anchor="middle" style="fill:#f8fafc">
+      <text x="780" y="236">:4747 API</text>
+      <text x="780" y="262">:4748 agents</text>
+    </g>
+
+    <!-- Postgres -->
+    <rect x="970" y="30" width="210" height="110" rx="24" class="card"/>
+    <text x="1075" y="64" text-anchor="middle" class="micro">POSTGRES</text>
+    <text x="1075" y="98" text-anchor="middle" class="label">vagabond</text>
+    <text x="1075" y="122" text-anchor="middle" class="small">via HAProxy :5433</text>
+
+    <!-- Consul -->
+    <rect x="970" y="170" width="210" height="120" rx="24" class="card"/>
+    <text x="1075" y="204" text-anchor="middle" class="micro">CONSUL</text>
+    <text x="1075" y="238" text-anchor="middle" class="label">vagabond</text>
+    <text x="1075" y="264" text-anchor="middle" class="small">/v1/health every 10s</text>
+
+    <!-- Clients and agents -->
+    <rect x="520" y="410" width="240" height="110" rx="24" class="card"/>
+    <text x="640" y="444" text-anchor="middle" class="micro">CLIENTS</text>
+    <text x="640" y="476" text-anchor="middle" class="label">CLI, CI</text>
+    <text x="640" y="500" text-anchor="middle" class="small">to :4747</text>
+    <rect x="800" y="410" width="240" height="110" rx="24" class="card"/>
+    <text x="920" y="444" text-anchor="middle" class="micro">AGENTS</text>
+    <text x="920" y="476" text-anchor="middle" class="label">nodes</text>
+    <text x="920" y="500" text-anchor="middle" class="small">mutual TLS to :4748</text>
+  </g>
+</svg>

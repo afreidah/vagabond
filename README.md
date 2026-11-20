@@ -81,8 +81,8 @@ Backends:
 | Google Cloud Run Jobs | `container` | [cloud-run.md](docs/providers/cloud-run.md) |
 | IBM Code Engine Jobs | `container` | [code-engine.md](docs/providers/code-engine.md) |
 | AWS Lambda | `function` | [lambda.md](docs/providers/lambda.md) |
-| Agent nodes (`vagabond agent`, `containerd` provider) | `container` | [agent.md](docs/agent.md) |
-| Agent nodes in microVMs (`vagabond-firecracker`, `firecracker` provider) | `container` | [firecracker.md](docs/firecracker.md) |
+| Agent nodes in containers (`vagabond agent`, `containerd` provider) | `container` | [containerd.md](docs/containerd.md) |
+| Agent nodes in microVMs (`vagabond agent -firecracker`, `firecracker` provider) | `container` | [firecracker.md](docs/firecracker.md) |
 
 The `worker` driver is modeled and admitted; no plugin implements it yet.
 
@@ -234,7 +234,8 @@ Details: [architecture.md](docs/architecture.md).
 | Running the server and agents | [deployment.md](docs/deployment.md) |
 | Postgres, CockroachDB, migrations, schema | [database.md](docs/database.md) |
 | Periodic loops in the server and agent | [background-services.md](docs/background-services.md) |
-| Running workloads on your own nodes | [agent.md](docs/agent.md) |
+| The agent on your own nodes, its pools and placement | [agent.md](docs/agent.md) |
+| Workloads in containers on agent nodes | [containerd.md](docs/containerd.md) |
 | Workloads in Firecracker microVMs | [firecracker.md](docs/firecracker.md) |
 | Google Cloud Run Jobs | [providers/cloud-run.md](docs/providers/cloud-run.md) |
 | IBM Code Engine Jobs | [providers/code-engine.md](docs/providers/code-engine.md) |

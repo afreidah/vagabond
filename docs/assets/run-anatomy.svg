@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 40 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">A run and the commands that read it</title>
+  <desc id="desc">job dispatch starts a dispatch, one run of the static-analysis job, which dispatch status reads. The dispatch created one execution, attempt 1 of the make task on gcp-cloud-run, which failed with exit 2; execution list and execution status read it. The execution's output is stored on the server, the last 16 MiB for 7 days, and execution logs reads it.</desc>
+  <defs>
+    <style>
+      .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:20px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.micro{font-size:13px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.cmd{font-size:14px;font-weight:700;fill:#ff8a2b;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.dash{fill:none;stroke:#9a9ea6;stroke-width:2;stroke-dasharray:5 5}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0l10 5-10 5z" fill="#fd7300"/></marker>
+  </defs>
+  <g class="t">
+    <!-- Connections -->
+    <path class="line" marker-end="url(#arrow)" d="M250 170H296"/>
+    <path class="line" marker-end="url(#arrow)" d="M560 170H606"/>
+    <path class="line" marker-end="url(#arrow)" d="M870 170H916"/>
+
+    <!-- Command -->
+    <rect x="20" y="80" width="230" height="180" rx="24" class="card"/>
+    <text x="135" y="116" text-anchor="middle" class="micro">COMMAND</text>
+    <text x="135" y="160" text-anchor="middle" class="label">job dispatch</text>
+    <text x="135" y="190" text-anchor="middle" class="small">static-analysis</text>
+    <text x="135" y="214" text-anchor="middle" class="small">prints both IDs</text>
+
+    <!-- Dispatch -->
+    <rect x="300" y="60" width="260" height="220" rx="34" class="core"/>
+    <text x="430" y="100" text-anchor="middle" class="micro">DISPATCH</text>
+    <text x="430" y="144" text-anchor="middle" class="label">one run</text>
+    <g class="small" text-anchor="middle" style="fill:#f8fafc">
+      <text x="430" y="186">static-analysis v4</text>
+      <text x="430" y="210">every task's attempts</text>
+      <text x="430" y="234">state: failed</text>
+    </g>
+
+    <!-- Execution -->
+    <rect x="610" y="80" width="260" height="180" rx="24" class="card"/>
+    <text x="740" y="116" text-anchor="middle" class="micro">EXECUTION</text>
+    <text x="740" y="160" text-anchor="middle" class="label">attempt 1</text>
+    <text x="740" y="190" text-anchor="middle" class="small">make on gcp-cloud-run</text>
+    <text x="740" y="214" text-anchor="middle" class="small">failed, exit 2</text>
+
+    <!-- Output -->
+    <rect x="920" y="80" width="260" height="180" rx="24" class="card"/>
+    <text x="1050" y="116" text-anchor="middle" class="micro">OUTPUT</text>
+    <text x="1050" y="160" text-anchor="middle" class="label">stored copy</text>
+    <text x="1050" y="190" text-anchor="middle" class="small">the last 16 MiB,</text>
+    <text x="1050" y="214" text-anchor="middle" class="small">kept 7 days</text>
+
+    <!-- Readers -->
+    <path class="dash" d="M430 280V318"/>
+    <path class="dash" d="M740 260V318"/>
+    <path class="dash" d="M1050 260V318"/>
+    <text x="430" y="344" text-anchor="middle" class="cmd">dispatch status &lt;id&gt;</text>
+    <text x="740" y="344" text-anchor="middle" class="cmd">execution list</text>
+    <text x="740" y="370" text-anchor="middle" class="cmd">execution status &lt;id&gt;</text>
+    <text x="1050" y="344" text-anchor="middle" class="cmd">execution logs &lt;id&gt;</text>
+  </g>
+</svg>
