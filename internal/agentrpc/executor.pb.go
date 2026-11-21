@@ -217,11 +217,13 @@ func (x *Process) GetAdditionalGids() []uint32 {
 }
 
 // Output is a workload's output from the offset asked for, and whether it has
-// ended with all of it read.
+// ended with all of it read. Its data begins at offset: the one asked for, or
+// further on past output the daemon dropped.
 type Output struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
 	Ended         bool                   `protobuf:"varint,2,opt,name=ended,proto3" json:"ended,omitempty"`
+	Offset        int64                  `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -268,6 +270,13 @@ func (x *Output) GetEnded() bool {
 		return x.Ended
 	}
 	return false
+}
+
+func (x *Output) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
 }
 
 type HeldList struct {
@@ -339,10 +348,11 @@ const file_internal_agentrpc_executor_proto_rawDesc = "" +
 	"\x0fadditional_gids\x18\x06 \x03(\rR\x0eadditionalGids\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"2\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"J\n" +
 	"\x06Output\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\x12\x14\n" +
-	"\x05ended\x18\x02 \x01(\bR\x05ended\"7\n" +
+	"\x05ended\x18\x02 \x01(\bR\x05ended\x12\x16\n" +
+	"\x06offset\x18\x03 \x01(\x03R\x06offset\"7\n" +
 	"\bHeldList\x12+\n" +
 	"\x04held\x18\x01 \x03(\v2\x17.vagabond.agent.v1.HeldR\x04held2\xdf\x04\n" +
 	"\bExecutor\x12Q\n" +

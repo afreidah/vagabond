@@ -32,19 +32,19 @@ import (
 type readingProvider struct {
 	scriptedProvider
 
-	read  func(attempt int, w io.Writer) error
+	read  func(attempt int, w execution.LogWriter) error
 	reads int
 }
 
 // ReadLogs counts the call and writes what read does.
-func (p *readingProvider) ReadLogs(_ context.Context, _ execution.ID, w io.Writer) error {
+func (p *readingProvider) ReadLogs(_ context.Context, _ execution.ID, w execution.LogWriter) error {
 	p.reads++
 
 	return p.read(p.reads, w)
 }
 
 // reading registers a reading provider named "a" whose runs succeed at once.
-func reading(read func(attempt int, w io.Writer) error) (*readingProvider, *fakeRegistry) {
+func reading(read func(attempt int, w execution.LogWriter) error) (*readingProvider, *fakeRegistry) {
 	p := &readingProvider{name: "a", pollsToFinish: 1, finalState: execution.StateSucceeded, read: read}
 
 	reg := newRegistry(&p.scriptedProvider)
@@ -54,8 +54,8 @@ func reading(read func(attempt int, w io.Writer) error) (*readingProvider, *fake
 }
 
 // writes is a read that writes text and succeeds.
-func writes(text string) func(int, io.Writer) error {
-	return func(_ int, w io.Writer) error {
+func writes(text string) func(int, execution.LogWriter) error {
+	return func(_ int, w execution.LogWriter) error {
 		_, err := io.WriteString(w, text)
 
 		return err
@@ -148,13 +148,75 @@ func TestCapture_DropsTheFrontPastTheCeiling(t *testing.T) {
 	}
 }
 
+// Output a provider kept only the end of is stored where that end begins, and
+// the record says so, as when the server drops the front itself.
+func TestCapture_PlacesOutputKeptOnlyFromItsEnd(t *testing.T) {
+	t.Parallel()
+
+	_, reg := reading(func(_ int, w execution.LogWriter) error {
+		if err := w.StartsAt(2 * execution.LogChunk); err != nil {
+			return err
+		}
+
+		_, err := io.WriteString(w, "the end\n")
+
+		return err
+	})
+
+	outcome := runOnce(t, newDispatcher(t, reg))
+
+	if got := stored(t, reg, outcome.ID); got != "the end\n" {
+		t.Errorf("stored %q, want only the end", got)
+	}
+
+	if rec := record(t, reg, outcome.ID); rec.LogsStart != 2*execution.LogChunk || rec.LogsTruncated {
+		t.Errorf("LogsStart = %d, truncated %t; want %d, whole", rec.LogsStart, rec.LogsTruncated, 2*execution.LogChunk)
+	}
+}
+
+// A place that does not begin a chunk, or comes after part of one or before
+// what was written, cannot be stored, and the output is marked truncated.
+func TestCapture_RefusesAPlaceItCannotStore(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		written string
+		at      int64
+	}{
+		{"mid-chunk", "", execution.LogChunk + 1},
+		{"after part of a chunk", "partial", execution.LogChunk},
+		{"before what was written", strings.Repeat("x", 2*execution.LogChunk), execution.LogChunk},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, reg := reading(func(_ int, w execution.LogWriter) error {
+				if _, err := io.WriteString(w, tt.written); err != nil {
+					return err
+				}
+
+				return w.StartsAt(tt.at)
+			})
+
+			outcome := runOnce(t, newDispatcher(t, reg))
+
+			if rec := record(t, reg, outcome.ID); !rec.LogsTruncated {
+				t.Error("an output placed where it cannot be stored was not marked truncated")
+			}
+		})
+	}
+}
+
 // A read refused as unauthorized is made again on a fresh credential, and the
 // output starts over rather than following what the first try wrote.
 func TestCapture_StartsOverOnAFreshCredential(t *testing.T) {
 	t.Parallel()
 
 	first := strings.Repeat("x", execution.LogChunk) + "cut short"
-	p, reg := reading(func(attempt int, w io.Writer) error {
+	p, reg := reading(func(attempt int, w execution.LogWriter) error {
 		if attempt == 1 {
 			_, _ = io.WriteString(w, first)
 
@@ -181,7 +243,7 @@ func TestCapture_StartsOverOnAFreshCredential(t *testing.T) {
 func TestCapture_MarksAFailedReadTruncated(t *testing.T) {
 	t.Parallel()
 
-	_, reg := reading(func(_ int, w io.Writer) error {
+	_, reg := reading(func(_ int, w execution.LogWriter) error {
 		_, _ = io.WriteString(w, "partial\n")
 
 		return plugin.Infrastructure(errors.New("connection reset"))

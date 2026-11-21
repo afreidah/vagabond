@@ -523,7 +523,7 @@ server {
 |---|---|---|---|---|
 | `bind` | string | no | `127.0.0.1:4747` | `host:port` for the HTTP API |
 | `agent_bind` | string | no | `127.0.0.1:4748` | `host:port` [agents](agent.md) dial |
-| `max_log_mib` | number | no | `16` | MiB of each execution's output kept, at least 1. Past it the oldest output is dropped, 256 KiB at a time, so the end is kept |
+| `max_log_mib` | number | no | `16` | MiB of each execution's output kept, at least 1. Past it the oldest output is dropped, 256 KiB at a time, so the end is kept. An agent node keeps its own `-max-log-mib`, which should be at least this |
 | `log_retention` | duration | no | `"168h"` | How long output is kept after its execution ends, above zero. Records stay; only the output is deleted ([Output retention](background-services.md#output-retention)) |
 | `tls` | block | no | plain HTTP | Certificate for the API, and the CA client certificates must chain to |
 | `agent_tls` | block | when `agent_bind` is not loopback | plain TCP | Mutual TLS for agents |

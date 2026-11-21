@@ -16,7 +16,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"strings"
 	"sync"
@@ -32,6 +31,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/backoff"
+	"github.com/afreidah/vagabond/internal/execution"
 )
 
 // -------------------------------------------------------------------------
@@ -291,44 +291,28 @@ func (f *Firecracker) Result(ctx context.Context, id string) (*agentrpc.Executio
 }
 
 // Logs copies a workload's output from byte offset on to w, read from the
-// daemon until all of it has been, and polled every logPoll while nothing new
-// has come. One the daemon does not hold is ErrUnknown before anything is
-// written; one released while it is followed has written all it will.
-func (f *Firecracker) Logs(ctx context.Context, id string, offset int64, w io.Writer) error {
-	for read := false; ; read = true {
+// daemon until all of it has been. One the daemon does not hold is ErrUnknown
+// before anything is written; one released while it is followed has written
+// all it will.
+func (f *Firecracker) Logs(ctx context.Context, id string, offset int64, w execution.LogWriter) error {
+	read := false
+
+	return follow(ctx, offset, w, func(offset int64) (output, error) {
 		out, err := call(ctx, f, func(d agentrpc.ExecutorService) (*agentrpc.Output, error) {
 			return d.ReadLogs(ctx, &agentrpc.LogsRequest{ExecutionId: id, Offset: offset})
 		})
 
 		switch {
 		case read && errors.Is(err, ErrUnknown):
-			return nil
+			return output{ended: true}, nil
 		case err != nil:
-			return err
+			return output{}, err
 		}
 
-		// Written only when there is something, since a write sends a chunk.
-		if data := out.GetData(); len(data) > 0 {
-			n, err := w.Write(data)
-			offset += int64(n)
+		read = true
 
-			if err != nil {
-				return err
-			}
-		}
-
-		// Done once it has ended; with nothing new yet, wait for more, or for ctx.
-		switch {
-		case out.GetEnded():
-			return nil
-		case len(out.GetData()) == 0:
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(logPoll):
-			}
-		}
-	}
+		return output{data: out.GetData(), offset: out.GetOffset(), ended: out.GetEnded()}, nil
+	})
 }
 
 // Held is every microVM the daemon holds, each with its overhead counted.

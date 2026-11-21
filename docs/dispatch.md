@@ -332,6 +332,10 @@ output, and releasing may destroy it.
 - Past the server's `max_log_mib` (16 MiB by default) the oldest chunks are
   dropped, so the end is kept. `LogsStart` is then the first byte still stored.
   Offsets count from the first byte the task printed either way.
+- A provider that kept only the end itself, as an agent node does past its
+  `-max-log-mib`, says where that end begins before writing it, through the
+  writer's `StartsAt`. The capture stores it from there, and `LogsStart` is at
+  least that.
 - A capture runs on its own context with a 5 minute timeout, through the same
   credential retry as every provider call. A retry starts the output over at
   chunk 0, so nothing is stored twice.

@@ -59,6 +59,10 @@ pub struct Config {
     #[arg(long, default_value_t = 32)]
     pub vmm_overhead: u64,
 
+    /// MiB of each workload's output kept, its front dropped past it
+    #[arg(long, default_value_t = 16, value_parser = clap::value_parser!(u64).range(1..))]
+    pub max_log_mib: u64,
+
     /// Addresses each microVM's /30 is taken from
     #[arg(long, default_value = "172.16.0.0/16")]
     pub pool: Ipv4Net,

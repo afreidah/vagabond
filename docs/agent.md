@@ -59,6 +59,7 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=no -memory 12288 \
 | `-firecracker-uid <uid>`, `-firecracker-gid <gid>` | `990` | User and group Firecracker runs as. Give them to nothing else on the node. |
 | `-firecracker-uplink <interface>` | the default route's | Interface microVM traffic leaves through, behind NAT. |
 | `-data-dir <path>` | `/var/lib/vagabond` | Workload output, under `<data-dir>/logs`. Created mode `0750` if missing. In a container it must be the same path inside and out. |
+| `-max-log-mib <MiB>` | `16` | How much of each workload's output the node keeps, on both executors; the front of longer output is freed in 256 KiB chunks. Set it to at least the server's `max_log_mib`, or the server stores only what the node kept. At least `1`. |
 | `-cgroup-parent <path>` | empty | cgroup v2 path to create workloads under, prepared by the operator. Skips [cgroup delegation](#cgroup-delegation). |
 | `-log-level <level>` | `info` | `debug`, `info`, `warn` or `error`. Logs are text to stderr. |
 
@@ -601,7 +602,7 @@ Every executor keeps the same contract, which the server relies on:
 |---|---|
 | Idempotency | The execution ID: a second `Submit` of a held execution starts nothing |
 | States | `accepted` until started, `running`, then `succeeded`, `failed` or `cancelled`; one gone after it started, without an exit, ends `failed` with no exit code |
-| Output | Standard output and error together, kept whole until `Release`, read from any byte offset |
+| Output | Standard output and error together, the last `-max-log-mib` of it kept until `Release`, read from any byte offset; a read from before the kept part begins where that part does |
 | Timeout | Measured from the saved start: `SIGTERM`, then `SIGKILL` 10 seconds later; ends `failed` |
 | Cancel | `SIGTERM`, then `SIGKILL` 10 seconds later; ends `cancelled` whatever the exit |
 | Release | Deletes everything kept for it; one not held is released already |
@@ -792,6 +793,7 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab \
 | Two agents alternate in `node status`, both logging `lost the server` | Same `-name` on two hosts. The server logs nothing while they alternate. | Give each a unique `-name`. |
 | Agent logs `connecting to the server ... registering: rpc error: code = Unavailable ...`; server logs `agent connection ... tls: first record does not look like a TLS handshake` | Agent started without `-tls-*` against a server with `agent_tls` | Pass `-tls-ca`, `-tls-cert` and `-tls-key`. |
 | Node disk fills under containerd's root | Pulled images are never removed | `ctr -n vagabond images rm <ref>`. |
+| `dropping the front of a workload's output error=... operation not supported` every 10 seconds | `-data-dir` is on a filesystem that cannot free part of a file, so logs grow until `Release` | Put `-data-dir` on ext4, XFS, btrfs or tmpfs. |
 | `cannot manage cgroups under ...` at startup | cgroup not delegated | `Delegate=yes`, or privileged container with `--cgroupns=host`. |
 | `the agent's cgroup is the root` at startup | Container without `--cgroupns=host` | Add it, or pass `-cgroup-parent`. |
 | Workloads die when the agent restarts under systemd | `KillMode=control-group` kills the unit's subtree | `KillMode=process`. |

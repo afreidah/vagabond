@@ -150,6 +150,17 @@ func TestAgent_DaemonFailureStopsIt(t *testing.T) {
 	}
 }
 
+// A cap on kept output under a MiB is refused before the agent reads the
+// node.
+func TestAgent_RefusesAMaxLogUnderAMiB(t *testing.T) {
+	var stderr bytes.Buffer
+
+	code := Run([]string{"agent", "-max-log-mib", "0"}, strings.NewReader(""), io.Discard, &stderr)
+	if code != ExitFailure || !strings.Contains(stderr.String(), "Invalid -max-log-mib 0") {
+		t.Errorf("agent -max-log-mib 0 = %d, %q; want it refused", code, stderr.String())
+	}
+}
+
 // An executor that cannot be made stops the daemon it was for.
 func TestStartFirecracker_NoContainerd(t *testing.T) {
 	if _, _, _, err := startFirecracker(t.Context(), daemonConfig(t, "serve"), io.Discard, "", ""); err == nil {

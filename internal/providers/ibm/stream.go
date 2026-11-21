@@ -84,7 +84,7 @@ func (p *Provider) awaitStart(ctx context.Context, run string) (string, error) {
 
 // ReadLogs writes a finished run's output, the task container's whole log. The
 // pod goes with the run, so a pod already gone is output lost.
-func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w io.Writer) error {
+func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w execution.LogWriter) error {
 	run := runName(id)
 
 	found, err := p.runPod(ctx, run)

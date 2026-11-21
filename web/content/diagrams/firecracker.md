@@ -164,7 +164,7 @@ window.vagabondDiagram = {
     OUTPUT: {
       title: 'output.log',
       badge: 'storage', badgeText: 'state dir',
-      body: '<p><code>&lt;state-dir&gt;/&lt;execution-id&gt;/output.log</code>, kept whole until <code>Release</code>. <code>ReadLogs</code> returns it from an offset, up to 64 KiB a call, and <code>ended</code> once the workload has ended and the offset has reached its end.</p>'
+      body: '<p><code>&lt;state-dir&gt;/&lt;execution-id&gt;/output.log</code>, kept until <code>Release</code>, its front freed past <code>--max-log-mib</code> with its length kept. <code>ReadLogs</code> returns it from an offset, or from where the kept part begins, up to 64 KiB a call, with the <code>offset</code> its data begins at, and <code>ended</code> once the workload has ended and the offset has reached its end.</p>'
     },
     ENDED: {
       title: 'End Saved, Guest Shut Down',

@@ -612,7 +612,7 @@ and `JobStatus`.
 | `Duration` | Run time in nanoseconds |
 | `Billed` | What the platform reported it charged, `{"CPU": <millicores>, "Memory": <MiB>, "Duration": <ns>}`; `null` when the platform does not report it |
 | `Reason` | Why the platform ended the workload, in its words, such as `OOMKilled`; empty when the process exited on its own or the platform did not say |
-| `LogsStart` | First byte of output still stored; above 0 once output past the server's `max_log_mib` was dropped from the front |
+| `LogsStart` | First byte of output still stored; above 0 once output past the server's `max_log_mib`, or the node's `-max-log-mib` on an agent node, was dropped from the front |
 | `LogsTruncated` | The provider gave less output than the task printed, as when a read of it failed or a function returned only the tail |
 
 | `State` | Terminal | Meaning |

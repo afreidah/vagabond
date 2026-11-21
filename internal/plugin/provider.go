@@ -112,10 +112,11 @@ type LogStreamer interface {
 
 // LogReader is implemented by providers that hold a finished execution's
 // output, read once it has ended and before Release, which may destroy it.
-// ReadLogs writes the whole output to w; an error means what was written is
-// incomplete.
+// ReadLogs writes the whole output to w, or, holding only its end, says through
+// StartsAt where that begins before writing it; an error means what was written
+// is incomplete.
 type LogReader interface {
-	ReadLogs(ctx context.Context, id execution.ID, w io.Writer) error
+	ReadLogs(ctx context.Context, id execution.ID, w execution.LogWriter) error
 }
 
 // Live is implemented by providers whose capabilities change between

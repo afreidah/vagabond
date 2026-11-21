@@ -5,18 +5,21 @@
 //
 // Runs workloads as containers on the node's containerd, in their own
 // namespace. The container ID is the execution ID, output goes to a log file
-// containerd writes itself, and everything the executor needs to know about a
-// workload is on the container as labels, so an agent that restarts finds its
-// workloads, their state, and their timeouts where it left them.
+// containerd writes itself, its front freed past the cap, and everything the
+// executor needs to know about a workload is on the container as labels, so an
+// agent that restarts finds its workloads, their state, and their timeouts
+// where it left them.
 // -------------------------------------------------------------------------------
 
 package executor
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,6 +34,7 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/distribution/reference"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"golang.org/x/sys/unix"
 
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/execution"
@@ -49,11 +53,13 @@ const (
 	labelMemory    = "vagabond.memory"
 )
 
-// Timings for stopping a workload and polling a log that is still being
-// written.
+// stopGrace is how long a stopped workload gets between SIGTERM and SIGKILL.
+const stopGrace = 10 * time.Second
+
+// How often logs are cut back to the cap, and how much of one a read takes.
 const (
-	stopGrace = 10 * time.Second
-	logPoll   = 250 * time.Millisecond
+	logTrim = 10 * time.Second
+	logRead = 64 << 10
 )
 
 var (
@@ -70,12 +76,16 @@ var (
 // -------------------------------------------------------------------------
 
 // Config is where the executor runs workloads. Cgroup is the parent every
-// workload's cgroup is created under.
+// workload's cgroup is created under. MaxLogBytes is how much of each
+// workload's output is kept, execution.DefaultMaxLogBytes when zero, and
+// Logger takes what goes wrong in the background, discarded when nil.
 type Config struct {
-	Socket    string
-	Namespace string
-	DataDir   string
-	Cgroup    string
+	Socket      string
+	Namespace   string
+	DataDir     string
+	Cgroup      string
+	MaxLogBytes int64
+	Logger      *slog.Logger
 }
 
 // Containerd runs workloads on one containerd.
@@ -84,6 +94,7 @@ type Containerd struct {
 	cfg     Config
 	mu      sync.Mutex
 	watched map[string]bool
+	untrim  context.CancelFunc
 }
 
 // workloadLabels are a container's labels read back: when its task started,
@@ -99,24 +110,36 @@ type workloadLabels struct {
 // CONSTRUCTOR
 // -------------------------------------------------------------------------
 
-// New connects to containerd and makes the log directory.
-func New(cfg Config) (*Containerd, error) {
-	c, err := client.New(cfg.Socket, client.WithDefaultNamespace(cfg.Namespace))
+// New connects to containerd, makes the log directory, and starts cutting logs
+// back to the cap.
+func New(cfg *Config) (*Containerd, error) {
+	cl, err := client.New(cfg.Socket, client.WithDefaultNamespace(cfg.Namespace))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to containerd at %s: %w", cfg.Socket, err)
 	}
 
 	if err := os.MkdirAll(filepath.Join(cfg.DataDir, "logs"), 0o750); err != nil {
-		_ = c.Close()
+		_ = cl.Close()
 
 		return nil, fmt.Errorf("creating the log directory: %w", err)
 	}
 
-	return &Containerd{client: c, cfg: cfg, watched: make(map[string]bool)}, nil
+	ctx, untrim := context.WithCancel(context.Background())
+
+	c := &Containerd{client: cl, cfg: *cfg, watched: make(map[string]bool), untrim: untrim}
+	c.cfg.MaxLogBytes = cmp.Or(c.cfg.MaxLogBytes, execution.DefaultMaxLogBytes)
+	c.cfg.Logger = cmp.Or(c.cfg.Logger, slog.New(slog.DiscardHandler))
+
+	go c.trim(ctx)
+
+	return c, nil
 }
 
-// Close disconnects from containerd. Workloads keep running.
+// Close stops cutting logs back and disconnects from containerd, and may be
+// called again. Workloads keep running.
 func (c *Containerd) Close() error {
+	c.untrim()
+
 	return c.client.Close()
 }
 
@@ -391,7 +414,7 @@ func (c *Containerd) Result(ctx context.Context, id string) (*agentrpc.Execution
 // until the workload ends, is released, or ctx ends. One it does not hold is
 // ErrUnknown before anything is written, so the caller can ask another
 // executor; one with no log yet has written nothing.
-func (c *Containerd) Logs(ctx context.Context, id string, offset int64, w io.Writer) error {
+func (c *Containerd) Logs(ctx context.Context, id string, offset int64, w execution.LogWriter) error {
 	if _, _, err := c.load(ctx, id); err != nil {
 		return err
 	}
@@ -407,33 +430,114 @@ func (c *Containerd) Logs(ctx context.Context, id string, offset int64, w io.Wri
 
 	defer func() { _ = file.Close() }()
 
-	if _, err := file.Seek(offset, io.SeekStart); err != nil {
-		return fmt.Errorf("seeking the log of %s: %w", id, err)
-	}
+	buf := make([]byte, logRead)
 
-	for {
-		if _, err := io.Copy(w, file); err != nil {
-			return err
+	return follow(ctx, offset, w, func(offset int64) (output, error) {
+		out, err := c.readLog(file, offset, buf)
+		if err != nil || len(out.data) > 0 {
+			return out, err
 		}
 
 		st, err := c.status(ctx, id)
 		if err != nil && !errors.Is(err, ErrUnknown) {
-			return err
+			return output{}, err
 		}
 
-		// Ended or released: the open file still holds whatever it wrote last.
-		if err != nil || st.State.Terminal() {
-			_, err := io.Copy(w, file)
-
-			return err
+		if err == nil && !st.State.Terminal() {
+			return out, nil
 		}
 
+		// Ended or released: the open file still holds whatever it wrote last
+		out, err = c.readLog(file, offset, buf)
+		out.ended = len(out.data) == 0
+
+		return out, err
+	})
+}
+
+// readLog reads into buf what of an open log follows offset, from where its
+// kept part begins when offset is before it. A read overtaken by the front
+// being dropped, which may have taken what it read, gives only where the kept
+// part now begins.
+func (c *Containerd) readLog(file *os.File, offset int64, buf []byte) (output, error) {
+	start, err := c.keptStart(file)
+	if err != nil {
+		return output{}, err
+	}
+
+	offset = max(offset, start)
+
+	n, err := file.ReadAt(buf, offset)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return output{}, fmt.Errorf("reading %s: %w", file.Name(), err)
+	}
+
+	if now, err := c.keptStart(file); err != nil || now > offset {
+		return output{offset: now}, err
+	}
+
+	return output{data: buf[:n], offset: offset}, nil
+}
+
+// keptStart is where the kept part of an open log begins: past MaxLogBytes, its
+// front is dropped in whole chunks, as the server drops stored output.
+func (c *Containerd) keptStart(file *os.File) (int64, error) {
+	info, err := file.Stat()
+	if err != nil {
+		return 0, fmt.Errorf("reading the size of %s: %w", file.Name(), err)
+	}
+
+	return execution.KeepFrom(info.Size(), c.cfg.MaxLogBytes) * execution.LogChunk, nil
+}
+
+// trim cuts every workload's log back to the cap every logTrim until ctx ends,
+// as the executor closes, so a workload printing without end cannot fill the
+// disk.
+func (c *Containerd) trim(ctx context.Context) {
+	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(logPoll):
+			return
+		case <-time.After(logTrim):
+		}
+
+		// The pattern is fixed, so it cannot be malformed
+		logs, _ := filepath.Glob(filepath.Join(c.cfg.DataDir, "logs", "*.log"))
+
+		for _, path := range logs {
+			if err := c.trimLog(path); err != nil {
+				c.cfg.Logger.WarnContext(ctx, "dropping the front of a workload's output", "error", err)
+			}
 		}
 	}
+}
+
+// trimLog frees the front of one log, before where its kept part begins, as a
+// hole: its length stays, so offsets into it still count from the first byte
+// the workload printed. A log released meanwhile is left alone.
+func (c *Containerd) trimLog(path string) error {
+	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", path, err)
+	}
+
+	defer func() { _ = file.Close() }()
+
+	start, err := c.keptStart(file)
+	if err != nil || start == 0 {
+		return err
+	}
+
+	err = unix.Fallocate(int(file.Fd()), unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE, 0, start)
+	if err != nil {
+		return fmt.Errorf("freeing the first %d bytes of %s: %w", start, path, err)
+	}
+
+	return nil
 }
 
 // Held returns every workload the executor holds, with what it declared and

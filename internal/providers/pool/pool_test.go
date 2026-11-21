@@ -503,7 +503,7 @@ func TestPool_Executions(t *testing.T) {
 
 	var whole strings.Builder
 
-	if err := on.(plugin.LogReader).ReadLogs(t.Context(), id, &whole); err != nil || whole.String() != out.String() {
+	if err := on.(plugin.LogReader).ReadLogs(t.Context(), id, &execution.PlacedWriter{Writer: &whole}); err != nil || whole.String() != out.String() {
 		t.Errorf("ReadLogs() = %q, %v; want the node's whole output", whole.String(), err)
 	}
 
@@ -525,6 +525,39 @@ func TestPool_Executions(t *testing.T) {
 
 	if err := h.pool.Target("gone").(plugin.LogStreamer).StreamLogs(t.Context(), id, 0, io.Discard); !plugin.Reroutable(err) {
 		t.Errorf("StreamLogs() on a node not connected = %v, want an infrastructure failure", err)
+	}
+}
+
+// Output a node kept only the end of is read whole from where that end begins,
+// placed there, while a live view from before it cannot resume.
+func TestPool_OutputKeptOnlyFromItsEnd(t *testing.T) {
+	h := newHarness(t, nil)
+	exec := &executortest.Fake{Output: "dropped|the end\n", Start: int64(len("dropped|"))}
+	h.join(t, "box1", 4096, exec)
+
+	id := h.place(t, "box1", 1024)
+	on := h.pool.Target("box1")
+
+	var whole strings.Builder
+
+	w := &execution.PlacedWriter{Writer: &whole}
+
+	if err := on.(plugin.LogReader).ReadLogs(t.Context(), id, w); err != nil || whole.String() != "the end\n" || w.Start != exec.Start {
+		t.Errorf("ReadLogs() = %q from %d, %v; want the end from %d", whole.String(), w.Start, err, exec.Start)
+	}
+
+	streamer := on.(plugin.LogStreamer)
+
+	var early strings.Builder
+
+	if err := streamer.StreamLogs(t.Context(), id, 0, &early); !errors.Is(err, plugin.ErrNoResume) || early.Len() > 0 {
+		t.Errorf("StreamLogs() from before the end = %q, %v; want nothing and no resume", early.String(), err)
+	}
+
+	var live strings.Builder
+
+	if err := streamer.StreamLogs(t.Context(), id, exec.Start, &live); err != nil || live.String() != "the end\n" {
+		t.Errorf("StreamLogs() from where the end begins = %q, %v; want the end", live.String(), err)
 	}
 }
 

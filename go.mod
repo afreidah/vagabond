@@ -28,6 +28,7 @@ require (
 	github.com/zclconf/go-cty v1.20.0
 	go.uber.org/mock v0.6.0
 	golang.org/x/oauth2 v0.38.0
+	golang.org/x/sys v0.50.0
 	google.golang.org/grpc v1.86.0-dev // fix for GO-2026-6443; move to v1.85.0 when released
 	google.golang.org/protobuf v1.36.12
 )
@@ -186,7 +187,6 @@ require (
 	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
-	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/telemetry v0.0.0-20261009151841-97e8ea77aa2a // indirect
 	golang.org/x/term v0.47.0 // indirect
 	golang.org/x/text v0.44.0 // indirect

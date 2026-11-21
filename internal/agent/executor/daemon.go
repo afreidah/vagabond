@@ -46,13 +46,15 @@ var (
 // DaemonConfig is how the agent runs vagabond-firecracker: the binary, looked
 // up on PATH when bare; the directory its socket, records and jails go under;
 // the user and group Firecracker runs as; the interface microVM traffic leaves
-// through, the default route's when empty; and its log level.
+// through, the default route's when empty; its log level; and how many MiB of
+// each workload's output it keeps.
 type DaemonConfig struct {
-	Binary   string
-	Dir      string
-	UID, GID int
-	Uplink   string
-	LogLevel string
+	Binary    string
+	Dir       string
+	UID, GID  int
+	Uplink    string
+	LogLevel  string
+	MaxLogMiB int
 }
 
 // Daemon is a vagabond-firecracker the agent started.
@@ -89,6 +91,7 @@ func StartDaemon(ctx context.Context, cfg *DaemonConfig, logs io.Writer) (*Daemo
 		"--gid", strconv.Itoa(cfg.GID),
 		"--uplink", uplink,
 		"--log-level", cfg.LogLevel,
+		"--max-log-mib", strconv.Itoa(cfg.MaxLogMiB),
 	)
 	d.cmd.Stdout, d.cmd.Stderr = logs, logs
 

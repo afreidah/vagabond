@@ -787,9 +787,12 @@ func (x *LogsRequest) GetOffset() int64 {
 	return 0
 }
 
+// LogChunk is part of a workload's output, its data beginning at offset in the
+// whole: where the last chunk ended, or further on past output the node dropped.
 type LogChunk struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	Offset        int64                  `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -829,6 +832,13 @@ func (x *LogChunk) GetData() []byte {
 		return x.Data
 	}
 	return nil
+}
+
+func (x *LogChunk) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
 }
 
 type Empty struct {
@@ -933,9 +943,10 @@ const file_internal_agentrpc_agent_proto_rawDesc = "" +
 	"_exit_codeJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x04logsR\x0elogs_truncated\"H\n" +
 	"\vLogsRequest\x12!\n" +
 	"\fexecution_id\x18\x01 \x01(\tR\vexecutionId\x12\x16\n" +
-	"\x06offset\x18\x02 \x01(\x03R\x06offset\"\x1e\n" +
+	"\x06offset\x18\x02 \x01(\x03R\x06offset\"6\n" +
 	"\bLogChunk\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data\"\a\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\x12\x16\n" +
+	"\x06offset\x18\x02 \x01(\x03R\x06offset\"\a\n" +
 	"\x05Empty2c\n" +
 	"\x04Node\x12[\n" +
 	"\bRegister\x12&.vagabond.agent.v1.NodeRegisterRequest\x1a'.vagabond.agent.v1.NodeRegisterResponse2\xe2\x03\n" +

@@ -100,6 +100,7 @@ vagabond-firecracker --kernel /usr/share/vagabond-firecracker/vmlinux \
 | `--gid <gid>` | required | Group Firecracker runs as inside its jail. |
 | `--chroot-base <path>` | `/srv/jailer` | Directory the jailer builds each microVM's jail under. See [Requirements](#requirements) for the filesystem and path length it needs. |
 | `--vmm-overhead <MiB>` | `32` | Memory added to each microVM's declared memory in its cgroup's `memory.max`, for Firecracker itself. |
+| `--max-log-mib <MiB>` | `16` | How much of each workload's output is kept; see [Output](#output). The agent passes its own `-max-log-mib`. At least `1`. |
 | `--pool <cidr>` | `172.16.0.0/16` | IPv4 range each microVM's `/30` is taken from. A `/16` holds 16384 microVMs. Must not overlap a network the node routes to. |
 | `--uplink <interface>` | required | Host interface microVM traffic leaves through, behind NAT. |
 | `--dns <address>` | `1.1.1.1` | Name server each microVM resolves through. |
@@ -434,7 +435,14 @@ Standard output and error are copied from the guest to
 written before the next is read. `ReadLogs` returns what the log holds from
 an offset, up to 64 KiB a call, and `ended` once the workload has ended and
 the offset has reached the log's end. An execution not started yet reads as
-empty. The output is kept whole until `Release`.
+empty.
+
+Past `--max-log-mib`, the front of the log is freed after each write, in whole
+256 KiB chunks, as the server drops stored output. The freed bytes are a hole:
+they take no disk, and the file keeps its length, so offsets still count from
+the first byte the workload printed. A `ReadLogs` from before the kept part
+begins where that part does, and its `offset` says where; otherwise `offset`
+is the one asked for. The rest goes at `Release`.
 
 ### Timeouts
 
@@ -509,7 +517,7 @@ and `make generate` the Go client the agent's firecracker executor uses.
 | RPC | Request | Response |
 |---|---|---|
 | `Submit` | `execution_id`, `process` (`args`, `env`, `working_dir`, `uid`, `gid`, `additional_gids`), `resources` (`cpu` millicores, `memory` MiB), `timeout`, `root_drive`, `root_fstype`, `cgroup` | `state`, `provider_id`: the execution ID |
-| `ReadLogs` | `execution_id`, `offset` | `data`, `ended` |
+| `ReadLogs` | `execution_id`, `offset` | `data`, `ended`, and `offset`, where `data` begins |
 | `Held` | empty | `held[]`: every execution held, ended or not, with its declared `resources` plus `--vmm-overhead` of memory, and `running` until its Firecracker has exited |
 | `Info` | empty | `name`, `firecracker`, and `overhead`, `--vmm-overhead` as memory, which the agent registers and the server adds to each reservation |
 
@@ -560,8 +568,8 @@ for a call before `Start`, `Internal` for anything else.
   in the microVM's cgroup, under Firecracker's default seccomp filters.
 - The workload runs as the image's user, root when it names none. Its
   boundary is the microVM and the network rules in [Networking](#networking).
-- Output is kept whole, with no cap: a workload can fill the filesystem
-  `--state-dir` is on.
+- Output past `--max-log-mib` loses its front, so a workload's log takes at
+  most that, plus a 256 KiB chunk, of the filesystem `--state-dir` is on.
 - Run one daemon per node. A second removes the first's socket as it starts,
   and both then follow the same microVMs, splitting their output.
 
