@@ -11,6 +11,8 @@ package tlsconfig
 
 import (
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -133,5 +135,31 @@ func TestClient_Unreadable(t *testing.T) {
 
 	if _, err := Client(filepath.Join(t.TempDir(), "missing.pem"), "", "", ""); err == nil {
 		t.Error("Client(missing CA) = nil error")
+	}
+}
+
+// -------------------------------------------------------------------------
+// PEERS
+// -------------------------------------------------------------------------
+
+// The peer's name is the common name on its verified certificate, and empty
+// without TLS or without a verified certificate.
+func TestPeerName(t *testing.T) {
+	verified := &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{
+		{{Subject: pkix.Name{CommonName: "alice"}}},
+	}}
+
+	for _, tc := range []struct {
+		name string
+		cs   *tls.ConnectionState
+		want string
+	}{
+		{"no TLS", nil, ""},
+		{"no certificate", &tls.ConnectionState{}, ""},
+		{"verified certificate", verified, "alice"},
+	} {
+		if got := PeerName(tc.cs); got != tc.want {
+			t.Errorf("%s: PeerName() = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

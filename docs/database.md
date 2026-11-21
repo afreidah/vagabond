@@ -85,7 +85,7 @@ server under a supervisor that restarts it.
 | Source | `internal/state/postgres/migrations/*.sql`, embedded in the binary |
 | Applied | At every `vagabond server` start, pending ones only |
 | Version table | `goose_db_version`, created by goose |
-| Expected version | `11` in this release (`SchemaVersion`) |
+| Expected version | `12` in this release (`SchemaVersion`) |
 | Connection | A separate `database/sql` connection opened from the DSN as written and closed after; the 5s `connect_timeout` default does not apply to it |
 
 After migrating, the server reads `MAX(version_id)` from `goose_db_version`
@@ -95,8 +95,8 @@ for:
 | Database version | Result |
 |---|---|
 | Equal | Starts |
-| Lower | Refuses: `older than the 10 this binary expects; a migration may have failed partway` |
-| Higher | Refuses: `newer than the 10 this binary expects; upgrade vagabond` |
+| Lower | Refuses: `older than the 12 this binary expects; a migration may have failed partway` |
+| Higher | Refuses: `newer than the 12 this binary expects; upgrade vagabond` |
 
 - There is no command to migrate down. The files carry `Down` sections, but
   the binary never runs them. Rolling back a release means restoring a backup
@@ -119,6 +119,7 @@ for:
 | 9 | `00009_execution_logs.sql` | `execution_logs`, holding each existing row's output as chunk 0; `executions.logs_start` and `logs_at`, backfilled for rows with a result; `executions.logs` dropped |
 | 10 | `00010_dispatch_ownership.sql` | `dispatches.epoch` (`1` for existing rows), `cancel_requested_at` and `done_at`, the last backfilled for ended dispatches whose executions are all released, so one with an unreleased execution is claimed and finished; `executions.timeout_ms`, `0` for existing rows; executions with no dispatch marked released; `quota_reservations.cpu` and `memory` dropped; index `dispatches_lease` rebuilt as `(lease_until) WHERE done_at IS NULL`; index `executions_unreleased` dropped |
 | 11 | `00011_execution_node.sql` | `executions.node`, `''` for existing rows |
+| 12 | `00012_disabled_providers.sql` | `disabled_providers`, empty |
 
 ## Schema
 
@@ -136,6 +137,7 @@ Interactive version, with columns and indexes on each table:
 | `executions` | `id` | One row per attempt of one task on one provider, with its result and stored output |
 | `quota_usage` | `(namespace, provider, pool, period)` | Settled usage per pool per period |
 | `quota_reservations` | `(execution_id, namespace, pool)` | Usage held by executions not yet settled |
+| `disabled_providers` | `name` | Providers an operator turned off with `provider disable`, with when and by whom |
 | `goose_db_version` | goose's | Applied migrations |
 
 ### `jobs` and `job_versions`
@@ -239,6 +241,22 @@ one `INSERT ... SELECT` that writes rows only when every pool has room;
 settling deletes the reservation and upserts `quota_usage` in one statement.
 Semantics: [Quotas](quotas.md).
 
+### `disabled_providers`
+
+| Column | Meaning |
+|---|---|
+| `name` | Provider label from the configuration |
+| `disabled_at` | When the server took the `disable` request |
+| `disabled_by` | Common name on the client certificate the request presented; `''` when the API requires none |
+
+A row means the provider is disabled, and
+[`provider enable`](cli.md#provider-disable-and-provider-enable) deletes it.
+Disabling a provider that already has a row keeps the row
+(`ON CONFLICT DO NOTHING`), so it shows the first disable. Every server reads
+the whole table at startup and every 5 seconds. A row for a provider no longer
+in the configuration is ignored; delete it by hand, or keep it in case the
+provider comes back.
+
 ### Retention
 
 Two things are deleted: settled reservations, and `execution_logs` rows of
@@ -303,6 +321,7 @@ What is lost:
 | Registered jobs | Gone at exit |
 | Dispatch and execution records | Gone at exit; `execution status` for an old ID is 404 |
 | Quota usage | Starts at zero every start, so every budget resets on restart |
+| Disabled providers | Enabled again at every start |
 | Running dispatches | Not resumed by the next server; work still running at a provider is left untracked and unsettled |
 | Multiple servers | Each has its own state; nothing is shared |
 | `GET /v1/health` | Always `"Store": "ok"` |
@@ -325,6 +344,8 @@ unreachable`.
 | Dispatch already running | Continues; each record, quota and dispatch write is retried until the store answers, and its runner waits on it |
 | `GET /v1/health` | 503, `"Store": "unreachable"` |
 | Usage refresh (15s) | Fails with a warning, keeps the last snapshot |
+| Disabled provider read (5s) | Fails with a warning, keeps the last set |
+| `provider disable`, `provider enable` | 503; nothing changes |
 
 Recovery needs no action. The pool reconnects on the next call and the writes
 being retried land. A dispatch whose lease lapsed meanwhile can be claimed by

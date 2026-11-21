@@ -279,6 +279,7 @@ Safe:
 | Execution writes | Conditional on the dispatch's lease (`owner`, `epoch`, not done); a runner whose write is refused stops, with no further provider call |
 | Reaping | `FOR UPDATE SKIP LOCKED`; two reapers never resolve the same reservation |
 | Registering a job | Serializable; concurrent registers are retried |
+| Disabling a provider | One insert that keeps an existing row; every server reads the table every 5s |
 
 Not safe, or not shared:
 
@@ -381,8 +382,8 @@ time=2026-09-28T14:03:12.540Z level=INFO msg="dispatch started" dispatch=... job
 | Level | Server events |
 |---|---|
 | `debug` | Every API request: `method`, `path`, `status`, `duration` |
-| `info` | `serving`, `serving agents`, `stopped`, `node registered`, `dispatch started`, `dispatch finished`, `dispatch resumed`, `resumed dispatch finished`, `resolved abandoned quota reservations`, `pruned stored output` |
-| `warn` | `dispatch finished without an answer`, `store unreachable`, `store write failed, retrying`, `node disconnected`, `agent connection`, `accepting agent connections failed, retrying`, `refreshing provider capabilities`, `refreshing quota usage`, `resolving abandoned quota reservations`, `releasing provider leftovers`, `claiming abandoned dispatches`, `resuming dispatch`, `pruning stored output`, `reading stored output ended early`, `log stream ended early` |
+| `info` | `serving`, `serving agents`, `stopped`, `node registered`, `dispatch started`, `dispatch finished`, `dispatch resumed`, `resumed dispatch finished`, `resolved abandoned quota reservations`, `pruned stored output`, `provider disabled`, `provider enabled` |
+| `warn` | `dispatch finished without an answer`, `store unreachable`, `store write failed, retrying`, `node disconnected`, `agent connection`, `accepting agent connections failed, retrying`, `refreshing provider capabilities`, `refreshing quota usage`, `reading disabled providers`, `resolving abandoned quota reservations`, `releasing provider leftovers`, `claiming abandoned dispatches`, `resuming dispatch`, `pruning stored output`, `reading stored output ended early`, `log stream ended early` |
 | `error` | `request failed`: an API request that answered 500 |
 
 Startup errors, configuration diagnostics, and the `Some providers did not

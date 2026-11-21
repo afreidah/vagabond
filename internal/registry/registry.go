@@ -7,7 +7,8 @@
 // and produces the inputs admission reads. Admission is a pure function over
 // snapshots, so the network calls that gather them happen here rather than on
 // the path a plan takes. A disabled provider is kept rather than dropped, so a
-// plan can say why it was not considered.
+// plan can say why it was not considered, whether its configuration or an
+// operator through the API turned it off.
 // -------------------------------------------------------------------------------
 
 package registry
@@ -29,6 +30,7 @@ import (
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/scheduler"
+	"github.com/afreidah/vagabond/internal/state"
 )
 
 // -------------------------------------------------------------------------
@@ -38,12 +40,15 @@ import (
 // Registry is every provider a deployment can dispatch to.
 //
 // namespaces holds every declared namespace, each with its compiled shares by
-// provider; a namespace with none maps to an empty map. mu guards what Refresh
-// changes on the entries, since a server refreshes while serving plans.
+// provider; a namespace with none maps to an empty map. disabled holds the
+// providers operators turned off through the API, as the store last listed
+// them. mu guards both of those and what Refresh changes on the entries, since
+// a server refreshes while serving plans.
 type Registry struct {
 	mu         sync.RWMutex
 	entries    []*entry
 	namespaces map[string]map[string]quota.Limits
+	disabled   map[string]state.Disabled
 }
 
 // entry is one provider and everything last known about it.
@@ -321,6 +326,10 @@ func (r *Registry) Inputs(
 			Healthy:      healthy,
 		}
 
+		if d, ok := r.disabled[e.name]; ok {
+			in.Disabled = &d
+		}
+
 		if usage != nil {
 			in.Usage, in.ShareUsage = usage(namespace, e.name)
 		}
@@ -353,16 +362,36 @@ func (r *Registry) Budgets() quota.Budgets {
 	return quota.Budgets{Totals: totals, Namespaces: r.namespaces}
 }
 
+// SetDisabled replaces the providers operators turned off through the API
+// with disabled, as the store lists them. Admission rejects those providers,
+// but Refresh keeps checking their health, so enabling one takes effect at once.
+func (r *Registry) SetDisabled(disabled map[string]state.Disabled) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.disabled = disabled
+}
+
 // Provider returns the plugin registered under a name, for the dispatcher to
 // submit to; admission reads Inputs instead.
 func (r *Registry) Provider(name string) (plugin.Provider, bool) {
-	for _, e := range r.entries {
-		if e.name == name {
-			return e.provider, true
-		}
+	if e := r.find(name); e != nil {
+		return e.provider, true
 	}
 
 	return nil, false
+}
+
+// find returns the provider configured under name, or nil when none is. The
+// entries never change after New, so no lock is needed.
+func (r *Registry) find(name string) *entry {
+	for _, e := range r.entries {
+		if e.name == name {
+			return e
+		}
+	}
+
+	return nil
 }
 
 // recredentialEvery is the least time between two resolutions of one
@@ -374,14 +403,7 @@ const recredentialEvery = time.Minute
 // retry can succeed: true when a credential is fresh, including one another
 // caller resolved within recredentialEvery.
 func (r *Registry) Recredential(ctx context.Context, name string) (bool, error) {
-	var e *entry
-
-	for _, candidate := range r.entries {
-		if candidate.name == name {
-			e = candidate
-		}
-	}
-
+	e := r.find(name)
 	if e == nil || e.credentials == nil {
 		return false, nil
 	}

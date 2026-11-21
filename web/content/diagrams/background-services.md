@@ -5,7 +5,7 @@ description: "Interactive diagram of every loop and long-running goroutine the s
 weight: 9
 ---
 
-Every loop the server and the agent run, with its interval and what it touches. The server runs five upkeep tickers plus one goroutine per dispatch, lease, execution, agent session and followed log; the agent holds one connection to the server and reports its workloads on a timer. **Hover over any component** for implementation details.
+Every loop the server and the agent run, with its interval and what it touches. The server runs six upkeep tickers plus one goroutine per dispatch, lease, execution, agent session and followed log; the agent holds one connection to the server and reports its workloads on a timer. **Hover over any component** for implementation details.
 
 {{< diagram >}}
 
@@ -16,6 +16,7 @@ window.vagabondDiagram = {
     '    SRV([vagabond<br>server]):::entry',
     '    CAPS[Capability<br>refresh 1m]:::background',
     '    USAGE[Usage<br>refresh 15s]:::background',
+    '    DISABLED[Disabled provider<br>read 5s]:::background',
     '    REAP[Reservation<br>reaper 5m]:::background',
     '    CLAIM[Dispatch<br>claim 30s]:::background',
     '    PRUNE[Output<br>retention 1h]:::background',
@@ -41,6 +42,7 @@ window.vagabondDiagram = {
     '',
     '    SRV --> CAPS',
     '    SRV --> USAGE',
+    '    SRV --> DISABLED',
     '    SRV --> REAP',
     '    SRV --> CLAIM',
     '    SRV --> PRUNE',
@@ -49,7 +51,7 @@ window.vagabondDiagram = {
     '    API --> DISPATCH',
     '    API --> HEALTH',
     '    API --> FOLLOW',
-    '    API -->|cancel request| STORE',
+    '    API -->|cancel, disable, enable| STORE',
     '    CLAIM -->|resume| DISPATCH',
     '    DISPATCH --> LEASE',
     '    DISPATCH -->|per attempt| RUNNER',
@@ -61,6 +63,8 @@ window.vagabondDiagram = {
     '    CAPS --> REGSNAP',
     '    USAGE --> STORE',
     '    USAGE --> LEDSNAP',
+    '    DISABLED --> STORE',
+    '    DISABLED --> REGSNAP',
     '    REAP --> STORE',
     '    CLAIM --> STORE',
     '    PRUNE --> STORE',
@@ -88,7 +92,7 @@ window.vagabondDiagram = {
     SRV: {
       title: 'vagabond server',
       badge: 'entry', badgeText: 'process',
-      body: '<p><code>internal/cli/server.go</code> builds the registry and refreshes every provider, opens, migrates and verifies the store (or builds memory stores under <code>-dev</code>), and reads quota usage. A server that cannot read usage does not start.</p><p>It then starts the agent listener and listens on the API address. <code>Server.ServeListener</code> claims lapsed dispatches and reaps stale reservations once, starts the five upkeep tickers in <code>internal/server/upkeep.go</code>, and serves HTTP.</p><p>Each tick runs synchronously; a tick longer than its interval is followed at once by the next, and ticks do not pile up. A failure is logged and waits for the next tick, and one loop failing never stops another. No loop applies jitter or takes a lock across servers: where two servers could collide, the store statement decides.</p><p><a href="../../docs/background-services/">Background services reference &rarr;</a></p>'
+      body: '<p><code>internal/cli/server.go</code> builds the registry and refreshes every provider, opens, migrates and verifies the store (or builds memory stores under <code>-dev</code>), and reads quota usage. A server that cannot read usage does not start.</p><p>It then starts the agent listener and listens on the API address. <code>Server.ServeListener</code> reads the disabled providers, claims lapsed dispatches and reaps stale reservations once, in that order, starts the six upkeep tickers in <code>internal/server/upkeep.go</code>, and serves HTTP.</p><p>Each tick runs synchronously; a tick longer than its interval is followed at once by the next, and ticks do not pile up. A failure is logged and waits for the next tick, and one loop failing never stops another. No loop applies jitter or takes a lock across servers: where two servers could collide, the store statement decides.</p><p><a href="../../docs/background-services/">Background services reference &rarr;</a></p>'
     },
     API: {
       title: 'HTTP API',
@@ -98,12 +102,17 @@ window.vagabondDiagram = {
     CAPS: {
       title: 'Capability refresh',
       badge: 'background', badgeText: 'every 1 min',
-      body: '<p><code>registry.Refresh</code> asks every enabled provider for <code>Capabilities</code> in parallel, each under a 30s timeout, and applies every answer at once.</p><p><b>At startup:</b> once while loading configuration, before the server is built.<br><b>Skips:</b> disabled providers, and <code>containerd</code> providers, whose capabilities are built from connected nodes on every read.</p><p>A provider that answers is marked healthy and its snapshot replaced. One that fails is marked unhealthy and keeps its last snapshot; admission rejects it with <code>provider-unhealthy</code> until a refresh succeeds. Errors from every provider are collected and joined.</p><p class="dg-metric">Logs: warn <code>refreshing provider capabilities</code>. At startup the CLI prints <code>Some providers did not answer: ...</code> instead, and the server still starts.</p><p><a href="../../docs/background-services/#capability-refresh">Reference &rarr;</a></p>'
+      body: '<p><code>registry.Refresh</code> asks every enabled provider for <code>Capabilities</code> in parallel, each under a 30s timeout, and applies every answer at once.</p><p><b>At startup:</b> once while loading configuration, before the server is built.<br><b>Skips:</b> providers with <code>enabled = false</code>, and <code>containerd</code> and <code>firecracker</code> providers, whose capabilities are built from connected nodes on every read. A provider disabled through the API is still asked, so its health is current when it is enabled again.</p><p>A provider that answers is marked healthy and its snapshot replaced. One that fails is marked unhealthy and keeps its last snapshot; admission rejects it with <code>provider-unhealthy</code> until a refresh succeeds. Errors from every provider are collected and joined.</p><p class="dg-metric">Logs: warn <code>refreshing provider capabilities</code>. At startup the CLI prints <code>Some providers did not answer: ...</code> instead, and the server still starts.</p><p><a href="../../docs/background-services/#capability-refresh">Reference &rarr;</a></p>'
     },
     USAGE: {
       title: 'Usage snapshot refresh',
       badge: 'background', badgeText: 'every 15 s',
       body: '<p><code>ledger.Refresh</code> re-reads settled usage plus outstanding reservations for every quota pool&rsquo;s current period, from <code>quota_usage</code> and <code>quota_reservations</code>, so plans see what every server has charged.</p><p><b>At startup:</b> required. <code>ledger.New</code> loads the first snapshot, and a server that cannot read usage does not start (<code>could not read quota usage</code>).<br><b>Also:</b> before every task a dispatch runs.</p><p>A failed read keeps the last snapshot. Plans keep answering from it, and the reservation at dispatch is what enforces the limit. <code>UsageRefreshed</code> in <code>GET /v1/health</code> is when it was last read, and ages while reads fail.</p><p class="dg-metric">Logs: warn <code>refreshing quota usage</code></p><p><a href="../../docs/background-services/#usage-snapshot-refresh">Reference &rarr;</a></p>'
+    },
+    DISABLED: {
+      title: 'Disabled provider read',
+      badge: 'background', badgeText: 'every 5 s',
+      body: '<p><code>Server.refreshDisabled</code> reads the whole <code>disabled_providers</code> table and hands it to the registry, so this server rejects a provider that any server sharing the store disabled with <code>vagabond provider disable</code>.</p><p><b>At startup:</b> once, before serving and before the dispatch claim, so resumed dispatches already avoid those providers.<br><b>Also:</b> after every disable or enable this server takes, before it answers.</p><p>A failed read keeps the last set. Under <code>-dev</code> the set is in memory and only this server sees it.</p><p class="dg-metric">Logs: warn <code>reading disabled providers</code></p><p><a href="../../docs/background-services/#disabled-provider-read">Reference &rarr;</a></p>'
     },
     REAP: {
       title: 'Reservation reaper',
@@ -188,7 +197,7 @@ window.vagabondDiagram = {
     REGSNAP: {
       title: 'Capability snapshots',
       badge: 'storage', badgeText: 'server memory',
-      body: '<p>Held by the registry: each provider&rsquo;s capabilities with their observation time, and whether it answered its last refresh. Admission reads them on every plan and dispatch without calling anything.</p><p>Not persisted; rebuilt by the startup refresh. A <code>containerd</code> provider&rsquo;s capabilities are built from connected nodes on every read instead.</p>'
+      body: '<p>Held by the registry: each provider&rsquo;s capabilities with their observation time, and whether it answered its last refresh. Admission reads them on every plan and dispatch without calling anything. Beside them, the providers operators disabled through the API, as the disabled provider read last found them.</p><p>Not persisted; rebuilt by the startup refresh and read. A <code>containerd</code> provider&rsquo;s capabilities are built from connected nodes on every read instead.</p>'
     },
     LEDSNAP: {
       title: 'Usage snapshot',
@@ -231,6 +240,7 @@ window.vagabondDiagram = {
 |---------|---------|----------|------------|------|
 | Capability refresh | Server | 1m | Yes, before the server is built | `registry.Refresh` |
 | Usage snapshot refresh | Server | 15s, and before each task | Yes, required | `ledger.Refresh` |
+| Disabled provider read | Server | 5s, and after each disable or enable | Yes, before serving | `Server.refreshDisabled` |
 | Reservation reaper | Server | 5m | Yes, before serving | `Dispatcher.Reap` |
 | Dispatch claim | Server | 30s | Yes, before serving | `Server.claim` |
 | Output retention | Server | 1h | No | `Server.prune` |

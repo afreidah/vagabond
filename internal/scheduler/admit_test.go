@@ -19,6 +19,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/state"
 )
 
 // -------------------------------------------------------------------------
@@ -233,6 +234,10 @@ var reasonCases = map[string]reasonCase{
 		input: func(in *Input) { in.Enabled = false },
 		want:  ReasonProviderDisabled,
 	},
+	"operator turned it off through the API": {
+		input: func(in *Input) { in.Disabled = &state.Disabled{At: observed} },
+		want:  ReasonProviderDisabled,
+	},
 	"provider is not answering": {
 		input: func(in *Input) { in.Healthy = false },
 		want:  ReasonUnhealthy,
@@ -354,6 +359,25 @@ func TestAdmitDetailsOnlyTheFirst(t *testing.T) {
 
 	if diff := cmp.Diff([]Reason{ReasonUnhealthy}, rejection.Also); diff != "" {
 		t.Errorf("collected reasons mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// A provider turned off through the API is rejected saying when, and naming
+// who when the operator's certificate gave a name.
+func TestAdmitNamesWhoDisabledIt(t *testing.T) {
+	t.Parallel()
+
+	for by, want := range map[string]string{
+		"":      "An operator disabled this provider at 2026-09-19T12:00:00Z.",
+		"alice": "alice disabled this provider at 2026-09-19T12:00:00Z.",
+	} {
+		in := baseInput()
+		in.Disabled = &state.Disabled{At: observed, By: by}
+
+		rejection := admitOnly(t, baseRequest(), &in).Rejections[0]
+		if rejection.Reason != ReasonProviderDisabled || rejection.Detail != want {
+			t.Errorf("rejection = %+v, want %s with %q", rejection, ReasonProviderDisabled, want)
+		}
 	}
 }
 

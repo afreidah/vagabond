@@ -4,10 +4,11 @@
 // Author: Alex Freidah
 //
 // What the CLI does once per call, the server does on timers: refreshing
-// provider capabilities and quota usage, reaping reservations nothing was
-// recorded for, claiming dispatches whose owner died, and pruning stored
-// output past its retention. Each task logs its own failures and waits for its
-// next tick, so one failing never stops another.
+// provider capabilities and quota usage, reading which providers are disabled,
+// reaping reservations nothing was recorded for, claiming dispatches whose
+// owner died, and pruning stored output past its retention. A task that fails
+// is logged and runs again at its next tick, so one failing never stops
+// another.
 // -------------------------------------------------------------------------------
 
 package server
@@ -27,9 +28,18 @@ import (
 const (
 	capabilitiesInterval = time.Minute
 	usageInterval        = 15 * time.Second
+	disabledInterval     = 5 * time.Second
 	reapInterval         = 5 * time.Minute
 	claimInterval        = 30 * time.Second
 	pruneInterval        = time.Hour
+)
+
+// Each task's name, which its failures and panics are logged under. The
+// startup passes use the same names.
+const (
+	disabledTask = "reading disabled providers"
+	claimTask    = "claiming abandoned dispatches"
+	reapTask     = "resolving abandoned quota reservations"
 )
 
 // -------------------------------------------------------------------------
@@ -41,20 +51,21 @@ const (
 func (s *Server) startUpkeep(ctx context.Context) *sync.WaitGroup {
 	var wg sync.WaitGroup
 
-	wg.Go(func() { s.every(ctx, "refreshing provider capabilities", capabilitiesInterval, s.refreshCapabilities) })
-	wg.Go(func() { s.every(ctx, "refreshing quota usage", usageInterval, s.refreshUsage) })
-	wg.Go(func() { s.every(ctx, "reaping reservations", reapInterval, s.reap) })
-	wg.Go(func() { s.every(ctx, "claiming dispatches", s.claimEvery, s.claim) })
+	wg.Go(func() { s.every(ctx, "refreshing provider capabilities", capabilitiesInterval, s.registry.Refresh) })
+	wg.Go(func() { s.every(ctx, "refreshing quota usage", usageInterval, s.ledger.Refresh) })
+	wg.Go(func() { s.every(ctx, disabledTask, disabledInterval, s.refreshDisabled) })
+	wg.Go(func() { s.every(ctx, reapTask, reapInterval, s.reap) })
+	wg.Go(func() { s.every(ctx, claimTask, s.claimEvery, s.claim) })
 	wg.Go(func() { s.every(ctx, "pruning stored output", pruneInterval, s.prune) })
 
 	return &wg
 }
 
 // every calls fn each interval until ctx is done. The first call is one
-// interval in; a task that needs a pass at startup gets it before serving. A
-// panic in one call is logged as what panicked, and the next tick runs as any
-// other.
-func (s *Server) every(ctx context.Context, what string, interval time.Duration, fn func(context.Context)) {
+// interval in; a task that needs a pass at startup gets it before serving. An
+// error or a panic in one call is logged under what, and the next tick runs as
+// any other.
+func (s *Server) every(ctx context.Context, what string, interval time.Duration, fn func(context.Context) error) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -68,51 +79,35 @@ func (s *Server) every(ctx context.Context, what string, interval time.Duration,
 	}
 }
 
-// tick calls fn once, logging a panic in it rather than ending the loop.
-func (s *Server) tick(ctx context.Context, what string, fn func(context.Context)) {
+// tick calls fn once, logging the error it returns, or a panic in it, under
+// what rather than ending the loop.
+func (s *Server) tick(ctx context.Context, what string, fn func(context.Context) error) {
 	defer panics.Catch(ctx, s.logger, what, nil)
 
-	fn(ctx)
-}
-
-// refreshCapabilities asks every provider what it can do. One that fails is
-// marked unhealthy, and admission rejects it by name until it answers again.
-func (s *Server) refreshCapabilities(ctx context.Context) {
-	if err := s.registry.Refresh(ctx); err != nil {
-		s.logger.WarnContext(ctx, "refreshing provider capabilities", "error", err)
-	}
-}
-
-// refreshUsage re-reads quota usage, so plans see what every process has
-// charged. A failed read keeps the last snapshot.
-func (s *Server) refreshUsage(ctx context.Context) {
-	if err := s.ledger.Refresh(ctx); err != nil {
-		s.logger.WarnContext(ctx, "refreshing quota usage", "error", err)
+	if err := fn(ctx); err != nil {
+		s.logger.WarnContext(ctx, what, "error", err)
 	}
 }
 
 // reap drops reservations whose execution was never recorded, which a process
-// that died between reserving and recording leaves holding quota.
-func (s *Server) reap(ctx context.Context) {
+// that died between reserving and recording leaves holding quota. Any it
+// dropped are logged even when a later one failed.
+func (s *Server) reap(ctx context.Context) error {
 	reaped, err := s.dispatcher.Reap(ctx)
-
-	switch {
-	case err != nil:
-		s.logger.WarnContext(ctx, "resolving abandoned quota reservations", "error", err)
-	case reaped > 0:
+	if reaped > 0 {
 		s.logger.InfoContext(ctx, "resolved abandoned quota reservations", "count", reaped)
 	}
+
+	return err
 }
 
 // prune deletes the stored output of executions that ended longer ago than the
-// retention.
-func (s *Server) prune(ctx context.Context) {
+// retention, logging how many it pruned.
+func (s *Server) prune(ctx context.Context) error {
 	pruned, err := s.executions.PruneLogs(ctx, s.now().Add(-s.retainLogs))
-
-	switch {
-	case err != nil:
-		s.logger.WarnContext(ctx, "pruning stored output", "error", err)
-	case pruned > 0:
+	if pruned > 0 {
 		s.logger.InfoContext(ctx, "pruned stored output", "executions", pruned)
 	}
+
+	return err
 }

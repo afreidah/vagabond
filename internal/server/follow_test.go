@@ -183,7 +183,7 @@ func TestExecutionLogs_StoredPastTheCeiling(t *testing.T) {
 func TestPrune_TakesOutputPastTheRetention(t *testing.T) {
 	reg, led := fixtures(t)
 	executions := memory.NewExecutions()
-	s := New(reg, led, executions, NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler),
+	s := New(reg, led, executions, NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler),
 		WithLogs(execution.DefaultMaxLogBytes, time.Hour))
 
 	old, oldLease := ended(t, executions, time.Now().Add(-2*time.Hour), 0)
@@ -195,7 +195,9 @@ func TestPrune_TakesOutputPastTheRetention(t *testing.T) {
 		}
 	}
 
-	s.prune(t.Context())
+	if err := s.prune(t.Context()); err != nil {
+		t.Fatalf("prune() = %v", err)
+	}
 
 	for id, want := range map[execution.ID]string{old: "", recent: "output"} {
 		var out strings.Builder
@@ -267,7 +269,7 @@ func (f streamerFunc) StreamLogs(ctx context.Context, id execution.ID, offset in
 // streamed; anything else is served the stored output.
 func TestStreamer(t *testing.T) {
 	reg, led := fixtures(t)
-	s := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler))
+	s := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler))
 
 	running := execution.Status{State: execution.StateRunning}
 
@@ -301,7 +303,7 @@ func TestStreamer(t *testing.T) {
 // cannot resume is answered 416 only while nothing has been sent.
 func TestFollow_StreamErrors(t *testing.T) {
 	reg, led := fixtures(t)
-	s := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler))
+	s := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler))
 
 	tests := []struct {
 		name     string
@@ -346,7 +348,7 @@ func TestEndFollow(t *testing.T) {
 	reg, led := fixtures(t)
 	store := memory.NewExecutions()
 
-	s := New(reg, led, store, NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler))
+	s := New(reg, led, store, NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler))
 	s.followPoll, s.followLinger = time.Millisecond, 100*time.Millisecond
 
 	d := dispatched(t, store)
@@ -413,7 +415,7 @@ func TestServeListener_ShutdownEndsFollows(t *testing.T) {
 
 	reg, led := fixtures(t)
 	srv := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)),
-		slog.New(slog.DiscardHandler))
+		memory.NewProviders(), slog.New(slog.DiscardHandler))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)

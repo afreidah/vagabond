@@ -71,7 +71,7 @@ func TestPool_RunsAJobOnANode(t *testing.T) {
 	}
 
 	srv := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)),
-		slog.New(slog.DiscardHandler), WithNodes(conns))
+		memory.NewProviders(), slog.New(slog.DiscardHandler), WithNodes(conns))
 
 	var lc net.ListenConfig
 

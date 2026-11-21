@@ -55,6 +55,12 @@ func Commands(meta *Meta) map[string]cli.CommandFactory {
 		"provider status": func() (cli.Command, error) {
 			return &ProviderStatusCommand{Meta: meta}, nil
 		},
+		"provider disable": func() (cli.Command, error) {
+			return &ProviderSwitchCommand{Meta: meta}, nil
+		},
+		"provider enable": func() (cli.Command, error) {
+			return &ProviderSwitchCommand{Meta: meta, enable: true}, nil
+		},
 		"execution": func() (cli.Command, error) {
 			return &groupCommand{Meta: meta, synopsis: "Interact with executions", help: executionHelp}, nil
 		},

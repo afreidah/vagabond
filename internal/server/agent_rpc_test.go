@@ -102,7 +102,7 @@ func newAgentServer(t *testing.T) *Server {
 
 	reg, led := fixtures(t)
 
-	return New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler))
+	return New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler))
 }
 
 // serveAgents serves srv's agent listener on a free loopback port, over TLS

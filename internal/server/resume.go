@@ -20,19 +20,19 @@ import (
 // claim takes over every dispatch whose lease lapsed and resumes each in the
 // background. Dispatches this server is running are skipped: their leases
 // lapse while the store is unreachable, and the process running them is alive.
-func (s *Server) claim(ctx context.Context) {
+func (s *Server) claim(ctx context.Context) error {
 	now := s.now()
 
 	claimed, err := s.executions.ClaimDispatches(ctx, s.owner, now, now.Add(s.leaseTTL), s.runningIDs())
 	if err != nil {
-		s.logger.WarnContext(ctx, "claiming abandoned dispatches", "error", err)
-
-		return
+		return err
 	}
 
 	for _, d := range claimed {
 		s.resume(ctx, d)
 	}
+
+	return nil
 }
 
 // resume takes a claimed dispatch to its end on its own context, which

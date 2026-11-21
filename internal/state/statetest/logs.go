@@ -29,7 +29,7 @@ func LogContract(t *testing.T, newStore func(t *testing.T) Store) {
 }
 
 // logRules are the promises LogContract checks.
-var logRules = []rule{
+var logRules = []rule[Store]{
 	{"chunks read back in order", readsInOrder},
 	{"a write at chunk 0 starts over", startsOver},
 	{"the front drops past the ceiling", dropsTheFront},

@@ -233,20 +233,32 @@ type NodeListStub struct {
 // -------------------------------------------------------------------------
 
 // ProviderList is the body of GET /v1/providers: every configured provider, and
-// when the usage shown was last read.
+// when the usage shown was last read. POST /v1/provider/{name}/disable and
+// /enable answer with the one provider's ProviderListStub.
 type ProviderList struct {
 	Refreshed time.Time
 	Providers []ProviderListStub
 }
 
-// ProviderListStub is one provider's standing. Pools is empty for a provider
-// with no declared budgets.
+// ProviderListStub is one provider's standing. Enabled is false when either
+// its configuration or an operator through the API turned it off, and
+// Disabled is set for the second. Pools is empty for a provider with no
+// declared budgets.
 type ProviderListStub struct {
-	Name    string
-	Tier    int
-	Enabled bool
-	Healthy bool
-	Pools   []ProviderPool
+	Name     string
+	Tier     int
+	Enabled  bool
+	Disabled *ProviderDisabled `json:",omitempty"`
+	Healthy  bool
+	Pools    []ProviderPool
+}
+
+// ProviderDisabled is when an operator turned a provider off through the API,
+// and the common name on their client certificate, empty when the API does
+// not require one.
+type ProviderDisabled struct {
+	At time.Time
+	By string
 }
 
 // ProviderPool is one budget, with Used and Limit in Unit, the unit its meter

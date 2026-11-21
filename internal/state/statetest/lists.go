@@ -29,7 +29,7 @@ func ListContract(t *testing.T, newStore func(t *testing.T) Store) {
 }
 
 // listRules are the promises ListContract checks.
-var listRules = []rule{
+var listRules = []rule[Store]{
 	{"a namespace lists newest first, up to the limit", newestFirst},
 	{"job, state and provider each narrow the list", filtersNarrow},
 	{"a dispatch lists oldest first", dispatchOldestFirst},

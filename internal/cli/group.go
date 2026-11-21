@@ -53,11 +53,17 @@ Usage: vagabond node <subcommand> [options] [args]
 Usage: vagabond provider <subcommand> [options] [args]
 
   Read the providers a server is configured with: where jobs can run, and how
-  much of each quota pool has been used.
+  much of each quota pool has been used. Turn one off and on without editing
+  the configuration.
 
   List the providers and their usage:
 
       $ vagabond provider status
+
+  Stop new work going to a provider, and let it go there again:
+
+      $ vagabond provider disable gcp-cloud-run
+      $ vagabond provider enable gcp-cloud-run
 
   Please see the individual subcommand help for detailed usage information.
 `

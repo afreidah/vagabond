@@ -300,6 +300,18 @@ func (c *Client) Providers(ctx context.Context) (*ProviderList, error) {
 	return call[ProviderList](ctx, c, http.MethodGet, "/v1/providers", nil, nil)
 }
 
+// DisableProvider stops new work going to a provider on every server sharing
+// the store, and answers with the provider as it now stands.
+func (c *Client) DisableProvider(ctx context.Context, name string) (*ProviderListStub, error) {
+	return call[ProviderListStub](ctx, c, http.MethodPost, providerPath(name)+"/disable", nil, nil)
+}
+
+// EnableProvider lets new work go to a provider an operator disabled, and
+// answers with the provider as it now stands.
+func (c *Client) EnableProvider(ctx context.Context, name string) (*ProviderListStub, error) {
+	return call[ProviderListStub](ctx, c, http.MethodPost, providerPath(name)+"/enable", nil, nil)
+}
+
 // -------------------------------------------------------------------------
 // HEALTH
 // -------------------------------------------------------------------------
@@ -443,4 +455,9 @@ func jobPath(name string) string {
 // executionPath is the route of one execution.
 func executionPath(id string) string {
 	return "/v1/execution/" + url.PathEscape(id)
+}
+
+// providerPath is the route of one configured provider.
+func providerPath(name string) string {
+	return "/v1/provider/" + url.PathEscape(name)
 }

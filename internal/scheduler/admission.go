@@ -20,17 +20,19 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
+	"github.com/afreidah/vagabond/internal/state"
 )
 
 // -------------------------------------------------------------------------
 // INPUTS
 // -------------------------------------------------------------------------
 
-// Input is everything admission knows about one provider. Enabled and Healthy
-// are kept apart because a provider an operator turned off and one failing its
-// health checks are different rejections with different fixes. Share and
-// ShareUsage are the namespace's own slice, zero when it declared none; both
-// layers must have room.
+// Input is everything admission knows about one provider. Enabled is whether
+// the configuration file turns it on. Disabled is set when an operator turned
+// it off through the API, and says when and by whom. Healthy is kept apart from
+// both, because an operator's decision and a failing health check have
+// different fixes. Share and ShareUsage are the namespace's own slice, zero
+// when it declared none; both layers must have room.
 type Input struct {
 	Provider     string
 	Capabilities plugin.Capabilities
@@ -43,6 +45,7 @@ type Input struct {
 	Labels       map[string]string // a node's labels, set while that node is judged
 	Tier         int               // the operator's preference, lower first
 	Enabled      bool
+	Disabled     *state.Disabled
 	Healthy      bool
 }
 

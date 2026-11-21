@@ -21,6 +21,7 @@ import (
 	plugin "github.com/afreidah/vagabond/internal/plugin"
 	quota "github.com/afreidah/vagabond/internal/quota"
 	scheduler "github.com/afreidah/vagabond/internal/scheduler"
+	state "github.com/afreidah/vagabond/internal/state"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -118,6 +119,18 @@ func (m *MockserverRegistry) Refresh(ctx context.Context) error {
 func (mr *MockserverRegistryMockRecorder) Refresh(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Refresh", reflect.TypeOf((*MockserverRegistry)(nil).Refresh), ctx)
+}
+
+// SetDisabled mocks base method.
+func (m *MockserverRegistry) SetDisabled(disabled map[string]state.Disabled) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetDisabled", disabled)
+}
+
+// SetDisabled indicates an expected call of SetDisabled.
+func (mr *MockserverRegistryMockRecorder) SetDisabled(disabled any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDisabled", reflect.TypeOf((*MockserverRegistry)(nil).SetDisabled), disabled)
 }
 
 // MockserverLedger is a mock of serverLedger interface.
@@ -626,4 +639,71 @@ func (m *MockserverJobs) Versions(ctx context.Context, namespace, name string) (
 func (mr *MockserverJobsMockRecorder) Versions(ctx, namespace, name any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Versions", reflect.TypeOf((*MockserverJobs)(nil).Versions), ctx, namespace, name)
+}
+
+// MockserverProviders is a mock of serverProviders interface.
+type MockserverProviders struct {
+	ctrl     *gomock.Controller
+	recorder *MockserverProvidersMockRecorder
+	isgomock struct{}
+}
+
+// MockserverProvidersMockRecorder is the mock recorder for MockserverProviders.
+type MockserverProvidersMockRecorder struct {
+	mock *MockserverProviders
+}
+
+// NewMockserverProviders creates a new mock instance.
+func NewMockserverProviders(ctrl *gomock.Controller) *MockserverProviders {
+	mock := &MockserverProviders{ctrl: ctrl}
+	mock.recorder = &MockserverProvidersMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockserverProviders) EXPECT() *MockserverProvidersMockRecorder {
+	return m.recorder
+}
+
+// DisableProvider mocks base method.
+func (m *MockserverProviders) DisableProvider(ctx context.Context, name string, d state.Disabled) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DisableProvider", ctx, name, d)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DisableProvider indicates an expected call of DisableProvider.
+func (mr *MockserverProvidersMockRecorder) DisableProvider(ctx, name, d any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DisableProvider", reflect.TypeOf((*MockserverProviders)(nil).DisableProvider), ctx, name, d)
+}
+
+// DisabledProviders mocks base method.
+func (m *MockserverProviders) DisabledProviders(ctx context.Context) (map[string]state.Disabled, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DisabledProviders", ctx)
+	ret0, _ := ret[0].(map[string]state.Disabled)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DisabledProviders indicates an expected call of DisabledProviders.
+func (mr *MockserverProvidersMockRecorder) DisabledProviders(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DisabledProviders", reflect.TypeOf((*MockserverProviders)(nil).DisabledProviders), ctx)
+}
+
+// EnableProvider mocks base method.
+func (m *MockserverProviders) EnableProvider(ctx context.Context, name string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "EnableProvider", ctx, name)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// EnableProvider indicates an expected call of EnableProvider.
+func (mr *MockserverProvidersMockRecorder) EnableProvider(ctx, name any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnableProvider", reflect.TypeOf((*MockserverProviders)(nil).EnableProvider), ctx, name)
 }

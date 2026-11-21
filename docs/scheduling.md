@@ -47,7 +47,7 @@ Every checker runs against every provider, in this order.
 |---|---|---|---|---|
 | 1 | allowlist | policy | `not-allowlisted` | `routing.providers` is non-empty and does not name the provider |
 | 2 | cost | policy | `cost-policy` | The provider's estimated cost exceeds `max_cost_usd` (default 0) |
-| 3 | enabled | availability | `provider-disabled` | `enabled = false` |
+| 3 | enabled | availability | `provider-disabled` | `enabled = false`, or an operator ran [`provider disable`](cli.md#provider-disable-and-provider-enable) |
 | 4 | healthy | availability | `provider-unhealthy` | The last capability refresh failed |
 | 5 | driver | mismatch | `driver-unsupported` | The provider does not offer the task's driver |
 | 6 | arch | mismatch | `arch-unsupported` | The task sets `architecture` and the provider does not offer it |
@@ -97,7 +97,7 @@ placeholders filled from the task and the provider:
 |---|---|
 | `not-allowlisted` | `The job routes only to <providers, comma-separated>.` |
 | `cost-policy` | `This provider charges <cost> per execution and the job allows <max_cost_usd>.` |
-| `provider-disabled` | `An operator disabled this provider in configuration.` |
+| `provider-disabled` | `An operator disabled this provider in configuration.` for `enabled = false`; `<name> disabled this provider at <RFC 3339 time>.` for `provider disable`, with `An operator` in place of the name when the client certificate gave none |
 | `provider-unhealthy` | `This provider did not answer its last capability refresh.` |
 | `driver-unsupported` | `The task uses the <driver> driver and this provider offers <drivers or none>.` |
 | `arch-unsupported` | `The task requires <arch> and this provider offers <architectures or none>.` |
@@ -454,7 +454,7 @@ despite its score of 15. Under `weighted` tiers `gcp-cloud-run` scores
 |---|---|---|---|
 | `not-allowlisted` | policy | no | The job's `providers` list excludes this provider |
 | `cost-policy` | policy | no | The provider's estimated cost exceeds `max_cost_usd` |
-| `provider-disabled` | availability | yes | `enabled = false` in configuration |
+| `provider-disabled` | availability | yes | `enabled = false` in configuration, or disabled through the API |
 | `provider-unhealthy` | availability | yes | The provider did not answer its last capability refresh |
 | `driver-unsupported` | mismatch | no | The provider does not offer the task's driver |
 | `arch-unsupported` | mismatch | no | The provider does not offer the required architecture |

@@ -54,8 +54,8 @@ except on `/v1/health`.
 ## Namespaces
 
 Routes that read or write jobs take `?namespace=<name>`. Routes addressed by a
-dispatch or execution ID, `/v1/nodes`, `/v1/providers` and `/v1/health` ignore
-it: IDs are unique across namespaces.
+dispatch or execution ID, `/v1/nodes`, the provider routes and `/v1/health`
+ignore it: IDs are unique across namespaces, and providers belong to none.
 
 | Route | Namespace used |
 |---|---|
@@ -135,6 +135,7 @@ unreachable. Routes that do not touch it keep working:
 | All other job, dispatch and execution routes | 503 |
 | `GET /v1/nodes` | 200, held in server memory |
 | `GET /v1/providers` | 200, usage from the last snapshot |
+| `POST /v1/provider/{name}/disable`, `/enable` | 503, the change cannot be written |
 | `GET /v1/health` | 503 with `Store: "unreachable"` |
 
 A server started with `-dev` keeps everything in memory and never answers 503.
@@ -158,6 +159,8 @@ What happens to dispatches already running: [dispatch](dispatch.md).
 | `DELETE` | `/v1/execution/{id}` | [Cancel an execution](#cancel-an-execution) |
 | `GET` | `/v1/nodes` | [List nodes](#list-nodes) |
 | `GET` | `/v1/providers` | [List providers](#list-providers) |
+| `POST` | `/v1/provider/{name}/disable` | [Disable a provider](#disable-and-enable-a-provider) |
+| `POST` | `/v1/provider/{name}/enable` | [Enable a provider](#disable-and-enable-a-provider) |
 | `GET` | `/v1/health` | [Read health](#read-health) |
 
 ## Jobs
@@ -899,7 +902,8 @@ Response, `ProviderList`:
 | `Refreshed` | When the usage shown was last read from the store |
 | `Providers[].Name` | Provider label |
 | `Providers[].Tier` | Operator's preference, lower first |
-| `Providers[].Enabled` | Whether configuration enables it |
+| `Providers[].Enabled` | Whether it can take work: `false` when its configuration has `enabled = false` or an operator [disabled](#disable-and-enable-a-provider) it |
+| `Providers[].Disabled` | Set only when an operator disabled it through the API: `At`, when, and `By`, the common name on their client certificate (`""` when the API requires none) |
 | `Providers[].Healthy` | Whether it answered its last capability refresh; for a `pool`, whether any node is connected now |
 | `Providers[].Pools` | Its quota pools; `[]` when it declares none |
 | `Pools[].Name` | Pool name |
@@ -917,6 +921,57 @@ Errors: none specific; the route does not touch the store.
 
 ```bash
 curl -s http://127.0.0.1:4747/v1/providers
+```
+
+### Disable and enable a provider
+
+`POST /v1/provider/{name}/disable`, `POST /v1/provider/{name}/enable`
+
+Disabling stops new work going to a provider without editing the
+configuration. Admission rejects it as `provider-disabled`, in plans and in
+dispatches, including the retries of dispatches already running. Executions
+already running on it are left to finish. Enabling it lets new work go there
+again.
+
+The change is written to the store, so it survives a restart and applies to
+every server sharing the store. The server that took the request applies it
+before answering; the others read the store every 5 seconds. Capability
+refreshes keep checking a disabled provider, so its health is current the
+moment it is enabled.
+
+| Parameter | In | Description |
+|---|---|---|
+| `name` | path | Provider label |
+
+No body. `At` is when the server took the request. `By` is the common name on
+the client certificate the request presented, `""` when the API does not
+require one ([TLS](configuration.md#tls-block)). Disabling a provider that is
+already disabled keeps its first `At` and `By`.
+
+Response: the provider's [`ProviderListStub`](#list-providers) after the change.
+
+```json
+{
+  "Name": "gcp-cloud-run",
+  "Tier": 0,
+  "Enabled": false,
+  "Disabled": { "At": "2026-11-21T10:00:00Z", "By": "alice" },
+  "Healthy": true,
+  "Pools": []
+}
+```
+
+| Status | When |
+|---|---|
+| 404 | No provider is configured under `name` |
+| 409 | `enable` on a provider its configuration turns off with `enabled = false`; only the configuration can turn it on |
+| 503 | The store is unreachable; nothing changed |
+
+Each change is logged at `info` with the provider and `by`.
+
+```bash
+curl -s -X POST http://127.0.0.1:4747/v1/provider/gcp-cloud-run/disable
+curl -s -X POST http://127.0.0.1:4747/v1/provider/gcp-cloud-run/enable
 ```
 
 ## Health
@@ -1085,6 +1140,8 @@ client retries: a connection failure, or one of those four statuses.
 | `Cancel(ctx, id)` | `DELETE /v1/execution/{id}` |
 | `Nodes(ctx)` | `GET /v1/nodes` |
 | `Providers(ctx)` | `GET /v1/providers` |
+| `DisableProvider(ctx, name)` | `POST /v1/provider/{name}/disable` |
+| `EnableProvider(ctx, name)` | `POST /v1/provider/{name}/enable` |
 | `Health(ctx)` | `GET /v1/health` |
 | `Address()` | The server's address, as the client parsed it |
 

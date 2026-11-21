@@ -44,14 +44,14 @@ type Store interface {
 	PruneLogs(ctx context.Context, before time.Time) (int, error)
 }
 
-// rule is one promise a store makes, checked against a fresh store.
-type rule struct {
+// rule is one promise a store of type S makes, checked against a fresh store.
+type rule[S any] struct {
 	name  string
-	check func(t *testing.T, s Store)
+	check func(t *testing.T, s S)
 }
 
 // check runs each of rules against a fresh store from newStore.
-func check(t *testing.T, rules []rule, newStore func(t *testing.T) Store) {
+func check[S any](t *testing.T, rules []rule[S], newStore func(t *testing.T) S) {
 	for _, r := range rules {
 		t.Run(r.name, func(t *testing.T) { r.check(t, newStore(t)) })
 	}

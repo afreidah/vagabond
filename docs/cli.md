@@ -45,6 +45,8 @@ Available commands are:
 | [`dispatch status`](#dispatch-status) | Show one dispatch and its executions | yes |
 | [`node status`](#node-status) | List the connected agent nodes | yes |
 | [`provider status`](#provider-status) | List the providers and what each has left | yes |
+| [`provider disable`](#provider-disable-and-provider-enable) | Stop new work going to a provider | yes |
+| [`provider enable`](#provider-disable-and-provider-enable) | Let new work go to a disabled provider | yes |
 | [`server`](#server) | Run the Vagabond server | runs one |
 | [`agent`](#agent) | Run the agent that executes workloads on this node | dials one |
 
@@ -844,7 +846,7 @@ goes to them.
 |---|---|
 | `PROVIDER` | Provider label |
 | `TIER` | Operator's preference, lower first |
-| `STATUS` | `healthy`; `unhealthy` when its last health check failed; `disabled` when configuration turns it off |
+| `STATUS` | `healthy`; `unhealthy` when its last health check failed; `disabled` when its configuration or an operator turns it off |
 | `QUOTA LEFT` | Each pool's name and whole percent left, rounded down and `0%` once a pool is spent; `no quota` for a provider with no pools |
 
 ```shell
@@ -881,14 +883,64 @@ memory  18,843  360,000  GB-seconds    94%   monthly
 Usage as of 2026-11-10 09:43:17Z (4s ago).
 ```
 
-A provider with no pools prints `No quota pools.` under its fields. A name no
-provider has fails with `Error: no provider is named "<name>". Configured: ...`,
-listing the configured names.
+A disabled provider has a `Disabled` field under `Status`: `in configuration`,
+or `at <time> by <name>` when an operator disabled it, without `by` when their
+client certificate gave no name. A provider with no pools prints
+`No quota pools.` under its fields. A name no provider has fails with
+`Error: no provider is named "<name>". Configured: ...`, listing the configured
+names.
+
+```shell
+$ vagabond provider status gcp-cloud-run
+Name     = gcp-cloud-run
+Tier     = 0
+Status   = disabled
+Disabled = at 2026-11-21 10:00:00Z by alice
+...
+```
 
 | Exit | Meaning |
 |---|---|
 | `0` | Printed |
 | `1` | Server error, a name no provider has, or more than one argument |
+
+### `provider disable` and `provider enable`
+
+```text
+vagabond provider disable [options] <name>
+vagabond provider enable [options] <name>
+```
+
+`disable` stops new work going to a provider without editing the
+configuration or restarting. Plans and dispatches reject it as
+`provider-disabled`, saying when and by whom. Executions already running on it
+are left to finish. `enable` lets new work go there again. Both take only the
+[client flags](#connecting-to-the-server).
+
+The change is kept in the store, so it survives a restart and applies to every
+server sharing the store. The server the command talks to applies it at once,
+and the others within 5 seconds. "By whom" is the common name on the client
+certificate given with `-tls-cert`, and empty when the server does not ask
+for one. Disabling a provider again keeps the first time and name.
+
+`enable` refuses a provider the configuration turns off with
+`enabled = false`, since only the configuration can turn that one on.
+
+```shell
+$ vagabond provider disable gcp-cloud-run
+Provider "gcp-cloud-run" is now disabled.
+
+$ vagabond provider enable gcp-cloud-run
+Provider "gcp-cloud-run" is now healthy.
+```
+
+`enable` prints the state the provider is in afterwards: `healthy`, or
+`unhealthy` when its last health check failed.
+
+| Exit | Meaning |
+|---|---|
+| `0` | Changed, or already as asked |
+| `1` | Server error, a name no provider has, `enable` on a provider the configuration turns off, or not exactly one argument |
 
 ## `server`
 
@@ -906,7 +958,7 @@ on `agent_bind` (`127.0.0.1:4748` by default). See
 | Flag | Default | Description |
 |---|---|---|
 | `-config <path>` | `$VAGABOND_CONFIG`, then the search path | Configuration file, or a directory whose `.hcl` files are all loaded |
-| `-dev` | `false` | Keep jobs, executions and quota usage in memory, lost on exit. A `store` block is ignored with a warning |
+| `-dev` | `false` | Keep jobs, executions, quota usage and disabled providers in memory, lost on exit. A `store` block is ignored with a warning |
 | `-log-level <level>` | `info` | `debug`, `info`, `warn` or `error`. Requests log at `debug`, dispatches at `info` |
 
 **Configuration discovery:** `-config`, else `$VAGABOND_CONFIG`, else the first

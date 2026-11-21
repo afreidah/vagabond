@@ -50,7 +50,7 @@ func newTLSHarness(t *testing.T) *tlsHarness {
 	}
 
 	reg, led := fixtures(t)
-	srv := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler))
+	srv := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler))
 
 	return &tlsHarness{agentHarness: serveAgents(t, srv, serverTLS), ca: ca}
 }
