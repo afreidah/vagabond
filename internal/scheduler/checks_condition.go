@@ -4,8 +4,8 @@
 // Author: Alex Freidah
 //
 // The rejections that may not hold tomorrow: a provider filtered here could run
-// this job once it is turned back on, answers a refresh, or has its quota
-// reset, which Reason.Transient reports. Enabled and healthy run before every
+// this job once it is turned back on, in its configuration or through the API,
+// answers a refresh, or has its quota reset, which Reason.Transient reports. Enabled and healthy run before every
 // capability comparison, since an unrefreshed provider has an empty snapshot;
 // quota runs last.
 // -------------------------------------------------------------------------------
@@ -13,7 +13,9 @@
 package scheduler
 
 import (
+	"cmp"
 	"fmt"
+	"time"
 
 	"github.com/afreidah/vagabond/internal/quota"
 )
@@ -28,14 +30,20 @@ type enabledChecker struct{}
 // Name identifies the checker in traces and test failures.
 func (enabledChecker) Name() string { return "enabled" }
 
-// Check rejects a provider disabled in configuration.
+// Check rejects a provider turned off in the configuration file, or by an
+// operator through the API, saying which.
 func (enabledChecker) Check(_ *Request, in *Input) *Rejection {
-	if in.Enabled {
+	switch {
+	case !in.Enabled:
+		return reject(ReasonProviderDisabled, "An operator disabled this provider in configuration.")
+	case in.Disabled == nil:
 		return nil
 	}
 
-	return reject(ReasonProviderDisabled,
-		"An operator disabled this provider in configuration.")
+	who := cmp.Or(in.Disabled.By, "An operator")
+
+	return reject(ReasonProviderDisabled, fmt.Sprintf("%s disabled this provider at %s.",
+		who, in.Disabled.At.UTC().Format(time.RFC3339)))
 }
 
 // healthyChecker removes providers that are not answering.

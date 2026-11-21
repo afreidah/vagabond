@@ -13,6 +13,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -108,16 +109,22 @@ func TestRecoverRequests_PassesThrough(t *testing.T) {
 	}
 }
 
-// An upkeep task that panics is called again on the next tick.
-func TestEvery_RunsOnAfterAPanic(t *testing.T) {
+// An upkeep task that panics, or returns an error, is called again on the
+// next tick.
+func TestEvery_RunsOnAfterAPanicOrAnError(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	var calls atomic.Int32
 
-	go quiet().every(ctx, "a flaky task", time.Millisecond, func(context.Context) {
-		if calls.Add(1) == 1 {
+	go quiet().every(ctx, "a flaky task", time.Millisecond, func(context.Context) error {
+		switch calls.Add(1) {
+		case 1:
 			panic("first tick")
+		case 2:
+			return errors.New("second tick")
+		default:
+			return nil
 		}
 	})
 

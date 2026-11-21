@@ -64,7 +64,13 @@ func (e *statusError) Error() string {
 
 // badRequest is a 400 carrying err's message.
 func badRequest(err error) error {
-	return &statusError{status: http.StatusBadRequest, body: api.Error{Error: err.Error()}}
+	return refuse(http.StatusBadRequest, err)
+}
+
+// refuse is an error that wrap answers with status and err's message, for a
+// request the server understood but will not act on.
+func refuse(status int, err error) error {
+	return &statusError{status: status, body: api.Error{Error: err.Error()}}
 }
 
 // invalidJob is a 400 carrying a job file's diagnostics, each against its

@@ -30,7 +30,7 @@ func LeaseContract(t *testing.T, newStore func(t *testing.T) Store) {
 }
 
 // leaseRules are the promises LeaseContract checks.
-var leaseRules = []rule{
+var leaseRules = []rule[Store]{
 	{"the holder's writes land", holderWrites},
 	{"writing the same record twice changes nothing", rewriteIsIdempotent},
 	{"a claim refuses the old lease", claimRefusesOldLease},

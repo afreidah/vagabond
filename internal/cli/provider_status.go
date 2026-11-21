@@ -113,7 +113,7 @@ func providerTable(providers []api.ProviderListStub) string {
 }
 
 // providerState is whether a provider can take work: disabled by its
-// configuration, unhealthy at its last check, or healthy.
+// configuration or through the API, unhealthy at its last check, or healthy.
 func providerState(p *api.ProviderListStub) string {
 	switch {
 	case !p.Enabled:
@@ -169,16 +169,23 @@ func providerNames(providers []api.ProviderListStub) []string {
 	return names
 }
 
-// providerDetail renders one provider: its fields, then a row per pool with
-// whole figures in the pool's own unit.
+// providerDetail renders one provider: its fields, with what disabled it when
+// it is disabled, then a row per pool with whole figures in the pool's own
+// unit.
 func providerDetail(p *api.ProviderListStub) string {
 	var out strings.Builder
 
-	out.WriteString(fields([][2]string{
+	rows := [][2]string{
 		{"Name", p.Name},
 		{"Tier", strconv.Itoa(p.Tier)},
 		{"Status", providerState(p)},
-	}))
+	}
+
+	if !p.Enabled {
+		rows = append(rows, [2]string{"Disabled", disabledHow(p.Disabled)})
+	}
+
+	out.WriteString(fields(rows))
 	out.WriteString("\n\n")
 
 	if len(p.Pools) == 0 {
@@ -203,6 +210,20 @@ func providerDetail(p *api.ProviderListStub) string {
 // -------------------------------------------------------------------------
 // FORMATTING
 // -------------------------------------------------------------------------
+
+// disabledHow says what turned a provider off: its configuration when d is
+// nil, otherwise an operator through the API, at a time and, when their
+// certificate gave one, under a name.
+func disabledHow(d *api.ProviderDisabled) string {
+	switch {
+	case d == nil:
+		return "in configuration"
+	case d.By == "":
+		return "at " + stamp(d.At)
+	default:
+		return fmt.Sprintf("at %s by %s", stamp(d.At), d.By)
+	}
+}
 
 // whole renders a pool figure rounded to a whole number, with thousands
 // separators.

@@ -6,7 +6,8 @@
 // A listener presents its certificate and, given a CA, verifies its clients'
 // certificates against it. A client verifies the server against a CA, or the
 // system's roots without one, and presents its own certificate when it has
-// one.
+// one. Once connected, either side can read the other's name from the
+// certificate it verified.
 // -------------------------------------------------------------------------------
 
 package tlsconfig
@@ -72,6 +73,17 @@ func Client(caFile, certFile, keyFile, serverName string) (*tls.Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// PeerName is the common name on the certificate the other side presented
+// and the handshake verified. It is empty without TLS or without a verified
+// certificate.
+func PeerName(cs *tls.ConnectionState) string {
+	if cs == nil || len(cs.VerifiedChains) == 0 {
+		return ""
+	}
+
+	return cs.VerifiedChains[0][0].Subject.CommonName
 }
 
 // -------------------------------------------------------------------------

@@ -177,6 +177,12 @@ resolves its credentials and decodes its `config`, but it is never asked for
 capabilities. A plan lists it rejected as `provider-disabled` rather than
 omitting it.
 
+To turn a provider off without editing this file or restarting, use
+[`vagabond provider disable`](cli.md#provider-disable-and-provider-enable).
+That is kept in the store, so it applies to every server sharing it. A
+provider is used only when this file enables it and no operator has disabled
+it. `vagabond provider enable` refuses a provider this file turns off.
+
 **Health:** the server asks every enabled provider for its capabilities at
 startup and every minute. One that does not answer within 30 seconds is marked
 unhealthy and rejected as `provider-unhealthy` until a later refresh succeeds.

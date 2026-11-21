@@ -6,7 +6,7 @@ weight: 440
 ---
 
 The server keeps its view of providers, quota and dispatches current, and its
-stored output within its retention, with five upkeep loops, and runs each
+stored output within its retention, with six upkeep loops, and runs each
 dispatch, execution, lease, agent session and followed log stream in its own
 goroutine. The agent holds one connection to the server and reports its
 workloads on a timer. None of the loops apply jitter, and none take a lock
@@ -24,6 +24,7 @@ Interactive version, with notes on each loop:
 |---|---|---|---|---|
 | [Capability refresh](#capability-refresh) | 1m | Yes, before serving | Every provider's `Capabilities` but a `containerd` or `firecracker` one's, read live | Provider marked unhealthy, warn |
 | [Usage snapshot refresh](#usage-snapshot-refresh) | 15s | Yes, required | Store: quota usage and reservations | Last snapshot kept, warn |
+| [Disabled provider read](#disabled-provider-read) | 5s | Yes, before serving | Store: `disabled_providers` | Last set kept, warn |
 | [Reservation reaper](#reservation-reaper) | 5m | Yes, before serving | Store: reservations over 1h old and their execution records | Reservation kept, warn |
 | [Dispatch claim](#dispatch-claim) | 30s | Yes, before serving | Store: dispatches not done with a lapsed lease | Warn, retried next tick |
 | [Output retention](#output-retention) | 1h | No | Store: stored output of executions that ended over `log_retention` ago | Warn, retried next tick |
@@ -52,12 +53,14 @@ not swept ([Node reservations](#node-reservations)).
 
 ## Server
 
-The five upkeep loops start when the server begins serving and stop when it
+The six upkeep loops start when the server begins serving and stop when it
 shuts down. Each tick runs synchronously; a run longer than its interval is
 followed immediately by the next, and ticks do not pile up. The first tick is
-one interval after startup. Capability refresh, usage refresh, the reaper and
-the claim each ran once before serving; output retention has no startup pass,
-so its first pass is 1h in.
+one interval after startup. Capability refresh, usage refresh, the disabled
+provider read, the reaper and the claim each ran once before serving, the
+disabled provider read before the claim so resumed dispatches already avoid
+those providers; output retention has no startup pass, so its first pass is
+1h in.
 A failure is logged and waits for the next tick; one loop failing never stops
 another. A panic in a tick is logged at error as `recovered a panic`, with
 the loop named in `in` and the stack, and the next tick runs as usual. Panics
@@ -74,7 +77,7 @@ every plan and dispatch.
 | Interval | 1m |
 | At startup | Once while loading configuration, before the server is built |
 | Timeout | 30s per provider; providers are asked in parallel |
-| Skips | Disabled providers, and `containerd` and `firecracker` providers, whose capabilities are built from connected nodes on every read |
+| Skips | Providers with `enabled = false`, and `containerd` and `firecracker` providers, whose capabilities are built from connected nodes on every read. A provider disabled through the API is still asked, so its health is current when it is enabled again |
 
 - A provider that answers is marked healthy and its capabilities replaced.
 - A provider that fails is marked unhealthy and keeps its last capabilities.
@@ -104,6 +107,27 @@ current period, so plans see what every server has charged.
   and ages while reads fail.
 
 **Logs:** warn `refreshing quota usage`.
+
+### Disabled provider read
+
+Re-reads which providers operators turned off with
+[`provider disable`](cli.md#provider-disable-and-provider-enable), so this
+server rejects a provider that another server sharing the store disabled.
+
+| | |
+|---|---|
+| Interval | 5s |
+| At startup | Once, before serving and before the dispatch claim |
+| Also | After every `disable` or `enable` this server takes, before it answers |
+| Touches | Store: `disabled_providers` ([Database](database.md#disabled_providers)) |
+
+- The whole table is read and replaces the set admission reads.
+- A failed read keeps the last set, so a provider stays as it was until the
+  store answers. A server that could not read it at startup starts with none
+  disabled and catches up at the next tick.
+- Under `-dev` the set is in memory and only this server sees it.
+
+**Logs:** warn `reading disabled providers`.
 
 ### Reservation reaper
 
@@ -423,5 +447,6 @@ store keeps them apart:
 | Execution runners | Every execution and output write is checked against the dispatch's lease, so only the current holder's land; a runner whose write is refused stops |
 | Reservation reaper | Row locks with `SKIP LOCKED`: each stale reservation is resolved by one server |
 | Output retention | Deleting what another server already deleted deletes nothing |
+| Disabled provider read | Per-server reads of one table; a change made through one server reaches the rest within 5s |
 | Usage refresh, capability refresh | Per-server reads; nothing to coordinate |
 | Agent sessions | Per server. An agent connects to one server, and its pools exist only there |

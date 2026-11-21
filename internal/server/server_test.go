@@ -101,6 +101,7 @@ type harness struct {
 	url        string
 	jobs       *MockserverJobs
 	executions *memory.Executions
+	providers  *memory.Providers
 	box        *plugin.FakeContainerProvider
 }
 
@@ -140,14 +141,18 @@ func newHarness(t *testing.T) *harness {
 	reg, led := fixtures(t)
 	jobStore := NewMockserverJobs(gomock.NewController(t))
 	executions := memory.NewExecutions()
+	providers := memory.NewProviders()
 	logger := slog.New(slog.DiscardHandler)
 
-	srv := httptest.NewServer(New(reg, led, executions, jobStore, logger).Handler())
+	srv := httptest.NewServer(New(reg, led, executions, jobStore, providers, logger).Handler())
 	t.Cleanup(srv.Close)
 
 	box, _ := reg.Provider("box")
 
-	return &harness{url: srv.URL, jobs: jobStore, executions: executions, box: box.(*plugin.FakeContainerProvider)}
+	return &harness{
+		url: srv.URL, jobs: jobStore, executions: executions, providers: providers,
+		box: box.(*plugin.FakeContainerProvider),
+	}
 }
 
 // openLogs requests an execution's output with query and returns the status
@@ -465,7 +470,7 @@ func TestCancel_UnrecordableRequestFails(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(New(reg, led, executions, NewMockserverJobs(gomock.NewController(t)),
-		slog.New(slog.DiscardHandler)).Handler())
+		memory.NewProviders(), slog.New(slog.DiscardHandler)).Handler())
 	t.Cleanup(srv.Close)
 
 	h := &harness{url: srv.URL}
@@ -623,7 +628,7 @@ func (downStore) Ping(context.Context) error {
 func TestStoreOutage_RefusesNewWork(t *testing.T) {
 	reg, led := fixtures(t)
 	srv := httptest.NewServer(New(reg, led, downStore{memory.NewExecutions()},
-		NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler)).Handler())
+		NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler)).Handler())
 	t.Cleanup(srv.Close)
 
 	h := &harness{url: srv.URL}
@@ -700,7 +705,7 @@ func TestServeListener_ResumesAnAbandonedDispatch(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 
-	srv := New(reg, led, executions, NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler))
+	srv := New(reg, led, executions, NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler))
 
 	serveCtx, stop := context.WithCancel(ctx)
 	defer stop()
@@ -725,7 +730,8 @@ func TestServeListener_ResumesAnAbandonedDispatch(t *testing.T) {
 	t.Fatal("the abandoned dispatch was never finished")
 }
 
-// The server stops cleanly when its context is cancelled.
+// The server reads which providers are disabled before serving, and stops
+// cleanly when its context is cancelled.
 func TestServeListener_StopsOnCancel(t *testing.T) {
 	var lc net.ListenConfig
 
@@ -740,7 +746,10 @@ func TestServeListener_StopsOnCancel(t *testing.T) {
 	}
 
 	ctrl := gomock.NewController(t)
-	srv := New(NewMockserverRegistry(ctrl), led, memory.NewExecutions(), NewMockserverJobs(ctrl),
+	reg := NewMockserverRegistry(ctrl)
+	reg.EXPECT().SetDisabled(map[string]state.Disabled{})
+
+	srv := New(reg, led, memory.NewExecutions(), NewMockserverJobs(ctrl), memory.NewProviders(),
 		slog.New(slog.DiscardHandler))
 
 	ctx, cancel := context.WithCancel(t.Context())

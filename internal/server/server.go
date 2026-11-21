@@ -26,6 +26,7 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobs"
 	"github.com/afreidah/vagabond/internal/nodes"
+	"github.com/afreidah/vagabond/internal/state"
 )
 
 // -------------------------------------------------------------------------
@@ -44,12 +45,13 @@ const (
 //go:generate mockgen -source=server.go -destination=mocks_test.go -package=server
 
 // serverRegistry is the part of the provider registry the server reads:
-// admission inputs, plugins by name, which namespaces exist, and refreshing
-// what providers can do.
+// admission inputs, plugins by name, which namespaces exist, refreshing what
+// providers can do, and which providers operators disabled through the API.
 type serverRegistry interface {
 	dispatch.Registry
 	HasNamespace(namespace string) bool
 	Refresh(ctx context.Context) error
+	SetDisabled(disabled map[string]state.Disabled)
 }
 
 // serverLedger is the account dispatch charges, and when its usage snapshot
@@ -86,6 +88,14 @@ type serverJobs interface {
 	Stop(ctx context.Context, namespace, name string, now time.Time) error
 }
 
+// serverProviders is where providers turned off through the API are kept, so
+// every server sharing the store refuses them and a restart keeps them off.
+type serverProviders interface {
+	DisableProvider(ctx context.Context, name string, d state.Disabled) error
+	EnableProvider(ctx context.Context, name string) error
+	DisabledProviders(ctx context.Context) (map[string]state.Disabled, error)
+}
+
 // -------------------------------------------------------------------------
 // TYPES
 // -------------------------------------------------------------------------
@@ -98,6 +108,7 @@ type Server struct {
 	ledger     serverLedger
 	executions serverExecutions
 	jobs       serverJobs
+	providers  serverProviders
 	dispatcher *dispatch.Dispatcher
 	owner      string        // who this server's dispatches are leased to
 	leaseTTL   time.Duration // how long a claimed lease runs unrenewed
@@ -165,13 +176,14 @@ func WithLogs(maxBytes int64, retain time.Duration) Option {
 // executions and charges ledger.
 func New(
 	reg serverRegistry, ledger serverLedger, executions serverExecutions, jobStore serverJobs,
-	logger *slog.Logger, opts ...Option,
+	providers serverProviders, logger *slog.Logger, opts ...Option,
 ) *Server {
 	s := &Server{
 		registry:     reg,
 		ledger:       ledger,
 		executions:   executions,
 		jobs:         jobStore,
+		providers:    providers,
 		owner:        dispatch.ProcessOwner("server"),
 		leaseTTL:     dispatch.LeaseTTL,
 		leaseRenew:   dispatch.LeaseRenew,
@@ -223,6 +235,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET "+healthPath, s.health)
 	mux.HandleFunc("GET /v1/nodes", s.wrap(s.listNodes))
 	mux.HandleFunc("GET /v1/providers", s.wrap(s.listProviders))
+	mux.HandleFunc("POST /v1/provider/{name}/disable", s.wrap(s.disableProvider))
+	mux.HandleFunc("POST /v1/provider/{name}/enable", s.wrap(s.enableProvider))
 
 	return mux
 }
@@ -244,13 +258,16 @@ func (s *Server) Serve(ctx context.Context, addr string, tlsConfig *tls.Config) 
 	return s.ServeListener(ctx, listener, tlsConfig)
 }
 
-// ServeListener serves on an existing listener until ctx is done. Dispatches a
-// dead owner left are claimed and stale reservations reaped before serving,
-// then upkeep runs on its timers until the server stops. A tlsConfig with
-// client CAs requires a verified client certificate on every route but health.
+// ServeListener serves on an existing listener until ctx is done. Before
+// serving it reads which providers are disabled, claims dispatches a dead
+// owner left, and reaps stale reservations, then upkeep runs on its timers
+// until the server stops. A tlsConfig with client CAs requires a verified
+// client certificate on every route but health.
 func (s *Server) ServeListener(ctx context.Context, listener net.Listener, tlsConfig *tls.Config) error {
-	s.claim(ctx)
-	s.reap(ctx)
+	// Disabled providers first, so the dispatches claimed next already avoid them.
+	s.tick(ctx, disabledTask, s.refreshDisabled)
+	s.tick(ctx, claimTask, s.claim)
+	s.tick(ctx, reapTask, s.reap)
 
 	upkeepCtx, stopUpkeep := context.WithCancel(ctx)
 	upkeep := s.startUpkeep(upkeepCtx)

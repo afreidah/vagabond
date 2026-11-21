@@ -97,7 +97,7 @@ window.vagabondDiagram = {
     CK_ENABLED: {
       title: 'enabled',
       badge: 'check', badgeText: 'availability, check 3',
-      body: '<p>Rejects with <code>provider-disabled</code> when the provider is configured <code>enabled = false</code>. Transient: turning it back on admits the same job.</p><p>A disabled provider is never refreshed, so its snapshot is empty. Availability runs before the capability checks so that it is reported as disabled, not as <code>driver-unsupported</code>.</p><p>Detail: <code>An operator disabled this provider in configuration.</code></p>'
+      body: '<p>Rejects with <code>provider-disabled</code> when the provider is configured <code>enabled = false</code>, or an operator turned it off with <code>vagabond provider disable</code>. Transient: turning it back on admits the same job.</p><p>A provider with <code>enabled = false</code> is never refreshed, so its snapshot is empty; one disabled through the API keeps being refreshed. Availability runs before the capability checks so that it is reported as disabled, not as <code>driver-unsupported</code>.</p><p>Detail: <code>An operator disabled this provider in configuration.</code>, or <code>alice disabled this provider at 2026-11-21T10:00:00Z.</code> for one disabled through the API, with <code>An operator</code> when the client certificate gave no name.</p>'
     },
     CK_HEALTHY: {
       title: 'healthy',

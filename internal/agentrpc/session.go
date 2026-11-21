@@ -21,6 +21,8 @@ import (
 	"github.com/hashicorp/yamux"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/afreidah/vagabond/internal/tlsconfig"
 )
 
 // -------------------------------------------------------------------------
@@ -85,7 +87,7 @@ func Accept(ctx context.Context, conn net.Conn) (*Session, error) {
 		}
 
 		// The listener requires a verified client certificate, so there is one.
-		identity = tlsConn.ConnectionState().PeerCertificates[0].Subject.CommonName
+		identity = tlsconfig.PeerName(new(tlsConn.ConnectionState()))
 	}
 
 	mux, err := yamux.Server(conn, muxConfig())

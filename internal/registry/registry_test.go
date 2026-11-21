@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/afreidah/vagabond/internal/providers/pool"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/scheduler"
+	"github.com/afreidah/vagabond/internal/state"
 )
 
 // -------------------------------------------------------------------------
@@ -450,6 +452,44 @@ provider "off" {
 
 	if err := r.Refresh(context.Background()); err != nil {
 		t.Fatalf("refresh failed on a disabled provider: %s", err)
+	}
+}
+
+// A provider disabled through the API is marked in Inputs and stays enabled
+// by its configuration. A refresh still asks it, so a failure marks it
+// unhealthy. Emptying the set clears the mark.
+func TestSetDisabledMarksInputsAndKeepsRefreshing(t *testing.T) {
+	t.Parallel()
+
+	r := build(t, `
+provider "off" { type = "fake-container" }
+provider "on"  { type = "fake-container" }
+`)
+
+	disabled := state.Disabled{At: time.Date(2026, 11, 21, 10, 0, 0, 0, time.UTC), By: "alice"}
+	r.SetDisabled(map[string]state.Disabled{"off": disabled})
+
+	boom := errors.New("connection refused")
+	r.entries[0].provider = &failingProvider{name: "off", err: boom}
+
+	if err := r.Refresh(context.Background()); !errors.Is(err, boom) {
+		t.Fatalf("Refresh() = %v, want the disabled provider asked and failing", err)
+	}
+
+	inputs := r.Inputs(job.DefaultNamespace, nil)
+
+	if off := inputs[0]; off.Disabled == nil || *off.Disabled != disabled || !off.Enabled || off.Healthy {
+		t.Errorf("off = %+v, want disabled by alice, enabled in configuration, and unhealthy", off)
+	}
+
+	if inputs[1].Disabled != nil {
+		t.Errorf("on = %+v, want it not disabled", inputs[1])
+	}
+
+	r.SetDisabled(nil)
+
+	if again := r.Inputs(job.DefaultNamespace, nil); again[0].Disabled != nil {
+		t.Errorf("off = %+v after the set was emptied, want it not disabled", again[0])
 	}
 }
 

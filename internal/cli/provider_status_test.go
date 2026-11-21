@@ -220,6 +220,25 @@ func TestProviderDetail(t *testing.T) {
 	}
 }
 
+// A disabled provider's detail says what turned it off: the configuration, or
+// an operator at a time, named when their certificate gave a name.
+func TestDisabledHow(t *testing.T) {
+	at := time.Date(2026, 11, 21, 10, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct {
+		disabled *api.ProviderDisabled
+		want     string
+	}{
+		{nil, "in configuration"},
+		{&api.ProviderDisabled{At: at}, "at 2026-11-21 10:00:00Z"},
+		{&api.ProviderDisabled{At: at, By: "alice"}, "at 2026-11-21 10:00:00Z by alice"},
+	} {
+		if got := disabledHow(tc.disabled); got != tc.want {
+			t.Errorf("disabledHow(%+v) = %q, want %q", tc.disabled, got, tc.want)
+		}
+	}
+}
+
 // A provider with no pools says so.
 func TestProviderDetail_NoPools(t *testing.T) {
 	got := providerDetail(&api.ProviderListStub{Name: "homelab", Tier: 1, Enabled: true, Healthy: true})

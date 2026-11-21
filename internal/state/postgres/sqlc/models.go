@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+type DisabledProvider struct {
+	Name       string
+	DisabledAt time.Time
+	DisabledBy string
+}
+
 type Dispatch struct {
 	DispatchID        string
 	Namespace         string

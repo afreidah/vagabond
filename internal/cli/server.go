@@ -75,8 +75,8 @@ Server Options:
     ./vagabond.hcl, the user configuration directory, /etc/vagabond.d.
 
   -dev
-    Keep jobs, executions and quota usage in memory, losing them on exit. A
-    store block is ignored.
+    Keep jobs, executions, quota usage and disabled providers in memory,
+    losing them on exit. A store block is ignored.
 
   -log-level <level>
     debug, info, warn or error. Defaults to info. Requests are logged at
@@ -252,7 +252,7 @@ func devServer(
 		return nil, err
 	}
 
-	return server.New(reg, led, memory.NewExecutions(), memory.NewJobs(), logger, opts...), nil
+	return server.New(reg, led, memory.NewExecutions(), memory.NewJobs(), memory.NewProviders(), logger, opts...), nil
 }
 
 // storeServer connects to the store, migrates it, and builds a server over it
@@ -283,7 +283,7 @@ func storeServer(
 		return nil, nil, fmt.Errorf("could not read quota usage: %w", err)
 	}
 
-	return server.New(reg, led, db, db, logger, opts...), db.Close, nil
+	return server.New(reg, led, db, db, db, logger, opts...), db.Close, nil
 }
 
 // -------------------------------------------------------------------------

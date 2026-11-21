@@ -58,7 +58,7 @@ func serveTLS(t *testing.T, ca, clientCA *tlstest.CA) string {
 	}
 
 	reg, led := fixtures(t)
-	srv := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), slog.New(slog.DiscardHandler))
+	srv := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -111,6 +111,22 @@ func TestAPITLS_CertificateReachesEveryRoute(t *testing.T) {
 
 	if _, err := client.Health(t.Context()); err != nil {
 		t.Errorf("Health() = %v", err)
+	}
+}
+
+// A disable over TLS records the common name on the client's certificate as
+// who disabled the provider.
+func TestAPITLS_DisableNamesTheCertificate(t *testing.T) {
+	ca := tlstest.NewCA(t)
+	client := tlsClient(t, serveTLS(t, ca, ca), ca, ca)
+
+	p, err := client.DisableProvider(t.Context(), "box")
+	if err != nil {
+		t.Fatalf("DisableProvider() = %v", err)
+	}
+
+	if p.Disabled == nil || p.Disabled.By != "ci" {
+		t.Errorf("disabled = %+v, want it disabled by ci", p.Disabled)
 	}
 }
 
