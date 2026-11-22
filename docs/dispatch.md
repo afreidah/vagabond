@@ -324,7 +324,7 @@ output, and releasing may destroy it.
 
 | Provider | Where the output comes from |
 |---|---|
-| Implements `plugin.LogReader` (Cloud Run, Code Engine, `containerd`, `firecracker`) | `ReadLogs`, which writes the whole output |
+| Implements `plugin.LogReader` (Cloud Run, Cloud Build, Code Engine, `containerd`, `firecracker`) | `ReadLogs`, which writes the whole output |
 | Any other (Lambda) | `Result.Logs`, the output that came with the answer |
 
 - The output is written in 256 KiB chunks as it is read, so a capture holds one

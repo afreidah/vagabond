@@ -54,7 +54,7 @@ func TestStreamLogs_WaitsThenStreams(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
-	podName := runName(id) + "-0-0"
+	podName := plugin.ResourceName(id) + "-0-0"
 
 	f.on("GET "+podsPath(),
 		reply(http.StatusOK, podList()),
@@ -89,7 +89,7 @@ func TestStreamLogs_ResumesFromAnOffset(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
-	podName := runName(id) + "-0-0"
+	podName := plugin.ResourceName(id) + "-0-0"
 
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList(podBody(podName, time.Now(), nil))))
 	f.on("GET "+podsPath()+"/"+podName+"/log", func(w http.ResponseWriter, _ *http.Request) {
@@ -112,7 +112,7 @@ func TestStreamLogs_ClassifiesARefusal(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
-	podName := runName(id) + "-0-0"
+	podName := plugin.ResourceName(id) + "-0-0"
 
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList(podBody(podName, time.Now(), nil))))
 	f.on("GET "+podsPath()+"/"+podName+"/log",
@@ -165,7 +165,7 @@ func TestReadLogs_ReadsTheWholeLog(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
-	podName := runName(id) + "-0-0"
+	podName := plugin.ResourceName(id) + "-0-0"
 	log := strings.Repeat("x", 5*maxResponse/4)
 
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList(podBody(podName, time.Now(), new(0)))))
@@ -212,7 +212,7 @@ func TestReadLogs_NeverStarted(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
-	podName := runName(id) + "-0-0"
+	podName := plugin.ResourceName(id) + "-0-0"
 
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList(waitingPod(podName))))
 
@@ -231,7 +231,7 @@ func TestReadLogs_CutConnection(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
-	podName := runName(id) + "-0-0"
+	podName := plugin.ResourceName(id) + "-0-0"
 
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList(podBody(podName, time.Now(), new(0)))))
 	f.on("GET "+podsPath()+"/"+podName+"/log", func(w http.ResponseWriter, _ *http.Request) {
@@ -258,7 +258,7 @@ func TestReadLogs_Refusals(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
-	podName := runName(id) + "-0-0"
+	podName := plugin.ResourceName(id) + "-0-0"
 
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList(podBody(podName, time.Now(), new(0)))))
 	f.on("GET "+podsPath()+"/"+podName+"/log",

@@ -23,12 +23,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/hclsyntax"
-
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/plugin/plugintest"
 	"github.com/afreidah/vagabond/internal/testkit"
 )
 
@@ -93,12 +91,12 @@ func newFakeIBM(t *testing.T) (*fakeIBM, *Provider) {
 		podPoll: time.Millisecond,
 	}
 
-	auth, err := newSession(t.Context(), p.iamURL, []byte(testKey))
-	if err != nil {
-		t.Fatalf("newSession() = %v", err)
+	auth, diags := plugin.NewCredentialed(t.Context(), p.name, []byte(testKey), p.signIn)
+	if diags.HasErrors() {
+		t.Fatalf("NewCredentialed() = %s", diags.Error())
 	}
 
-	p.auth.Store(auth)
+	p.Credentialed = auth
 
 	return f, p
 }
@@ -257,48 +255,6 @@ func podList(pods ...map[string]any) map[string]any {
 }
 
 // -------------------------------------------------------------------------
-// HELPERS
-// -------------------------------------------------------------------------
-
-// body parses a provider config block the way the config loader leaves it.
-func body(t *testing.T, src string) hcl.Body {
-	t.Helper()
-
-	f, diags := hclsyntax.ParseConfig([]byte(src), "vagabond.hcl", hcl.InitialPos)
-	if diags.HasErrors() {
-		t.Fatalf("parsing failed: %s", diags.Error())
-	}
-
-	return f.Body
-}
-
-// rawBlock parses a driver config the way the job parser leaves it.
-func rawBlock(t *testing.T, src string) *job.RawBlock {
-	t.Helper()
-
-	f, diags := hclsyntax.ParseConfig([]byte(src), "test.hcl", hcl.InitialPos)
-	if diags.HasErrors() {
-		t.Fatalf("parsing config failed: %s", diags.Error())
-	}
-
-	return &job.RawBlock{Body: f.Body}
-}
-
-// containerTask is a task shaped like the documented example.
-func containerTask(t *testing.T) *job.Task {
-	t.Helper()
-
-	return &job.Task{
-		Name:      "test",
-		Driver:    job.DriverContainer,
-		Config:    rawBlock(t, "image = \"golang:1.27\"\ncommand = \"go\"\nargs = [\"test\", \"./...\"]\n"),
-		Env:       rawBlock(t, "CI = \"true\"\nCGO_ENABLED = \"0\"\n"),
-		Resources: &job.Resources{CPU: new(1000), Memory: new(2048)},
-		Timeout:   new(job.Duration("15m")),
-	}
-}
-
-// -------------------------------------------------------------------------
 // CONSTRUCTOR
 // -------------------------------------------------------------------------
 
@@ -306,7 +262,7 @@ func containerTask(t *testing.T) *job.Task {
 func TestNew_BuildsWithAKey(t *testing.T) {
 	t.Parallel()
 
-	p, diags := New(t.Context(), "ibm-code-engine", body(t, `
+	p, diags := New(t.Context(), "ibm-code-engine", plugintest.Body(t, `
 region     = "us-east"
 project_id = "`+testProject+`"
 `), []byte(testKey))
@@ -331,7 +287,7 @@ project_id = "`+testProject+`"
 func TestNew_RejectsAnEmptyKey(t *testing.T) {
 	t.Parallel()
 
-	_, diags := New(t.Context(), "ibm-code-engine", body(t, `
+	_, diags := New(t.Context(), "ibm-code-engine", plugintest.Body(t, `
 region     = "us-east"
 project_id = "`+testProject+`"
 `), []byte("  \n"))
@@ -356,13 +312,13 @@ func TestRecredential_ReplacesTheSession(t *testing.T) {
 	t.Parallel()
 
 	f, p := newFakeIBM(t)
-	before := p.auth.Load()
+	before := p.Client()
 
 	if err := p.Recredential(t.Context(), []byte("rotated-key")); err != nil {
 		t.Fatalf("Recredential() = %v", err)
 	}
 
-	if p.auth.Load() == before {
+	if p.Client() == before {
 		t.Fatal("the session was not replaced")
 	}
 
@@ -383,13 +339,13 @@ func TestRecredential_RefusesAnEmptyKey(t *testing.T) {
 	t.Parallel()
 
 	_, p := newFakeIBM(t)
-	before := p.auth.Load()
+	before := p.Client()
 
 	if err := p.Recredential(t.Context(), nil); !errors.Is(err, ErrNoCredential) {
 		t.Fatalf("Recredential() = %v, want ErrNoCredential", err)
 	}
 
-	if p.auth.Load() != before {
+	if p.Client() != before {
 		t.Error("the session was replaced by an unusable one")
 	}
 }
@@ -439,11 +395,11 @@ func TestSubmit_CreatesTheJobRun(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
-	name := runName(id)
+	name := plugin.ResourceName(id)
 
 	f.on("POST /v2/projects/"+testProject+"/job_runs", reply(http.StatusAccepted, jobRunBody(name, "pending", "")))
 
-	sub, err := p.Submit(t.Context(), id, containerTask(t))
+	sub, err := p.Submit(t.Context(), id, plugintest.ContainerTask(t))
 	if err != nil {
 		t.Fatalf("Submit() = %v", err)
 	}
@@ -480,7 +436,7 @@ func TestSubmit_RefusesAnUntranslatableTask(t *testing.T) {
 	_, err := p.Submit(t.Context(), testkit.NewID(t), &job.Task{
 		Name:   "test",
 		Driver: job.DriverContainer,
-		Config: rawBlock(t, "command = \"true\"\n"),
+		Config: plugintest.RawBlock(t, "command = \"true\"\n"),
 	})
 	if err == nil || plugin.Reroutable(err) {
 		t.Fatalf("Submit() = %v, want an internal failure", err)
@@ -500,7 +456,7 @@ func TestSubmit_DuplicateIsInternal(t *testing.T) {
 	f.on("POST /v2/projects/"+testProject+"/job_runs",
 		reply(http.StatusConflict, v2Error("resource_already_exists", "A resource with this name already exists.")))
 
-	_, err := p.Submit(t.Context(), testkit.NewID(t), containerTask(t))
+	_, err := p.Submit(t.Context(), testkit.NewID(t), plugintest.ContainerTask(t))
 	if err == nil || plugin.Reroutable(err) {
 		t.Fatalf("Submit() = %v, want an internal failure", err)
 	}
@@ -517,7 +473,7 @@ func TestStatus_ReadsTheRun(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
-	name := runName(id)
+	name := plugin.ResourceName(id)
 
 	f.on("GET "+runPath(name),
 		reply(http.StatusOK, jobRunBody(name, "running", "")),
@@ -566,7 +522,7 @@ func TestStatus_UnknownStatus(t *testing.T) {
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
 
-	f.on("GET "+runPath(runName(id)), reply(http.StatusOK, jobRunBody(runName(id), "suspended", "")))
+	f.on("GET "+runPath(plugin.ResourceName(id)), reply(http.StatusOK, jobRunBody(plugin.ResourceName(id), "suspended", "")))
 
 	if _, err := p.Status(t.Context(), id); err == nil || plugin.Reroutable(err) {
 		t.Fatalf("Status() = %v, want an internal failure", err)
@@ -584,7 +540,7 @@ func TestResult_ReadsThePod(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
-	name := runName(id)
+	name := plugin.ResourceName(id)
 	podName := name + "-0-0"
 
 	f.on("GET "+runPath(name), reply(http.StatusOK, jobRunBody(name, "failed", "OOMKilled")))
@@ -611,7 +567,7 @@ func TestResult_Evicted(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
-	name := runName(id)
+	name := plugin.ResourceName(id)
 	podName := name + "-0-0"
 
 	const message = "Pod ephemeral local storage usage exceeds the total limit of containers 400M."
@@ -647,7 +603,7 @@ func TestResult_PodGone(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
-	name := runName(id)
+	name := plugin.ResourceName(id)
 
 	f.on("GET "+runPath(name), reply(http.StatusOK, jobRunBody(name, "failed", "ContainerExitedCode3")))
 	f.on("GET "+podsPath(), reply(http.StatusOK, podList()))
@@ -668,7 +624,7 @@ func TestResult_PodLookupFails(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
-	name := runName(id)
+	name := plugin.ResourceName(id)
 
 	f.on("GET "+runPath(name), reply(http.StatusOK, jobRunBody(name, "completed", "")))
 	f.on("GET "+podsPath(), reply(http.StatusServiceUnavailable, map[string]any{"message": "unavailable"}))
@@ -699,7 +655,7 @@ func TestCancel_DeletesTheRun(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
-	route := "DELETE " + runPath(runName(id))
+	route := "DELETE " + runPath(plugin.ResourceName(id))
 
 	f.on(route, reply(http.StatusAccepted, map[string]any{}), reply(http.StatusNotFound, v2Error("job_run_not_found", "gone")))
 
@@ -723,7 +679,7 @@ func TestCancel_ReportsARefusal(t *testing.T) {
 	f, p := newFakeIBM(t)
 	id := testkit.NewID(t)
 
-	f.on("DELETE "+runPath(runName(id)), reply(http.StatusInternalServerError, v2Error("internal", "boom")))
+	f.on("DELETE "+runPath(plugin.ResourceName(id)), reply(http.StatusInternalServerError, v2Error("internal", "boom")))
 
 	if err := p.Cancel(t.Context(), id); err == nil {
 		t.Fatal("Cancel() swallowed a 500")

@@ -83,6 +83,7 @@ Backends:
 | Backend | Driver | Doc |
 |---|---|---|
 | Google Cloud Run Jobs | `container` | [cloud-run.md](docs/providers/cloud-run.md) |
+| Google Cloud Build | `container` | [cloud-build.md](docs/providers/cloud-build.md) |
 | IBM Code Engine Jobs | `container` | [code-engine.md](docs/providers/code-engine.md) |
 | AWS Lambda | `function` | [lambda.md](docs/providers/lambda.md) |
 | Agent nodes in containers (`vagabond agent`, `containerd` provider) | `container` | [containerd.md](docs/containerd.md) |
@@ -243,6 +244,7 @@ Details: [architecture.md](docs/architecture.md).
 | Workloads in containers on agent nodes | [containerd.md](docs/containerd.md) |
 | Workloads in Firecracker microVMs | [firecracker.md](docs/firecracker.md) |
 | Google Cloud Run Jobs | [providers/cloud-run.md](docs/providers/cloud-run.md) |
+| Google Cloud Build | [providers/cloud-build.md](docs/providers/cloud-build.md) |
 | IBM Code Engine Jobs | [providers/code-engine.md](docs/providers/code-engine.md) |
 | AWS Lambda | [providers/lambda.md](docs/providers/lambda.md) |
 | Writing a provider plugin | [writing-a-provider.md](docs/writing-a-provider.md) |

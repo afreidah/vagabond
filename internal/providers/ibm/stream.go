@@ -39,7 +39,7 @@ const defaultPodPoll = 2 * time.Second
 // byte offset on. It waits for the container to start, since its log cannot be
 // opened before, and returns when the container exits or ctx ends.
 func (p *Provider) StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error {
-	name, err := p.awaitStart(ctx, runName(id))
+	name, err := p.awaitStart(ctx, plugin.ResourceName(id))
 	if err != nil || name == "" {
 		return err
 	}
@@ -85,7 +85,7 @@ func (p *Provider) awaitStart(ctx context.Context, run string) (string, error) {
 // ReadLogs writes a finished run's output, the task container's whole log. The
 // pod goes with the run, so a pod already gone is output lost.
 func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w execution.LogWriter) error {
-	run := runName(id)
+	run := plugin.ResourceName(id)
 
 	found, err := p.runPod(ctx, run)
 	if err != nil {

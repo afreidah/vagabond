@@ -168,10 +168,5 @@ func (p *Provider) getJobRun(ctx context.Context, name string) (*jobRun, error) 
 // deleteJobRun removes a job run and its pods, which stops it if it is still
 // running. A run already gone is not an error.
 func (p *Provider) deleteJobRun(ctx context.Context, name string) error {
-	err := p.call(ctx, http.MethodDelete, p.cfg.jobRunURL(p.apiURL, name), nil, nil)
-	if errors.Is(err, plugin.ErrNotFound) {
-		return nil
-	}
-
-	return err
+	return plugin.IgnoreNotFound(p.call(ctx, http.MethodDelete, p.cfg.jobRunURL(p.apiURL, name), nil, nil))
 }

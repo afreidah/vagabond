@@ -7,7 +7,7 @@
 // from a real API response rather than assumed from documentation.
 // -------------------------------------------------------------------------------
 
-package gcp
+package cloudrun
 
 import (
 	"context"
@@ -70,8 +70,8 @@ func (p *Provider) execution(ctx context.Context, jobName string) (*runExecution
 		Executions []runExecution `json:"executions"`
 	}
 
-	url := p.cfg.jobURL(p.runURL, jobName) + "/executions"
-	if err := p.call(ctx, http.MethodGet, url, nil, &out); err != nil {
+	url := p.jobURL(jobName) + "/executions"
+	if err := p.Call(ctx, http.MethodGet, url, nil, &out); err != nil {
 		if errors.Is(err, plugin.ErrNotFound) {
 			return nil, plugin.Internal(plugin.UnknownExecution("job %s does not exist", jobName))
 		}
@@ -121,7 +121,7 @@ func (p *Provider) task(ctx context.Context, executionName string) (*runTask, er
 	}
 
 	url := p.runURL + "/v2/" + executionName + "/tasks"
-	if err := p.call(ctx, http.MethodGet, url, nil, &out); err != nil {
+	if err := p.Call(ctx, http.MethodGet, url, nil, &out); err != nil {
 		return nil, err
 	}
 

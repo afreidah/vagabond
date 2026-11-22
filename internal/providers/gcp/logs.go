@@ -3,9 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// Where the container's output comes from, and the reason this platform was
-// chosen: entries are readable the moment a run finishes, and the free tier is
-// 50 GiB a month against output measured in kilobytes.
+// Where a container's output comes from, for Cloud Run and Cloud Build alike,
+// each picking out its own entries with a filter. Entries are readable the
+// moment a run finishes, and the free tier is 50 GiB a month against output
+// measured in kilobytes.
 // -------------------------------------------------------------------------------
 
 package gcp
@@ -13,7 +14,6 @@ package gcp
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 
@@ -62,13 +62,12 @@ func (e *logEntry) key() entryKey {
 	return entryKey{timestamp: e.Timestamp, insertID: e.InsertID}
 }
 
-// logQuery is the part of a list or tail request that picks out a job's
-// output.
-func (p *Provider) logQuery(job string) map[string]any {
+// logQuery is the part of a list or tail request that picks out the entries
+// filter matches in the provider's project.
+func (a *API) logQuery(filter string) map[string]any {
 	return map[string]any{
-		"resourceNames": []string{"projects/" + p.cfg.Project},
-		"filter": fmt.Sprintf(
-			`resource.type="cloud_run_job" resource.labels.job_name=%q`, job),
+		"resourceNames": []string{"projects/" + a.Config.Project},
+		"filter":        filter,
 	}
 }
 
@@ -88,13 +87,13 @@ func writeEntry(w io.Writer, entry *logEntry) error {
 // READING
 // -------------------------------------------------------------------------
 
-// ReadLogs writes what a finished job's container printed. Both streams arrive
-// interleaved in timestamp order, as a failed build reads. The entries outlive
-// the job, so Release destroys nothing this reads.
-func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w execution.LogWriter) error {
+// ReadEntries writes what a finished run printed, the entries filter matches.
+// Both streams arrive interleaved in timestamp order, as a failed build reads.
+// The entries outlive the run, so cleaning it up destroys nothing this reads.
+func (a *API) ReadEntries(ctx context.Context, filter string, w execution.LogWriter) error {
 	out := plugin.LogOutput(w)
 
-	err := p.listEntries(ctx, jobName(id), func(entry *logEntry) error { return writeEntry(out, entry) })
+	err := a.listEntries(ctx, filter, func(entry *logEntry) error { return writeEntry(out, entry) })
 	if errors.Is(err, errPageCap) {
 		return plugin.Infrastructure(err)
 	}
@@ -102,13 +101,13 @@ func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w execution.Lo
 	return err
 }
 
-// listEntries calls each on a job's entries, oldest first, until the entries
-// run out or each fails. Stopping at maxLogPages returns errPageCap.
-func (p *Provider) listEntries(ctx context.Context, job string, each func(*logEntry) error) error {
+// listEntries calls each on the entries filter matches, oldest first, until
+// the entries run out or each fails. Stopping at maxLogPages returns errPageCap.
+func (a *API) listEntries(ctx context.Context, filter string, each func(*logEntry) error) error {
 	var token string
 
 	for range maxLogPages {
-		page, err := p.logPage(ctx, job, token)
+		page, err := a.logPage(ctx, filter, token)
 		if err != nil {
 			return err
 		}
@@ -136,9 +135,9 @@ type logPage struct {
 	NextPageToken string     `json:"nextPageToken"`
 }
 
-// logPage fetches one page of a job's output.
-func (p *Provider) logPage(ctx context.Context, job, token string) (*logPage, error) {
-	request := p.logQuery(job)
+// logPage fetches one page of the entries filter matches.
+func (a *API) logPage(ctx context.Context, filter, token string) (*logPage, error) {
+	request := a.logQuery(filter)
 	request["orderBy"] = "timestamp asc"
 	request["pageSize"] = pageSize
 
@@ -148,7 +147,7 @@ func (p *Provider) logPage(ctx context.Context, job, token string) (*logPage, er
 
 	var out logPage
 
-	if err := p.call(ctx, http.MethodPost, p.logsURL+"/v2/entries:list", request, &out); err != nil {
+	if err := a.Call(ctx, http.MethodPost, a.LogsURL+"/v2/entries:list", request, &out); err != nil {
 		return nil, err
 	}
 

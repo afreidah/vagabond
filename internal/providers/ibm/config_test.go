@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	"github.com/hashicorp/hcl/v2"
+
+	"github.com/afreidah/vagabond/internal/plugin/plugintest"
 )
 
 // -------------------------------------------------------------------------
@@ -24,7 +26,7 @@ import (
 func TestDecodeConfig(t *testing.T) {
 	t.Parallel()
 
-	cfg, diags := decodeConfig("ibm", body(t, `
+	cfg, diags := decodeConfig("ibm", plugintest.Body(t, `
 region       = "us-east"
 project_id   = "`+testProject+`"
 image_secret = "ghcr"
@@ -52,7 +54,7 @@ func TestDecodeConfig_NoBlock(t *testing.T) {
 func TestDecodeConfig_RejectsEmptySettings(t *testing.T) {
 	t.Parallel()
 
-	_, diags := decodeConfig("ibm", body(t, `
+	_, diags := decodeConfig("ibm", plugintest.Body(t, `
 region       = ""
 project_id   = "`+testProject+`"
 image_secret = " "
@@ -75,7 +77,7 @@ image_secret = " "
 func TestDecodeConfig_RejectsANonUUIDProject(t *testing.T) {
 	t.Parallel()
 
-	_, diags := decodeConfig("ibm", body(t, `
+	_, diags := decodeConfig("ibm", plugintest.Body(t, `
 region     = "us-east"
 project_id = "vagabond"
 `))
@@ -88,7 +90,7 @@ project_id = "vagabond"
 func TestDecodeConfig_WarnsOnAnUnknownRegion(t *testing.T) {
 	t.Parallel()
 
-	cfg, diags := decodeConfig("ibm", body(t, `
+	cfg, diags := decodeConfig("ibm", plugintest.Body(t, `
 region     = "mars-north"
 project_id = "`+testProject+`"
 `))
@@ -105,7 +107,7 @@ project_id = "`+testProject+`"
 func TestDecodeConfig_ReportsUnknownAttributes(t *testing.T) {
 	t.Parallel()
 
-	_, diags := decodeConfig("ibm", body(t, `
+	_, diags := decodeConfig("ibm", plugintest.Body(t, `
 region     = "us-east"
 project_id = "`+testProject+`"
 project    = "typo"

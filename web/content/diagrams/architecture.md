@@ -154,7 +154,7 @@ window.vagabondDiagram = {
     CLOUDRUN: {
       title: 'cloud-run: Cloud Run Jobs',
       badge: 'data', badgeText: 'provider',
-      body: '<p><code>providers/gcp</code>, for <code>container</code> tasks. One Job per execution, named <code>vagabond-&lt;execution id&gt;</code>: <code>Submit</code> creates it and calls <code>:run</code>, <code>Status</code> reads the Job&rsquo;s executions, and <code>Cancel</code> and <code>Release</code> delete the Job.</p><p>Stateless: every call derives the Job name from the execution ID, so a server that takes over a dispatch can poll a run it did not submit. Calls the Cloud Run and Cloud Logging REST APIs over HTTP.</p><p><a href="../../docs/providers/cloud-run/">Cloud Run provider &rarr;</a></p>'
+      body: '<p><code>providers/gcp/cloudrun</code>, for <code>container</code> tasks. One Job per execution, named <code>vagabond-&lt;execution id&gt;</code>: <code>Submit</code> creates it and calls <code>:run</code>, <code>Status</code> reads the Job&rsquo;s executions, and <code>Cancel</code> and <code>Release</code> delete the Job.</p><p>Stateless: every call derives the Job name from the execution ID, so a server that takes over a dispatch can poll a run it did not submit. Calls the Cloud Run and Cloud Logging REST APIs over HTTP.</p><p><a href="../../docs/providers/cloud-run/">Cloud Run provider &rarr;</a></p>'
     },
     CLOG: {
       title: 'Cloud Logging',

@@ -9,30 +9,28 @@
 // Run's.
 // -------------------------------------------------------------------------------
 
-package gcp
+package cloudrun
 
 import (
-	"cmp"
 	"fmt"
 	"math"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/providers/gcp"
 )
 
 // -------------------------------------------------------------------------
 // CONSTANTS
 // -------------------------------------------------------------------------
 
-// What Cloud Run accepts, published through Capabilities. CPU is in millicores
-// to match job.Resources; the duration is Cloud Run's task timeout maximum.
+// The largest task Cloud Run accepts, published through Capabilities. CPU is
+// in millicores to match job.Resources.
 const (
-	maxCPU      = 8000
-	maxMemory   = 32768
-	maxDuration = 24 * time.Hour
+	maxCPU    = 8000
+	maxMemory = 32768
 )
 
 // Defaults for a task that states nothing. One vCPU to 2 GiB is the ratio at
@@ -42,12 +40,12 @@ const (
 	defaultMemory = 2048
 )
 
-// cloudRun is Cloud Run as Capabilities publishes it and jobSpec sizes a task.
+// platform is Cloud Run as Capabilities publishes it and jobSpec sizes a task.
 // Jobs always run in the second generation execution environment, a microVM.
-var cloudRun = plugin.Cloud{
+var platform = plugin.Cloud{
 	Max:         plugin.Resources{CPU: maxCPU, Memory: maxMemory},
 	Default:     plugin.Resources{CPU: defaultCPU, Memory: defaultMemory},
-	MaxDuration: maxDuration,
+	MaxDuration: gcp.MaxDuration,
 	Isolation:   plugin.IsolationVM,
 }
 
@@ -58,7 +56,7 @@ var cloudRun = plugin.Cloud{
 // jobSpec builds the Cloud Run job for a task. One with no timeout runs to
 // Cloud Run's maximum, not zero, which would end the job as it started.
 func (p *Provider) jobSpec(task *job.Task) (map[string]any, error) {
-	c, err := plugin.ContainerOf(task, cloudRun.Default)
+	c, err := plugin.ContainerOf(task, platform.Default)
 	if err != nil {
 		return nil, err
 	}
@@ -89,13 +87,13 @@ func (p *Provider) jobSpec(task *job.Task) (map[string]any, error) {
 			"taskCount": 1,
 			"template": map[string]any{
 				"containers": []map[string]any{container},
-				"timeout":    fmt.Sprintf("%ds", int(cmp.Or(c.Timeout, maxDuration).Seconds())),
+				"timeout":    gcp.Timeout(c.Timeout),
 
 				// The default of 3 bills four runs the ledger counts as one
 				"maxRetries": 0,
 
 				// An identity holding nothing, not Vagabond's own
-				"serviceAccount": p.cfg.RuntimeServiceAccount,
+				"serviceAccount": p.Config.RuntimeServiceAccount,
 			},
 		},
 	}, nil

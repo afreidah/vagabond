@@ -678,7 +678,7 @@ rejected with `image-unsupported`. A non-string `image` fails admission with
 
 #### `container` driver
 
-Read by the Cloud Run, Code Engine, `containerd` and `firecracker` providers.
+Read by the Cloud Run, Cloud Build, Code Engine, `containerd` and `firecracker` providers.
 
 ```hcl
 config {

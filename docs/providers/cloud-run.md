@@ -13,7 +13,7 @@ resource and the output from Cloud Logging, then deletes the Job.
 | | |
 |---|---|
 | Provider type | `cloud-run` |
-| Package | `internal/providers/gcp` |
+| Package | `internal/providers/gcp/cloudrun`, on the shared `internal/providers/gcp` |
 | Drivers | `container` |
 | Execution family | asynchronous: `Submit` returns `accepted`, dispatch polls `Status` |
 | Optional interfaces | `LogStreamer`, `Releaser`, `Recredentialer` |
@@ -536,7 +536,7 @@ live round trip is included and skips unless credentials are supplied:
 VAGABOND_GCP_CREDENTIALS=/path/to/key.json \
 VAGABOND_GCP_PROJECT=my-project \
 VAGABOND_GCP_RUNTIME_SA=vagabond-run@my-project.iam.gserviceaccount.com \
-go test -run TestLive -v -timeout 12m ./internal/providers/gcp/
+go test -run TestLive -v -timeout 12m ./internal/providers/gcp/cloudrun/
 ```
 
 | Variable | Required | Default |
@@ -546,7 +546,14 @@ go test -run TestLive -v -timeout 12m ./internal/providers/gcp/
 | `VAGABOND_GCP_RUNTIME_SA` | yes | none |
 | `VAGABOND_GCP_REGION` | no | `us-central1` |
 
-The test runs `alpine:3.20` writing one line to stdout and one to stderr and
-exiting 3, polls to completion for up to 6 minutes, asserts state `failed`,
-exit code 3 and both lines, and deletes the job in a cleanup that runs even
-when an assertion fails.
+`TestLiveRoundTrip` is the round trip every container provider shares, in
+`internal/plugin/plugintest`. It runs `alpine:3.20` writing one line to
+stdout and one to stderr, sleeping 10 seconds so a follow attaches, and
+exiting 3. It polls to completion for up to 6 minutes, asserts state
+`failed`, exit code 3, and both lines read whole and streamed, and deletes
+the job in a cleanup that runs even when an assertion fails.
+
+`TestLiveLateFollow` prints 12,000 lines, waits, and prints one more. It
+asserts that all of it is stored, past 64 KiB, and that a follow opened after
+most of it was printed, and one reopened at an offset, both start where they
+should.

@@ -16,30 +16,19 @@ import (
 	"testing"
 
 	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/hclsyntax"
+
+	"github.com/afreidah/vagabond/internal/plugin/plugintest"
 )
 
 // -------------------------------------------------------------------------
 // CONFIGURATION
 // -------------------------------------------------------------------------
 
-// body parses an HCL fragment the way the config loader leaves a block.
-func body(t *testing.T, src string) hcl.Body {
-	t.Helper()
-
-	f, diags := hclsyntax.ParseConfig([]byte(src), "vagabond.hcl", hcl.InitialPos)
-	if diags.HasErrors() {
-		t.Fatalf("parsing failed: %s", diags.Error())
-	}
-
-	return f.Body
-}
-
 // A block naming a region decodes.
 func TestDecodeConfig(t *testing.T) {
 	t.Parallel()
 
-	cfg, diags := decodeConfig("lambda", body(t, `region = "us-east-1"`))
+	cfg, diags := decodeConfig("lambda", plugintest.Body(t, `region = "us-east-1"`))
 	if diags.HasErrors() {
 		t.Fatalf("decode failed: %s", diags.Error())
 	}
@@ -59,9 +48,9 @@ func TestDecodeConfig_Refusals(t *testing.T) {
 		want string
 	}{
 		{name: "no block", body: nil, want: "Missing provider configuration"},
-		{name: "empty region", body: body(t, `region = " "`), want: "Empty provider setting"},
-		{name: "no region", body: body(t, ``), want: "Missing required argument"},
-		{name: "typo", body: body(t, "region = \"us-east-1\"\nregoin = \"x\""), want: "Unsupported argument"},
+		{name: "empty region", body: plugintest.Body(t, `region = " "`), want: "Empty provider setting"},
+		{name: "no region", body: plugintest.Body(t, ``), want: "Missing required argument"},
+		{name: "typo", body: plugintest.Body(t, "region = \"us-east-1\"\nregoin = \"x\""), want: "Unsupported argument"},
 	}
 
 	for _, tt := range tests {

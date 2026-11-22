@@ -77,7 +77,7 @@ func TestSession_DelegatedToken(t *testing.T) {
 
 	f, p := newFakeIBM(t)
 
-	drt, err := p.auth.Load().iam.delegated(t.Context())
+	drt, err := p.Client().iam.delegated(t.Context())
 	if err != nil || drt != "drt" {
 		t.Fatalf("delegated() = %q, %v", drt, err)
 	}
@@ -97,7 +97,7 @@ func TestSession_DelegatedTokenMissing(t *testing.T) {
 
 	f.on("POST /identity/token", reply(http.StatusOK, map[string]any{}))
 
-	if _, err := p.auth.Load().iam.delegated(t.Context()); err == nil || plugin.Reroutable(err) {
+	if _, err := p.Client().iam.delegated(t.Context()); err == nil || plugin.Reroutable(err) {
 		t.Fatalf("delegated() = %v, want an internal failure", err)
 	}
 }

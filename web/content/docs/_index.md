@@ -30,6 +30,7 @@ backend, and records what it used.
 | | [containerd](containerd.md) | The `containerd` provider: workloads in containers on the node's containerd |
 | | [Firecracker](firecracker.md) | The `firecracker` provider: workloads in Firecracker microVMs, through vagabond-firecracker |
 | Providers | [Cloud Run Jobs](providers/cloud-run.md) | The `cloud-run` provider |
+| | [Cloud Build](providers/cloud-build.md) | The `cloud-build` provider |
 | | [Code Engine Jobs](providers/code-engine.md) | The `code-engine` provider |
 | | [AWS Lambda](providers/lambda.md) | The `lambda` provider |
 | | [Writing a provider](writing-a-provider.md) | The plugin contract |

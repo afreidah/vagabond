@@ -11,6 +11,7 @@
 package aws
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -23,12 +24,11 @@ import (
 	sdkaws "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
-	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/hclsyntax"
 
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/plugin/plugintest"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/testkit"
 )
@@ -92,10 +92,10 @@ func newTestProvider(t *testing.T, f *fakeLambda) *Provider {
 		HTTPClient:   srv.Client(),
 	})
 
-	p := &Provider{name: "aws-lambda"}
-	p.client.Store(client)
+	creds, _ := plugin.NewCredentialed(t.Context(), "aws-lambda", nil,
+		func(context.Context, []byte) (*lambda.Client, error) { return client, nil })
 
-	return p
+	return &Provider{Credentialed: creds, name: "aws-lambda"}
 }
 
 // functionTask builds a task from a driver config fragment.
@@ -105,27 +105,14 @@ func functionTask(t *testing.T, config, env string) *job.Task {
 	task := &job.Task{
 		Name:   "test",
 		Driver: job.DriverFunction,
-		Config: rawBlock(t, config),
+		Config: plugintest.RawBlock(t, config),
 	}
 
 	if env != "" {
-		task.Env = rawBlock(t, env)
+		task.Env = plugintest.RawBlock(t, env)
 	}
 
 	return task
-}
-
-// rawBlock parses an HCL fragment into a block with its attributes still
-// expressions, as the job parser leaves a driver config.
-func rawBlock(t *testing.T, src string) *job.RawBlock {
-	t.Helper()
-
-	f, diags := hclsyntax.ParseConfig([]byte(src), "job.hcl", hcl.InitialPos)
-	if diags.HasErrors() {
-		t.Fatalf("parsing failed: %s", diags.Error())
-	}
-
-	return &job.RawBlock{Body: f.Body}
 }
 
 // -------------------------------------------------------------------------
@@ -362,16 +349,16 @@ func TestNew_BuildsWithACredential(t *testing.T) {
 
 	credential := []byte(`{"Version": 1, "AccessKeyId": "AKIA", "SecretAccessKey": "s", "SessionToken": "t"}`)
 
-	p, diags := New(t.Context(), "aws-lambda", body(t, `region = "us-east-1"`), credential)
+	p, diags := New(t.Context(), "aws-lambda", plugintest.Body(t, `region = "us-east-1"`), credential)
 	if diags.HasErrors() {
 		t.Fatalf("New() failed: %s", diags.Error())
 	}
 
-	if p.Name() != "aws-lambda" || p.client.Load() == nil {
+	if p.Name() != "aws-lambda" || p.Client() == nil {
 		t.Errorf("New() = %+v, want the name and a client", p)
 	}
 
-	if _, diags := New(t.Context(), "aws-lambda", body(t, `region = "us-east-1"`), []byte(`not json`)); !diags.HasErrors() {
+	if _, diags := New(t.Context(), "aws-lambda", plugintest.Body(t, `region = "us-east-1"`), []byte(`not json`)); !diags.HasErrors() {
 		t.Error("an unreadable credential was accepted")
 	}
 }
@@ -381,17 +368,22 @@ func TestNew_BuildsWithACredential(t *testing.T) {
 func TestRecredential_ReplacesTheClient(t *testing.T) {
 	t.Parallel()
 
-	p := newTestProvider(t, &fakeLambda{})
-	p.cfg = &Config{Region: "us-east-1"}
-	before := p.client.Load()
+	credential := []byte(`{"Version": 1, "AccessKeyId": "AKIA", "SecretAccessKey": "s", "SessionToken": "t"}`)
 
-	if err := p.Recredential(t.Context(), []byte(`not json`)); err == nil || p.client.Load() != before {
-		t.Fatalf("Recredential(garbage) = %v, and the client changed: %v", err, p.client.Load() != before)
+	p, diags := New(t.Context(), "aws-lambda", plugintest.Body(t, `region = "us-east-1"`), credential)
+	if diags.HasErrors() {
+		t.Fatalf("New() failed: %s", diags.Error())
+	}
+
+	before := p.Client()
+
+	if err := p.Recredential(t.Context(), []byte(`not json`)); err == nil || p.Client() != before {
+		t.Fatalf("Recredential(garbage) = %v, and the client changed: %v", err, p.Client() != before)
 	}
 
 	fresh := []byte(`{"Version": 1, "AccessKeyId": "AKIANEW", "SecretAccessKey": "new", "SessionToken": "t"}`)
 
-	if err := p.Recredential(t.Context(), fresh); err != nil || p.client.Load() == before {
-		t.Errorf("Recredential() = %v, client replaced: %v; want it replaced", err, p.client.Load() != before)
+	if err := p.Recredential(t.Context(), fresh); err != nil || p.Client() == before {
+		t.Errorf("Recredential() = %v, client replaced: %v; want it replaced", err, p.Client() != before)
 	}
 }

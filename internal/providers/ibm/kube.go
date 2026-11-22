@@ -149,7 +149,7 @@ func (p *Provider) namespace(ctx context.Context) (string, error) {
 		return *ns, nil
 	}
 
-	drt, err := p.auth.Load().iam.delegated(ctx)
+	drt, err := p.Client().iam.delegated(ctx)
 	if err != nil {
 		return "", err
 	}

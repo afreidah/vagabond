@@ -3,186 +3,43 @@
 //
 // Author: Alex Freidah
 //
-// Run against an httptest server standing in for Google, so request building,
-// headers, encoding and status classification are all exercised for real. The
-// canned responses are shaped after real ones, including the exit code on
-// lastAttemptResult and the suffix Google adds to an execution's name.
+// Run against the fake Google, so request building, headers, encoding and
+// status classification are all exercised for real. The canned responses are
+// shaped after real ones, including the exit code on lastAttemptResult and the
+// suffix Google adds to an execution's name.
 // -------------------------------------------------------------------------------
 
-package gcp
+package cloudrun
 
 import (
-	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/hclsyntax"
 
 	"github.com/afreidah/vagabond/internal/execution"
-	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/plugin/plugintest"
+	"github.com/afreidah/vagabond/internal/providers/gcp/gcptest"
 	"github.com/afreidah/vagabond/internal/ptr"
 	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
-// FAKE GOOGLE
+// FIXTURES
 // -------------------------------------------------------------------------
 
-// recorded is one request the fake Google saw.
-type recorded struct {
-	method string
-	path   string
-	query  string
-	body   map[string]any
-}
-
-// fakeGoogle stands in for Cloud Run and Cloud Logging. Handlers are keyed by
-// "METHOD /path", a trailing star meaning prefix; anything unmatched 404s.
-type fakeGoogle struct {
-	t         *testing.T
-	handlers  map[string]any
-	sequences map[string][]any
-	requests  []recorded
-}
-
-// newFakeGoogle starts a fake Google and a provider pointed at it.
-func newFakeGoogle(t *testing.T) (*fakeGoogle, *Provider) {
+// newFake starts a fake Google and a Cloud Run provider pointed at it.
+func newFake(t *testing.T) (*gcptest.Google, *Provider) {
 	t.Helper()
 
-	g := &fakeGoogle{
-		t:         t,
-		handlers:  map[string]any{},
-		sequences: map[string][]any{},
-	}
+	g, api := gcptest.NewGoogle(t, "gcp-cloud-run")
 
-	server := httptest.NewServer(g)
-	t.Cleanup(server.Close)
-
-	p := &Provider{
-		name: "gcp-cloud-run",
-		cfg: &Config{
-			Project:               "test-project",
-			Region:                "us-central1",
-			RuntimeServiceAccount: "runtime@test-project.iam.gserviceaccount.com",
-		},
-		runURL:  server.URL,
-		logsURL: server.URL,
-	}
-
-	// The real client signs requests; a test server needs no auth
-	p.http.Store(server.Client())
-
-	return g, p
-}
-
-// respond registers what the fake returns for one route.
-func (g *fakeGoogle) respond(route string, body any) {
-	g.handlers[route] = body
-}
-
-// respondInTurn registers successive responses for one route, for the APIs
-// whose answer depends on how many times they have been asked.
-func (g *fakeGoogle) respondInTurn(route string, bodies ...any) {
-	g.sequences[route] = bodies
-}
-
-// ServeHTTP records the request and answers from the queued, exact, then
-// prefix routes, in that order.
-func (g *fakeGoogle) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	var body map[string]any
-	_ = json.NewDecoder(r.Body).Decode(&body)
-
-	g.requests = append(g.requests, recorded{
-		method: r.Method,
-		path:   r.URL.Path,
-		query:  r.URL.RawQuery,
-		body:   body,
-	})
-
-	key := r.Method + " " + r.URL.Path
-
-	if queued, ok := g.sequences[key]; ok && len(queued) > 0 {
-		g.sequences[key] = queued[1:]
-
-		writeJSON(w, http.StatusOK, queued[0])
-
-		return
-	}
-
-	if response, ok := g.handlers[key]; ok {
-		writeJSON(w, http.StatusOK, response)
-
-		return
-	}
-
-	for route, response := range g.handlers {
-		if strings.HasSuffix(route, "*") &&
-			strings.HasPrefix(key, strings.TrimSuffix(route, "*")) {
-			writeJSON(w, http.StatusOK, response)
-
-			return
-		}
-	}
-
-	writeJSON(w, http.StatusNotFound, map[string]any{
-		"error": map[string]any{"message": "no handler for " + key},
-	})
-}
-
-// writeJSON writes body as a JSON response with the given status.
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
-}
-
-// request returns the nth recorded request.
-func (g *fakeGoogle) request(n int) recorded {
-	g.t.Helper()
-
-	if n >= len(g.requests) {
-		g.t.Fatalf("wanted request %d, only %d were made", n, len(g.requests))
-	}
-
-	return g.requests[n]
-}
-
-// -------------------------------------------------------------------------
-// HELPERS
-// -------------------------------------------------------------------------
-
-// rawBlock parses a driver config the way the job parser leaves it: decoded as
-// a block, with its attributes still expressions.
-func rawBlock(t *testing.T, src string) *job.RawBlock {
-	t.Helper()
-
-	f, diags := hclsyntax.ParseConfig([]byte(src), "test.hcl", hcl.InitialPos)
-	if diags.HasErrors() {
-		t.Fatalf("parsing config failed: %s", diags.Error())
-	}
-
-	return &job.RawBlock{Body: f.Body}
-}
-
-// containerTask is a task shaped like the documented example.
-func containerTask(t *testing.T) *job.Task {
-	t.Helper()
-
-	return &job.Task{
-		Name:      "test",
-		Driver:    job.DriverContainer,
-		Config:    rawBlock(t, "image = \"golang:1.27\"\ncommand = \"go\"\nargs = [\"test\", \"./...\"]\n"),
-		Env:       rawBlock(t, "CI = \"true\"\nCGO_ENABLED = \"0\"\n"),
-		Resources: &job.Resources{CPU: new(1000), Memory: new(2048)},
-		Timeout:   new(job.Duration("15m")),
-	}
+	return g, &Provider{API: api, runURL: g.URL}
 }
 
 // -------------------------------------------------------------------------
@@ -194,13 +51,13 @@ func containerTask(t *testing.T) *job.Task {
 func TestSubmitCreatesThenRuns(t *testing.T) {
 	t.Parallel()
 
-	g, p := newFakeGoogle(t)
-	g.respond("POST /v2/projects/test-project/locations/us-central1/jobs", map[string]any{})
-	g.respond("POST /v2/projects/test-project/locations/us-central1/jobs/*", map[string]any{})
+	g, p := newFake(t)
+	g.Respond("POST /v2/projects/test-project/locations/us-central1/jobs", map[string]any{})
+	g.Respond("POST /v2/projects/test-project/locations/us-central1/jobs/*", map[string]any{})
 
 	id := testkit.NewID(t)
 
-	submission, err := p.Submit(t.Context(), id, containerTask(t))
+	submission, err := p.Submit(t.Context(), id, plugintest.ContainerTask(t))
 	if err != nil {
 		t.Fatalf("Submit failed: %v", err)
 	}
@@ -214,14 +71,14 @@ func TestSubmitCreatesThenRuns(t *testing.T) {
 		t.Errorf("provider id = %q, want %q", submission.ProviderID, want)
 	}
 
-	create := g.request(0)
-	if !strings.Contains(create.query, "jobId=vagabond-"+id.String()) {
-		t.Errorf("create did not name the job: %q", create.query)
+	create := g.Request(0)
+	if !strings.Contains(create.Query, "jobId=vagabond-"+id.String()) {
+		t.Errorf("create did not name the job: %q", create.Query)
 	}
 
-	run := g.request(1)
-	if !strings.HasSuffix(run.path, ":run") {
-		t.Errorf("second call was %s, want :run", run.path)
+	run := g.Request(1)
+	if !strings.HasSuffix(run.Path, ":run") {
+		t.Errorf("second call was %s, want :run", run.Path)
 	}
 }
 
@@ -230,15 +87,15 @@ func TestSubmitCreatesThenRuns(t *testing.T) {
 func TestSubmitDisablesGoogleRetries(t *testing.T) {
 	t.Parallel()
 
-	g, p := newFakeGoogle(t)
-	g.respond("POST /v2/projects/test-project/locations/us-central1/jobs", map[string]any{})
-	g.respond("POST /v2/projects/test-project/locations/us-central1/jobs/*", map[string]any{})
+	g, p := newFake(t)
+	g.Respond("POST /v2/projects/test-project/locations/us-central1/jobs", map[string]any{})
+	g.Respond("POST /v2/projects/test-project/locations/us-central1/jobs/*", map[string]any{})
 
-	if _, err := p.Submit(t.Context(), testkit.NewID(t), containerTask(t)); err != nil {
+	if _, err := p.Submit(t.Context(), testkit.NewID(t), plugintest.ContainerTask(t)); err != nil {
 		t.Fatalf("Submit failed: %v", err)
 	}
 
-	inner := taskTemplate(t, g.request(0).body)
+	inner := taskTemplate(t, g.Request(0).Body)
 
 	if got, ok := inner["maxRetries"].(float64); !ok || got != 0 {
 		t.Errorf("maxRetries = %v, want an explicit 0", inner["maxRetries"])
@@ -255,15 +112,15 @@ func TestSubmitDisablesGoogleRetries(t *testing.T) {
 func TestSubmitTranslatesTheTask(t *testing.T) {
 	t.Parallel()
 
-	g, p := newFakeGoogle(t)
-	g.respond("POST /v2/projects/test-project/locations/us-central1/jobs", map[string]any{})
-	g.respond("POST /v2/projects/test-project/locations/us-central1/jobs/*", map[string]any{})
+	g, p := newFake(t)
+	g.Respond("POST /v2/projects/test-project/locations/us-central1/jobs", map[string]any{})
+	g.Respond("POST /v2/projects/test-project/locations/us-central1/jobs/*", map[string]any{})
 
-	if _, err := p.Submit(t.Context(), testkit.NewID(t), containerTask(t)); err != nil {
+	if _, err := p.Submit(t.Context(), testkit.NewID(t), plugintest.ContainerTask(t)); err != nil {
 		t.Fatalf("Submit failed: %v", err)
 	}
 
-	inner := taskTemplate(t, g.request(0).body)
+	inner := taskTemplate(t, g.Request(0).Body)
 
 	if got := inner["timeout"]; got != "900s" {
 		t.Errorf("timeout = %v, want 900s", got)
@@ -300,16 +157,16 @@ func TestSubmitTranslatesTheTask(t *testing.T) {
 func TestSubmitCleansUpAfterAFailedRun(t *testing.T) {
 	t.Parallel()
 
-	g, p := newFakeGoogle(t)
-	g.respond("POST /v2/projects/test-project/locations/us-central1/jobs", map[string]any{})
+	g, p := newFake(t)
+	g.Respond("POST /v2/projects/test-project/locations/us-central1/jobs", map[string]any{})
 
-	if _, err := p.Submit(t.Context(), testkit.NewID(t), containerTask(t)); err == nil {
+	if _, err := p.Submit(t.Context(), testkit.NewID(t), plugintest.ContainerTask(t)); err == nil {
 		t.Fatal("expected the run to fail")
 	}
 
-	last := g.request(len(g.requests) - 1)
-	if last.method != http.MethodDelete {
-		t.Errorf("last call was %s, want a DELETE cleaning up", last.method)
+	last := g.Request(len(g.Requests) - 1)
+	if last.Method != http.MethodDelete {
+		t.Errorf("last call was %s, want a DELETE cleaning up", last.Method)
 	}
 }
 
@@ -376,8 +233,8 @@ func TestStatusListsTheExecution(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			g, p := newFakeGoogle(t)
-			g.respond("GET /v2/projects/test-project/locations/us-central1/jobs/*",
+			g, p := newFake(t)
+			g.Respond("GET /v2/projects/test-project/locations/us-central1/jobs/*",
 				map[string]any{"executions": []any{tc.execution}})
 
 			id := testkit.NewID(t)
@@ -403,8 +260,8 @@ func TestStatusListsTheExecution(t *testing.T) {
 func TestStatusWithNoExecution(t *testing.T) {
 	t.Parallel()
 
-	g, p := newFakeGoogle(t)
-	g.respond("GET /v2/projects/test-project/locations/us-central1/jobs/*",
+	g, p := newFake(t)
+	g.Respond("GET /v2/projects/test-project/locations/us-central1/jobs/*",
 		map[string]any{"executions": []any{}})
 
 	_, err := p.Status(t.Context(), testkit.NewID(t))
@@ -427,7 +284,7 @@ func TestStatusWithNoExecution(t *testing.T) {
 func TestStatusWithNoJob(t *testing.T) {
 	t.Parallel()
 
-	_, p := newFakeGoogle(t)
+	_, p := newFake(t)
 
 	_, err := p.Status(t.Context(), testkit.NewID(t))
 	if !errors.Is(err, plugin.ErrUnknownExecution) {
@@ -444,14 +301,14 @@ func TestStatusWithNoJob(t *testing.T) {
 func TestResultReadsTheExitCode(t *testing.T) {
 	t.Parallel()
 
-	g, p := newFakeGoogle(t)
-	g.respond("GET /v2/projects/test-project/locations/us-central1/jobs/*",
+	g, p := newFake(t)
+	g.Respond("GET /v2/projects/test-project/locations/us-central1/jobs/*",
 		map[string]any{"executions": []any{map[string]any{
 			"name":           "projects/p/locations/l/jobs/j/executions/j-nhrzk",
 			"completionTime": "2026-09-20T22:55:31Z",
 			"failedCount":    1,
 		}}})
-	g.respond("GET /v2/projects/p/locations/l/jobs/j/executions/j-nhrzk/tasks",
+	g.Respond("GET /v2/projects/p/locations/l/jobs/j/executions/j-nhrzk/tasks",
 		map[string]any{"tasks": []any{map[string]any{
 			"startTime":         "2026-09-20T22:55:23Z",
 			"completionTime":    "2026-09-20T22:55:26Z",
@@ -473,6 +330,35 @@ func TestResultReadsTheExitCode(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
+// OUTPUT
+// -------------------------------------------------------------------------
+
+// The output is read through a filter naming the job, or one execution's
+// output is stored as another's, and followed from the same entries.
+func TestLogsFilterToTheJob(t *testing.T) {
+	t.Parallel()
+
+	g, p := newFake(t)
+	g.Respond("POST /v2/entries:list", map[string]any{})
+
+	id := testkit.NewID(t)
+
+	if err := p.ReadLogs(t.Context(), id, &execution.PlacedWriter{Writer: io.Discard}); err != nil {
+		t.Fatalf("ReadLogs failed: %v", err)
+	}
+
+	want := `resource.type="cloud_run_job" resource.labels.job_name="` + plugin.ResourceName(id) + `"`
+	if got := g.Request(0).Body["filter"]; got != want {
+		t.Errorf("filter = %q, want %q", got, want)
+	}
+
+	// Nothing registered for entries:tail, so the stream ends at its refusal
+	if err := p.StreamLogs(t.Context(), id, 0, io.Discard); err == nil || g.Request(1).Path != "/v2/entries:tail" {
+		t.Errorf("StreamLogs() = %v, want the tail's refusal", err)
+	}
+}
+
+// -------------------------------------------------------------------------
 // CANCEL
 // -------------------------------------------------------------------------
 
@@ -480,8 +366,8 @@ func TestResultReadsTheExitCode(t *testing.T) {
 func TestCancelDeletesTheJob(t *testing.T) {
 	t.Parallel()
 
-	g, p := newFakeGoogle(t)
-	g.respond("DELETE /v2/projects/test-project/locations/us-central1/jobs/*",
+	g, p := newFake(t)
+	g.Respond("DELETE /v2/projects/test-project/locations/us-central1/jobs/*",
 		map[string]any{})
 
 	id := testkit.NewID(t)
@@ -490,85 +376,54 @@ func TestCancelDeletesTheJob(t *testing.T) {
 		t.Fatalf("Cancel failed: %v", err)
 	}
 
-	got := g.request(0)
-	if got.method != http.MethodDelete || !strings.HasSuffix(got.path, "vagabond-"+id.String()) {
-		t.Errorf("cancel called %s %s", got.method, got.path)
+	got := g.Request(0)
+	if got.Method != http.MethodDelete || !strings.HasSuffix(got.Path, "vagabond-"+id.String()) {
+		t.Errorf("cancel called %s %s", got.Method, got.Path)
 	}
 }
 
-// Cancelling a job that is already gone is not an error.
+// Cancelling or releasing a job that is already gone is not an error.
 func TestCancelIsIdempotent(t *testing.T) {
 	t.Parallel()
 
-	_, p := newFakeGoogle(t)
+	_, p := newFake(t)
 
 	// Nothing registered, so the delete 404s.
 	if err := p.Cancel(t.Context(), testkit.NewID(t)); err != nil {
 		t.Errorf("cancelling a job that is already gone failed: %v", err)
 	}
+
+	if err := p.Release(t.Context(), testkit.NewID(t)); err != nil {
+		t.Errorf("releasing a job that is already gone failed: %v", err)
+	}
 }
 
 // -------------------------------------------------------------------------
-// CREDENTIALS
+// CONSTRUCTION
 // -------------------------------------------------------------------------
 
-// serviceAccountKey is shaped like a key file. The private key is only read
-// when a token is fetched, which nothing here does.
-//
-//nolint:gosec // shaped like a key, holds no secret
-const serviceAccountKey = `{
-  "type": "service_account",
-  "client_email": "dispatcher@test-project.iam.gserviceaccount.com",
-  "private_key": "unused"
-}`
-
-// testConfig is a complete config block for New.
-const testConfig = `
-project                 = "test-project"
-region                  = "us-central1"
-runtime_service_account = "runtime@test-project.iam.gserviceaccount.com"
-`
-
-// A usable key builds a provider against the real endpoints, holding a
-// client.
-func TestNew_BuildsWithAKey(t *testing.T) {
+// A usable config builds a provider against the real Cloud Run endpoint,
+// publishing Cloud Run's limits, and a missing one builds nothing.
+func TestNew(t *testing.T) {
 	t.Parallel()
 
-	p, diags := New(t.Context(), "gcp-cloud-run", body(t, testConfig), []byte(serviceAccountKey))
+	p, diags := New(t.Context(), "gcp-cloud-run", plugintest.Body(t, gcptest.Config), []byte(gcptest.Key))
 	if diags.HasErrors() {
 		t.Fatalf("New() failed: %s", diags.Error())
 	}
 
-	if p.Name() != "gcp-cloud-run" || p.runURL != runEndpoint || p.logsURL != loggingEndpoint || p.http.Load() == nil {
-		t.Errorf("New() = %+v, want the name, the real endpoints and a client", p)
-	}
-}
-
-// A key that cannot be parsed is reported against the provider, since the
-// alternative is a rejection on the first call.
-func TestNew_RejectsAnUnusableKey(t *testing.T) {
-	t.Parallel()
-
-	_, diags := New(t.Context(), "gcp-cloud-run", body(t, testConfig), []byte(`not json`))
-	if !diags.HasErrors() || !strings.Contains(diags.Error(), "Unusable credential") {
-		t.Errorf("diagnostics = %v, want an unusable credential", diags)
-	}
-}
-
-// A refreshed key replaces the client; one that cannot be parsed leaves the
-// client in place.
-func TestRecredential_ReplacesTheClient(t *testing.T) {
-	t.Parallel()
-
-	_, p := newFakeGoogle(t)
-	before := p.http.Load()
-
-	if err := p.Recredential(t.Context(), []byte(`not json`)); err == nil || p.http.Load() != before {
-		t.Fatalf("Recredential(garbage) = %v, and the client changed: %v", err, p.http.Load() != before)
+	if p.Name() != "gcp-cloud-run" || p.runURL != runEndpoint {
+		t.Errorf("New() = %+v, want the name and the real endpoint", p)
 	}
 
-	if err := p.Recredential(t.Context(), []byte(serviceAccountKey)); err != nil || p.http.Load() == before {
-		t.Errorf("Recredential() = %v, client replaced: %v; want it replaced", err, p.http.Load() != before)
+	caps, _ := p.Capabilities(t.Context())
+	if *caps.MaxResources.CPU != maxCPU || *caps.MaxResources.Memory != maxMemory ||
+		caps.MaxDuration != 24*time.Hour || caps.Isolation != plugin.IsolationVM {
+		t.Errorf("capabilities = %+v, want 8 vCPU and 32 GiB for 24 hours, in a VM", caps)
+	}
+
+	if _, diags := New(t.Context(), "gcp-cloud-run", nil, []byte(gcptest.Key)); !diags.HasErrors() {
+		t.Error("New() built a provider with no config block")
 	}
 }
 
