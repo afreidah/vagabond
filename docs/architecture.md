@@ -237,14 +237,15 @@ One server process runs these concurrently:
 | Execution runner | One per execution not yet released | Submits, watches, collects, settles and releases one execution; the only writer of its record |
 | Lease renewal | One per dispatch not yet done | Renews the dispatch lease every 20 seconds; the lease runs 60 seconds |
 | Log stream | One per open `?follow=true` request on a `LogStreamer` provider | Re-reads the execution record every second while the request copies the provider's stream; ends the response 5 s after the execution does, or at once when shutdown begins |
-| Upkeep | Five tickers until shutdown | Capability refresh (1 min), usage refresh (15 s), reservation reaping (5 min), lapsed-lease claiming (30 s), output retention (1 h) |
+| Upkeep | Seven loops until shutdown | Capability refresh (1 min), usage refresh (15 s), disabled provider read (5 s), reservation reaping (5 min), lapsed-lease claiming (30 s), output retention (1 h), periodic launches (at each launch, 1 min at most) |
 
 **Startup order:** load configuration, build the registry and refresh every
 provider, open, migrate and verify the store and read quota usage into the
 ledger (or build memory stores under `-dev`), load the API certificate, start
-accepting agents, listen on the API address, claim dispatches with lapsed
-leases and resume each in the background, reap stale reservations, then start
-upkeep and serve HTTP.
+accepting agents, listen on the API address, read which providers are
+disabled, claim dispatches with lapsed leases and resume each in the
+background, reap stale reservations, then start upkeep, with the first pass of
+periodic launches at once, and serve HTTP.
 
 **Shutdown:** on SIGINT or SIGTERM the server stops accepting requests and gives
 in-flight ones 10 seconds to finish. Running dispatches are not cancelled; their

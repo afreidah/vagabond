@@ -247,6 +247,59 @@ func TestJobDispatch_RegisteredAndStopped(t *testing.T) {
 	}
 }
 
+// A periodic job prints its next launch when registered and shows its
+// schedule in its status. Running it is refused, and planning it says when it
+// would first launch.
+func TestPeriodicJob_RegisterStatusRunPlan(t *testing.T) {
+	s := serve(t, functionConfig)
+	path := writeJob(t, strings.Replace(functionJob, `type = "batch"`,
+		"type = \"batch\"\n\n  periodic {\n    crons = [\"@yearly\"]\n  }", 1))
+	nextYear := stamp(time.Date(time.Now().UTC().Year()+1, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	code, stdout, stderr := s.at([]string{"job", "register"}, path)
+	if code != ExitSuccess || !strings.Contains(stdout, "Next launch: "+nextYear+" (in ") {
+		t.Fatalf("register: exit %d\n%s%s", code, stdout, stderr)
+	}
+
+	_, shown, _ := s.at([]string{"job", "status"}, "hello")
+	for _, want := range []string{"@yearly", "UTC", "Prohibit overlap = false", "Next launch      = " + nextYear} {
+		if !strings.Contains(shown, want) {
+			t.Errorf("job status hello lacks %q:\n%s", want, shown)
+		}
+	}
+
+	code, _, stderr = s.at([]string{"job", "run"}, path)
+	if code != ExitFailure || !strings.Contains(stderr, "vagabond job register") {
+		t.Errorf("run: exit %d\n%s", code, stderr)
+	}
+
+	_, planned, _ := s.at([]string{"job", "plan"}, path)
+	if !strings.Contains(planned, "If registered now, the next launch would be at "+nextYear+" (in ") {
+		t.Errorf("plan:\n%s", planned)
+	}
+}
+
+// A time ahead reads as how long until it, and one behind or now as how long
+// since, both to the second.
+func TestRelative(t *testing.T) {
+	now := time.Date(2026, 11, 21, 10, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		at   time.Time
+		want string
+	}{
+		{at: now.Add(3*time.Minute + 400*time.Millisecond), want: "in 3m0s"},
+		{at: now.Add(-4 * time.Second), want: "4s ago"},
+		{at: now, want: "0s ago"},
+	}
+
+	for _, tt := range tests {
+		if got := relative(tt.at, now); got != tt.want {
+			t.Errorf("relative(%s) = %q, want %q", tt.at, got, tt.want)
+		}
+	}
+}
+
 // Registering the same job again is not a new version.
 func TestJobRegister_UnchangedIsNotAVersion(t *testing.T) {
 	s := serve(t, functionConfig)

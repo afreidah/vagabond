@@ -4,7 +4,7 @@
 // Author: Alex Freidah
 //
 // With no name, the jobs registered in a namespace. With one, that job's
-// versions and its most recent executions.
+// schedule if it has one, its versions and its most recent executions.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,7 +41,9 @@ func (c *JobStatusCommand) Help() string {
 Usage: vagabond job status [options] [name]
 
   With no name, lists the jobs registered in the namespace. With a name, shows
-  that job's versions and its most recent executions.
+  that job's versions and its most recent executions. A periodic job also
+  shows its crons, time zone, whether it prohibits overlap, and its next
+  launch.
 
 Status Options:
 
@@ -104,7 +107,8 @@ func (c *JobStatusCommand) list(ctx context.Context, client *api.Client) int {
 	return ExitSuccess
 }
 
-// show prints one job's standing, its versions, and its recent executions.
+// show prints one job's standing and any schedule, its versions, and its
+// recent executions.
 func (c *JobStatusCommand) show(ctx context.Context, client *api.Client, name string) int {
 	status, err := client.JobStatus(ctx, c.namespace, name)
 	if err != nil {
@@ -113,12 +117,12 @@ func (c *JobStatusCommand) show(ctx context.Context, client *api.Client, name st
 
 	var b strings.Builder
 
-	b.WriteString(fields([][2]string{
+	b.WriteString(fields(append([][2]string{
 		{"Name", status.Name},
 		{"Namespace", status.Namespace},
 		{"Version", fmt.Sprintf("%d", status.Version)},
 		{"Status", standing(&status.Job)},
-	}))
+	}, scheduleFields(&status.Job, time.Now())...)))
 
 	b.WriteString("\n\nVersions\n")
 	b.WriteString(columns(func(w io.Writer) {
@@ -150,4 +154,41 @@ func standing(j *api.Job) string {
 // stamp renders a time for a table, in UTC so every reader sees the same.
 func stamp(t time.Time) string {
 	return t.UTC().Format("2006-01-02 15:04:05Z")
+}
+
+// relative says how far t is from now, to the second: "in 3m0s" when t is
+// ahead, "4s ago" otherwise.
+func relative(t, now time.Time) string {
+	d := t.Sub(now).Round(time.Second)
+	if d > 0 {
+		return "in " + d.String()
+	}
+
+	return (-d).String() + " ago"
+}
+
+// when renders a time with how far it is from now, as "2026-11-22 00:00:00Z
+// (in 13h59m30s)".
+func when(t, now time.Time) string {
+	return fmt.Sprintf("%s (%s)", stamp(t), relative(t, now))
+}
+
+// scheduleFields renders a periodic job's schedule and next launch as status
+// rows, and none for a job that launches only by hand.
+func scheduleFields(j *api.Job, now time.Time) [][2]string {
+	if j.Periodic == nil {
+		return nil
+	}
+
+	rows := [][2]string{
+		{"Crons", strings.Join(j.Periodic.Crons, ", ")},
+		{"Time zone", j.Periodic.TimeZone},
+		{"Prohibit overlap", strconv.FormatBool(j.Periodic.ProhibitOverlap)},
+	}
+
+	if j.NextLaunch != nil {
+		rows = append(rows, [2]string{"Next launch", when(*j.NextLaunch, now)})
+	}
+
+	return rows
 }

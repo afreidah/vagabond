@@ -20,8 +20,6 @@ import (
 	"net/http"
 	"testing"
 
-	"go.uber.org/mock/gomock"
-
 	"github.com/afreidah/vagabond/internal/api"
 	"github.com/afreidah/vagabond/internal/state/memory"
 	"github.com/afreidah/vagabond/internal/tlsconfig"
@@ -58,7 +56,7 @@ func serveTLS(t *testing.T, ca, clientCA *tlstest.CA) string {
 	}
 
 	reg, led := fixtures(t)
-	srv := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler))
+	srv := New(reg, led, memory.NewExecutions(), memory.NewJobs(), memory.NewProviders(), slog.New(slog.DiscardHandler))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

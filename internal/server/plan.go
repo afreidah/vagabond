@@ -11,7 +11,6 @@ package server
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 
 	"github.com/afreidah/vagabond/internal/api"
@@ -22,7 +21,8 @@ import (
 )
 
 // planJob answers with where each task of a job file or registered job would
-// run, priced from the ledger but reserving nothing.
+// run, priced from the ledger but reserving nothing, and for a periodic job
+// file when it would first launch.
 func (s *Server) planJob(_ http.ResponseWriter, r *http.Request) (any, error) {
 	var req api.PlanRequest
 	if err := decode(r, &req); err != nil {
@@ -49,6 +49,11 @@ func (s *Server) planJob(_ http.ResponseWriter, r *http.Request) (any, error) {
 		plan.Tasks = append(plan.Tasks, taskPlanOf(j.Name, task, scheduler.PlanTask(taskReq, inputs)))
 	}
 
+	// A file is not registered yet, so its first launch would count from now
+	if req.Source != "" && j.Periodic.Active() {
+		plan.NextLaunch = nextLaunch(j.Periodic, s.now())
+	}
+
 	return plan, nil
 }
 
@@ -70,17 +75,12 @@ func (s *Server) planned(r *http.Request, req *api.PlanRequest) (*job.Job, strin
 			return nil, "", err
 		}
 
-		parsed, diags, err := jobs.ForDispatch(
-			fmt.Sprintf("%s (version %d)", req.Name, version.Version), version.Source, req.Meta)
+		j, err := loadVersion(version, req.Meta)
 		if err != nil {
-			return nil, "", badRequest(err)
+			return nil, "", err
 		}
 
-		if diags.HasErrors() {
-			return nil, "", invalidJob(diags)
-		}
-
-		return &parsed.Spec.Jobs[0], ns, nil
+		return j, ns, nil
 
 	default:
 		parsed, diags := jobs.Load("job", []byte(req.Source), req.Meta)

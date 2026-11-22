@@ -22,6 +22,7 @@ window.vagabondDiagram = {
     '    subgraph REGISTRY [Registered jobs]',
     '        jobs[jobs]:::registry',
     '        job_versions[job_versions]:::registry',
+    '        periodic_launches[periodic_launches]:::registry',
     '    end',
     '    subgraph RUNS [Runs]',
     '        dispatches[dispatches]:::runs',
@@ -40,6 +41,7 @@ window.vagabondDiagram = {
     '    end',
     '',
     '    jobs -->|namespace, name| job_versions',
+    '    jobs -->|namespace, name| periodic_launches',
     '    job_versions -->|namespace, job, job_version| dispatches',
     '    dispatches -->|dispatch_id| executions',
     '    executions -->|previous_id| executions',
@@ -53,16 +55,31 @@ window.vagabondDiagram = {
     jobs: {
       title: 'jobs',
       badge: 'registry', badgeText: 'job registry',
-      body: '<p>One row per registered job: which version is current and whether the job is stopped. Registering an unchanged running job writes nothing; a changed one, or any register of a stopped job, inserts the next <code>job_versions</code> row and points this row at it. A job run from a file through <code>POST /v1/jobs/run</code> is never registered and has no row.</p>' +
+      body: '<p>One row per registered job: which version is current, whether the job is stopped, and the schedule that version launches by. Registering an unchanged running job writes nothing; a changed one, or any register of a stopped job, inserts the next <code>job_versions</code> row and points this row at it. A job run from a file through <code>POST /v1/jobs/run</code> is never registered and has no row.</p>' +
         '<table class="dg-cols"><tr><th>Column</th><th>Type</th><th>Notes</th></tr>' +
         '<tr><td class="pk">namespace</td><td>TEXT</td><td>PRIMARY KEY (composite)</td></tr>' +
         '<tr><td class="pk">name</td><td>TEXT</td><td>PRIMARY KEY (composite)</td></tr>' +
         '<tr><td>version</td><td>BIGINT</td><td>Current version, a key into <code>job_versions</code></td></tr>' +
         '<tr><td>stopped</td><td>BOOLEAN</td><td>Set by <code>DELETE /v1/job/{name}</code>; cleared by the next register</td></tr>' +
-        '<tr><td>updated_at</td><td>TIMESTAMPTZ</td><td>Last register or stop</td></tr></table>' +
-        '<div class="dg-idx"><b>Indexes:</b> PK (namespace, name), which serves the single-job read, the per-namespace listing ordered by name, and the register upsert</div>' +
-        '<p>Used by: <code>Store.Register</code> (CurrentJobVersion, then PointJobAt, an upsert on <code>(namespace, name)</code> that sets the version and clears <code>stopped</code>) &bull; <code>Store.Job</code> (GetJob, for job status, a stop, and before a <a href="../task-path/">dispatch</a>, where <code>jobs.Current</code> refuses a stopped job) &bull; <code>Store.Jobs</code> (ListJobs, for <code>GET /v1/jobs</code>) &bull; <code>Store.Stop</code> (StopJob; zero rows is not found). See <a href="../../docs/database/#jobs-and-job_versions">Database</a>.</p>' +
-        '<p class="dg-metric">Key queries: CurrentJobVersion, PointJobAt, GetJob, ListJobs, StopJob</p>'
+        '<tr><td>updated_at</td><td>TIMESTAMPTZ</td><td>Last register or stop</td></tr>' +
+        '<tr><td>crons</td><td>TEXT[]</td><td>The current version&rsquo;s <code>periodic</code> crons; <code>\'{}\'</code> for a job with no block or a disabled one</td></tr>' +
+        '<tr><td>time_zone</td><td>TEXT</td><td>The zone the crons are read in, <code>UTC</code> when the job file names none</td></tr>' +
+        '<tr><td>prohibit_overlap</td><td>BOOLEAN</td><td>Skip a launch while a dispatch of the job runs</td></tr></table>' +
+        '<div class="dg-idx"><b>Indexes:</b> PK (namespace, name), which serves the single-job read, the per-namespace listing ordered by name, and the register upsert. The periodic listing reads the whole table</div>' +
+        '<p>Used by: <code>Store.Register</code> (CurrentJobVersion, then PointJobAt, an upsert on <code>(namespace, name)</code> that sets the version and schedule and clears <code>stopped</code>) &bull; <code>Store.Job</code> (GetJob, for job status, a stop, and before a <a href="../task-path/">dispatch</a>, where <code>jobs.Current</code> refuses a stopped job) &bull; <code>Store.Jobs</code> (ListJobs, for <code>GET /v1/jobs</code>) &bull; <code>Store.PeriodicJobs</code> (ListPeriodicJobs, every job with crons that is not stopped, for each pass of <a href="../background-services/">periodic launches</a>) &bull; <code>Store.Stop</code> (StopJob; zero rows is not found). Every read joins <code>periodic_launches</code> for the last launch. See <a href="../../docs/database/#jobs-and-job_versions">Database</a>.</p>' +
+        '<p class="dg-metric">Key queries: CurrentJobVersion, PointJobAt, GetJob, ListJobs, ListPeriodicJobs, StopJob</p>'
+    },
+    periodic_launches: {
+      title: 'periodic_launches',
+      badge: 'registry', badgeText: 'job registry',
+      body: '<p>One row per job that has been periodic: when it last launched, or when it became periodic if it has not launched since. A row stays when its job stops or loses its schedule, and is overwritten when the job becomes periodic again.</p>' +
+        '<table class="dg-cols"><tr><th>Column</th><th>Type</th><th>Notes</th></tr>' +
+        '<tr><td class="pk">namespace</td><td>TEXT</td><td>PRIMARY KEY (composite)</td></tr>' +
+        '<tr><td class="pk">name</td><td>TEXT</td><td>PRIMARY KEY (composite)</td></tr>' +
+        '<tr><td>launched_at</td><td>TIMESTAMPTZ</td><td>Last launch, or when the job became periodic</td></tr></table>' +
+        '<div class="dg-idx"><b>Indexes:</b> PK (namespace, name), which serves the claim and the join from every <code>jobs</code> read</div>' +
+        '<p>Used by: <code>Store.Register</code> (ResetLaunch, an upsert of the registration time, when the new version makes the job periodic and the old one was not or the job was stopped) &bull; <code>Store.ClaimLaunch</code> (ClaimLaunch, one <code>UPDATE</code> that moves <code>launched_at</code> from the value the server read to now while <code>jobs</code> has the version it read and the job is not stopped; zero rows means another server launched it or the job changed). See <a href="../../docs/database/#periodic_launches">Database</a>.</p>' +
+        '<p class="dg-metric">Key queries: ResetLaunch, ClaimLaunch</p>'
     },
     job_versions: {
       title: 'job_versions',
@@ -98,10 +115,10 @@ window.vagabondDiagram = {
         '<tr><td>epoch</td><td>BIGINT</td><td>Claims of the row, 1 at insert; each claim adds one, so every write under an earlier lease is refused. DEFAULT 1</td></tr>' +
         '<tr><td>cancel_requested_at</td><td>TIMESTAMPTZ</td><td>Nullable; when a cancel was first requested by a server not holding the lease, for the owner to act on</td></tr>' +
         '<tr><td>done_at</td><td>TIMESTAMPTZ</td><td>Nullable; when every execution finished through release, which ends the lease. Migration 10 backfilled it for ended dispatches whose executions were all released</td></tr></table>' +
-        '<div class="dg-idx"><b>Indexes:</b> PK on dispatch_id &bull; dispatches_lease (lease_until) WHERE done_at IS NULL, a partial index holding only the rows a claim can take</div>' +
+        '<div class="dg-idx"><b>Indexes:</b> PK on dispatch_id &bull; dispatches_lease (lease_until) WHERE done_at IS NULL, a partial index holding only the rows a claim can take &bull; dispatches_running (namespace, job) WHERE state = \'running\', which RunningDispatch reads for a schedule with <code>prohibit_overlap</code></div>' +
         '<p>Every write under the lease matches the caller&rsquo;s owner and epoch: finishing also requires <code>state = \'running\'</code>, renewing and closing <code>done_at IS NULL</code>. Zero rows is <code>ErrStale</code>, so a server whose lease was taken over cannot overwrite how the run ended.</p>' +
         '<p>Used by: the dispatcher (CreateDispatch as a run starts, FinishDispatch as it ends, CloseDispatch once every execution is released; <a href="../task-path/">task path</a>) &bull; <a href="../background-services/">lease renewal</a> (RenewDispatch every 20s, returning <code>cancel_requested_at</code>; stale marks the lease lost and every runner under it stops) &bull; <a href="../background-services/">dispatch claim</a> (ClaimDispatches at startup and every 30s: one <code>UPDATE ... RETURNING</code> takes every row with no <code>done_at</code> whose <code>lease_until</code> is past, except the ones this server runs, under <code>epoch + 1</code>, so two servers never claim the same row) &bull; the API (RequestCancel for <code>DELETE /v1/execution/{id}</code> on a dispatch held elsewhere, keeping the first request&rsquo;s time; GetDispatch for <code>GET /v1/dispatch/{id}</code>). See <a href="../../docs/database/#dispatches">Database</a> and <a href="../../docs/dispatch/#leases">leases</a>.</p>' +
-        '<p class="dg-metric">Key queries: CreateDispatch, FinishDispatch, CloseDispatch, RenewDispatch, RequestCancel, ClaimDispatches, GetDispatch</p>'
+        '<p class="dg-metric">Key queries: CreateDispatch, FinishDispatch, CloseDispatch, RenewDispatch, RequestCancel, ClaimDispatches, GetDispatch, RunningDispatch</p>'
     },
     executions: {
       title: 'executions',
@@ -204,11 +221,11 @@ window.vagabondDiagram = {
       body: '<p>goose\'s record of applied migrations. goose creates it on the first migrate; no migration defines it, and its layout is the goose v3.29 Postgres dialect\'s.</p>' +
         '<table class="dg-cols"><tr><th>Column</th><th>Type</th><th>Notes</th></tr>' +
         '<tr><td class="pk">id</td><td>INTEGER</td><td>PRIMARY KEY, GENERATED BY DEFAULT AS IDENTITY</td></tr>' +
-        '<tr><td>version_id</td><td>BIGINT</td><td>Migration number, 1 to 12 in this release</td></tr>' +
+        '<tr><td>version_id</td><td>BIGINT</td><td>Migration number, 1 to 13 in this release</td></tr>' +
         '<tr><td>is_applied</td><td>BOOLEAN</td><td>Whether the migration is applied</td></tr>' +
         '<tr><td>tstamp</td><td>TIMESTAMP</td><td>DEFAULT now(); no time zone</td></tr></table>' +
         '<div class="dg-idx"><b>Indexes:</b> PK on id</div>' +
-        '<p>Used by: <code>Store.Migrate</code> (goose applies the embedded migrations not yet recorded, at every server start, over a <code>database/sql</code> connection opened for it) &bull; <code>Store.VerifySchema</code> (reads <code>MAX(version_id)</code> where <code>is_applied</code> and requires it to equal <code>SchemaVersion</code>, 12; lower means a migration failed partway, higher means the binary is older than the database, and either stops the server from starting). See <a href="../../docs/database/#migrations">Migrations</a>.</p>'
+        '<p>Used by: <code>Store.Migrate</code> (goose applies the embedded migrations not yet recorded, at every server start, over a <code>database/sql</code> connection opened for it) &bull; <code>Store.VerifySchema</code> (reads <code>MAX(version_id)</code> where <code>is_applied</code> and requires it to equal <code>SchemaVersion</code>, 13; lower means a migration failed partway, higher means the binary is older than the database, and either stops the server from starting). See <a href="../../docs/database/#migrations">Migrations</a>.</p>'
     }
   }
 };
@@ -230,8 +247,9 @@ An arrow joins two tables on the columns in its label, from the table that holds
 
 | Table | Purpose | Primary Key |
 |-------|---------|-------------|
-| **jobs** | Each registered job's current version and whether it is stopped | `(namespace, name)` |
+| **jobs** | Each registered job's current version, whether it is stopped, and its schedule | `(namespace, name)` |
 | **job_versions** | Every registered version's source and fingerprint | `(namespace, name, version)` |
+| **periodic_launches** | When each periodic job last launched, or became periodic | `(namespace, name)` |
 | **dispatches** | One row per run of a job, with its lease | `dispatch_id` |
 | **executions** | One row per attempt of one task on one provider, with its result and where its output stands | `id` |
 | **execution_logs** | Each execution's output in 256 KiB chunks, up to `max_log_mib`, for `log_retention` | `(execution_id, seq)` |
@@ -256,3 +274,4 @@ An arrow joins two tables on the columns in its label, from the table that holds
 | `00010_dispatch_ownership` | `dispatches.epoch`, `cancel_requested_at` and `done_at`, `done_at` backfilled for ended dispatches whose executions are all released; `executions.timeout_ms`; `quota_reservations.cpu` and `memory` dropped; executions with no dispatch marked released; `dispatches_lease` rebuilt as `(lease_until) WHERE done_at IS NULL`; `executions_unreleased` dropped. Outside a transaction |
 | `00011_execution_node` | `executions.node`, `''` for existing rows. Outside a transaction |
 | `00012_disabled_providers` | `disabled_providers`, empty. Outside a transaction |
+| `00013_periodic_jobs` | `jobs.crons` (`'{}'` for existing rows), `time_zone` and `prohibit_overlap`; `periodic_launches`, empty; partial index `dispatches_running`. Outside a transaction |

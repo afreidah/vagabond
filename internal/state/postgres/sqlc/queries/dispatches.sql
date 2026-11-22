@@ -45,3 +45,9 @@ RETURNING *;
 
 -- name: GetDispatch :one
 SELECT * FROM dispatches WHERE dispatch_id = @dispatch_id;
+
+-- name: RunningDispatch :one
+-- Whether any dispatch of a job has no verdict yet.
+SELECT EXISTS (
+    SELECT 1 FROM dispatches WHERE namespace = @namespace AND job = @job AND state = 'running'
+);

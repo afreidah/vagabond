@@ -75,6 +75,7 @@ func validateJob(j *job.Job) hcl.Diagnostics {
 	}
 
 	diags = append(diags, validateJobType(j)...)
+	diags = append(diags, validatePeriodic(j)...)
 	diags = append(diags, validateRouting(j)...)
 	diags = append(diags, validateTasks(j)...)
 
@@ -96,6 +97,47 @@ func validateJobType(j *job.Job) hcl.Diagnostics {
 		fmt.Sprintf("Unknown job type in %q", j.Name),
 		fmt.Sprintf("Type %q is not one Vagabond implements. Valid types are %s.",
 			ptr.Deref(j.Type), joinTypes()))}
+}
+
+// -------------------------------------------------------------------------
+// PERIODIC
+// -------------------------------------------------------------------------
+
+// validatePeriodic checks that a schedule can be launched by: it has crons,
+// each one parses, its time zone resolves, and the job takes no metadata.
+func validatePeriodic(j *job.Job) hcl.Diagnostics {
+	if j.Periodic == nil {
+		return nil
+	}
+
+	var diags hcl.Diagnostics
+
+	if len(j.Periodic.Crons) == 0 {
+		diags = append(diags, simple(fmt.Sprintf("No crons in %q", j.Name),
+			"A periodic block launches the job when a cron matches, so it needs at least one."))
+	}
+
+	for _, expr := range j.Periodic.Crons {
+		if err := job.CheckCron(expr); err != nil {
+			diags = append(diags, simple(fmt.Sprintf("Invalid cron in %q", j.Name),
+				fmt.Sprintf("Vagabond cannot launch by it: %s.", err)))
+		}
+	}
+
+	if _, err := j.Periodic.Location(); err != nil {
+		diags = append(diags, simple(fmt.Sprintf("Invalid time zone in %q", j.Name),
+			fmt.Sprintf("Vagabond cannot read it: %s. Name a zone such as Europe/Berlin, "+
+				"or remove the attribute to use UTC.", err)))
+	}
+
+	// A scheduled launch has nobody to supply metadata
+	if j.Parameterized != nil {
+		diags = append(diags, simple(fmt.Sprintf("Periodic job %q is parameterized", j.Name),
+			"A scheduled launch has no metadata to give it, so a periodic job cannot "+
+				"have a parameterized block. Remove one of the two."))
+	}
+
+	return diags
 }
 
 // -------------------------------------------------------------------------

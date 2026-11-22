@@ -5,7 +5,7 @@
 //
 // What an execution store promises about listing records: a namespace's newest
 // first up to a limit, narrowed by job, state and provider, and a dispatch's
-// oldest first.
+// oldest first. Also whether a job has a dispatch still running.
 // -------------------------------------------------------------------------------
 
 package statetest
@@ -33,6 +33,7 @@ var listRules = []rule[Store]{
 	{"a namespace lists newest first, up to the limit", newestFirst},
 	{"job, state and provider each narrow the list", filtersNarrow},
 	{"a dispatch lists oldest first", dispatchOldestFirst},
+	{"a job has a running dispatch until its verdict", runningUntilVerdict},
 }
 
 // -------------------------------------------------------------------------
@@ -110,6 +111,39 @@ func dispatchOldestFirst(t *testing.T, s Store) {
 
 	if diff := cmp.Diff(ids(first, second), ids(got...)); diff != "" {
 		t.Errorf("DispatchExecutions() (-want +got):\n%s", diff)
+	}
+}
+
+// runningUntilVerdict: a job with a dispatch still running has one, another
+// job does not, and once the verdict is recorded neither does.
+func runningUntilVerdict(t *testing.T, s Store) {
+	d := dispatched(t, s, held())
+
+	running := func(job string) bool {
+		t.Helper()
+
+		got, err := s.RunningDispatch(t.Context(), d.Namespace, job)
+		if err != nil {
+			t.Fatalf("RunningDispatch(%s) = %v", job, err)
+		}
+
+		return got
+	}
+
+	if !running(d.Job) || running("deploy") {
+		t.Fatalf("before the verdict: %s running %v, deploy running %v; want true, false",
+			d.Job, running(d.Job), running("deploy"))
+	}
+
+	verdict := *d
+	verdict.State, verdict.Ended = execution.DispatchFailed, time.Now().UTC().Truncate(time.Microsecond)
+
+	if err := s.FinishDispatch(t.Context(), &verdict); err != nil {
+		t.Fatalf("FinishDispatch() = %v", err)
+	}
+
+	if running(d.Job) {
+		t.Errorf("RunningDispatch(%s) after the verdict = true, want false", d.Job)
 	}
 }
 

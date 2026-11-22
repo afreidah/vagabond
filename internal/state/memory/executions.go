@@ -180,6 +180,21 @@ func (s *Executions) GetDispatch(_ context.Context, id execution.ID) (*execution
 	return &stored, nil
 }
 
+// RunningDispatch reports whether any dispatch of a job has no verdict yet,
+// whichever server owns it.
+func (s *Executions) RunningDispatch(_ context.Context, namespace, job string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for id := range s.dispatches {
+		if d := s.dispatches[id]; d.Namespace == namespace && d.Job == job && d.State == execution.DispatchRunning {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 // Ping reports the store reachable, which memory always is.
 func (s *Executions) Ping(context.Context) error {
 	return nil

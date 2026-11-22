@@ -252,7 +252,7 @@ func TestRegister(t *testing.T) {
 	h := newHarness(t)
 
 	h.jobs.EXPECT().
-		Register(gomock.Any(), "default", "hello", []byte(helloJob), gomock.Any()).
+		Register(gomock.Any(), "default", "hello", []byte(helloJob), gomock.Nil(), gomock.Any()).
 		Return(int64(1), true, nil)
 
 	var resp api.RegisterResponse
@@ -705,7 +705,7 @@ func TestServeListener_ResumesAnAbandonedDispatch(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 
-	srv := New(reg, led, executions, NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler))
+	srv := New(reg, led, executions, memory.NewJobs(), memory.NewProviders(), slog.New(slog.DiscardHandler))
 
 	serveCtx, stop := context.WithCancel(ctx)
 	defer stop()
@@ -749,7 +749,7 @@ func TestServeListener_StopsOnCancel(t *testing.T) {
 	reg := NewMockserverRegistry(ctrl)
 	reg.EXPECT().SetDisabled(map[string]state.Disabled{})
 
-	srv := New(reg, led, memory.NewExecutions(), NewMockserverJobs(ctrl), memory.NewProviders(),
+	srv := New(reg, led, memory.NewExecutions(), memory.NewJobs(), memory.NewProviders(),
 		slog.New(slog.DiscardHandler))
 
 	ctx, cancel := context.WithCancel(t.Context())

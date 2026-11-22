@@ -414,7 +414,7 @@ func TestServeListener_ShutdownEndsFollows(t *testing.T) {
 	}
 
 	reg, led := fixtures(t)
-	srv := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)),
+	srv := New(reg, led, memory.NewExecutions(), memory.NewJobs(),
 		memory.NewProviders(), slog.New(slog.DiscardHandler))
 
 	ctx, cancel := context.WithCancel(t.Context())

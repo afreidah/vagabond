@@ -253,13 +253,16 @@ func whole(v float64) string {
 	return b.String()
 }
 
-// usageAge says when the usage shown was read, and how long before now.
+// usageAge says when the usage shown was read, and how long before now. A
+// server clock running ahead of this one still reads as just now.
 func usageAge(refreshed, now time.Time) string {
 	if refreshed.IsZero() {
 		return "Usage has not been read yet."
 	}
 
-	age := max(now.Sub(refreshed), 0).Round(time.Second)
+	if refreshed.After(now) {
+		now = refreshed
+	}
 
-	return fmt.Sprintf("Usage as of %s (%s ago).", stamp(refreshed), age)
+	return fmt.Sprintf("Usage as of %s.", when(refreshed, now))
 }

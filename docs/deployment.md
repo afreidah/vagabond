@@ -88,8 +88,10 @@ What startup does, in order:
    quota usage ([database](database.md#startup)).
 5. Loads the `tls` certificate and CA, warns when the API is reachable beyond
    loopback without a `ca`, then listens for agents on `agent_bind`.
-6. Binds `bind`, claims dispatches whose lease lapsed, reaps stale quota
-   reservations, starts the upkeep loops, then serves the API.
+6. Binds `bind`, reads which providers are disabled, claims dispatches whose
+   lease lapsed, reaps stale quota reservations, starts the upkeep loops, then
+   serves the API. The first pass of periodic launches starts at once, beside
+   serving.
 
 On `SIGINT` or `SIGTERM` the server stops accepting requests and gives
 in-flight ones 10 seconds to finish. Dispatches it is running are not
@@ -280,6 +282,7 @@ Safe:
 | Reaping | `FOR UPDATE SKIP LOCKED`; two reapers never resolve the same reservation |
 | Registering a job | Serializable; concurrent registers are retried |
 | Disabling a provider | One insert that keeps an existing row; every server reads the table every 5s |
+| Periodic launches | One `UPDATE` per launch, guarded by the last launch and version the server read; one server makes each launch. A job registered through one server is seen by the others within a minute |
 
 Not safe, or not shared:
 

@@ -49,20 +49,17 @@ func (s *Server) dispatchJob(_ http.ResponseWriter, r *http.Request) (any, error
 		return nil, err
 	}
 
-	parsed, diags, err := jobs.ForDispatch(fmt.Sprintf("%s (version %d)", name, version.Version), version.Source, req.Meta)
+	j, err := loadVersion(version, req.Meta)
 	if err != nil {
-		return nil, badRequest(err)
+		return nil, err
 	}
 
-	if diags.HasErrors() {
-		return nil, invalidJob(diags)
-	}
-
-	return s.launch(r.Context(), dispatch.Origin{Namespace: ns, JobVersion: version.Version}, &parsed.Spec.Jobs[0], req.Meta)
+	return s.launch(r.Context(), dispatch.Origin{Namespace: ns, JobVersion: version.Version}, j, req.Meta)
 }
 
 // runJob starts a run of a job file without registering it, the API's
-// equivalent of job run.
+// equivalent of job run. A periodic job is refused: only its schedule
+// launches it, once it is registered.
 func (s *Server) runJob(_ http.ResponseWriter, r *http.Request) (any, error) {
 	var req api.RunRequest
 	if err := decode(r, &req); err != nil {
@@ -75,6 +72,10 @@ func (s *Server) runJob(_ http.ResponseWriter, r *http.Request) (any, error) {
 	}
 
 	j := &parsed.Spec.Jobs[0]
+
+	if j.Periodic != nil {
+		return nil, badRequest(fmt.Errorf("job %q is periodic; register it with vagabond job register", j.Name))
+	}
 
 	ns, err := s.namespace(r, j)
 	if err != nil {
@@ -109,14 +110,30 @@ func (s *Server) dispatchStatus(_ http.ResponseWriter, r *http.Request) (any, er
 // RUNNING
 // -------------------------------------------------------------------------
 
+// loadVersion loads a registered version of a job with meta, refusing
+// metadata the job does not declare. A refusal and a version that no longer
+// loads are both the caller's to fix.
+func loadVersion(v *jobs.Version, meta map[string]string) (*job.Job, error) {
+	parsed, diags, err := jobs.ForDispatch(fmt.Sprintf("%s (version %d)", v.Name, v.Version), v.Source, meta)
+	if err != nil {
+		return nil, badRequest(err)
+	}
+
+	if diags.HasErrors() {
+		return nil, invalidJob(diags)
+	}
+
+	return &parsed.Spec.Jobs[0], nil
+}
+
 // launch records a run of j and starts it in the background. The record exists
 // before this returns, and the run's own context outlives the request.
 func (s *Server) launch(
 	ctx context.Context, origin dispatch.Origin, j *job.Job, meta map[string]string,
-) (any, error) {
+) (api.DispatchResponse, error) {
 	origin, err := s.dispatcher.Begin(ctx, origin, j)
 	if err != nil {
-		return nil, err
+		return api.DispatchResponse{}, err
 	}
 
 	id := origin.Dispatch

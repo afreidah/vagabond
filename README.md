@@ -54,6 +54,10 @@ does not use or require Nomad.
   platform's billed usage when it reports one.
 - Registered jobs: versioned on change, dispatched by name, parameterized with
   `meta_required` and `meta_optional`. Tasks receive `VAGABOND_META_<KEY>`.
+- Periodic jobs: a registered job with a `periodic` block launches whenever
+  one of its crons matches, in a time zone of its choosing, once across every
+  server sharing the store, optionally skipping a launch while the last one
+  runs.
 - Namespaces, declared in configuration.
 - Execution history: every dispatch and attempt, with its whole output up to a
   16 MiB ceiling that keeps the end, for 7 days by default.
@@ -134,7 +138,7 @@ See [quickstart.md](docs/quickstart.md). `make install` puts the binary on your
 | `job validate <file>` | Parse and validate |
 | `job plan <file or name>` | Show where each task would run, and why |
 | `job run <file>` | Run a job file without registering it |
-| `job register <file>` | Store a job as a new version when it changed |
+| `job register <file>` | Store a job as a new version when it changed; a periodic job then launches on its schedule |
 | `job dispatch <name>` | Run a registered job's current version |
 | `job status [name]` | Registered jobs, or one job's versions and recent executions |
 | `job stop <name>` | Stop a registered job from being dispatched |
@@ -252,8 +256,7 @@ Not implemented yet. Tracked in [issues](https://github.com/afreidah/vagabond/is
 - Own nodes: Firecracker on arm64.
 - Server: API tokens scoped to namespaces, degraded mode that keeps
   dispatching through a store outage.
-- Operations: periodic jobs, an event stream, blocking queries, disabling a
-  provider at runtime.
+- Operations: an event stream and blocking queries.
 - Jobs: submission hooks, variables and workload identity, execution garbage
   collection, fetching a job's source on the node.
 - Providers: a `worker` plugin.

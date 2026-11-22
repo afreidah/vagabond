@@ -5,8 +5,9 @@ description: "Every periodic and long-running goroutine the server and agent run
 weight: 440
 ---
 
-The server keeps its view of providers, quota and dispatches current, and its
-stored output within its retention, with six upkeep loops, and runs each
+The server keeps its view of providers, quota and dispatches current, its
+stored output within its retention, and its periodic jobs launching, with
+seven upkeep loops, and runs each
 dispatch, execution, lease, agent session and followed log stream in its own
 goroutine. The agent holds one connection to the server and reports its
 workloads on a timer. None of the loops apply jitter, and none take a lock
@@ -28,6 +29,7 @@ Interactive version, with notes on each loop:
 | [Reservation reaper](#reservation-reaper) | 5m | Yes, before serving | Store: reservations over 1h old and their execution records | Reservation kept, warn |
 | [Dispatch claim](#dispatch-claim) | 30s | Yes, before serving | Store: dispatches not done with a lapsed lease | Warn, retried next tick |
 | [Output retention](#output-retention) | 1h | No | Store: stored output of executions that ended over `log_retention` ago | Warn, retried next tick |
+| [Periodic launches](#periodic-launches) | Until the next launch is due, 1m at most | Yes, without holding up serving | Store: periodic jobs and their last launch; one dispatch per launch | Warn, retried within 1m |
 | [Dispatch runner](#dispatch-runner) | Per dispatch | | Store, ledger | Dispatch ends `unanswered` |
 | [Execution runner](#execution-runner) | Per execution, polling 2s to 15s | | Provider, store, ledger | Write retried, warn; refused write stops it |
 | [Lease renewal](#lease-renewal) | 20s per open dispatch | | Store: the dispatch's lease | Ignored; stale lease stops every runner |
@@ -53,14 +55,15 @@ not swept ([Node reservations](#node-reservations)).
 
 ## Server
 
-The six upkeep loops start when the server begins serving and stop when it
+The seven upkeep loops start when the server begins serving and stop when it
 shuts down. Each tick runs synchronously; a run longer than its interval is
 followed immediately by the next, and ticks do not pile up. The first tick is
 one interval after startup. Capability refresh, usage refresh, the disabled
 provider read, the reaper and the claim each ran once before serving, the
 disabled provider read before the claim so resumed dispatches already avoid
 those providers; output retention has no startup pass, so its first pass is
-1h in.
+1h in. Periodic launches are the exception: the first pass runs at once,
+beside serving, and each pass sets when the next one runs.
 A failure is logged and waits for the next tick; one loop failing never stops
 another. A panic in a tick is logged at error as `recovered a panic`, with
 the loop named in `in` and the stack, and the next tick runs as usual. Panics
@@ -212,10 +215,44 @@ execution was released, and resumes each ([Resuming](dispatch.md#resuming)).
 `state` and `reason` once every execution is released, or warn `resuming
 dispatch` with the error.
 
+### Periodic launches
+
+Launches registered jobs that have a
+[`periodic`](job-specification.md#periodic-block) block, each time one of their
+crons matches.
+
+| | |
+|---|---|
+| Interval | Until the earliest next launch of any periodic job, 1m at most |
+| At startup | At once, without holding up serving |
+| Also | Straight after a `job register` or `job stop` on this server |
+| Selects | Every job, in any namespace, that has a schedule and is not stopped |
+| Touches | Store: `jobs` and `periodic_launches` ([Database](database.md#periodic_launches)); `dispatches`, for a schedule with `prohibit_overlap` |
+
+- A job is due once its next match after its last launch has come. Several
+  missed matches make one launch.
+- A due launch is claimed by moving the job's last launch to now, checked
+  against the version the server read and that the job is not stopped. Only
+  the server whose claim changed the row dispatches, so running the loop on
+  every server is safe.
+- With `prohibit_overlap`, a claimed launch whose job still has a dispatch
+  running is skipped, and counts as made.
+- Otherwise the claimed version is loaded with no metadata and dispatched as
+  `job dispatch` would, on a [dispatch runner](#dispatch-runner).
+- One job failing does not hold up the others. A job whose launch failed
+  waits for its next match rather than retrying at once.
+- The 1m limit is how soon a job registered through another server is seen.
+
+**Logs:** info `periodic launch` with `job`, `namespace`, `version` and
+`dispatch`; info `periodic launch skipped` with `reason` when overlap is
+prohibited; warn `launching periodic jobs` with every failing job's error
+joined.
+
 ### Dispatch runner
 
 One goroutine per dispatch started through `POST /v1/jobs/run` or
-`POST /v1/job/{name}/dispatch`. Runs the job's tasks in order, starting an
+`POST /v1/job/{name}/dispatch`, or by a [periodic launch](#periodic-launches).
+Runs the job's tasks in order, starting an
 [execution runner](#execution-runner) for each attempt, records how it ended,
 then waits for every execution to be released and marks the dispatch done
 ([Dispatch](dispatch.md)).
@@ -444,6 +481,7 @@ store keeps them apart:
 | Service | Coordination |
 |---|---|
 | Dispatch claim | One `UPDATE ... RETURNING` statement: a lapsed dispatch goes to exactly one server, under a new epoch |
+| Periodic launches | One `UPDATE` per launch, guarded by the last launch and version the server read: each launch is made by exactly one server |
 | Execution runners | Every execution and output write is checked against the dispatch's lease, so only the current holder's land; a runner whose write is refused stops |
 | Reservation reaper | Row locks with `SKIP LOCKED`: each stale reservation is resolved by one server |
 | Output retention | Deleting what another server already deleted deletes nothing |

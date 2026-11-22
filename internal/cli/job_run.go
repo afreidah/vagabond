@@ -34,7 +34,9 @@ func (c *JobRunCommand) Help() string {
 Usage: vagabond job run [options] <path>
 
   Sends a job to the server, which dispatches it to the best provider, and
-  waits for it to finish. The job is not registered.
+  waits for it to finish. The job is not registered. A job with a periodic
+  block is refused: register it with vagabond job register, and its schedule
+  launches it.
 
   Tasks run in the order they are declared, and the job stops at the first one
   that fails. A provider that fails to give an answer is abandoned and the next

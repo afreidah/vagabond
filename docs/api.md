@@ -173,7 +173,10 @@ Parses and validates the job file in full, then stores it as a new version when
 it differs from the current version once both are formatted; reformatting a
 file alone adds no version. Declared `${meta.<key>}` references
 are validated as placeholders; values arrive at dispatch. Registering a stopped
-job always creates a new version and un-stops it.
+job always creates a new version and un-stops it. A job with a
+[`periodic`](job-specification.md#periodic-block) block launches on its
+schedule from then on, and registering wakes this server's scheduler so a
+launch sooner than its next check is not missed.
 
 | Parameter | In | Description |
 |---|---|---|
@@ -208,6 +211,7 @@ Response, `RegisterResponse`:
 | `Name` | Job name from the file |
 | `Version` | Current version after the call |
 | `Changed` | `false` when the formatted source matched the current version and nothing was stored |
+| `NextLaunch` | When a periodic job next launches, in UTC. Left out for any other job |
 
 Errors: 400 (invalid job, namespace), 503.
 
@@ -243,6 +247,22 @@ Response, `[]Job`:
 | `Version` | Current version |
 | `Stopped` | `true` after [stop](#stop-a-job) until registered again |
 | `Updated` | Last register or stop |
+| `Periodic` | For a periodic job that is not stopped: `Crons`, `TimeZone` and `ProhibitOverlap`, with the zone and overlap rule filled in when the job file leaves them out. Left out for any other job |
+| `NextLaunch` | When that job next launches, in UTC. Left out with `Periodic` |
+
+A periodic job's entry:
+
+```json
+{
+  "Namespace": "default",
+  "Name": "nightly-lint",
+  "Version": 1,
+  "Stopped": false,
+  "Updated": "2026-11-22T12:47:55Z",
+  "Periodic": { "Crons": ["0 3 * * *"], "TimeZone": "UTC", "ProhibitOverlap": true },
+  "NextLaunch": "2026-11-23T03:00:00Z"
+}
+```
 
 Errors: 400 (namespace), 503.
 
@@ -287,9 +307,11 @@ Errors: 400 (namespace), 404, 503.
 
 `DELETE /v1/job/{name}`
 
-Marks the job stopped so it can no longer be dispatched. Versions and
-executions are kept; running dispatches are not cancelled. Registering the job
-again revives it. Stopping a stopped job succeeds and changes `Updated`.
+Marks the job stopped so it can no longer be dispatched, and a periodic job
+stops launching. Versions and executions are kept; running dispatches are not
+cancelled. Registering the job again revives it, and a periodic one starts from
+the first match after that. Stopping a stopped job succeeds and changes
+`Updated`.
 
 | Parameter | In | Description |
 |---|---|---|
@@ -389,7 +411,10 @@ response, and the dispatch ends `unanswered` with the reason in `Error`.
 `POST /v1/jobs/run`
 
 Runs a job file once without registering it. The dispatch records
-`JobVersion: 0`.
+`JobVersion: 0`. A file with a [`periodic`](job-specification.md#periodic-block)
+block is refused with 400,
+`job "<job>" is periodic; register it with vagabond job register`: only its
+schedule launches it, once it is registered.
 
 | Parameter | In | Description |
 |---|---|---|
@@ -411,7 +436,8 @@ Request, `RunRequest`:
 
 Response: `DispatchResponse`, as for [dispatch](#dispatch-a-registered-job).
 
-Errors: 400 (invalid job or metadata, with `Diagnostics`; namespace), 503.
+Errors: 400 (invalid job or metadata, with `Diagnostics`; a periodic job;
+namespace), 503.
 
 ### Read a dispatch
 
@@ -550,6 +576,7 @@ Response, `Plan`:
 | `EstimatedCost` | Estimated cost of `Selected`; always `0` |
 | `Retryable` | With no `Selected`: `true` when the refusal may clear on its own (quota recovering, provider healthy again) |
 | `Tiers` | Tier mode the candidates were ordered under: `strict` or `weighted` (see [tiers](scheduling.md#tiers)) |
+| `NextLaunch` | With a `Source` that has a [`periodic`](job-specification.md#periodic-block) block: when the job would first launch if it were registered now, in UTC. Left out otherwise |
 
 Errors: 400 (invalid job or metadata, both `Source` and `Name`, namespace), 404
 and 409 (with `Name`: not registered, stopped), 503 (with `Name`).

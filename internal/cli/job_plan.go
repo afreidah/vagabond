@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/afreidah/vagabond/internal/api"
 )
@@ -52,6 +53,9 @@ Usage: vagabond job plan [options] <path or name>
   An argument that exists as a file is read as one, and "-" reads standard
   input. Anything else names a registered job, whose current version is
   planned with its metadata checked as dispatch checks it.
+
+  For a file with a periodic block, the plan also says when the job would
+  first launch if it were registered now.
 
   No provider is contacted. The server plans from capability snapshots
   gathered earlier, so a plan is only as current as its data and can be wrong
@@ -133,8 +137,9 @@ func isFile(arg string) bool {
 // RENDERING
 // -------------------------------------------------------------------------
 
-// render prints every task's plan, a blank line between tasks, and returns
-// failure when any task has nowhere to run.
+// render prints every task's plan, a blank line between tasks, then when a
+// periodic job would first launch, and returns failure when any task has
+// nowhere to run.
 func (c *JobPlanCommand) render(plan *api.Plan, verbose bool) int {
 	code := ExitSuccess
 
@@ -146,6 +151,12 @@ func (c *JobPlanCommand) render(plan *api.Plan, verbose bool) int {
 		if !c.renderTask(&plan.Tasks[i], verbose) {
 			code = ExitFailure
 		}
+	}
+
+	if plan.NextLaunch != nil {
+		c.Ui.Output("")
+		c.Ui.Output(fmt.Sprintf("If registered now, the next launch would be at %s.",
+			when(*plan.NextLaunch, time.Now())))
 	}
 
 	return code

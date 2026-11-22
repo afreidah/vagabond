@@ -16,6 +16,7 @@ import (
 	time "time"
 
 	execution "github.com/afreidah/vagabond/internal/execution"
+	job "github.com/afreidah/vagabond/internal/job"
 	jobs "github.com/afreidah/vagabond/internal/jobs"
 	ledger "github.com/afreidah/vagabond/internal/ledger"
 	plugin "github.com/afreidah/vagabond/internal/plugin"
@@ -513,6 +514,21 @@ func (mr *MockserverExecutionsMockRecorder) RequestCancel(ctx, id, at any) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RequestCancel", reflect.TypeOf((*MockserverExecutions)(nil).RequestCancel), ctx, id, at)
 }
 
+// RunningDispatch mocks base method.
+func (m *MockserverExecutions) RunningDispatch(ctx context.Context, namespace, arg2 string) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RunningDispatch", ctx, namespace, arg2)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RunningDispatch indicates an expected call of RunningDispatch.
+func (mr *MockserverExecutionsMockRecorder) RunningDispatch(ctx, namespace, arg2 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RunningDispatch", reflect.TypeOf((*MockserverExecutions)(nil).RunningDispatch), ctx, namespace, arg2)
+}
+
 // Save mocks base method.
 func (m *MockserverExecutions) Save(ctx context.Context, r *execution.Record, lease execution.Lease) error {
 	m.ctrl.T.Helper()
@@ -551,6 +567,21 @@ func (m *MockserverJobs) EXPECT() *MockserverJobsMockRecorder {
 	return m.recorder
 }
 
+// ClaimLaunch mocks base method.
+func (m *MockserverJobs) ClaimLaunch(ctx context.Context, j *jobs.Job, now time.Time) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ClaimLaunch", ctx, j, now)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ClaimLaunch indicates an expected call of ClaimLaunch.
+func (mr *MockserverJobsMockRecorder) ClaimLaunch(ctx, j, now any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClaimLaunch", reflect.TypeOf((*MockserverJobs)(nil).ClaimLaunch), ctx, j, now)
+}
+
 // Job mocks base method.
 func (m *MockserverJobs) Job(ctx context.Context, namespace, name string) (*jobs.Job, error) {
 	m.ctrl.T.Helper()
@@ -581,10 +612,25 @@ func (mr *MockserverJobsMockRecorder) Jobs(ctx, namespace any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Jobs", reflect.TypeOf((*MockserverJobs)(nil).Jobs), ctx, namespace)
 }
 
-// Register mocks base method.
-func (m *MockserverJobs) Register(ctx context.Context, namespace, name string, source []byte, now time.Time) (int64, bool, error) {
+// PeriodicJobs mocks base method.
+func (m *MockserverJobs) PeriodicJobs(ctx context.Context) ([]*jobs.Job, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Register", ctx, namespace, name, source, now)
+	ret := m.ctrl.Call(m, "PeriodicJobs", ctx)
+	ret0, _ := ret[0].([]*jobs.Job)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// PeriodicJobs indicates an expected call of PeriodicJobs.
+func (mr *MockserverJobsMockRecorder) PeriodicJobs(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PeriodicJobs", reflect.TypeOf((*MockserverJobs)(nil).PeriodicJobs), ctx)
+}
+
+// Register mocks base method.
+func (m *MockserverJobs) Register(ctx context.Context, namespace, name string, source []byte, periodic *job.Periodic, now time.Time) (int64, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Register", ctx, namespace, name, source, periodic, now)
 	ret0, _ := ret[0].(int64)
 	ret1, _ := ret[1].(bool)
 	ret2, _ := ret[2].(error)
@@ -592,9 +638,9 @@ func (m *MockserverJobs) Register(ctx context.Context, namespace, name string, s
 }
 
 // Register indicates an expected call of Register.
-func (mr *MockserverJobsMockRecorder) Register(ctx, namespace, name, source, now any) *gomock.Call {
+func (mr *MockserverJobsMockRecorder) Register(ctx, namespace, name, source, periodic, now any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Register", reflect.TypeOf((*MockserverJobs)(nil).Register), ctx, namespace, name, source, now)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Register", reflect.TypeOf((*MockserverJobs)(nil).Register), ctx, namespace, name, source, periodic, now)
 }
 
 // Stop mocks base method.

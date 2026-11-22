@@ -10,9 +10,44 @@ import (
 	"time"
 )
 
+const claimLaunch = `-- name: ClaimLaunch :execrows
+UPDATE periodic_launches p SET launched_at = $1
+WHERE p.namespace = $2 AND p.name = $3 AND p.launched_at = $4
+  AND EXISTS (
+    SELECT 1 FROM jobs j
+    WHERE j.namespace = p.namespace AND j.name = p.name
+      AND j.version = $5 AND NOT j.stopped
+  )
+`
+
+type ClaimLaunchParams struct {
+	Now       time.Time
+	Namespace string
+	Name      string
+	Last      time.Time
+	Version   int64
+}
+
+// Moves a job's last launch from the time the caller read to now, while the
+// job is still running the version the caller read. No row changes when
+// another server launched it first, or the job changed or stopped since.
+func (q *Queries) ClaimLaunch(ctx context.Context, arg ClaimLaunchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimLaunch,
+		arg.Now,
+		arg.Namespace,
+		arg.Name,
+		arg.Last,
+		arg.Version,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const currentJobVersion = `-- name: CurrentJobVersion :one
 
-SELECT j.version, j.stopped, v.fingerprint
+SELECT j.version, j.stopped, j.crons, v.fingerprint
 FROM jobs j
 JOIN job_versions v
   ON v.namespace = j.namespace AND v.name = j.name AND v.version = j.version
@@ -27,6 +62,7 @@ type CurrentJobVersionParams struct {
 type CurrentJobVersionRow struct {
 	Version     int64
 	Stopped     bool
+	Crons       []string
 	Fingerprint string
 }
 
@@ -35,19 +71,29 @@ type CurrentJobVersionRow struct {
 //
 // Registering is several statements in one serializable transaction: read the
 // current version, and only if the job changed, insert the next and point the
-// job at it. Two registers racing conflict and one is retried.
+// job at it, and record the time when it has just become periodic. Two
+// registers racing conflict and one is retried.
+//
+// A job's reads carry its last launch, which only a periodic job has.
 // -----------------------------------------------------------------------------
 func (q *Queries) CurrentJobVersion(ctx context.Context, arg CurrentJobVersionParams) (CurrentJobVersionRow, error) {
 	row := q.db.QueryRow(ctx, currentJobVersion, arg.Namespace, arg.Name)
 	var i CurrentJobVersionRow
-	err := row.Scan(&i.Version, &i.Stopped, &i.Fingerprint)
+	err := row.Scan(
+		&i.Version,
+		&i.Stopped,
+		&i.Crons,
+		&i.Fingerprint,
+	)
 	return i, err
 }
 
 const getJob = `-- name: GetJob :one
-SELECT namespace, name, version, stopped, updated_at
-FROM jobs
-WHERE namespace = $1 AND name = $2
+SELECT j.namespace, j.name, j.version, j.stopped, j.updated_at,
+       j.crons, j.time_zone, j.prohibit_overlap, p.launched_at
+FROM jobs j
+LEFT JOIN periodic_launches p ON p.namespace = j.namespace AND p.name = j.name
+WHERE j.namespace = $1 AND j.name = $2
 `
 
 type GetJobParams struct {
@@ -55,15 +101,31 @@ type GetJobParams struct {
 	Name      string
 }
 
-func (q *Queries) GetJob(ctx context.Context, arg GetJobParams) (Job, error) {
+type GetJobRow struct {
+	Namespace       string
+	Name            string
+	Version         int64
+	Stopped         bool
+	UpdatedAt       time.Time
+	Crons           []string
+	TimeZone        string
+	ProhibitOverlap bool
+	LaunchedAt      *time.Time
+}
+
+func (q *Queries) GetJob(ctx context.Context, arg GetJobParams) (GetJobRow, error) {
 	row := q.db.QueryRow(ctx, getJob, arg.Namespace, arg.Name)
-	var i Job
+	var i GetJobRow
 	err := row.Scan(
 		&i.Namespace,
 		&i.Name,
 		&i.Version,
 		&i.Stopped,
 		&i.UpdatedAt,
+		&i.Crons,
+		&i.TimeZone,
+		&i.ProhibitOverlap,
+		&i.LaunchedAt,
 	)
 	return i, err
 }
@@ -168,27 +230,97 @@ func (q *Queries) ListJobVersions(ctx context.Context, arg ListJobVersionsParams
 }
 
 const listJobs = `-- name: ListJobs :many
-SELECT namespace, name, version, stopped, updated_at
-FROM jobs
-WHERE namespace = $1
-ORDER BY name
+SELECT j.namespace, j.name, j.version, j.stopped, j.updated_at,
+       j.crons, j.time_zone, j.prohibit_overlap, p.launched_at
+FROM jobs j
+LEFT JOIN periodic_launches p ON p.namespace = j.namespace AND p.name = j.name
+WHERE j.namespace = $1
+ORDER BY j.name
 `
 
-func (q *Queries) ListJobs(ctx context.Context, namespace string) ([]Job, error) {
+type ListJobsRow struct {
+	Namespace       string
+	Name            string
+	Version         int64
+	Stopped         bool
+	UpdatedAt       time.Time
+	Crons           []string
+	TimeZone        string
+	ProhibitOverlap bool
+	LaunchedAt      *time.Time
+}
+
+func (q *Queries) ListJobs(ctx context.Context, namespace string) ([]ListJobsRow, error) {
 	rows, err := q.db.Query(ctx, listJobs, namespace)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Job{}
+	items := []ListJobsRow{}
 	for rows.Next() {
-		var i Job
+		var i ListJobsRow
 		if err := rows.Scan(
 			&i.Namespace,
 			&i.Name,
 			&i.Version,
 			&i.Stopped,
 			&i.UpdatedAt,
+			&i.Crons,
+			&i.TimeZone,
+			&i.ProhibitOverlap,
+			&i.LaunchedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPeriodicJobs = `-- name: ListPeriodicJobs :many
+SELECT j.namespace, j.name, j.version, j.stopped, j.updated_at,
+       j.crons, j.time_zone, j.prohibit_overlap, p.launched_at
+FROM jobs j
+LEFT JOIN periodic_launches p ON p.namespace = j.namespace AND p.name = j.name
+WHERE NOT j.stopped AND j.crons <> '{}'
+ORDER BY j.namespace, j.name
+`
+
+type ListPeriodicJobsRow struct {
+	Namespace       string
+	Name            string
+	Version         int64
+	Stopped         bool
+	UpdatedAt       time.Time
+	Crons           []string
+	TimeZone        string
+	ProhibitOverlap bool
+	LaunchedAt      *time.Time
+}
+
+// Every job in any namespace that launches on a schedule.
+func (q *Queries) ListPeriodicJobs(ctx context.Context) ([]ListPeriodicJobsRow, error) {
+	rows, err := q.db.Query(ctx, listPeriodicJobs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPeriodicJobsRow{}
+	for rows.Next() {
+		var i ListPeriodicJobsRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Name,
+			&i.Version,
+			&i.Stopped,
+			&i.UpdatedAt,
+			&i.Crons,
+			&i.TimeZone,
+			&i.ProhibitOverlap,
+			&i.LaunchedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -201,29 +333,57 @@ func (q *Queries) ListJobs(ctx context.Context, namespace string) ([]Job, error)
 }
 
 const pointJobAt = `-- name: PointJobAt :exec
-INSERT INTO jobs (namespace, name, version, stopped, updated_at)
-VALUES ($1, $2, $3, FALSE, $4)
+INSERT INTO jobs (namespace, name, version, stopped, updated_at, crons, time_zone, prohibit_overlap)
+VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7)
 ON CONFLICT (namespace, name) DO UPDATE SET
-    version    = EXCLUDED.version,
-    stopped    = FALSE,
-    updated_at = EXCLUDED.updated_at
+    version          = EXCLUDED.version,
+    stopped          = FALSE,
+    updated_at       = EXCLUDED.updated_at,
+    crons            = EXCLUDED.crons,
+    time_zone        = EXCLUDED.time_zone,
+    prohibit_overlap = EXCLUDED.prohibit_overlap
 `
 
 type PointJobAtParams struct {
-	Namespace string
-	Name      string
-	Version   int64
-	UpdatedAt time.Time
+	Namespace       string
+	Name            string
+	Version         int64
+	UpdatedAt       time.Time
+	Crons           []string
+	TimeZone        string
+	ProhibitOverlap bool
 }
 
-// Makes version current and the job dispatchable again.
+// Makes version current with its schedule, and the job dispatchable again.
 func (q *Queries) PointJobAt(ctx context.Context, arg PointJobAtParams) error {
 	_, err := q.db.Exec(ctx, pointJobAt,
 		arg.Namespace,
 		arg.Name,
 		arg.Version,
 		arg.UpdatedAt,
+		arg.Crons,
+		arg.TimeZone,
+		arg.ProhibitOverlap,
 	)
+	return err
+}
+
+const resetLaunch = `-- name: ResetLaunch :exec
+INSERT INTO periodic_launches (namespace, name, launched_at)
+VALUES ($1, $2, $3)
+ON CONFLICT (namespace, name) DO UPDATE SET launched_at = EXCLUDED.launched_at
+`
+
+type ResetLaunchParams struct {
+	Namespace  string
+	Name       string
+	LaunchedAt time.Time
+}
+
+// Records when a job became periodic, so its first launch waits for the next
+// time a cron matches.
+func (q *Queries) ResetLaunch(ctx context.Context, arg ResetLaunchParams) error {
+	_, err := q.db.Exec(ctx, resetLaunch, arg.Namespace, arg.Name, arg.LaunchedAt)
 	return err
 }
 

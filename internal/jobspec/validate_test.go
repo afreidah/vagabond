@@ -72,12 +72,19 @@ func routed(body string) string {
 		"type = \"batch\"\n\n  routing {\n"+body+"\n  }", 1)
 }
 
+// periodic adds a periodic block to the minimal job, for the rules that check
+// a schedule.
+func periodic(body string) string {
+	return strings.Replace(minimalJob, `type = "batch"`,
+		"type = \"batch\"\n\n  periodic {\n"+body+"\n  }", 1)
+}
+
 // -------------------------------------------------------------------------
 // THE VALID CASE
 // -------------------------------------------------------------------------
 
-// The fixture uses every block the specification defines, so it is the strongest
-// statement that the rules do not fire on a correct job.
+// The fixture uses every block the specification defines but periodic, so it is
+// the strongest statement that the rules do not fire on a correct job.
 func TestValidate_FixtureIsClean(t *testing.T) {
 	file, diags := ParseFile(fixturePath, map[string]string{"version": "abc123"})
 	if diags.HasErrors() {
@@ -497,6 +504,87 @@ func TestValidate_NonPositiveAffinityWeight(t *testing.T) {
 
 	if !mentions(messages, "Invalid affinity weight") {
 		t.Errorf("diagnostics do not report the weight: %v", messages)
+	}
+}
+
+// -------------------------------------------------------------------------
+// PERIODIC
+// -------------------------------------------------------------------------
+
+// A periodic block using every attribute produces no diagnostics, so the
+// schedule rules do not fire on a correct one.
+func TestValidate_PeriodicJobIsClean(t *testing.T) {
+	messages := validate(t, periodic(`
+    crons            = ["0 3 * * 1-5", "@hourly"]
+    time_zone        = "Europe/Berlin"
+    prohibit_overlap = true
+    enabled          = true`), nil)
+
+	if len(messages) != 0 {
+		t.Errorf("a valid periodic job produced diagnostics: %v", messages)
+	}
+}
+
+// Each schedule a periodic block cannot launch by is reported with the cron
+// or zone at fault.
+func TestValidate_PeriodicSchedule(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		fragments []string
+	}{
+		{
+			name:      "no crons",
+			body:      `crons = []`,
+			fragments: []string{"No crons", "at least one"},
+		},
+		{
+			name:      "unsupported macro",
+			body:      `crons = ["@5minutes"]`,
+			fragments: []string{"Invalid cron", "@5minutes", "five fields"},
+		},
+		{
+			name:      "no date matches",
+			body:      `crons = ["0 0 30 2 *"]`,
+			fragments: []string{"Invalid cron", "no date matches"},
+		},
+		{
+			name:      "unknown zone",
+			body:      "crons = [\"@daily\"]\n    time_zone = \"Mars/Base\"",
+			fragments: []string{"Invalid time zone", "Mars/Base", "UTC"},
+		},
+		{
+			name:      "local zone",
+			body:      "crons = [\"@daily\"]\n    time_zone = \"Local\"",
+			fragments: []string{"Invalid time zone", "Local"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			messages := validate(t, periodic(tt.body), nil)
+
+			if !mentions(messages, tt.fragments...) {
+				t.Errorf("diagnostics do not mention %v: %v", tt.fragments, messages)
+			}
+		})
+	}
+}
+
+// A periodic job cannot be parameterized, even with optional keys only, since
+// a scheduled launch has no metadata to give it.
+func TestValidate_PeriodicJobIsNotParameterized(t *testing.T) {
+	for _, list := range []string{"meta_required", "meta_optional"} {
+		t.Run(list, func(t *testing.T) {
+			src := strings.Replace(periodic(`crons = ["@daily"]`), `type = "batch"`,
+				"type = \"batch\"\n\n  parameterized {\n    "+list+" = [\"version\"]\n  }", 1)
+
+			messages := validate(t, src, map[string]string{"version": "abc123"})
+
+			if !mentions(messages, "is parameterized", "Remove one of the two") {
+				t.Errorf("diagnostics do not refuse the parameterized block: %v", messages)
+			}
+		})
 	}
 }
 
