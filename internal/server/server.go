@@ -64,10 +64,12 @@ type serverLedger interface {
 // serverExecutions is where runs and attempts are recorded, read back and
 // listed, where dispatches a dead owner left are claimed and cancels are
 // requested, where stored output is read and pruned, and whose reachability
-// health reports.
+// health reports. A schedule that prohibits overlap asks it whether a job
+// still has a dispatch running.
 type serverExecutions interface {
 	dispatch.Executions
 	GetDispatch(ctx context.Context, id execution.ID) (*execution.Dispatch, error)
+	RunningDispatch(ctx context.Context, namespace, job string) (bool, error)
 	ListExecutions(ctx context.Context, f execution.Filter) ([]*execution.Record, error)
 	ClaimDispatches(
 		ctx context.Context, owner string, now, until time.Time, skip []execution.ID,
@@ -79,13 +81,18 @@ type serverExecutions interface {
 }
 
 // serverJobs is where registered jobs live: storing versions and reading them
-// back.
+// back, listing the jobs that launch on a schedule, and claiming each
+// scheduled launch so only one server makes it.
 type serverJobs interface {
 	jobs.Reader
-	Register(ctx context.Context, namespace, name string, source []byte, now time.Time) (int64, bool, error)
+	Register(
+		ctx context.Context, namespace, name string, source []byte, periodic *job.Periodic, now time.Time,
+	) (int64, bool, error)
 	Jobs(ctx context.Context, namespace string) ([]*jobs.Job, error)
 	Versions(ctx context.Context, namespace, name string) ([]*jobs.Version, error)
 	Stop(ctx context.Context, namespace, name string, now time.Time) error
+	PeriodicJobs(ctx context.Context) ([]*jobs.Job, error)
+	ClaimLaunch(ctx context.Context, j *jobs.Job, now time.Time) (bool, error)
 }
 
 // serverProviders is where providers turned off through the API are kept, so
@@ -125,6 +132,10 @@ type Server struct {
 	followLinger time.Duration
 	stopping     chan struct{} // closed when shutdown begins, ending every live output stream
 	stopOnce     sync.Once
+
+	// A register or stop on this server sends here, so the next scheduled
+	// launch is worked out again at once.
+	wake chan struct{}
 
 	mu      sync.Mutex
 	running map[execution.ID]context.CancelFunc
@@ -195,6 +206,7 @@ func New(
 		followPoll:   defaultFollowPoll,
 		followLinger: defaultFollowLinger,
 		stopping:     make(chan struct{}),
+		wake:         make(chan struct{}, 1),
 		running:      make(map[execution.ID]context.CancelFunc),
 		nodeConns:    nodes.New(),
 	}

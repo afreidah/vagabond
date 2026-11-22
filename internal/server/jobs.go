@@ -21,7 +21,8 @@ import (
 const recentExecutions = 20
 
 // registerJob stores a job's source as a new version when it changed, and
-// answers with the version it is at.
+// answers with the version it is at and, for a periodic job, when it next
+// launches.
 func (s *Server) registerJob(_ http.ResponseWriter, r *http.Request) (any, error) {
 	var req api.RegisterRequest
 	if err := decode(r, &req); err != nil {
@@ -40,12 +41,26 @@ func (s *Server) registerJob(_ http.ResponseWriter, r *http.Request) (any, error
 		return nil, err
 	}
 
-	version, changed, err := s.jobs.Register(r.Context(), ns, j.Name, []byte(req.Source), s.now())
+	version, changed, err := s.jobs.Register(r.Context(), ns, j.Name, []byte(req.Source), j.Periodic, s.now())
 	if err != nil {
 		return nil, err
 	}
 
-	return api.RegisterResponse{Namespace: ns, Name: j.Name, Version: version, Changed: changed}, nil
+	s.wakeLaunches()
+
+	resp := api.RegisterResponse{Namespace: ns, Name: j.Name, Version: version, Changed: changed}
+
+	// The next launch counts from the last launch the store kept for the job
+	if j.Periodic.Active() {
+		stored, err := s.jobs.Job(r.Context(), ns, j.Name)
+		if err != nil {
+			return nil, err
+		}
+
+		resp.NextLaunch = jobOf(stored).NextLaunch
+	}
+
+	return resp, nil
 }
 
 // listJobs answers with every job registered in the namespace, stopped ones
@@ -120,6 +135,8 @@ func (s *Server) stopJob(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err := s.jobs.Stop(r.Context(), ns, name, s.now()); err != nil {
 		return nil, err
 	}
+
+	s.wakeLaunches()
 
 	j, err := s.jobs.Job(r.Context(), ns, name)
 	if err != nil {

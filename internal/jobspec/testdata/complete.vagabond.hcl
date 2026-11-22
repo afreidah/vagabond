@@ -4,7 +4,9 @@
 # Project: Vagabond / Author: Alex Freidah
 #
 # Exercises every block and attribute the specification defines, so that the
-# parser is tested against a job using all of them at once.
+# parser is tested against a job using all of them at once. The periodic block
+# is the exception: a periodic job cannot be parameterized, and this one is, so
+# it is tested on its own.
 #
 # This is a fixture, not an example. It lives here rather than in examples/ so
 # that the test suite does not break when an illustrative file is edited, and so

@@ -45,13 +45,14 @@ type File struct {
 // empty provider list that allows no provider.
 //
 // Namespace is nil when the job names none; the caller's -namespace or the
-// default namespace applies.
+// default namespace applies. Periodic is nil for a job launched only by hand.
 type Job struct {
 	Name          string         `hcl:"name,label"`
 	Namespace     *string        `hcl:"namespace,optional"`
 	Type          *Type          `hcl:"type,optional"`
 	Meta          *RawBlock      `hcl:"meta,block"`
 	Parameterized *Parameterized `hcl:"parameterized,block"`
+	Periodic      *Periodic      `hcl:"periodic,block"`
 	Routing       *Routing       `hcl:"routing,block"`
 	Tasks         []Task         `hcl:"task,block"`
 }

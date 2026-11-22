@@ -21,21 +21,33 @@ type RegisterRequest struct {
 }
 
 // RegisterResponse reports the job's version after registering and whether
-// it changed.
+// it changed, and for a periodic job when it next launches.
 type RegisterResponse struct {
-	Namespace string
-	Name      string
-	Version   int64
-	Changed   bool
+	Namespace  string
+	Name       string
+	Version    int64
+	Changed    bool
+	NextLaunch *time.Time `json:",omitempty"`
 }
 
-// Job is a registered job's standing.
+// Job is a registered job's standing. Periodic and NextLaunch are set for a
+// job that launches on a schedule and is not stopped.
 type Job struct {
-	Namespace string
-	Name      string
-	Version   int64
-	Stopped   bool
-	Updated   time.Time
+	Namespace  string
+	Name       string
+	Version    int64
+	Stopped    bool
+	Updated    time.Time
+	Periodic   *Periodic  `json:",omitempty"`
+	NextLaunch *time.Time `json:",omitempty"`
+}
+
+// Periodic is the schedule a registered job launches by, with its time zone
+// and overlap rule filled in when the job file left them out.
+type Periodic struct {
+	Crons           []string
+	TimeZone        string
+	ProhibitOverlap bool
 }
 
 // JobVersion is one registered version, without its source.
@@ -104,9 +116,11 @@ type PlanRequest struct {
 	Meta   map[string]string
 }
 
-// Plan is where every task would run.
+// Plan is where every task would run. NextLaunch is set for a periodic job
+// file: when it would first launch if it were registered now.
 type Plan struct {
-	Tasks []TaskPlan
+	Tasks      []TaskPlan
+	NextLaunch *time.Time `json:",omitempty"`
 }
 
 // TaskPlan is one task's admission and ranking. Selected is empty when nothing

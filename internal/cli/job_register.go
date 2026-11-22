@@ -3,8 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// Stores a job on the server so it can be dispatched by name. Nothing runs. A
-// new version is made only when the job changed.
+// Stores a job on the server so it can be dispatched by name. Nothing runs
+// now; a periodic job launches on its schedule, and its next launch is
+// printed. A new version is made only when the job changed.
 //
 // Validated in full before sending, with each declared ${meta.key} standing as
 // its own text: the values arrive at dispatch, and a reference to an undeclared
@@ -16,6 +17,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // JobRegisterCommand implements `vagabond job register`.
@@ -34,7 +36,11 @@ func (c *JobRegisterCommand) Help() string {
 Usage: vagabond job register [options] <path>
 
   Stores the job in the file on the server so it can be dispatched by name.
-  Nothing runs.
+  Nothing runs now.
+
+  A job with a periodic block launches on its schedule from then on, and the
+  time of its next launch is printed. Its first launch is the first time a
+  cron matches after it is registered, never one that has already passed.
 
   A new version is made only when the job changed. Registering a stopped job
   makes a new version and makes it dispatchable again.
@@ -81,6 +87,10 @@ func (c *JobRegisterCommand) Run(args []string) int {
 	} else {
 		c.Ui.Output(fmt.Sprintf("Job %q is unchanged at version %d in namespace %q.",
 			registered.Name, registered.Version, registered.Namespace))
+	}
+
+	if registered.NextLaunch != nil {
+		c.Ui.Output(fmt.Sprintf("Next launch: %s.", when(*registered.NextLaunch, time.Now())))
 	}
 
 	return ExitSuccess

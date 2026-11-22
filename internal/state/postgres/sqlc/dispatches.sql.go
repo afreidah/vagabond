@@ -238,3 +238,22 @@ func (q *Queries) RequestCancel(ctx context.Context, arg RequestCancelParams) (i
 	}
 	return result.RowsAffected(), nil
 }
+
+const runningDispatch = `-- name: RunningDispatch :one
+SELECT EXISTS (
+    SELECT 1 FROM dispatches WHERE namespace = $1 AND job = $2 AND state = 'running'
+)
+`
+
+type RunningDispatchParams struct {
+	Namespace string
+	Job       string
+}
+
+// Whether any dispatch of a job has no verdict yet.
+func (q *Queries) RunningDispatch(ctx context.Context, arg RunningDispatchParams) (bool, error) {
+	row := q.db.QueryRow(ctx, runningDispatch, arg.Namespace, arg.Job)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}

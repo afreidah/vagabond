@@ -2,7 +2,7 @@
 title: "Job Specification"
 linkTitle: "Job specification"
 seoTitle: "Job Specification: Job File Reference"
-description: "Every block and attribute a job file accepts: routing, constraints, tasks, drivers, resources, retry and parameters, with defaults and validation."
+description: "Every block and attribute a job file accepts: routing, constraints, tasks, drivers, resources, retry, parameters and schedules, with defaults and validation."
 weight: 210
 ---
 
@@ -23,6 +23,7 @@ job "<name>" {
 
   meta { ... }            # job metadata, strings
   parameterized { ... }   # metadata a dispatch must or may supply
+  periodic { ... }        # launches on a schedule once registered
 
   routing {
     strategy     = "free-first"
@@ -223,6 +224,115 @@ Every task's environment receives one variable per metadata key: the job's
 - The key is upper-cased and every character outside `[A-Z0-9_]` becomes `_`:
   `build-id` becomes `VAGABOND_META_BUILD_ID`.
 - An `env` entry with the same name wins over the generated variable.
+
+## `periodic` block
+
+Launches a registered job on a schedule. The block takes effect once the job
+is registered with [`job register`](cli.md#job-register). From then on, each
+time a cron matches, the job's current version is dispatched, the same as
+[`job dispatch`](cli.md#job-dispatch) would. `job run` refuses a file with a
+`periodic` block, and `job dispatch` still launches a periodic job at once,
+outside its schedule.
+
+```hcl
+periodic {
+  # Required. Five-field crons or macros; the earliest match wins.
+  crons = ["0 3 * * 1-5", "@weekly"]
+
+  # Optional. The zone the crons are read in.
+  time_zone = "Europe/Berlin"
+
+  # Optional. Skip a launch while a dispatch of the job is still running.
+  prohibit_overlap = true
+
+  # Optional. false keeps the block but launches nothing.
+  enabled = true
+}
+```
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `crons` | list(string) | yes | - | When to launch. At least one |
+| `time_zone` | string | no | `UTC` | The [IANA zone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) the crons are read in, such as `America/New_York` |
+| `prohibit_overlap` | bool | no | `false` | Skip a launch while any dispatch of the job is running, including one started by hand |
+| `enabled` | bool | no | `true` | `false` stops launches without removing the block |
+
+A periodic job cannot have a `parameterized` block. A scheduled launch has no
+metadata to give it, so a job that needed some would fail at every launch.
+
+### Crons
+
+A cron is five fields, or one of the macros below. Every launch falls on a
+whole minute.
+
+| Field | Values |
+|---|---|
+| minute | `0-59` |
+| hour | `0-23` |
+| day of month | `1-31` |
+| month | `1-12`, or `jan` to `dec` |
+| day of week | `0-7`, where `0` and `7` are both Sunday, or `sun` to `sat` |
+
+Each field takes `*`, a list (`1,15`), a range (`1-5`) or a step (`*/15`).
+When both day of month and day of week are restricted, a day matching either
+one launches, as in cron. A range of day names cannot run past Saturday:
+write `fri,sat,sun` or `5-7`, not `fri-sun`.
+
+| Macro | Same as |
+|---|---|
+| `@yearly`, `@annually` | `0 0 1 1 *` |
+| `@monthly` | `0 0 1 * *` |
+| `@weekly` | `0 0 * * 0` |
+| `@daily` | `0 0 * * *` |
+| `@hourly` | `0 * * * *` |
+
+Macros are read in either case. A seconds field, a year field and any other
+macro are refused.
+
+### When launches happen
+
+- **The first launch** is the first match after the job is registered.
+  Registering never launches a time that has already passed. The same holds
+  when a stopped job is registered again, a `periodic` block is added to a
+  job, or `enabled` goes back to `true`. Registering a changed version of a
+  job that was already periodic keeps its place in the schedule.
+- **Missed launches:** when no server ran across one or more matches, the
+  first server to run again launches the job once, not once per match it
+  missed.
+- **Overlap:** with `prohibit_overlap`, a launch while a dispatch of the job
+  is running is skipped. The skipped launch counts as made, so nothing
+  launches until the next match.
+- **Several servers:** every server sharing the database watches the
+  schedules, and the database lets exactly one of them make each launch. A
+  job registered through one server is seen by the others within a minute.
+- **A refused launch,** for quota or any other reason, is recorded as a
+  refused dispatch, the same as any other, and is not retried. The next match
+  tries again.
+- **A server that stops** between claiming a launch and starting its dispatch
+  loses that launch. The window is one read of the job's version.
+
+### Clock changes
+
+Crons follow the clock in `time_zone`, and a launch waits for the clock to
+show a matching time later than any it has shown before.
+
+- When clocks go back, the repeated hour launches nothing, since its times
+  already launched the first time round. `30 1 * * *` in `America/New_York`
+  launches once on the first Sunday of November, and a job due every minute
+  pauses for that hour.
+- When clocks go forward, a time in the skipped hour launches when the clock
+  jumps past it. `30 2 * * *` launches at 03:00 on the second Sunday of March.
+
+`UTC`, the default, has no clock changes.
+
+**Validation:**
+
+| Diagnostic | Cause |
+|---|---|
+| `No crons in "<job>"` | `crons = []` |
+| `Invalid cron in "<job>"` | Not five fields or a macro, a malformed or out-of-range field, or a cron no date matches, such as `0 0 30 2 *`. The detail names the cron |
+| `Invalid time zone in "<job>"` | An unknown zone, an empty one, or `Local`, which servers in different zones would read differently |
+| `Periodic job "<job>" is parameterized` | A `parameterized` block beside `periodic` |
 
 ## `routing` block
 

@@ -31,8 +31,9 @@ import (
 // HELPERS
 // -------------------------------------------------------------------------
 
-// fixturePath is the job using every block the specification defines, kept out
-// of examples/ so coverage can grow without changing what a reader is shown.
+// fixturePath is the job using every block the specification defines but
+// periodic, kept out of examples/ so coverage can grow without changing what a
+// reader is shown.
 var fixturePath = filepath.Join("testdata", "complete.vagabond.hcl")
 
 // examplesDir holds the files a reader is pointed at, every one of which must
@@ -143,6 +144,30 @@ job "second" {
 
 	if got := len(parse(t, src, nil).Jobs); got != 2 {
 		t.Errorf("len(Jobs) = %d, want 2", got)
+	}
+}
+
+// A periodic block decodes every attribute. It is tested apart from the
+// fixture, whose parameterized block cannot share a job with a schedule.
+func TestParse_PeriodicBlock(t *testing.T) {
+	src := strings.Replace(minimalJob, `type = "batch"`, `type = "batch"
+
+  periodic {
+    crons            = ["0 3 * * *", "@hourly"]
+    time_zone        = "Europe/Berlin"
+    prohibit_overlap = true
+    enabled          = false
+  }`, 1)
+
+	want := &job.Periodic{
+		Crons:           []string{"0 3 * * *", "@hourly"},
+		TimeZone:        new("Europe/Berlin"),
+		ProhibitOverlap: new(true),
+		Enabled:         new(false),
+	}
+
+	if diff := cmp.Diff(want, parse(t, src, nil).Jobs[0].Periodic); diff != "" {
+		t.Errorf("periodic block differs (-want +got):\n%s", diff)
 	}
 }
 

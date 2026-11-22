@@ -11,10 +11,13 @@
 package server
 
 import (
+	"time"
+
 	"github.com/afreidah/vagabond/internal/api"
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobs"
+	"github.com/afreidah/vagabond/internal/ptr"
 	"github.com/afreidah/vagabond/internal/scheduler"
 )
 
@@ -22,15 +25,40 @@ import (
 // JOBS
 // -------------------------------------------------------------------------
 
-// jobOf converts a registered job's standing to its wire form.
+// jobOf converts a registered job's standing to its wire form. A periodic job
+// that is not stopped carries its schedule and when it next launches.
 func jobOf(j *jobs.Job) api.Job {
-	return api.Job{
+	out := api.Job{
 		Namespace: j.Namespace,
 		Name:      j.Name,
 		Version:   j.Version,
 		Stopped:   j.Stopped,
 		Updated:   j.Updated.UTC(),
 	}
+
+	if j.Periodic == nil || j.Stopped {
+		return out
+	}
+
+	out.Periodic = &api.Periodic{
+		Crons:           j.Periodic.Crons,
+		TimeZone:        ptr.Deref(j.Periodic.TimeZone),
+		ProhibitOverlap: ptr.Deref(j.Periodic.ProhibitOverlap),
+	}
+	out.NextLaunch = nextLaunch(j.Periodic, j.Launched)
+
+	return out
+}
+
+// nextLaunch returns when the launch after last falls due, in UTC, or nil
+// when the schedule cannot say, which validation keeps from happening.
+func nextLaunch(p *job.Periodic, last time.Time) *time.Time {
+	next, err := p.Next(last)
+	if err != nil {
+		return nil
+	}
+
+	return new(next.UTC())
 }
 
 // versionOf converts one registered version, without its source.

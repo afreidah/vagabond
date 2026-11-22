@@ -85,7 +85,7 @@ server under a supervisor that restarts it.
 | Source | `internal/state/postgres/migrations/*.sql`, embedded in the binary |
 | Applied | At every `vagabond server` start, pending ones only |
 | Version table | `goose_db_version`, created by goose |
-| Expected version | `12` in this release (`SchemaVersion`) |
+| Expected version | `13` in this release (`SchemaVersion`) |
 | Connection | A separate `database/sql` connection opened from the DSN as written and closed after; the 5s `connect_timeout` default does not apply to it |
 
 After migrating, the server reads `MAX(version_id)` from `goose_db_version`
@@ -120,6 +120,7 @@ for:
 | 10 | `00010_dispatch_ownership.sql` | `dispatches.epoch` (`1` for existing rows), `cancel_requested_at` and `done_at`, the last backfilled for ended dispatches whose executions are all released, so one with an unreleased execution is claimed and finished; `executions.timeout_ms`, `0` for existing rows; executions with no dispatch marked released; `quota_reservations.cpu` and `memory` dropped; index `dispatches_lease` rebuilt as `(lease_until) WHERE done_at IS NULL`; index `executions_unreleased` dropped |
 | 11 | `00011_execution_node.sql` | `executions.node`, `''` for existing rows |
 | 12 | `00012_disabled_providers.sql` | `disabled_providers`, empty |
+| 13 | `00013_periodic_jobs.sql` | `jobs.crons` (`'{}'` for existing rows), `time_zone` and `prohibit_overlap`; `periodic_launches`, empty; index `dispatches_running` |
 
 ## Schema
 
@@ -131,8 +132,9 @@ Interactive version, with columns and indexes on each table:
 
 | Table | Primary key | Holds |
 |---|---|---|
-| `jobs` | `(namespace, name)` | Each registered job's current version and whether it is stopped |
+| `jobs` | `(namespace, name)` | Each registered job's current version, whether it is stopped, and the schedule that version launches by |
 | `job_versions` | `(namespace, name, version)` | Every registered version's source as written, and the fingerprint of its formatted form |
+| `periodic_launches` | `(namespace, name)` | When each periodic job last launched |
 | `dispatches` | `dispatch_id` | One row per run of a job: state, error, task count, lease owner, epoch and expiry, a requested cancel, when it was done |
 | `executions` | `id` | One row per attempt of one task on one provider, with its result and stored output |
 | `quota_usage` | `(namespace, provider, pool, period)` | Settled usage per pool per period |
@@ -146,11 +148,28 @@ Interactive version, with columns and indexes on each table:
 |---|---|
 | `jobs.version` | Current version, pointing into `job_versions` |
 | `jobs.stopped` | Set by `DELETE /v1/job/{name}`; cleared by the next register, which always creates a version |
+| `jobs.crons`, `time_zone`, `prohibit_overlap` | The current version's [`periodic`](job-specification.md#periodic-block) block, with the zone and overlap rule filled in. `crons` is `'{}'` for a job with no block or a disabled one |
 | `job_versions.source` | Job file as submitted |
 | `job_versions.fingerprint` | SHA-256 of the `hclwrite`-formatted source; registering an unchanged, running job creates no version |
 
 Registering reads the current version and inserts the next in one
-serializable transaction.
+serializable transaction. When the new version makes the job periodic, and the
+old one was not or the job was stopped, the same transaction writes the
+registration time to `periodic_launches`.
+
+### `periodic_launches`
+
+| Column | Meaning |
+|---|---|
+| `namespace`, `name` | The job |
+| `launched_at` | When the job last launched, or when it became periodic if it has not launched since |
+
+A launch is claimed with one `UPDATE` that moves `launched_at` from the value
+the server read to the current time, while `jobs` still has the version the
+server read and the job is not stopped. Of several servers making the same
+launch, only one changes the row, and only that one dispatches. A row stays
+when its job stops or loses its schedule, and is overwritten when the job
+becomes periodic again.
 
 ### `dispatches`
 
@@ -167,7 +186,9 @@ serializable transaction.
 | `done_at` | When every execution was released, which ends the lease; null until then |
 
 Index `dispatches_lease (lease_until) WHERE done_at IS NULL` serves the claim
-query. Finishing matches `state = 'running'`, and renewing and closing match
+query. Index `dispatches_running (namespace, job) WHERE state = 'running'`
+answers whether a job still has a dispatch running, for a schedule with
+`prohibit_overlap`. Finishing matches `state = 'running'`, and renewing and closing match
 `done_at IS NULL`, each with the caller's `owner` and `epoch`, so only the
 lease holder can end a run or keep it. Claiming is one `UPDATE ... RETURNING`
 that increments `epoch`. See [dispatch](dispatch.md#leases).
@@ -265,6 +286,8 @@ default, [Output retention](background-services.md#output-retention)).
 `execution_logs` dominates while it is kept: up to `max_log_mib` (16 MiB by
 default) per attempt. `jobs`, `job_versions`, `dispatches`, `executions` and
 past periods of `quota_usage` grow without bound, a few hundred bytes a row.
+A periodic job adds a dispatch at every launch: one due every minute adds
+1,440 a day.
 Pruning old rows by hand is safe for:
 
 - `dispatches` that are done (`done_at` set) and their `executions`, older
@@ -345,6 +368,7 @@ unreachable`.
 | `GET /v1/health` | 503, `"Store": "unreachable"` |
 | Usage refresh (15s) | Fails with a warning, keeps the last snapshot |
 | Disabled provider read (5s) | Fails with a warning, keeps the last set |
+| Periodic launches | None; each pass fails with a warning and the next comes within a minute. A launch missed meanwhile is made once when the store answers |
 | `provider disable`, `provider enable` | 503; nothing changes |
 
 Recovery needs no action. The pool reconnects on the next call and the writes
@@ -371,6 +395,7 @@ pg_restore --clean --if-exists --dbname="postgres://vagabond@db.internal:5432/va
 |---|---|
 | `quota_usage`, `quota_reservations` | Budgets count from zero; the current period can be overspent |
 | `jobs`, `job_versions` | Registered jobs must be registered again |
+| `periodic_launches` | A periodic job with no row never launches; stop it and register it again |
 | `dispatches`, `executions` | History, stored output, and resumption of running dispatches |
 | `goose_db_version` | The server re-runs migrations against existing tables and fails |
 
@@ -386,7 +411,7 @@ Restoring an older backup:
 
 Supported with the same code and migrations. Differences the code accounts for:
 
-- Migrations 2, 4 and 6 to 10 run outside a transaction (`-- +goose NO
+- Migrations 2, 4 and 6 to 13 run outside a transaction (`-- +goose NO
   TRANSACTION`). CockroachDB refuses a primary key change in the same
   transaction as the column it adds (2); the others follow suit so each schema
   change applies on its own.

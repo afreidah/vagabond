@@ -5,7 +5,7 @@ description: "Interactive diagram of every loop and long-running goroutine the s
 weight: 9
 ---
 
-Every loop the server and the agent run, with its interval and what it touches. The server runs six upkeep tickers plus one goroutine per dispatch, lease, execution, agent session and followed log; the agent holds one connection to the server and reports its workloads on a timer. **Hover over any component** for implementation details.
+Every loop the server and the agent run, with its interval and what it touches. The server runs seven upkeep loops plus one goroutine per dispatch, lease, execution, agent session and followed log; the agent holds one connection to the server and reports its workloads on a timer. **Hover over any component** for implementation details.
 
 {{< diagram >}}
 
@@ -20,6 +20,7 @@ window.vagabondDiagram = {
     '    REAP[Reservation<br>reaper 5m]:::background',
     '    CLAIM[Dispatch<br>claim 30s]:::background',
     '    PRUNE[Output<br>retention 1h]:::background',
+    '    LAUNCH[Periodic<br>launches]:::background',
     '    API([HTTP<br>requests]):::entry',
     '    HEALTH[Store<br>health]:::filter',
     '    FOLLOW[Live output<br>follow]:::process',
@@ -46,6 +47,7 @@ window.vagabondDiagram = {
     '    SRV --> REAP',
     '    SRV --> CLAIM',
     '    SRV --> PRUNE',
+    '    SRV --> LAUNCH',
     '    SRV --> LISTENER',
     '',
     '    API --> DISPATCH',
@@ -53,6 +55,8 @@ window.vagabondDiagram = {
     '    API --> FOLLOW',
     '    API -->|cancel, disable, enable| STORE',
     '    CLAIM -->|resume| DISPATCH',
+    '    LAUNCH -->|start| DISPATCH',
+    '    API -->|register, stop: wake| LAUNCH',
     '    DISPATCH --> LEASE',
     '    DISPATCH -->|per attempt| RUNNER',
     '    LEASE -->|cancel, lease lost| RUNNER',
@@ -68,6 +72,7 @@ window.vagabondDiagram = {
     '    REAP --> STORE',
     '    CLAIM --> STORE',
     '    PRUNE --> STORE',
+    '    LAUNCH -->|claim| STORE',
     '    DISPATCH --> STORE',
     '    RUNNER --> STORE',
     '    RUNNER --> PROVIDERS',
@@ -92,7 +97,7 @@ window.vagabondDiagram = {
     SRV: {
       title: 'vagabond server',
       badge: 'entry', badgeText: 'process',
-      body: '<p><code>internal/cli/server.go</code> builds the registry and refreshes every provider, opens, migrates and verifies the store (or builds memory stores under <code>-dev</code>), and reads quota usage. A server that cannot read usage does not start.</p><p>It then starts the agent listener and listens on the API address. <code>Server.ServeListener</code> reads the disabled providers, claims lapsed dispatches and reaps stale reservations once, in that order, starts the six upkeep tickers in <code>internal/server/upkeep.go</code>, and serves HTTP.</p><p>Each tick runs synchronously; a tick longer than its interval is followed at once by the next, and ticks do not pile up. A failure is logged and waits for the next tick, and one loop failing never stops another. No loop applies jitter or takes a lock across servers: where two servers could collide, the store statement decides.</p><p><a href="../../docs/background-services/">Background services reference &rarr;</a></p>'
+      body: '<p><code>internal/cli/server.go</code> builds the registry and refreshes every provider, opens, migrates and verifies the store (or builds memory stores under <code>-dev</code>), and reads quota usage. A server that cannot read usage does not start.</p><p>It then starts the agent listener and listens on the API address. <code>Server.ServeListener</code> reads the disabled providers, claims lapsed dispatches and reaps stale reservations once, in that order, starts the seven upkeep loops in <code>internal/server/upkeep.go</code>, and serves HTTP. Periodic launches get their first pass at once, beside serving.</p><p>Each tick runs synchronously; a tick longer than its interval is followed at once by the next, and ticks do not pile up. A failure is logged and waits for the next tick, and one loop failing never stops another. No loop applies jitter or takes a lock across servers: where two servers could collide, the store statement decides.</p><p><a href="../../docs/background-services/">Background services reference &rarr;</a></p>'
     },
     API: {
       title: 'HTTP API',
@@ -124,6 +129,11 @@ window.vagabondDiagram = {
       badge: 'background', badgeText: 'every 1h',
       body: '<p><code>Server.prune</code> deletes the stored output of executions that ended longer ago than the server&rsquo;s <code>log_retention</code> (default <code>168h</code>), through <code>PruneLogs</code>. The execution records stay; once pruned, <code>GET /v1/execution/{id}/logs</code> answers 200 with an empty body.</p><p><b>At startup:</b> no; the first pass is one interval in.</p><p>One statement per pass, driven from the <code>execution_logs</code> chunks retention keeps, joined to each chunk&rsquo;s execution for its <code>ended_at</code>. Deleting what another server already deleted deletes nothing, so several servers running it is harmless.</p><p class="dg-metric">Logs: info <code>pruned stored output</code> with <code>executions</code>; warn <code>pruning stored output</code></p><p><a href="../../docs/background-services/#output-retention">Output retention &rarr;</a></p>'
     },
+    LAUNCH: {
+      title: 'Periodic launches',
+      badge: 'background', badgeText: 'at each launch, 1 min at most',
+      body: '<p><code>Server.launchPass</code> reads every job with a schedule that is not stopped, through <code>PeriodicJobs</code>, and launches each whose next match after its last launch has come. Several missed matches make one launch.</p><p><b>At startup:</b> at once, without holding up serving. Each pass returns when the next should run: the earliest next launch, a minute away at most, so a job registered through another server is seen within a minute. A register or stop on this server wakes it at once.</p><p>Each launch is claimed with <code>ClaimLaunch</code>, one <code>UPDATE</code> that moves the job&rsquo;s <code>periodic_launches.launched_at</code> from the value read to now while the job is at the version read and not stopped. Only the server whose claim changed the row goes on, so the launch is made once however many servers run the loop. With <code>prohibit_overlap</code> it then asks <code>RunningDispatch</code> and skips the launch, still counted as made, while a dispatch of the job runs. Otherwise it loads the claimed version with no metadata and starts it through <code>Server.launch</code>, as <code>job dispatch</code> does.</p><p>One job failing does not hold up the others, and a failed launch waits for the job&rsquo;s next match.</p><p class="dg-metric">Logs: info <code>periodic launch</code> with <code>dispatch</code>; info <code>periodic launch skipped</code>; warn <code>launching periodic jobs</code></p><p><a href="../../docs/background-services/#periodic-launches">Periodic launches &rarr;</a></p>'
+    },
     CLAIM: {
       title: 'Dispatch claim',
       badge: 'background', badgeText: 'every 30 s',
@@ -132,7 +142,7 @@ window.vagabondDiagram = {
     DISPATCH: {
       title: 'Dispatch run',
       badge: 'process', badgeText: 'per dispatch',
-      body: '<p>One goroutine per dispatch started through <code>POST /v1/jobs/run</code> or <code>POST /v1/job/{name}/dispatch</code>, or resumed by a claim. Runs the job&rsquo;s tasks in order, starting an execution runner for each attempt and waiting for its first answer, and records how the dispatch ended: <code>succeeded</code>, <code>failed</code> or <code>unanswered</code>. It then waits for every runner to finish through release and records the dispatch done (<code>done_at</code>), which ends the lease.</p><p>Runs on a context detached from the request, so the request returns the dispatch ID at once. Cancelled by <code>DELETE /v1/execution/{id}</code> on one of its executions: at once on this server, or through a cancel request seen at the next lease renewal. Shutdown does not stop it; the process exit does, and the dispatch is resumed once its lease lapses.</p><p>Retry submissions wait <code>backoff.initial</code> (default 5s) doubling to <code>backoff.max</code> (default 30s). A resumed dispatch follows only the executions already created: the job file is not stored, so tasks not yet reached are not run.</p><p class="dg-metric">Logs: info <code>dispatch started</code>; once the dispatch is done, info <code>dispatch finished</code> with <code>tasks</code> and <code>succeeded</code>, or warn <code>dispatch finished without an answer</code> with <code>tasks</code> and <code>error</code></p><p>A panic in it ends the dispatch <code>unanswered</code> with the panic as its error, logged as <code>recovered a panic</code> with the stack. A dispatch claimed past 5 resumes is ended without running anything.</p><p><a href="../task-path/">Task path diagram &rarr;</a> &middot; <a href="../execution-states/">Execution states diagram &rarr;</a> &middot; <a href="../../docs/dispatch/#panics">Panics &rarr;</a></p>'
+      body: '<p>One goroutine per dispatch started through <code>POST /v1/jobs/run</code> or <code>POST /v1/job/{name}/dispatch</code>, started by a periodic launch, or resumed by a claim. Runs the job&rsquo;s tasks in order, starting an execution runner for each attempt and waiting for its first answer, and records how the dispatch ended: <code>succeeded</code>, <code>failed</code> or <code>unanswered</code>. It then waits for every runner to finish through release and records the dispatch done (<code>done_at</code>), which ends the lease.</p><p>Runs on a context detached from the request, so the request returns the dispatch ID at once. Cancelled by <code>DELETE /v1/execution/{id}</code> on one of its executions: at once on this server, or through a cancel request seen at the next lease renewal. Shutdown does not stop it; the process exit does, and the dispatch is resumed once its lease lapses.</p><p>Retry submissions wait <code>backoff.initial</code> (default 5s) doubling to <code>backoff.max</code> (default 30s). A resumed dispatch follows only the executions already created: the job file is not stored, so tasks not yet reached are not run.</p><p class="dg-metric">Logs: info <code>dispatch started</code>; once the dispatch is done, info <code>dispatch finished</code> with <code>tasks</code> and <code>succeeded</code>, or warn <code>dispatch finished without an answer</code> with <code>tasks</code> and <code>error</code></p><p>A panic in it ends the dispatch <code>unanswered</code> with the panic as its error, logged as <code>recovered a panic</code> with the stack. A dispatch claimed past 5 resumes is ended without running anything.</p><p><a href="../task-path/">Task path diagram &rarr;</a> &middot; <a href="../execution-states/">Execution states diagram &rarr;</a> &middot; <a href="../../docs/dispatch/#panics">Panics &rarr;</a></p>'
     },
     LEASE: {
       title: 'Lease renewal',
@@ -187,7 +197,7 @@ window.vagabondDiagram = {
     STORE: {
       title: 'Store (Postgres or CockroachDB)',
       badge: 'storage', badgeText: 'shared state',
-      body: '<p><code>state/postgres</code>, or memory stores under <code>-dev</code>. The loops and runners read and write <code>dispatches</code> (owner, epoch, lease, cancel request, <code>done_at</code>), <code>executions</code> (the record and its <code>logs_at</code> and <code>released_at</code> marks), <code>execution_logs</code>, <code>quota_usage</code> and <code>quota_reservations</code>.</p><p>Several servers can share one store. Every loop runs on every server, and the store keeps them apart: the claim is one <code>UPDATE ... RETURNING</code> that moves the dispatch to its next epoch, so a lapsed dispatch goes to exactly one server and every write under the old lease is refused; the reaper resolves each stale reservation under a <code>SKIP LOCKED</code> row lock; the refreshes are per-server reads.</p><p><a href="../database-schema/">Database schema diagram &rarr;</a></p>'
+      body: '<p><code>state/postgres</code>, or memory stores under <code>-dev</code>. The loops and runners read and write <code>dispatches</code> (owner, epoch, lease, cancel request, <code>done_at</code>), <code>executions</code> (the record and its <code>logs_at</code> and <code>released_at</code> marks), <code>execution_logs</code>, <code>quota_usage</code>, <code>quota_reservations</code>, and for periodic launches <code>jobs</code> and <code>periodic_launches</code>.</p><p>Several servers can share one store. Every loop runs on every server, and the store keeps them apart: the claim is one <code>UPDATE ... RETURNING</code> that moves the dispatch to its next epoch, so a lapsed dispatch goes to exactly one server and every write under the old lease is refused; the reaper resolves each stale reservation under a <code>SKIP LOCKED</code> row lock; a periodic launch is one <code>UPDATE</code> guarded by the last launch the server read, so one server makes it; the refreshes are per-server reads.</p><p><a href="../database-schema/">Database schema diagram &rarr;</a></p>'
     },
     PROVIDERS: {
       title: 'Providers',
@@ -244,6 +254,7 @@ window.vagabondDiagram = {
 | Reservation reaper | Server | 5m | Yes, before serving | `Dispatcher.Reap` |
 | Dispatch claim | Server | 30s | Yes, before serving | `Server.claim` |
 | Output retention | Server | 1h | No | `Server.prune` |
+| Periodic launches | Server | At the next launch, 1m at most, and after each register or stop | Yes, beside serving | `Server.launchPass` |
 | Dispatch run | Server | Per dispatch | | `Dispatcher.Run`, `Dispatcher.Resume` |
 | Execution runner | Server | Per execution, `Status` every 2s to 15s | | `runner.run` |
 | Lease renewal | Server | 20s per dispatch, until it is done | | `Dispatcher.hold` |

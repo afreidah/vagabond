@@ -15,7 +15,7 @@ A run has two levels:
 
 | Level | What it is | Read with |
 |---|---|---|
-| Dispatch | One run of a job, started by `job run` or `job dispatch` | `dispatch status <id>` |
+| Dispatch | One run of a job, started by `job run`, `job dispatch` or a periodic job's schedule | `dispatch status <id>` |
 | Execution | One attempt of one task on one provider | `execution status <id>`, `execution logs <id>` |
 
 ![job dispatch starts a dispatch, one run of the static-analysis job, which dispatch status reads. The dispatch created one execution, attempt 1 of the make task on gcp-cloud-run, which failed with exit 2; execution list and execution status read it. The execution's output is stored on the server, the last 16 MiB for 7 days, and execution logs reads it.](../docs/assets/run-anatomy.svg)

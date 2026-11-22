@@ -6,9 +6,9 @@
 // What the CLI does once per call, the server does on timers: refreshing
 // provider capabilities and quota usage, reading which providers are disabled,
 // reaping reservations nothing was recorded for, claiming dispatches whose
-// owner died, and pruning stored output past its retention. A task that fails
-// is logged and runs again at its next tick, so one failing never stops
-// another.
+// owner died, pruning stored output past its retention, and launching periodic
+// jobs. A task that fails is logged and runs again at its next call, so one
+// failing never stops another.
 // -------------------------------------------------------------------------------
 
 package server
@@ -46,8 +46,9 @@ const (
 // UPKEEP
 // -------------------------------------------------------------------------
 
-// startUpkeep runs every upkeep task on its interval until ctx is done. The
-// returned group is waited on to know they have all stopped.
+// startUpkeep runs every upkeep task on its interval, and periodic launches
+// whenever one comes, until ctx is done. The returned group is waited on to
+// know they have all stopped.
 func (s *Server) startUpkeep(ctx context.Context) *sync.WaitGroup {
 	var wg sync.WaitGroup
 
@@ -58,24 +59,44 @@ func (s *Server) startUpkeep(ctx context.Context) *sync.WaitGroup {
 	wg.Go(func() { s.every(ctx, claimTask, s.claimEvery, s.claim) })
 	wg.Go(func() { s.every(ctx, "pruning stored output", pruneInterval, s.prune) })
 
+	// Periodic jobs get their first pass at once, without holding up serving
+	wg.Go(func() { s.repeat(ctx, s.wake, time.Now(), s.launchPass) })
+
 	return &wg
 }
 
-// every calls fn each interval until ctx is done. The first call is one
-// interval in; a task that needs a pass at startup gets it before serving. An
-// error or a panic in one call is logged under what, and the next tick runs as
-// any other.
+// every calls fn each interval until ctx is done, counting each interval from
+// the start of the call before. The first call is one interval in; a task that
+// needs a pass at startup gets it before serving. An error or a panic in one
+// call is logged under what, and the next call runs as any other.
 func (s *Server) every(ctx context.Context, what string, interval time.Duration, fn func(context.Context) error) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	s.repeat(ctx, nil, time.Now().Add(interval), func(ctx context.Context) time.Time {
+		next := time.Now().Add(interval)
+		s.tick(ctx, what, fn)
 
+		return next
+	})
+}
+
+// repeat calls fn when at comes, then again at whatever time each call
+// returns, until ctx is done. A receive on wake makes the next call at once;
+// a nil wake never does.
+func (s *Server) repeat(ctx context.Context, wake <-chan struct{}, at time.Time, fn func(context.Context) time.Time) {
 	for {
+		timer := time.NewTimer(time.Until(at))
+
 		select {
 		case <-ctx.Done():
+			timer.Stop()
+
 			return
-		case <-ticker.C:
-			s.tick(ctx, what, fn)
+		case <-wake:
+		case <-timer.C:
 		}
+
+		timer.Stop()
+
+		at = fn(ctx)
 	}
 }
 

@@ -32,6 +32,7 @@ type Store interface {
 	RequestCancel(ctx context.Context, id execution.ID, at time.Time) error
 	ClaimDispatches(ctx context.Context, owner string, now, until time.Time, skip []execution.ID) ([]*execution.Dispatch, error)
 	GetDispatch(ctx context.Context, id execution.ID) (*execution.Dispatch, error)
+	RunningDispatch(ctx context.Context, namespace, job string) (bool, error)
 
 	Create(ctx context.Context, r *execution.Record, lease execution.Lease) error
 	Save(ctx context.Context, r *execution.Record, lease execution.Lease) error

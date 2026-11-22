@@ -71,11 +71,14 @@ type ExecutionLog struct {
 }
 
 type Job struct {
-	Namespace string
-	Name      string
-	Version   int64
-	Stopped   bool
-	UpdatedAt time.Time
+	Namespace       string
+	Name            string
+	Version         int64
+	Stopped         bool
+	UpdatedAt       time.Time
+	Crons           []string
+	TimeZone        string
+	ProhibitOverlap bool
 }
 
 type JobVersion struct {
@@ -85,6 +88,12 @@ type JobVersion struct {
 	Source      string
 	Fingerprint string
 	CreatedAt   time.Time
+}
+
+type PeriodicLaunch struct {
+	Namespace  string
+	Name       string
+	LaunchedAt time.Time
 }
 
 type QuotaReservation struct {

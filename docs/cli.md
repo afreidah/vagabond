@@ -330,6 +330,13 @@ If any rejection's first reason is transient (`quota-exhausted`,
 `provider-disabled` or `provider-unhealthy`), the plan adds
 `At least one rejection is transient, so this may be admitted later.`
 
+A job file with a [`periodic`](job-specification.md#periodic-block) block
+ends with when it would first launch if it were registered now:
+
+```text
+If registered now, the next launch would be at 2026-11-23 03:00:00Z (in 14h12m5s).
+```
+
 ### `job run`
 
 ```text
@@ -340,6 +347,9 @@ Validates the job file locally, sends it to the server, and waits for the run
 to finish. The job is not registered. The server makes the same selection
 `job plan` shows.
 
+- A job file with a [`periodic`](job-specification.md#periodic-block) block
+  is refused: `Error: job "<job>" is periodic; register it with vagabond job register`.
+  Only its schedule launches it, once registered.
 - Tasks run in declaration order; the run stops at the first task that fails.
 - A provider that gives no answer is abandoned for the next eligible one, as
   far as the task's [`retry`](job-specification.md#retry-block) block allows.
@@ -447,8 +457,12 @@ vagabond job register [options] <path>
 ```
 
 Stores the job on the server so it can be run with `job dispatch`. Nothing
-runs.
+runs now.
 
+- A job with a [`periodic`](job-specification.md#periodic-block) block
+  launches on its schedule from then on, and the output ends with its next
+  launch. The first launch is the first match after registering, never one
+  that has already passed.
 - A new version is created only when the job changed. The comparison is on
   the HCL-formatted source, so whitespace and alignment changes do not make a
   new version.
@@ -473,6 +487,10 @@ Job "go-test" registered as version 3 in namespace "default".
 
 $ vagabond job register go-test.vagabond.hcl
 Job "go-test" is unchanged at version 3 in namespace "default".
+
+$ vagabond job register nightly-lint.vagabond.hcl
+Job "nightly-lint" registered as version 1 in namespace "default".
+Next launch: 2026-11-23 03:00:00Z (in 14h12m5s).
 ```
 
 ### `job dispatch`
@@ -567,6 +585,22 @@ The executions table is the one [`execution list`](#execution-list) prints,
 without its `JOB` column. `NODE` is `-` for a provider not made of nodes. With
 no executions the section reads `None.`
 
+A [periodic](job-specification.md#periodic-block) job that is not stopped
+also shows its schedule, with its time zone and overlap rule filled in when
+the job file leaves them out:
+
+```shell
+$ vagabond job status nightly-lint
+Name             = nightly-lint
+Namespace        = default
+Version          = 1
+Status           = registered
+Crons            = 0 3 * * *
+Time zone        = UTC
+Prohibit overlap = true
+Next launch      = 2026-11-23 03:00:00Z (in 14h12m5s)
+```
+
 ```shell
 $ vagabond job status unknown
 Error: job not registered: "unknown" in namespace "default"
@@ -578,9 +612,10 @@ Error: job not registered: "unknown" in namespace "default"
 vagabond job stop [options] <name>
 ```
 
-Deregisters a job. It can no longer be dispatched; its versions and executions
-are kept, and `job register` makes it dispatchable again. Executions already
-running are not affected.
+Deregisters a job. It can no longer be dispatched, and a periodic job stops
+launching; its versions and executions are kept, and `job register` makes it
+dispatchable again. A periodic job registered again starts from the first
+match after that. Executions already running are not affected.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -736,8 +771,8 @@ ok  	example.com/service/store	1.087s
 ## Dispatch commands
 
 A dispatch is one run of a job, started by `job run` or `job dispatch`, which
-print its ID first. It holds every execution the run created: each task's
-attempts.
+print its ID first, or by a periodic job's schedule. It holds every execution
+the run created: each task's attempts.
 
 ### `dispatch status`
 

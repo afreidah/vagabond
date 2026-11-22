@@ -196,6 +196,17 @@ func (s *Store) GetDispatch(ctx context.Context, id execution.ID) (*execution.Di
 	return dispatchOf(&row)
 }
 
+// RunningDispatch reports whether any dispatch of a job has no verdict yet,
+// whichever server owns it.
+func (s *Store) RunningDispatch(ctx context.Context, namespace, job string) (bool, error) {
+	running, err := s.queries.RunningDispatch(ctx, db.RunningDispatchParams{Namespace: namespace, Job: job})
+	if err != nil {
+		return false, fmt.Errorf("look for a running dispatch of %s: %w", job, err)
+	}
+
+	return running, nil
+}
+
 // dispatchOf rebuilds a dispatch from its row. A null end is a run still
 // going, a null done one whose executions are still finishing.
 func dispatchOf(row *db.Dispatch) (*execution.Dispatch, error) {
