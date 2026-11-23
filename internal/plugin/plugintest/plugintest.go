@@ -93,23 +93,26 @@ type Live struct {
 // RoundTrip runs a container that prints to both streams, sleeps so a follow
 // attaches while it runs, and exits 3, since exit zero is also what a plugin
 // that lost the code would report. It fails unless the exit code and both
-// streams come back, read whole and, where p streams, followed live. The
-// execution is cancelled when the test ends; its id is returned for checks of
-// the provider's own.
+// streams come back, read whole and, where p streams, followed live, with the
+// $ in the task's args and env as written. The execution is cancelled when the
+// test ends; its id is returned for checks of the provider's own.
 func (l Live) RoundTrip(t *testing.T, p LiveProvider, resources job.Resources) execution.ID {
 	t.Helper()
 
 	id := testkit.NewID(t)
 
+	// A platform that substitutes its own $NAME variables would refuse
+	// $VAGABOND_LIVE or fill in $BUILD_ID, so the line comes back as written
+	// only if the plugin passes every $ through
 	task := &job.Task{
 		Name:   "live",
 		Driver: job.DriverContainer,
 		Config: RawBlock(t, `
 image   = "alpine:3.20"
 command = "sh"
-args    = ["-c", "echo hello-stdout; echo hello-stderr >&2; sleep 10; exit 3"]
+args    = ["-c", "echo hello-stdout-$VAGABOND_LIVE; echo hello-stderr >&2; sleep 10; exit 3"]
 `),
-		Env:       RawBlock(t, "VAGABOND_LIVE = \"1\"\n"),
+		Env:       RawBlock(t, `VAGABOND_LIVE = "$BUILD_ID"`+"\n"),
 		Resources: &resources,
 		Timeout:   new(job.Duration("5m")),
 	}
@@ -157,7 +160,7 @@ args    = ["-c", "echo hello-stdout; echo hello-stderr >&2; sleep 10; exit 3"]
 	}
 
 	// Both streams, since stdout alone looks correct on a passing build
-	for _, want := range []string{"hello-stdout", "hello-stderr"} {
+	for _, want := range []string{"hello-stdout-$BUILD_ID", "hello-stderr"} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("logs do not contain %q: %q", want, logs)
 		}
