@@ -91,6 +91,46 @@ func TestSubmitSendsOneStep(t *testing.T) {
 	}
 }
 
+// Cloud Build reads $NAME in a step's args and env as its own substitution,
+// refusing one it does not know and filling in its built-in ones, so every $
+// there goes out doubled, which it hands the container as one.
+func TestSubmitDoublesDollars(t *testing.T) {
+	t.Parallel()
+
+	g, p := newFake(t)
+	g.Respond("POST "+buildsPath, map[string]any{"metadata": map[string]any{"build": map[string]any{"id": "b-1"}}})
+
+	task := &job.Task{
+		Name:   "test",
+		Driver: job.DriverContainer,
+		Config: plugintest.RawBlock(t, `
+image   = "alpine:3.20"
+command = "sh"
+args    = ["-ec", "echo $REPO"]
+`),
+		Env: plugintest.RawBlock(t, `ID = "$BUILD_ID"`+"\n"),
+	}
+
+	if _, err := p.Submit(t.Context(), testkit.NewID(t), task); err != nil {
+		t.Fatalf("Submit failed: %v", err)
+	}
+
+	step := g.Request(0).Body["steps"].([]any)[0].(map[string]any)
+
+	if diff := cmp.Diff([]any{"-ec", "echo $$REPO"}, step["args"]); diff != "" {
+		t.Errorf("args (-want +got):\n%s", diff)
+	}
+
+	if diff := cmp.Diff([]any{"ID=$$BUILD_ID"}, step["env"]); diff != "" {
+		t.Errorf("env (-want +got):\n%s", diff)
+	}
+
+	// Not shown substituted in Google's docs, so sent as written
+	if step["entrypoint"] != "sh" {
+		t.Errorf("entrypoint = %v, want sh", step["entrypoint"])
+	}
+}
+
 // A task Cloud Build cannot run is refused before any call, and a refused
 // build comes back as the API's error.
 func TestSubmitRefusals(t *testing.T) {

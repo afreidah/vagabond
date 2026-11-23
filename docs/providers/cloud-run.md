@@ -550,8 +550,9 @@ go test -run TestLive -v -timeout 12m ./internal/providers/gcp/cloudrun/
 `internal/plugin/plugintest`. It runs `alpine:3.20` writing one line to
 stdout and one to stderr, sleeping 10 seconds so a follow attaches, and
 exiting 3. It polls to completion for up to 6 minutes, asserts state
-`failed`, exit code 3, and both lines read whole and streamed, and deletes
-the job in a cleanup that runs even when an assertion fails.
+`failed`, exit code 3, and both lines read whole and streamed, with the `$`
+in its args and env as written, and deletes the job in a cleanup that runs
+even when an assertion fails.
 
 `TestLiveLateFollow` prints 12,000 lines, waits, and prints one more. It
 asserts that all of it is stored, past 64 KiB, and that a follow opened after

@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 
@@ -118,12 +119,13 @@ func (p *Provider) Submit(
 		step["entrypoint"] = c.Command[0]
 	}
 
+	// Cloud Build reads $NAME in args and env as one of its substitutions
 	if len(c.Args) > 0 {
-		step["args"] = c.Args
+		step["args"] = literals(c.Args)
 	}
 
 	if env := stepEnv(c.Env); len(env) > 0 {
-		step["env"] = env
+		step["env"] = literals(env)
 	}
 
 	if c.WorkingDir != "" {
@@ -162,6 +164,17 @@ func stepEnv(vars map[string]string) []string {
 	}
 
 	return env
+}
+
+// literals doubles every $ in each value, which Cloud Build passes to the
+// step as one $ instead of reading $NAME as a substitution of its own.
+func literals(values []string) []string {
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = strings.ReplaceAll(v, "$", "$$")
+	}
+
+	return out
 }
 
 // -------------------------------------------------------------------------

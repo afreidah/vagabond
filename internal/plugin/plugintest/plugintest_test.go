@@ -40,8 +40,9 @@ type scripted struct {
 	cancelled bool
 }
 
-// output is what every scripted run prints.
-const output = "hello-stdout\nhello-stderr\n"
+// output is what every scripted run prints, the round trip's script with its
+// $ passed through.
+const output = "hello-stdout-$BUILD_ID\nhello-stderr\n"
 
 // Submit accepts any task.
 func (s *scripted) Submit(context.Context, execution.ID, *job.Task) (plugin.Submission, error) {

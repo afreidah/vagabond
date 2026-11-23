@@ -620,7 +620,7 @@ go test -run TestLive -v -timeout 10m ./internal/providers/ibm/
 to stdout and one to stderr, sleeping 10 seconds and exiting 3. It follows the
 output while the run is going, polls to completion for up to 6 minutes, and
 asserts state `failed`, exit code 3, and both lines in both the stream and
-`Result`. It then releases the run, asserts the run is gone, and deletes it
+the stored output, with the `$` in its args and env as written. It then releases the run, asserts the run is gone, and deletes it
 again in a cleanup that runs even when an assertion fails.
 
 `TestLiveMultiLine` runs a multi-line `sh -ec` script with a one-line argument

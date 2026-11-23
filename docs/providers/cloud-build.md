@@ -122,14 +122,22 @@ The driver `config` keys are those of `cloud-run`: `image`, `command` and
 |---|---|
 | `steps[0].name` | `image` |
 | `steps[0].entrypoint` | `command`, when set; otherwise the image's own |
-| `steps[0].args` | `args` |
-| `steps[0].env` | The `env` block and `VAGABOND_META_<KEY>` variables, as `KEY=VALUE`, sorted by name |
+| `steps[0].args` | `args`, each `$` doubled |
+| `steps[0].env` | The `env` block and `VAGABOND_META_<KEY>` variables, as `KEY=VALUE`, sorted by name, each `$` doubled |
 | `steps[0].dir` | `working_directory`, when set |
 | `timeout` | The task's `timeout` in whole seconds, `24h` when unset |
 | `tags` | `vagabond-<execution id>`, which every later call finds the build by |
 | `serviceAccount` | `runtime_service_account` |
 | `options.machineType` | `E2_STANDARD_2` |
 | `options.logging` | `CLOUD_LOGGING_ONLY`, which a build running as its own account requires |
+
+Cloud Build reads `$NAME` and `${NAME}` in a step as its own substitutions.
+It refuses a name that is not one of its built-in ones and does not start with
+an underscore, failing the build with a 400, and fills in its built-in ones,
+such as `$BUILD_ID` and `$PROJECT_ID`. Cloud Build passes `$$` to the step as
+one `$`, so doubling every `$` in `args` and `env` makes a shell script reach
+the container as the task wrote it. `entrypoint`, `dir` and the image are sent
+unchanged, since Google's documentation does not show them substituted.
 
 **Not applied:** `resources`, since the machine is fixed, and `network`. The
 build has no source: an image that needs code fetches it itself, as the
@@ -214,4 +222,5 @@ The key's account needs the dispatcher roles above, and the runtime account
 `roles/logging.logWriter`. The test runs the shared round trip: `alpine:3.20`
 writes one line to stdout and one to stderr, sleeps 10 seconds so a follow
 attaches, and exits 3. It asserts state `failed`, exit code 3, and both lines,
-read whole and streamed, and cancels the build in a cleanup.
+read whole and streamed, with the `$` in its args and env as written, and
+cancels the build in a cleanup.
