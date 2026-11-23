@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"time"
 
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
@@ -223,4 +224,39 @@ type CancelNotSupported struct{}
 // Cancel reports that this provider cannot stop work once it has started.
 func (CancelNotSupported) Cancel(context.Context, execution.ID) error {
 	return Internal(fmt.Errorf("cancel: %w", ErrUnsupported))
+}
+
+// -------------------------------------------------------------------------
+// PLATFORM RESOURCES
+// -------------------------------------------------------------------------
+
+// resourcePrefix marks every resource a plugin creates on a platform.
+const resourcePrefix = "vagabond-"
+
+// ResourceName is the name or tag of the platform resource a plugin creates
+// for an execution, from its id alone, so any later process finds it. It is
+// 45 lowercase letters, digits and hyphens starting with a letter, inside
+// Code Engine's limit of 53 and Cloud Run's of 63.
+func ResourceName(id execution.ID) string {
+	return resourcePrefix + id.String()
+}
+
+// ObservedStatus is an execution's status as its platform reports it, stamped
+// with when it ended, or with now while it runs.
+func ObservedStatus(
+	id execution.ID, state execution.State, providerID string, started, ended time.Time,
+) execution.Status {
+	updated := ended
+	if updated.IsZero() {
+		updated = time.Now()
+	}
+
+	return execution.Status{
+		ID:         id,
+		State:      state,
+		ProviderID: providerID,
+		StartedAt:  started,
+		EndedAt:    ended,
+		UpdatedAt:  updated,
+	}
 }

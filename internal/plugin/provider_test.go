@@ -16,6 +16,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
@@ -498,5 +499,38 @@ func TestProvider_SubmitErrorIsReturnedUnchanged(t *testing.T) {
 	_, err := p.Submit(t.Context(), testkit.NewID(t), &job.Task{})
 	if !errors.Is(err, ErrProvider) {
 		t.Errorf("error = %v, want a classified provider failure", err)
+	}
+}
+
+// -------------------------------------------------------------------------
+// PLATFORM RESOURCES
+// -------------------------------------------------------------------------
+
+// A platform resource is named from the execution id behind a fixed prefix.
+func TestResourceName(t *testing.T) {
+	id := testkit.NewID(t)
+
+	if got := ResourceName(id); got != "vagabond-"+id.String() {
+		t.Errorf("ResourceName() = %q, want vagabond-%s", got, id)
+	}
+}
+
+// A finished execution is stamped with its end, and one still running with
+// the time it was looked at.
+func TestObservedStatus(t *testing.T) {
+	id := testkit.NewID(t)
+	started := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	ended := started.Add(time.Minute)
+
+	done := ObservedStatus(id, execution.StateSucceeded, "build-1", started, ended)
+	if done.ID != id || done.State != execution.StateSucceeded || done.ProviderID != "build-1" ||
+		!done.StartedAt.Equal(started) || !done.EndedAt.Equal(ended) || !done.UpdatedAt.Equal(ended) {
+		t.Errorf("finished = %+v, want every field as given and UpdatedAt at the end", done)
+	}
+
+	before := time.Now()
+
+	if running := ObservedStatus(id, execution.StateRunning, "build-1", started, time.Time{}); running.UpdatedAt.Before(before) {
+		t.Errorf("running UpdatedAt = %s, want no earlier than %s", running.UpdatedAt, before)
 	}
 }

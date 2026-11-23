@@ -13,7 +13,6 @@ package ibm
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -23,14 +22,6 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 )
-
-// -------------------------------------------------------------------------
-// CONSTANTS
-// -------------------------------------------------------------------------
-
-// namePrefix marks every job run this plugin creates. The execution id follows
-// it, which is how a later process finds and releases a run it did not submit.
-const namePrefix = "vagabond-"
 
 // -------------------------------------------------------------------------
 // TYPES
@@ -49,10 +40,11 @@ var (
 // and the pod poll are fields so a test can point the plugin at a local server
 // and not wait on it.
 type Provider struct {
+	*plugin.Credentialed[session]
+
 	name string
 	cfg  *Config
-	auth atomic.Pointer[session] // swapped whole when the credential is refreshed
-	ns   atomic.Pointer[string]  // the project's namespace, once read
+	ns   atomic.Pointer[string] // the project's namespace, once read
 
 	iamURL  string
 	apiURL  string
@@ -74,15 +66,6 @@ func New(
 		return nil, diags
 	}
 
-	auth, err := newSession(ctx, iamEndpoint, credentials)
-	if err != nil {
-		return nil, append(diags, &hcl.Diagnostic{
-			Severity: hcl.DiagError,
-			Summary:  "Unusable credential",
-			Detail:   fmt.Sprintf("Provider %q: %s.", name, err),
-		})
-	}
-
 	p := &Provider{
 		name:    name,
 		cfg:     cfg,
@@ -91,23 +74,21 @@ func New(
 		kubeURL: kubeBase(cfg.Region),
 		podPoll: defaultPodPoll,
 	}
-	p.auth.Store(auth)
+
+	auth, credDiags := plugin.NewCredentialed(ctx, name, credentials, p.signIn)
+	if credDiags.HasErrors() {
+		return nil, append(diags, credDiags...)
+	}
+
+	p.Credentialed = auth
 
 	return p, diags
 }
 
-// Recredential rebuilds the session from a key resolved again, after a call
-// was refused with 401 or 403. Tokens are fetched long after this call
-// returns, so the session is built on a context that outlives it.
-func (p *Provider) Recredential(ctx context.Context, credential []byte) error {
-	auth, err := newSession(context.WithoutCancel(ctx), p.iamURL, credential)
-	if err != nil {
-		return err
-	}
-
-	p.auth.Store(auth)
-
-	return nil
+// signIn builds the session an API key is exchanged through, against the IAM
+// endpoint the provider holds, at construction and on every key resolved again.
+func (p *Provider) signIn(ctx context.Context, key []byte) (*session, error) {
+	return newSession(ctx, p.iamURL, key)
 }
 
 // Name returns the routing identifier.
@@ -135,7 +116,7 @@ func (p *Provider) Capabilities(context.Context) (plugin.Capabilities, error) {
 func (p *Provider) Submit(
 	ctx context.Context, id execution.ID, task *job.Task,
 ) (plugin.Submission, error) {
-	name := runName(id)
+	name := plugin.ResourceName(id)
 
 	spec, err := p.buildSpec(name, task)
 	if err != nil {
@@ -162,7 +143,7 @@ func (p *Provider) Submit(
 func (p *Provider) Status(
 	ctx context.Context, id execution.ID,
 ) (execution.Status, error) {
-	name := runName(id)
+	name := plugin.ResourceName(id)
 
 	run, err := p.getJobRun(ctx, name)
 	if err != nil {
@@ -174,20 +155,7 @@ func (p *Provider) Status(
 		return execution.Status{}, err
 	}
 
-	status := execution.Status{
-		ID:         id,
-		State:      state,
-		ProviderID: name,
-		StartedAt:  run.started(),
-		EndedAt:    run.ended(),
-	}
-
-	status.UpdatedAt = status.EndedAt
-	if status.UpdatedAt.IsZero() {
-		status.UpdatedAt = time.Now()
-	}
-
-	return status, nil
+	return plugin.ObservedStatus(id, state, name, run.started(), run.ended()), nil
 }
 
 // -------------------------------------------------------------------------
@@ -200,7 +168,7 @@ func (p *Provider) Status(
 func (p *Provider) Result(
 	ctx context.Context, id execution.ID,
 ) (*execution.Result, error) {
-	name := runName(id)
+	name := plugin.ResourceName(id)
 
 	run, err := p.getJobRun(ctx, name)
 	if err != nil {
@@ -244,7 +212,7 @@ func (p *Provider) Result(
 // way to stop one. The pod goes with it, so this destroys what Result and
 // ReadLogs read.
 func (p *Provider) Cancel(ctx context.Context, id execution.ID) error {
-	return p.deleteJobRun(ctx, runName(id))
+	return p.deleteJobRun(ctx, plugin.ResourceName(id))
 }
 
 // Release deletes the job run a finished execution left behind, which
@@ -252,14 +220,4 @@ func (p *Provider) Cancel(ctx context.Context, id execution.ID) error {
 // calls it last, however the execution ended.
 func (p *Provider) Release(ctx context.Context, id execution.ID) error {
 	return p.Cancel(ctx, id)
-}
-
-// -------------------------------------------------------------------------
-// NAMING
-// -------------------------------------------------------------------------
-
-// runName is the job run for an execution: 45 characters, inside Code Engine's
-// 53, lowercase as its naming rules require.
-func runName(id execution.ID) string {
-	return namePrefix + id.String()
 }

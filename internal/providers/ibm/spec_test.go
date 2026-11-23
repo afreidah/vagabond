@@ -19,6 +19,7 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobspec"
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/plugin/plugintest"
 )
 
 // -------------------------------------------------------------------------
@@ -133,7 +134,7 @@ func TestBuildSpec(t *testing.T) {
 	_, p := newFakeIBM(t)
 	p.cfg.ImageSecret = new("ghcr")
 
-	spec, err := p.buildSpec("vagabond-run", containerTask(t))
+	spec, err := p.buildSpec("vagabond-run", plugintest.ContainerTask(t))
 	if err != nil {
 		t.Fatalf("buildSpec() = %v", err)
 	}
@@ -196,7 +197,7 @@ func TestBuildSpec_NoImageSecret(t *testing.T) {
 
 	_, p := newFakeIBM(t)
 
-	spec, err := p.buildSpec("vagabond-run", containerTask(t))
+	spec, err := p.buildSpec("vagabond-run", plugintest.ContainerTask(t))
 	if err != nil {
 		t.Fatalf("buildSpec() = %v", err)
 	}
@@ -259,26 +260,26 @@ func TestBuildSpec_Refusals(t *testing.T) {
 	_, p := newFakeIBM(t)
 
 	cases := map[string]*job.Task{
-		"no image": {Name: "test", Driver: job.DriverContainer, Config: rawBlock(t, "command = \"true\"\n")},
+		"no image": {Name: "test", Driver: job.DriverContainer, Config: plugintest.RawBlock(t, "command = \"true\"\n")},
 		"unreadable env": {
 			Name: "test", Driver: job.DriverContainer,
-			Config: rawBlock(t, "image = \"alpine:3.20\"\n"),
-			Env:    rawBlock(t, "LIST = [\"a\", \"b\"]\n"),
+			Config: plugintest.RawBlock(t, "image = \"alpine:3.20\"\n"),
+			Env:    plugintest.RawBlock(t, "LIST = [\"a\", \"b\"]\n"),
 		},
 		"too large": {
 			Name: "test", Driver: job.DriverContainer,
-			Config:    rawBlock(t, "image = \"alpine:3.20\"\n"),
+			Config:    plugintest.RawBlock(t, "image = \"alpine:3.20\"\n"),
 			Resources: &job.Resources{CPU: new(16000)},
 		},
 		"timeout too long": {
 			Name: "test", Driver: job.DriverContainer,
-			Config:  rawBlock(t, "image = \"alpine:3.20\"\n"),
+			Config:  plugintest.RawBlock(t, "image = \"alpine:3.20\"\n"),
 			Timeout: new(job.Duration("48h")),
 		},
 		"env takes a carried name": {
 			Name: "test", Driver: job.DriverContainer,
-			Config: rawBlock(t, "image = \"alpine:3.20\"\nargs = [\"a\\nb\"]\n"),
-			Env:    rawBlock(t, "VAGABOND_ARG_0 = \"mine\"\n"),
+			Config: plugintest.RawBlock(t, "image = \"alpine:3.20\"\nargs = [\"a\\nb\"]\n"),
+			Env:    plugintest.RawBlock(t, "VAGABOND_ARG_0 = \"mine\"\n"),
 		},
 	}
 
@@ -351,8 +352,8 @@ func TestBuildSpec_CommandLine(t *testing.T) {
 		spec, err := p.buildSpec("vagabond-run", &job.Task{
 			Name:   "test",
 			Driver: job.DriverContainer,
-			Config: rawBlock(t, "image = \"alpine:3.20\"\n"+tc.config+"\n"),
-			Env:    rawBlock(t, tc.env+"\n"),
+			Config: plugintest.RawBlock(t, "image = \"alpine:3.20\"\n"+tc.config+"\n"),
+			Env:    plugintest.RawBlock(t, tc.env+"\n"),
 		})
 		if err != nil {
 			t.Errorf("%s: buildSpec() = %v", tc.name, err)

@@ -13,6 +13,7 @@ package gcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,12 +25,14 @@ import (
 	"time"
 
 	"github.com/afreidah/vagabond/internal/plugin"
-	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
 // FIXTURES
 // -------------------------------------------------------------------------
+
+// testFilter is the filter every read and stream here asks for.
+const testFilter = `resource.type="cloud_run_job" resource.labels.job_name="vagabond-test"`
 
 // fakeLogging answers entries:list with pages in turn, the last repeating, and
 // entries:tail with one canned stream. Safe for the concurrent requests a
@@ -39,8 +42,9 @@ type fakeLogging struct {
 	pages      []any
 	tail       string
 	listStatus int // when set, entries:list is refused with it
+	tailStatus int // when set, entries:tail is refused with it
 	tailBody   []byte
-	lists      int
+	lists      []map[string]any // the body of each entries:list request
 }
 
 // ServeHTTP answers the two routes and records what they were sent.
@@ -55,10 +59,21 @@ func (f *fakeLogging) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/v2/entries:tail":
 		f.tailBody = body
+
+		if f.tailStatus != 0 {
+			w.WriteHeader(f.tailStatus)
+			_, _ = io.WriteString(w, `{"error":{"message":"refused"}}`)
+
+			return
+		}
+
 		_, _ = io.WriteString(w, f.tail)
 
 	case "/v2/entries:list":
-		f.lists++
+		var request map[string]any
+		_ = json.Unmarshal(body, &request)
+
+		f.lists = append(f.lists, request)
 
 		if f.listStatus != 0 {
 			w.WriteHeader(f.listStatus)
@@ -67,24 +82,28 @@ func (f *fakeLogging) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_ = json.NewEncoder(w).Encode(f.pages[min(f.lists, len(f.pages))-1])
+		_ = json.NewEncoder(w).Encode(f.pages[min(len(f.lists), len(f.pages))-1])
 
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
 }
 
-// newLogging starts f and a provider reading logs from it.
-func newLogging(t *testing.T, f *fakeLogging) *Provider {
+// newLogging starts f and an API reading logs from it, its requests unsigned
+// since the fake needs no auth.
+func newLogging(t *testing.T, f *fakeLogging) *API {
 	t.Helper()
 
 	server := httptest.NewServer(f)
 	t.Cleanup(server.Close)
 
-	p := &Provider{name: "gcp", cfg: &Config{Project: "test-project", Region: "us-central1"}, logsURL: server.URL}
-	p.http.Store(server.Client())
+	client, diags := plugin.NewCredentialed(t.Context(), "gcp", nil,
+		func(context.Context, []byte) (*http.Client, error) { return server.Client(), nil })
+	if diags.HasErrors() {
+		t.Fatalf("NewCredentialed() = %s", diags.Error())
+	}
 
-	return p
+	return &API{Credentialed: client, Config: &Config{Project: "test-project"}, LogsURL: server.URL, name: "gcp"}
 }
 
 // keyed is one entry as Cloud Logging returns it, with its identity.
@@ -104,13 +123,13 @@ func tailOf(t *testing.T, entries ...any) string {
 	return string(encoded)
 }
 
-// stream runs StreamLogs from offset and returns what it wrote.
-func stream(t *testing.T, p *Provider, offset int64) (string, error) {
+// stream runs StreamEntries from offset and returns what it wrote.
+func stream(t *testing.T, a *API, offset int64) (string, error) {
 	t.Helper()
 
 	var out bytes.Buffer
 
-	err := p.StreamLogs(t.Context(), testkit.NewID(t), offset, &out)
+	err := a.StreamEntries(t.Context(), testFilter, offset, &out)
 
 	return out.String(), err
 }
@@ -127,7 +146,7 @@ func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
 // What was logged before the stream opened comes first, and an entry both the
 // list and the tail carry is written once.
-func TestStreamLogs_BackfillsThenTails(t *testing.T) {
+func TestStreamEntries_BackfillsThenTails(t *testing.T) {
 	t.Parallel()
 
 	f := &fakeLogging{
@@ -137,13 +156,13 @@ func TestStreamLogs_BackfillsThenTails(t *testing.T) {
 
 	got, err := stream(t, newLogging(t, f), 0)
 	if err != nil || got != "one\ntwo\nthree\n" {
-		t.Errorf("StreamLogs() = %q, %v; want every line once, in order", got, err)
+		t.Errorf("StreamEntries() = %q, %v; want every line once, in order", got, err)
 	}
 }
 
 // A stream reopened at an offset skips what the caller has, across the
 // backfill and into the tail.
-func TestStreamLogs_ResumesFromAnOffset(t *testing.T) {
+func TestStreamEntries_ResumesFromAnOffset(t *testing.T) {
 	t.Parallel()
 
 	f := &fakeLogging{
@@ -158,20 +177,20 @@ func TestStreamLogs_ResumesFromAnOffset(t *testing.T) {
 		int64(len("one\ntwo\nthree\n")): "",
 	} {
 		if got, err := stream(t, p, offset); err != nil || got != want {
-			t.Errorf("StreamLogs() from %d = %q, %v; want %q", offset, got, err, want)
+			t.Errorf("StreamEntries() from %d = %q, %v; want %q", offset, got, err, want)
 		}
 	}
 }
 
 // The tail is a streaming method's body, a JSON array of requests, since a
 // bare object is rejected by Google as "Invalid value (Object)".
-func TestStreamLogs_SendsAnArrayBody(t *testing.T) {
+func TestStreamEntries_SendsAnArrayBody(t *testing.T) {
 	t.Parallel()
 
 	f := &fakeLogging{pages: []any{page("")}, tail: `[]`}
 
 	if _, err := stream(t, newLogging(t, f), 0); err != nil {
-		t.Fatalf("StreamLogs() = %v", err)
+		t.Fatalf("StreamEntries() = %v", err)
 	}
 
 	var decoded []map[string]any
@@ -183,47 +202,46 @@ func TestStreamLogs_SendsAnArrayBody(t *testing.T) {
 		t.Errorf("bufferWindow = %v, want %s", got, bufferWindow)
 	}
 
-	if filter, _ := decoded[0]["filter"].(string); !strings.Contains(filter, "vagabond-") {
-		t.Errorf("filter does not name the job: %q", filter)
+	if got := decoded[0]["filter"]; got != testFilter {
+		t.Errorf("filter = %v, want %s", got, testFilter)
 	}
 }
 
 // A backfill that cannot be listed, or stops at the page cap, leaves the
 // stream unplaced, which the caller learns as ErrNoResume.
-func TestStreamLogs_UnplacedIsNoResume(t *testing.T) {
+func TestStreamEntries_UnplacedIsNoResume(t *testing.T) {
 	t.Parallel()
 
 	refused := &fakeLogging{listStatus: http.StatusTooManyRequests, tail: `[]`}
 
 	if _, err := stream(t, newLogging(t, refused), 0); !errors.Is(err, plugin.ErrNoResume) {
-		t.Errorf("StreamLogs() with the list refused = %v, want ErrNoResume", err)
+		t.Errorf("StreamEntries() with the list refused = %v, want ErrNoResume", err)
 	}
 
 	endless := &fakeLogging{pages: []any{page("more")}, tail: `[]`}
 
 	if _, err := stream(t, newLogging(t, endless), 0); !errors.Is(err, plugin.ErrNoResume) || !errors.Is(err, errPageCap) {
-		t.Errorf("StreamLogs() at the page cap = %v, want ErrNoResume", err)
+		t.Errorf("StreamEntries() at the page cap = %v, want ErrNoResume", err)
 	}
 }
 
 // A tail Google refuses to open is reported, before anything is listed.
-func TestStreamLogs_ClassifiesAFailedOpen(t *testing.T) {
+func TestStreamEntries_ClassifiesAFailedOpen(t *testing.T) {
 	t.Parallel()
 
-	// Nothing registered for entries:tail, so it 404s.
-	g, p := newFakeGoogle(t)
+	f := &fakeLogging{tailStatus: http.StatusForbidden}
 
-	if _, err := stream(t, p, 0); err == nil || errors.Is(err, plugin.ErrNoResume) {
-		t.Fatalf("StreamLogs() = %v, want the refusal", err)
+	if _, err := stream(t, newLogging(t, f), 0); !errors.Is(err, plugin.ErrUnauthorized) || errors.Is(err, plugin.ErrNoResume) {
+		t.Fatalf("StreamEntries() = %v, want the refusal", err)
 	}
 
-	if len(g.requests) != 1 {
-		t.Errorf("made %d requests, want only the tail", len(g.requests))
+	if len(f.lists) != 0 {
+		t.Errorf("listed %d pages, want only the tail opened", len(f.lists))
 	}
 }
 
 // A write that fails is the caller's, in the backfill and in the tail.
-func TestStreamLogs_ReportsAFailedWrite(t *testing.T) {
+func TestStreamEntries_ReportsAFailedWrite(t *testing.T) {
 	t.Parallel()
 
 	gone := writerFunc(func([]byte) (int, error) { return 0, errors.New("client gone") })
@@ -232,9 +250,9 @@ func TestStreamLogs_ReportsAFailedWrite(t *testing.T) {
 		"backfill": {pages: []any{page("", keyed("one", "1"))}, tail: `[]`},
 		"tail":     {pages: []any{page("")}, tail: tailOf(t, keyed("one", "1"))},
 	} {
-		err := newLogging(t, f).StreamLogs(t.Context(), testkit.NewID(t), 0, gone)
+		err := newLogging(t, f).StreamEntries(t.Context(), testFilter, 0, gone)
 		if classOf(err) != plugin.ClassInternal || errors.Is(err, plugin.ErrNoResume) {
-			t.Errorf("%s: StreamLogs() = %v, want an Internal error", name, err)
+			t.Errorf("%s: StreamEntries() = %v, want an Internal error", name, err)
 		}
 	}
 }

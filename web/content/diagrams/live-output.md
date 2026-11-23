@@ -168,7 +168,7 @@ window.vagabondDiagram = {
     TAIL: {
       title: 'Open entries:tail, Queue What Arrives',
       badge: 'process', badgeText: 'Cloud Run provider',
-      body: '<p><code>gcp.Provider.StreamLogs</code> opens the tail first, so nothing logged while the backfill is listed is missed. <code>openTail</code> POSTs to <code>/v2/entries:tail</code> a one-element JSON array, since a streaming method&rsquo;s body is a stream of requests, filtering on <code>resource.type="cloud_run_job"</code> and the job name, with a 1 s <code>bufferWindow</code> so stderr does not arrive before the stdout that preceded it.</p><p>A goroutine decodes the open response with <code>decodeTail</code> into a queue of up to 10,000 entries from the moment it opens, because Cloud Logging drops entries a client does not read quickly enough. Once open, every way the tail stops ends it without an error.</p>'
+      body: '<p><code>gcp.API.StreamEntries</code>, which both Google providers&rsquo; <code>StreamLogs</code> call, opens the tail first, so nothing logged while the backfill is listed is missed. <code>openTail</code> POSTs to <code>/v2/entries:tail</code> a one-element JSON array, since a streaming method&rsquo;s body is a stream of requests, filtering on <code>resource.type="cloud_run_job"</code> and the job name, with a 1 s <code>bufferWindow</code> so stderr does not arrive before the stdout that preceded it.</p><p>A goroutine decodes the open response with <code>decodeTail</code> into a queue of up to 10,000 entries from the moment it opens, because Cloud Logging drops entries a client does not read quickly enough. Once open, every way the tail stops ends it without an error.</p>'
     },
     BACKFILL: {
       title: 'entries:list: What Was Logged Before',

@@ -7,7 +7,7 @@
 // a place where a task could quietly run with less than it asked for.
 // -------------------------------------------------------------------------------
 
-package gcp
+package cloudrun
 
 import (
 	"testing"
@@ -15,6 +15,7 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobspec"
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/plugin/plugintest"
 )
 
 // -------------------------------------------------------------------------
@@ -54,12 +55,12 @@ func TestVCPURoundsUp(t *testing.T) {
 func podOf(t *testing.T, resources *job.Resources, timeout *job.Duration) (limits map[string]string, seconds string) {
 	t.Helper()
 
-	_, p := newFakeGoogle(t)
+	_, p := newFake(t)
 
 	spec, err := p.jobSpec(&job.Task{
 		Name:      "test",
 		Driver:    job.DriverContainer,
-		Config:    rawBlock(t, "image = \"alpine:3.20\"\n"),
+		Config:    plugintest.RawBlock(t, "image = \"alpine:3.20\"\n"),
 		Resources: resources,
 		Timeout:   timeout,
 	})
@@ -104,7 +105,7 @@ func TestJobSpecReadsTheTask(t *testing.T) {
 func TestJobSpecSetsTheWorkingDirectory(t *testing.T) {
 	t.Parallel()
 
-	_, p := newFakeGoogle(t)
+	_, p := newFake(t)
 
 	cases := []struct {
 		dir  *string
@@ -117,7 +118,7 @@ func TestJobSpecSetsTheWorkingDirectory(t *testing.T) {
 		spec, err := p.jobSpec(&job.Task{
 			Name:             "test",
 			Driver:           job.DriverContainer,
-			Config:           rawBlock(t, "image = \"alpine:3.20\"\n"),
+			Config:           plugintest.RawBlock(t, "image = \"alpine:3.20\"\n"),
 			WorkingDirectory: tc.dir,
 		})
 		if err != nil {
@@ -141,7 +142,7 @@ func TestJobSpecSetsTheWorkingDirectory(t *testing.T) {
 func TestJobSpecCarriesMetadata(t *testing.T) {
 	t.Parallel()
 
-	_, p := newFakeGoogle(t)
+	_, p := newFake(t)
 
 	parsed, diags := jobspec.Parse(jobspec.Config{
 		Source: []byte(`
@@ -190,12 +191,12 @@ job "ci" {
 func TestJobSpecNeedsAnImage(t *testing.T) {
 	t.Parallel()
 
-	_, p := newFakeGoogle(t)
+	_, p := newFake(t)
 
 	_, err := p.jobSpec(&job.Task{
 		Name:   "test",
 		Driver: job.DriverContainer,
-		Config: rawBlock(t, "command = \"true\"\n"),
+		Config: plugintest.RawBlock(t, "command = \"true\"\n"),
 	})
 	if err == nil {
 		t.Fatal("a task with no image was translated")
@@ -207,13 +208,13 @@ func TestJobSpecNeedsAnImage(t *testing.T) {
 func TestJobSpecRefusesAnUnreadableEnv(t *testing.T) {
 	t.Parallel()
 
-	_, p := newFakeGoogle(t)
+	_, p := newFake(t)
 
 	_, err := p.jobSpec(&job.Task{
 		Name:   "test",
 		Driver: job.DriverContainer,
-		Config: rawBlock(t, "image = \"alpine:3.20\"\n"),
-		Env:    rawBlock(t, "LIST = [\"a\", \"b\"]\n"),
+		Config: plugintest.RawBlock(t, "image = \"alpine:3.20\"\n"),
+		Env:    plugintest.RawBlock(t, "LIST = [\"a\", \"b\"]\n"),
 	})
 
 	if err == nil || plugin.Reroutable(err) {

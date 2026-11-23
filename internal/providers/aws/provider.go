@@ -13,8 +13,6 @@ package aws
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
-	"sync/atomic"
 	"time"
 
 	sdkaws "github.com/aws/aws-sdk-go-v2/aws"
@@ -58,13 +56,15 @@ type Provider struct {
 	plugin.StatusNotSupported
 	plugin.ResultNotSupported
 	plugin.CancelNotSupported
+	*plugin.Credentialed[lambda.Client]
 
-	name   string
-	cfg    *Config
-	client atomic.Pointer[lambda.Client] // swapped whole when the credential is refreshed
+	name string
+	cfg  *Config
 }
 
-// New builds a Lambda provider from its configuration block.
+// New builds a Lambda provider from its configuration block. The client is
+// built again from a credential resolved anew whenever AWS rejects the one it
+// holds, as it does an expired session token.
 func New(
 	ctx context.Context, name string, body hcl.Body, credential []byte,
 ) (*Provider, hcl.Diagnostics) {
@@ -73,32 +73,15 @@ func New(
 		return nil, diags
 	}
 
-	client, err := newClient(ctx, cfg, credential)
-	if err != nil {
-		return nil, append(diags, &hcl.Diagnostic{
-			Severity: hcl.DiagError,
-			Summary:  "Unusable credential",
-			Detail:   fmt.Sprintf("Provider %q: %s.", name, err),
+	client, credDiags := plugin.NewCredentialed(ctx, name, credential,
+		func(ctx context.Context, credential []byte) (*lambda.Client, error) {
+			return newClient(ctx, cfg, credential)
 		})
+	if credDiags.HasErrors() {
+		return nil, append(diags, credDiags...)
 	}
 
-	p := &Provider{name: name, cfg: cfg}
-	p.client.Store(client)
-
-	return p, diags
-}
-
-// Recredential rebuilds the Lambda client from a credential resolved again,
-// after AWS rejected the one it held, as an expired session token is.
-func (p *Provider) Recredential(ctx context.Context, credential []byte) error {
-	client, err := newClient(ctx, p.cfg, credential)
-	if err != nil {
-		return err
-	}
-
-	p.client.Store(client)
-
-	return nil
+	return &Provider{Credentialed: client, name: name, cfg: cfg}, diags
 }
 
 // -------------------------------------------------------------------------
@@ -140,7 +123,7 @@ func (p *Provider) Submit(
 
 	started := time.Now()
 
-	out, err := p.client.Load().Invoke(ctx, &lambda.InvokeInput{
+	out, err := p.Client().Invoke(ctx, &lambda.InvokeInput{
 		FunctionName:   sdkaws.String(function),
 		Payload:        payload,
 		InvocationType: types.InvocationTypeRequestResponse,

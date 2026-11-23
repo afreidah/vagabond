@@ -27,7 +27,7 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/nodes"
 	"github.com/afreidah/vagabond/internal/plugin"
-	"github.com/afreidah/vagabond/internal/providers/gcp"
+	"github.com/afreidah/vagabond/internal/providers/gcp/cloudrun"
 	"github.com/afreidah/vagabond/internal/providers/pool"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/scheduler"
@@ -566,7 +566,7 @@ func TestBuild(t *testing.T) {
 func TestBuildRealProviderNeedsConfig(t *testing.T) {
 	t.Parallel()
 
-	_, diags := Build(t.Context(), gcp.Type, Settings{Name: "gcp-cloud-run"})
+	_, diags := Build(t.Context(), cloudrun.Type, Settings{Name: "gcp-cloud-run"})
 	if !diags.HasErrors() {
 		t.Fatal("a cloud-run provider built with no configuration")
 	}

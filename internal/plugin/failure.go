@@ -73,6 +73,16 @@ var ErrProvider = errors.New("provider operation failed")
 // that does not exist from a request that failed.
 var ErrNotFound = errors.New("not found")
 
+// IgnoreNotFound returns err unless it is the platform saying the resource is
+// gone, for a delete or cancel that a missing resource already satisfies.
+func IgnoreNotFound(err error) error {
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+
+	return err
+}
+
 // ErrUnauthorized marks a 401 or 403 from ClassifyHTTP: the platform rejected
 // the credential. Dispatch re-resolves the credential and tries once more,
 // since one that expired is the common cause.

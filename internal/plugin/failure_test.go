@@ -375,3 +375,22 @@ func TestClassifyHTTP_PreservesStatusAndCause(t *testing.T) {
 		t.Error("the underlying cause was lost")
 	}
 }
+
+// A resource the platform says is gone is no error; any other failure, and
+// success, come back unchanged.
+func TestIgnoreNotFound(t *testing.T) {
+	gone := ClassifyHTTP(http.StatusNotFound, 0, errors.New("no such job"))
+	refused := ClassifyHTTP(http.StatusForbidden, 0, errors.New("denied"))
+
+	if err := IgnoreNotFound(gone); err != nil {
+		t.Errorf("IgnoreNotFound(404) = %v, want nil", err)
+	}
+
+	if err := IgnoreNotFound(refused); !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("IgnoreNotFound(403) = %v, want it unchanged", err)
+	}
+
+	if err := IgnoreNotFound(nil); err != nil {
+		t.Errorf("IgnoreNotFound(nil) = %v, want nil", err)
+	}
+}

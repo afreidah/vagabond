@@ -16,7 +16,8 @@ time.
 
 | Reference | Package | Shows |
 |---|---|---|
-| Cloud Run Jobs | `internal/providers/gcp` | Asynchronous family, a paged `LogReader`, a `LogStreamer` that lists what was logged before its tail, `Releaser`, `Recredentialer`, raw HTTP against `httptest` |
+| Cloud Run Jobs | `internal/providers/gcp/cloudrun` | Asynchronous family, a paged `LogReader`, a `LogStreamer` that lists what was logged before its tail, `Releaser`, `Recredentialer`, raw HTTP against `httptest` |
+| Cloud Build | `internal/providers/gcp/cloudbuild` | A second provider on the same platform, both embedding `gcp.API` for the signed client and the Cloud Logging reader; a resource the platform names and the plugin finds again by tag; a `Result` that reports a run the platform ended as infrastructure |
 | Code Engine Jobs | `internal/providers/ibm` | Asynchronous family, `LogReader` and `LogStreamer` over one log, `Releaser`, a `Recredentialer` whose token refusals are unauthorized, a fixed size table, two APIs behind one token |
 | AWS Lambda | `internal/providers/aws` | Synchronous family, the `NotSupported` embeds, `Result.Billed`, output in `Result.Logs`, `Recredentialer`, a cloud SDK against `httptest` |
 | containerd, firecracker | `internal/providers/pool` | One package behind two types, `Live`, `Targeter` and `Reserver`, `LogStreamer` with `offset` and `LogReader` on top of it, `Releaser`, `Capabilities.Members`, an optional config block |
@@ -311,12 +312,13 @@ is absent.
 
 ### `Recredentialer`
 
-- For a provider that holds a credential. Rebuild whatever signs requests from
-  the new bytes and swap it in atomically; calls in flight may still use the
-  old one.
-- The context is the call that was rejected. Anything built on it that
-  outlives the call, such as a token source, needs `context.WithoutCancel`.
-- Return an error when the bytes are unusable, and keep the old client.
+- For a provider that holds a credential. Embed `*plugin.Credentialed[C]`,
+  where `C` is whatever signs requests, and read it with `Client()`; it
+  provides this method. It rebuilds the client from the new bytes and swaps
+  it in atomically, so calls in flight may still use the old one.
+- The context is the call that was rejected. `Credentialed` builds on
+  `context.WithoutCancel` of it, since a token source outlives the call.
+- When the bytes are unusable it returns the error and keeps the old client.
 - Classify 401 and 403 through `ClassifyHTTP`, which marks them
   `ErrUnauthorized`; that is what triggers the refresh.
 - Never called for a provider block with no `credentials` block: there is
@@ -527,8 +529,9 @@ dispatch call fails with `ErrUnauthorized`.
 
 - `nil` when the provider block has no `credentials` block. Either fail with a
   diagnostic or fall back to the platform's default chain, and document which.
-- Parse the credential in the constructor and return an `Unusable credential`
-  diagnostic when it fails, so a bad secret stops startup.
+- Parse the credential in the constructor, so a bad secret stops startup.
+  `plugin.NewCredentialed(ctx, name, credential, build)` builds the first
+  client and returns the `Unusable credential` diagnostic when `build` fails.
 - Accept the narrowest format the platform offers. The Cloud Run plugin accepts
   service account keys only, because broader formats can name a command to
   run.
@@ -562,39 +565,28 @@ const Type = "example"
 func New(ctx context.Context, name string, body hcl.Body, credentials []byte) (*Provider, hcl.Diagnostics)
 ```
 
-Add both to `internal/registry/build.go`:
+Add a row to the `builders` table in `internal/registry/build.go`:
 
 ```go
-var providerTypes = []string{
-    gcp.Type,
-    aws.Type,
-    pool.Type,
-    example.Type,
-    // fakes
-}
-
-func Build(ctx context.Context, providerType string, settings Settings) (plugin.Provider, hcl.Diagnostics) {
-    switch providerType {
+var builders = []struct {
+    providerType string
+    build        builder
+}{
+    {cloudrun.Type, cloud(cloudrun.New)},
     // ...
-    case example.Type:
-        p, diags := example.New(ctx, settings.Name, settings.Config, settings.Credentials)
-        if diags.HasErrors() {
-            return nil, diags
-        }
-
-        return p, diags
+    {example.Type, cloud(example.New)},
     // ...
-    }
 }
 ```
 
-- Return `nil` explicitly on error. Returning a nil `*example.Provider` through
-  the `plugin.Provider` interface produces a non-nil interface that panics on
-  first use.
-- `providerTypes` feeds the `Unknown provider type` diagnostic, which lists
-  every known type.
+- `cloud` adapts a constructor of the shape above, passing it the block's
+  label, its undecoded `config` body and its resolved credential. On error it
+  returns a nil interface, not one holding a nil `*example.Provider`, which
+  would be non-nil and panic on first use.
+- The table's order is the order the `Unknown provider type` diagnostic lists
+  every known type in.
 - `registry.Settings` also carries `Nodes`, the server's connected agents,
-  which only the `pool` type uses.
+  which only the `containerd` and `firecracker` types use.
 
 Nothing else is wired by hand. `vagabond server` builds the registry from
 configuration at startup, refreshes it, and hands each provider to admission
@@ -700,12 +692,14 @@ func (p *Provider) Submit(ctx context.Context, id execution.ID, task *job.Task) 
 		return plugin.Submission{}, err
 	}
 
-	run := map[string]any{"name": runName(id), "image": c.Image, "env": c.Env, "memory_mib": c.Memory}
+	name := plugin.ResourceName(id)
+
+	run := map[string]any{"name": name, "image": c.Image, "env": c.Env, "memory_mib": c.Memory}
 	if err := p.call(ctx, http.MethodPost, "/runs", run, nil); err != nil {
 		return plugin.Submission{}, err
 	}
 
-	return plugin.Submission{ProviderID: runName(id), State: execution.StateAccepted}, nil
+	return plugin.Submission{ProviderID: name, State: execution.StateAccepted}, nil
 }
 
 // Status maps the platform's run state onto Vagabond's.
@@ -716,10 +710,12 @@ func (p *Provider) Status(ctx context.Context, id execution.ID) (execution.Statu
 		Ended   time.Time `json:"ended"`
 	}
 
-	if err := p.call(ctx, http.MethodGet, "/runs/"+runName(id), nil, &run); err != nil {
+	name := plugin.ResourceName(id)
+
+	if err := p.call(ctx, http.MethodGet, "/runs/"+name, nil, &run); err != nil {
 		// Only the platform saying "no such run" wraps ErrUnknownExecution.
 		if errors.Is(err, plugin.ErrNotFound) {
-			return execution.Status{}, plugin.Internal(plugin.UnknownExecution("run %s", runName(id)))
+			return execution.Status{}, plugin.Internal(plugin.UnknownExecution("run %s", name))
 		}
 
 		return execution.Status{}, err
@@ -735,10 +731,8 @@ func (p *Provider) Status(ctx context.Context, id execution.ID) (execution.Statu
 		return execution.Status{}, plugin.Infrastructure(fmt.Errorf("run %s: unknown state %q", id, run.State))
 	}
 
-	return execution.Status{
-		ID: id, State: state, ProviderID: runName(id),
-		StartedAt: run.Started, EndedAt: run.Ended, UpdatedAt: time.Now(),
-	}, nil
+	// Stamped with its end, or with now while it runs
+	return plugin.ObservedStatus(id, state, name, run.Started, run.Ended), nil
 }
 
 // Result returns the exit code and output of a finished run.
@@ -749,7 +743,7 @@ func (p *Provider) Result(ctx context.Context, id execution.ID) (*execution.Resu
 		Logs     string  `json:"logs"`
 	}
 
-	if err := p.call(ctx, http.MethodGet, "/runs/"+runName(id)+"/result", nil, &out); err != nil {
+	if err := p.call(ctx, http.MethodGet, "/runs/"+plugin.ResourceName(id)+"/result", nil, &out); err != nil {
 		return nil, err
 	}
 
@@ -763,26 +757,13 @@ func (p *Provider) Result(ctx context.Context, id execution.ID) (*execution.Resu
 
 // Cancel stops a run. A run that is already gone satisfies the caller.
 func (p *Provider) Cancel(ctx context.Context, id execution.ID) error {
-	err := p.call(ctx, http.MethodPost, "/runs/"+runName(id)+":stop", struct{}{}, nil)
-	if errors.Is(err, plugin.ErrNotFound) {
-		return nil
-	}
-
-	return err
+	return plugin.IgnoreNotFound(p.call(ctx, http.MethodPost, "/runs/"+plugin.ResourceName(id)+":stop", struct{}{}, nil))
 }
 
 // Release deletes the run record, the last call for every execution.
 func (p *Provider) Release(ctx context.Context, id execution.ID) error {
-	err := p.call(ctx, http.MethodDelete, "/runs/"+runName(id), nil, nil)
-	if errors.Is(err, plugin.ErrNotFound) {
-		return nil
-	}
-
-	return err
+	return plugin.IgnoreNotFound(p.call(ctx, http.MethodDelete, "/runs/"+plugin.ResourceName(id), nil, nil))
 }
-
-// runName derives the platform's name for an execution.
-func runName(id execution.ID) string { return "vagabond-" + id.String() }
 
 // call sends one JSON request and classifies any failure.
 func (p *Provider) call(ctx context.Context, method, path string, payload, out any) error {
@@ -823,15 +804,14 @@ A synchronous provider replaces `Status`, `Result` and `Cancel` with the three
 endpoint, as a field and point it at `httptest.NewServer` in tests. This
 exercises request building, headers, encoding and status classification.
 
+A provider embedding `plugin.Credentialed` gets its test client the same
+way it gets a real one, from a build function, here one that returns a client
+for the test server:
+
 ```go
-// Raw HTTP, as internal/providers/gcp does.
-p := &Provider{
-    name:    "gcp-cloud-run",
-    cfg:     &Config{Project: "test-project", Region: "us-central1", RuntimeServiceAccount: "runtime@test-project.iam.gserviceaccount.com"},
-    runURL:  server.URL,
-    logsURL: server.URL,
-}
-p.http.Store(server.Client()) // an atomic.Pointer, swapped by Recredential
+// Raw HTTP, as internal/providers/gcp/gcptest does: unsigned, since httptest needs no auth.
+creds, _ := plugin.NewCredentialed(t.Context(), "gcp-cloud-run", nil,
+    func(context.Context, []byte) (*http.Client, error) { return server.Client(), nil })
 
 // An SDK, as internal/providers/aws does.
 client := lambda.New(lambda.Options{
@@ -841,9 +821,14 @@ client := lambda.New(lambda.Options{
     Retryer:      sdkaws.NopRetryer{},
     HTTPClient:   srv.Client(),
 })
-p := &Provider{name: "aws-lambda"}
-p.client.Store(client)
+creds, _ := plugin.NewCredentialed(t.Context(), "aws-lambda", nil,
+    func(context.Context, []byte) (*lambda.Client, error) { return client, nil })
+p := &Provider{Credentialed: creds, name: "aws-lambda"}
 ```
+
+`internal/plugin/plugintest` holds what provider tests share:
+`Body` and `RawBlock` parse configuration the way the loaders leave it, and
+`ContainerTask` is a container task shaped like the documented example.
 
 Cover at least:
 
@@ -876,9 +861,15 @@ catches it.
 
 **Live tests.** Add a round-trip test against the real platform, gated on an
 environment variable and skipped when it is unset, so `make test` needs no
-cloud account (see `internal/providers/gcp/live_test.go`). Register the
-cleanup on its own context: `t.Context()` is cancelled before `t.Cleanup`
-functions run, so a delete on it leaks the resource.
+cloud account (see `internal/providers/gcp/cloudrun/live_test.go`). For a container
+provider, `plugintest.Live{Poll, Deadline}.RoundTrip(t, p, resources)` is the
+whole test: a container printing to both streams and exiting 3, followed live
+when the provider streams, its exit code and output checked, and cancelled in
+a cleanup. It returns the execution ID for checks of the provider's own.
+`Finish`, `AwaitRunning`, `Follow` and `ReadAll` are there for other live
+tests. A cleanup registered by hand needs its own context: `t.Context()` is
+cancelled before `t.Cleanup` functions run, so a delete on it leaks the
+resource.
 
 **Without the platform.** `internal/plugin` exports fakes for tests of code
 above the boundary: `NewFakeContainerProvider`, `NewFakeFunctionProvider` and

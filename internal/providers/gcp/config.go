@@ -1,17 +1,20 @@
 // -------------------------------------------------------------------------------
-// Cloud Run Configuration
+// Google Provider Configuration
 //
 // Author: Alex Freidah
 //
 // The values a deployment has to state, decoded from the provider's own config
-// block. Vagabond hands that block over undecoded, so a typo is reported
-// against the line the operator wrote it on rather than at dispatch.
+// block, and the run limit, the same for Cloud Run and Cloud Build. Vagabond
+// hands that block over undecoded, so a typo is reported against the line the
+// operator wrote it on rather than at dispatch.
 // -------------------------------------------------------------------------------
 
 package gcp
 
 import (
+	"cmp"
 	"fmt"
+	"time"
 
 	"github.com/hashicorp/hcl/v2"
 
@@ -22,11 +25,9 @@ import (
 // TYPES
 // -------------------------------------------------------------------------
 
-// Type is what a provider block names to select this plugin.
-const Type = "cloud-run"
-
-// Config is what Cloud Run needs beyond a credential. RuntimeServiceAccount is
-// what the container executes as, deliberately an identity holding nothing.
+// Config is what a Google provider needs beyond a credential.
+// RuntimeServiceAccount is what the container executes as, deliberately an
+// identity holding nothing but what the platform requires of it.
 type Config struct {
 	Project               string `hcl:"project"`
 	Region                string `hcl:"region"`
@@ -37,10 +38,10 @@ type Config struct {
 // DECODING
 // -------------------------------------------------------------------------
 
-// decodeConfig reads the provider's own block, refusing a value present but
+// decodeConfig reads a provider's own block, refusing a value present but
 // empty, which would build a URL with a hole in it.
-func decodeConfig(name string, body hcl.Body) (*Config, hcl.Diagnostics) {
-	cfg, diags := plugin.DecodeConfig[Config](name, Type, body, "project, region and runtime_service_account")
+func decodeConfig(name, providerType string, body hcl.Body) (*Config, hcl.Diagnostics) {
+	cfg, diags := plugin.DecodeConfig[Config](name, providerType, body, "project, region and runtime_service_account")
 	if cfg == nil {
 		return nil, diags
 	}
@@ -53,17 +54,15 @@ func decodeConfig(name string, body hcl.Body) (*Config, hcl.Diagnostics) {
 }
 
 // -------------------------------------------------------------------------
-// ENDPOINTS
+// RUN LIMIT
 // -------------------------------------------------------------------------
 
-// jobsURL is the collection every job of this provider lives in, built from a
-// base the provider holds so a test can point it at an httptest server.
-func (c *Config) jobsURL(base string) string {
-	return fmt.Sprintf("%s/v2/projects/%s/locations/%s/jobs",
-		base, c.Project, c.Region)
-}
+// MaxDuration is the longest a Cloud Run task or a Cloud Build build may run.
+const MaxDuration = 24 * time.Hour
 
-// jobURL addresses one job by name.
-func (c *Config) jobURL(base, job string) string {
-	return c.jobsURL(base) + "/" + job
+// Timeout renders a timeout in whole seconds as Cloud Run and Cloud Build
+// both take it, or MaxDuration when the task sets none, since zero would end
+// the run as it started.
+func Timeout(d time.Duration) string {
+	return fmt.Sprintf("%ds", int(cmp.Or(d, MaxDuration).Seconds()))
 }

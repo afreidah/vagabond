@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------
-// Cloud Run Configuration Tests
+// Google Provider Configuration Tests
 //
 // Author: Alex Freidah
 //
@@ -14,25 +14,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/hclsyntax"
+	"github.com/afreidah/vagabond/internal/plugin/plugintest"
 )
-
-// -------------------------------------------------------------------------
-// HELPERS
-// -------------------------------------------------------------------------
-
-// body parses a provider config block the way the config loader leaves it.
-func body(t *testing.T, src string) hcl.Body {
-	t.Helper()
-
-	f, diags := hclsyntax.ParseConfig([]byte(src), "vagabond.hcl", hcl.InitialPos)
-	if diags.HasErrors() {
-		t.Fatalf("parsing failed: %s", diags.Error())
-	}
-
-	return f.Body
-}
 
 // -------------------------------------------------------------------------
 // DECODING
@@ -42,7 +25,7 @@ func body(t *testing.T, src string) hcl.Body {
 func TestDecodeConfig(t *testing.T) {
 	t.Parallel()
 
-	cfg, diags := decodeConfig("gcp", body(t, `
+	cfg, diags := decodeConfig("gcp", "cloud-run", plugintest.Body(t, `
 project                 = "munchbox-66afc"
 region                  = "us-central1"
 runtime_service_account = "vagabond-runtime@munchbox-66afc.iam.gserviceaccount.com"
@@ -61,7 +44,7 @@ runtime_service_account = "vagabond-runtime@munchbox-66afc.iam.gserviceaccount.c
 func TestDecodeConfigWithNoBlock(t *testing.T) {
 	t.Parallel()
 
-	_, diags := decodeConfig("gcp", nil)
+	_, diags := decodeConfig("gcp", "cloud-run", nil)
 	if !diags.HasErrors() {
 		t.Fatal("a missing config block was accepted")
 	}
@@ -76,7 +59,7 @@ func TestDecodeConfigWithNoBlock(t *testing.T) {
 func TestDecodeConfigRejectsEmptySettings(t *testing.T) {
 	t.Parallel()
 
-	_, diags := decodeConfig("gcp", body(t, `
+	_, diags := decodeConfig("gcp", "cloud-run", plugintest.Body(t, `
 project                 = ""
 region                  = "us-central1"
 runtime_service_account = "  "
@@ -100,7 +83,7 @@ runtime_service_account = "  "
 func TestDecodeConfigReportsUnknownAttributes(t *testing.T) {
 	t.Parallel()
 
-	_, diags := decodeConfig("gcp", body(t, `
+	_, diags := decodeConfig("gcp", "cloud-run", plugintest.Body(t, `
 project                 = "p"
 region                  = "r"
 runtime_service_account = "sa"
@@ -112,21 +95,5 @@ regoin                  = "typo"
 
 	if got := diags[0].Subject; got == nil || got.Start.Line != 5 {
 		t.Errorf("diagnostic did not point at line 5: %v", got)
-	}
-}
-
-// -------------------------------------------------------------------------
-// ENDPOINTS
-// -------------------------------------------------------------------------
-
-// jobURL joins the base, project, region and job name.
-func TestJobURL(t *testing.T) {
-	t.Parallel()
-
-	cfg := &Config{Project: "p", Region: "us-central1"}
-
-	want := "https://x/v2/projects/p/locations/us-central1/jobs/vagabond-abc"
-	if got := cfg.jobURL("https://x", "vagabond-abc"); got != want {
-		t.Errorf("jobURL = %q, want %q", got, want)
 	}
 }

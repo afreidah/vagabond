@@ -23,7 +23,6 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/plugin"
 )
 
@@ -44,14 +43,13 @@ const tailBacklog = 10_000
 // STREAMING
 // -------------------------------------------------------------------------
 
-// StreamLogs writes a running execution's output to w from byte offset on, as
-// it is logged. Output that cannot be placed, because the backfill failed or
-// stopped at the page cap, is plugin.ErrNoResume.
-func (p *Provider) StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error {
-	job := jobName(id)
-
+// StreamEntries writes a running execution's output, the entries filter
+// matches, to w from byte offset on, as it is logged. Output that cannot be
+// placed, because the backfill failed or stopped at the page cap, is
+// plugin.ErrNoResume.
+func (a *API) StreamEntries(ctx context.Context, filter string, offset int64, w io.Writer) error {
 	// Opened first, so nothing logged while the backfill is listed is missed
-	resp, err := p.openTail(ctx, job)
+	resp, err := a.openTail(ctx, filter)
 	if err != nil {
 		return err
 	}
@@ -73,7 +71,7 @@ func (p *Provider) StreamLogs(ctx context.Context, id execution.ID, offset int64
 
 	var failedWrite error
 
-	err = p.listEntries(ctx, job, func(entry *logEntry) error {
+	err = a.listEntries(ctx, filter, func(entry *logEntry) error {
 		listed[entry.key()] = true
 
 		failedWrite = writeEntry(out, entry)
@@ -102,13 +100,14 @@ func (p *Provider) StreamLogs(ctx context.Context, id execution.ID, offset int64
 	return nil
 }
 
-// openTail starts the stream, whose response never ends.
-func (p *Provider) openTail(ctx context.Context, job string) (*http.Response, error) {
-	query := p.logQuery(job)
+// openTail starts the stream of the entries filter matches, whose response
+// never ends.
+func (a *API) openTail(ctx context.Context, filter string) (*http.Response, error) {
+	query := a.logQuery(filter)
 	query["bufferWindow"] = bufferWindow
 
 	// A bare object is rejected as "Invalid value (Object)"
-	return p.open(ctx, http.MethodPost, p.logsURL+"/v2/entries:tail", []map[string]any{query})
+	return a.Open(ctx, http.MethodPost, a.LogsURL+"/v2/entries:tail", []map[string]any{query})
 }
 
 // backlog reads the tail into a channel from now on, closing it when the tail

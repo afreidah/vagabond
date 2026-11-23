@@ -600,8 +600,8 @@ those figures. Vagabond ships no defaults.
 ## Testing against a real project
 
 The unit tests run against an `httptest` server standing in for IAM, the v2 API
-and the Kubernetes API. Two live tests are included and skip unless a key is
-supplied:
+and the Kubernetes API. Three live tests are included and skip unless a key
+is supplied:
 
 ```bash
 VAGABOND_IBM_API_KEY=$(vault kv get -field=api_key secret/vagabond/code-engine) \
@@ -626,3 +626,9 @@ again in a cleanup that runs even when an assertion fails.
 `TestLiveMultiLine` runs a multi-line `sh -ec` script with a one-line argument
 and an env value holding `$(UNSET)` and `$$`, and asserts that the output is
 exactly the script's, `$` for `$`.
+
+`TestLiveLongOutput` prints 20,000 lines and asserts that all of them come
+back, past 64 KiB, in order.
+
+The round trip is the one every container provider shares, in
+`internal/plugin/plugintest`.

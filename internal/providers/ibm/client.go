@@ -159,7 +159,7 @@ func (s *iamSource) exchange(ctx context.Context, extra url.Values, out any) err
 // call sends one request and decodes the JSON answer, up to maxResponse, into
 // out, which may be nil. Every failure is classified.
 func (p *Provider) call(ctx context.Context, method, target string, payload, out any) error {
-	err := rest.Call(ctx, p.auth.Load().http, &rest.Request{
+	err := rest.Call(ctx, p.Client().http, &rest.Request{
 		Method: method, URL: target, Payload: payload, Limit: maxResponse,
 	}, out)
 
@@ -171,7 +171,7 @@ func (p *Provider) call(ctx context.Context, method, target string, payload, out
 func (p *Provider) fetch(
 	ctx context.Context, method, target string, header http.Header, payload any,
 ) ([]byte, error) {
-	body, err := rest.Read(ctx, p.auth.Load().http, &rest.Request{
+	body, err := rest.Read(ctx, p.Client().http, &rest.Request{
 		Method: method, URL: target, Header: header, Payload: payload, Limit: maxResponse,
 	})
 
@@ -184,7 +184,7 @@ func (p *Provider) fetch(
 func (p *Provider) open(
 	ctx context.Context, method, target string, header http.Header, payload any,
 ) (*http.Response, error) {
-	resp, err := rest.Open(ctx, p.auth.Load().http, &rest.Request{
+	resp, err := rest.Open(ctx, p.Client().http, &rest.Request{
 		Method: method, URL: target, Header: header, Payload: payload,
 	})
 

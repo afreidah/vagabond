@@ -9,34 +9,31 @@
 // destroys what Result reads, and startup dominates the time a run takes.
 // -------------------------------------------------------------------------------
 
-package gcp
+package cloudrun
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
-	"strings"
-	"sync/atomic"
-	"time"
 
 	"github.com/hashicorp/hcl/v2"
 
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/providers/gcp"
 )
-
-// -------------------------------------------------------------------------
-// CONSTANTS
-// -------------------------------------------------------------------------
-
-// namePrefix marks every job this plugin creates. The execution id follows it,
-// which is how a later process finds and releases a run it did not submit.
-const namePrefix = "vagabond-"
 
 // -------------------------------------------------------------------------
 // TYPES
 // -------------------------------------------------------------------------
+
+// Type is what a provider block names to select Cloud Run.
+const Type = "cloud-run"
+
+// runEndpoint is Cloud Run's Admin API.
+const runEndpoint = "https://run.googleapis.com"
 
 // Compile-time proof the contract is met.
 var (
@@ -47,15 +44,12 @@ var (
 	_ plugin.Recredentialer = (*Provider)(nil)
 )
 
-// Provider dispatches container tasks to Cloud Run Jobs. The endpoints are
-// fields so a test can point the plugin at a local server.
+// Provider dispatches container tasks to Cloud Run Jobs. The endpoint is a
+// field so a test can point the plugin at a local server.
 type Provider struct {
-	name string
-	cfg  *Config
-	http atomic.Pointer[http.Client] // swapped whole when the credential is refreshed
+	*gcp.API
 
-	runURL  string
-	logsURL string
+	runURL string
 }
 
 // New builds a Cloud Run provider from its configuration block, returning
@@ -63,48 +57,12 @@ type Provider struct {
 func New(
 	ctx context.Context, name string, body hcl.Body, credentials []byte,
 ) (*Provider, hcl.Diagnostics) {
-	cfg, diags := decodeConfig(name, body)
+	api, diags := gcp.NewAPI(ctx, name, Type, body, credentials)
 	if diags.HasErrors() {
 		return nil, diags
 	}
 
-	client, err := newHTTPClient(ctx, credentials)
-	if err != nil {
-		return nil, append(diags, &hcl.Diagnostic{
-			Severity: hcl.DiagError,
-			Summary:  "Unusable credential",
-			Detail:   fmt.Sprintf("Provider %q: %s.", name, err),
-		})
-	}
-
-	p := &Provider{
-		name:    name,
-		cfg:     cfg,
-		runURL:  runEndpoint,
-		logsURL: loggingEndpoint,
-	}
-	p.http.Store(client)
-
-	return p, diags
-}
-
-// Recredential rebuilds the HTTP client from a key resolved again, after an
-// Admin API call returned 401 or 403. The client fetches tokens on the context
-// it was built with, so that context outlives the call asking for the refresh.
-func (p *Provider) Recredential(ctx context.Context, credential []byte) error {
-	client, err := newHTTPClient(context.WithoutCancel(ctx), credential)
-	if err != nil {
-		return err
-	}
-
-	p.http.Store(client)
-
-	return nil
-}
-
-// Name returns the routing identifier.
-func (p *Provider) Name() string {
-	return p.name
+	return &Provider{API: api, runURL: runEndpoint}, diags
 }
 
 // -------------------------------------------------------------------------
@@ -114,7 +72,7 @@ func (p *Provider) Name() string {
 // Capabilities reports what Cloud Run can do: constants, since nothing here
 // varies by account. ObservedAt is set anyway, as admission requires.
 func (p *Provider) Capabilities(context.Context) (plugin.Capabilities, error) {
-	return plugin.CloudContainer(cloudRun), nil
+	return plugin.CloudContainer(platform), nil
 }
 
 // -------------------------------------------------------------------------
@@ -129,7 +87,7 @@ func (p *Provider) Capabilities(context.Context) (plugin.Capabilities, error) {
 func (p *Provider) Submit(
 	ctx context.Context, id execution.ID, task *job.Task,
 ) (plugin.Submission, error) {
-	name := jobName(id)
+	name := plugin.ResourceName(id)
 
 	spec, err := p.jobSpec(task)
 	if err != nil {
@@ -137,13 +95,11 @@ func (p *Provider) Submit(
 	}
 
 	// A retry with the same id collides on the job name, not a second run
-	err = p.call(ctx, http.MethodPost,
-		p.cfg.jobsURL(p.runURL)+"?jobId="+name, spec, nil)
-	if err != nil {
+	if err := p.Call(ctx, http.MethodPost, p.jobsURL()+"?jobId="+name, spec, nil); err != nil {
 		return plugin.Submission{}, err
 	}
 
-	if err := p.call(ctx, http.MethodPost, p.cfg.jobURL(p.runURL, name)+":run", struct{}{}, nil); err != nil {
+	if err := p.Call(ctx, http.MethodPost, p.jobURL(name)+":run", struct{}{}, nil); err != nil {
 		// Nothing runs the job, so delete it now rather than at release
 		p.deleteJob(ctx, name)
 
@@ -165,27 +121,15 @@ func (p *Provider) Submit(
 func (p *Provider) Status(
 	ctx context.Context, id execution.ID,
 ) (execution.Status, error) {
-	name := jobName(id)
+	name := plugin.ResourceName(id)
 
 	found, err := p.execution(ctx, name)
 	if err != nil {
 		return execution.Status{}, err
 	}
 
-	status := execution.Status{
-		ID:         id,
-		State:      found.state(),
-		ProviderID: name,
-		StartedAt:  plugin.ParseTime(found.StartTime),
-		EndedAt:    plugin.ParseTime(found.CompletionTime),
-	}
-
-	status.UpdatedAt = status.EndedAt
-	if status.UpdatedAt.IsZero() {
-		status.UpdatedAt = time.Now()
-	}
-
-	return status, nil
+	return plugin.ObservedStatus(id, found.state(), name,
+		plugin.ParseTime(found.StartTime), plugin.ParseTime(found.CompletionTime)), nil
 }
 
 // -------------------------------------------------------------------------
@@ -197,7 +141,7 @@ func (p *Provider) Status(
 func (p *Provider) Result(
 	ctx context.Context, id execution.ID,
 ) (*execution.Result, error) {
-	name := jobName(id)
+	name := plugin.ResourceName(id)
 
 	found, err := p.execution(ctx, name)
 	if err != nil {
@@ -217,6 +161,27 @@ func (p *Provider) Result(
 }
 
 // -------------------------------------------------------------------------
+// OUTPUT
+// -------------------------------------------------------------------------
+
+// ReadLogs writes what a finished job's container printed. The entries outlive
+// the job, so Release destroys nothing this reads.
+func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w execution.LogWriter) error {
+	return p.ReadEntries(ctx, jobLogs(id), w)
+}
+
+// StreamLogs writes a running job's output to w from byte offset on, as it is
+// logged.
+func (p *Provider) StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error {
+	return p.StreamEntries(ctx, jobLogs(id), offset, w)
+}
+
+// jobLogs is the filter picking out the output of an execution's job.
+func jobLogs(id execution.ID) string {
+	return fmt.Sprintf(`resource.type="cloud_run_job" resource.labels.job_name=%q`, plugin.ResourceName(id))
+}
+
+// -------------------------------------------------------------------------
 // CANCEL
 // -------------------------------------------------------------------------
 
@@ -224,12 +189,7 @@ func (p *Provider) Result(
 // tasks with it and so destroys what Result reads. A job already gone is not an
 // error.
 func (p *Provider) Cancel(ctx context.Context, id execution.ID) error {
-	err := p.call(ctx, http.MethodDelete, p.cfg.jobURL(p.runURL, jobName(id)), nil, nil)
-	if isNotFound(err) {
-		return nil
-	}
-
-	return err
+	return plugin.IgnoreNotFound(p.Call(ctx, http.MethodDelete, p.jobURL(plugin.ResourceName(id)), nil, nil))
 }
 
 // Release deletes the Job a finished execution left behind, which otherwise
@@ -242,20 +202,21 @@ func (p *Provider) Release(ctx context.Context, id execution.ID) error {
 // deleteJob removes a job, ignoring the error: it runs on paths already
 // returning a failure, and that failure is the one worth reporting.
 func (p *Provider) deleteJob(ctx context.Context, name string) {
-	_ = p.call(ctx, http.MethodDelete, p.cfg.jobURL(p.runURL, name), nil, nil)
+	_ = p.Call(ctx, http.MethodDelete, p.jobURL(name), nil, nil)
 }
 
 // -------------------------------------------------------------------------
-// NAMING
+// ENDPOINTS
 // -------------------------------------------------------------------------
 
-// jobName is the Cloud Run job for an execution: 45 characters, inside Cloud
-// Run's 63, and starting with a letter as its naming rules require.
-func jobName(id execution.ID) string {
-	return namePrefix + id.String()
+// jobsURL is the collection every job of this provider lives in, under a base
+// the provider holds so a test can point it at a local server.
+func (p *Provider) jobsURL() string {
+	return fmt.Sprintf("%s/v2/projects/%s/locations/%s/jobs", p.runURL, p.Config.Project, p.Config.Region)
 }
 
-// isNotFound reports whether an error is Google saying the resource is gone.
-func isNotFound(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "http 404")
+// jobURL addresses one job by name, the name Submit gave it from the
+// execution id.
+func (p *Provider) jobURL(job string) string {
+	return p.jobsURL() + "/" + job
 }
