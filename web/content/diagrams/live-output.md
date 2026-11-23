@@ -5,7 +5,7 @@ description: "Interactive diagram of a running execution's output from the provi
 weight: 7
 ---
 
-How a running execution's output reaches the terminal: the CLI follower, the server's follow route, the agent node, Cloud Run and Code Engine streams behind it, and the stored copy that finishes what did not stream. Every stream starts at the first byte the task printed, so a byte count is a position in all of them. **Hover over any component** for implementation details.
+How a running execution's output reaches the terminal: the CLI follower, the server's follow route, the agent node, Cloud Run, Cloud Build and Code Engine streams behind it, and the stored copy that finishes what did not stream. Every stream starts at the first byte the task printed, so a byte count is a position in all of them. **Hover over any component** for implementation details.
 
 {{< diagram >}}
 
@@ -93,7 +93,7 @@ window.vagabondDiagram = {
     REST: {
       title: 'Print the Rest of the Stored Copy',
       badge: 'process', badgeText: 'stored copy',
-      body: '<p><code>follower.rest</code> runs once the execution has a result. It waits for the follow to stop, so the stream&rsquo;s last lines come before the verdict, then calls <code>api.Client.Logs</code> with <code>offset</code> set to the bytes streamed and copies what comes back to stdout, ending it with a newline if needed. <code>execution logs</code> without <code>-f</code> does the same from offset 0.</p><p>When <code>LogsStart</code> is past the bytes streamed, output between them was dropped past the server&rsquo;s or the node&rsquo;s ceiling, and it warns <code>&lt;n&gt; bytes of output were not kept: only the end of long output is kept.</code> When <code>LogsTruncated</code> is set it warns <code>The provider gave only part of the output.</code></p><p>A failed read warns <code>Could not read the output of &lt;id&gt;</code>.</p>'
+      body: '<p><code>follower.rest</code> runs once the execution has a result. It waits for the follow to stop, so the stream&rsquo;s last lines come before the verdict, then calls <code>api.Client.Logs</code> and copies what follows the bytes streamed to stdout, ending it with a newline if needed. <code>execution logs</code> without <code>-f</code> does the same from offset 0.</p><p>A stored copy holding the whole output is read from offset 0 and checked against what streamed: the CLI keeps a CRC-32 of every byte it printed, and compares it with the stored copy&rsquo;s first that many bytes. A stream that lost or reordered lines fails the check, and the CLI warns <code>The output that streamed does not match the stored copy, which follows in full.</code> and prints all of it. A copy missing its front or its end is read from the bytes streamed, unchecked.</p><p>When <code>LogsStart</code> is past the bytes streamed, output between them was dropped past the server&rsquo;s or the node&rsquo;s ceiling, and it warns <code>&lt;n&gt; bytes of output were not kept: only the end of long output is kept.</code> When <code>LogsTruncated</code> is set it warns <code>The provider gave only part of the output.</code></p><p>A failed read warns <code>Could not read the output of &lt;id&gt;</code>.</p>'
     },
     VERDICT: {
       title: 'Verdict Line',
@@ -108,7 +108,7 @@ window.vagabondDiagram = {
     STREAMSEL: {
       title: 'Stream or Stored?',
       badge: 'decision', badgeText: 'streamer',
-      body: '<p><code>Server.streamer</code> streams only when the request has <code>follow=true</code>, the record is not terminal, the provider it ran on is still configured, and that provider, on the record&rsquo;s node for a <code>containerd</code> one (<code>plugin.Target</code>), implements <code>plugin.LogStreamer</code>: <code>containerd</code>, Cloud Run and Code Engine.</p><p>Anything else gets the stored copy, so a client can always ask to follow. A <code>lost</code> execution is not terminal, so it is still streamed.</p><p><a href="../../docs/writing-a-provider/#logstreamer">LogStreamer &rarr;</a></p>'
+      body: '<p><code>Server.streamer</code> streams only when the request has <code>follow=true</code>, the record is not terminal, the provider it ran on is still configured, and that provider, on the record&rsquo;s node for a <code>containerd</code> one (<code>plugin.Target</code>), implements <code>plugin.LogStreamer</code>: <code>containerd</code>, Cloud Run, Cloud Build and Code Engine.</p><p>Anything else gets the stored copy, so a client can always ask to follow. A <code>lost</code> execution is not terminal, so it is still streamed.</p><p><a href="../../docs/writing-a-provider/#logstreamer">LogStreamer &rarr;</a></p>'
     },
     STORED: {
       title: 'Stored Copy from Offset',
@@ -183,7 +183,7 @@ window.vagabondDiagram = {
     DRAIN: {
       title: 'Tail On, Dropping Entries Listed',
       badge: 'process', badgeText: 'live',
-      body: '<p>The queue is drained, then the tail read as it arrives. An entry the backfill already wrote, by <code>timestamp</code> and <code>insertId</code>, is dropped; the rest are written, one line each.</p><p>An entry that reached Cloud Logging after the backfill listed later ones, with an earlier timestamp, is streamed after them but stored before them, so a stream reopened across it can repeat or skip its bytes.</p><p><a href="../../docs/providers/cloud-run/#live-output">Cloud Run live output &rarr;</a></p>'
+      body: '<p>The queue is drained, then the tail read as it arrives. An entry the backfill already wrote, by <code>timestamp</code> and <code>insertId</code>, is dropped; the rest are written, one line each.</p><p>An entry that reached Cloud Logging after the backfill listed later ones, with an earlier timestamp, is streamed after them but stored before them, and a tail can leave entries out. The CLI&rsquo;s check of what streamed against the stored copy catches either, and prints the stored copy in full.</p><p><a href="../../docs/providers/cloud-run/#live-output">Cloud Run live output &rarr;</a></p>'
     },
     NORESUME: {
       title: 'plugin.ErrNoResume',

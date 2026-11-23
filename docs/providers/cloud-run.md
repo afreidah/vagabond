@@ -374,9 +374,13 @@ transcoding, then lists what was logged before it opened:
 - Platform lines such as `Container called exit(0).` arrive on the same stream
   and are not filtered.
 
-An entry that reaches Cloud Logging after the backfill listed later ones, with
-an earlier timestamp, is streamed after them but stored before them. A stream
-reopened across such an entry can then repeat or skip its bytes.
+The stream can differ from the stored copy. An entry that reaches Cloud
+Logging after the backfill listed later ones, with an earlier timestamp, is
+streamed after them but stored before them. A tail can also leave entries out,
+reported in `suppressionInfo`, which the stream does not read, and Google does
+not document what a tail does with an entry later than its buffer window. The
+CLI checks what streamed against the stored copy once the execution ends; see
+[`job run`](../cli.md#job-run).
 
 Output runs several seconds behind the container, so the server holds a
 followed stream open for 5 s after the execution ends. `StreamLogs` is called

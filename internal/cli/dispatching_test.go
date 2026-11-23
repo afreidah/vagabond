@@ -4,16 +4,17 @@
 // Author: Alex Freidah
 //
 // The parts of following a run that a real server cannot be made to produce on
-// demand: a stream that cannot resume, a stored copy missing its front, cut by
-// the provider or unreadable,
-// an execution that ends with no result, a platform's reason for ending one,
-// and a server that stops answering mid-run. A stub answers the routes.
+// demand: a stream that cannot resume or that lost lines, a stored copy
+// missing its front, cut by the provider or unreadable, an execution that ends
+// with no result, a platform's reason for ending one, and a server that stops
+// answering mid-run. A stub answers the routes.
 // -------------------------------------------------------------------------------
 
 package cli
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"io"
 	"net/http"
@@ -124,8 +125,8 @@ func TestFollower_StopsWhenTheStreamCannotResume(t *testing.T) {
 	}
 }
 
-// The stored copy finishes what did not stream, from the bytes printed, and
-// says when output is not there to print.
+// The stored copy finishes what did not stream, after checking what streamed
+// against it, and says when output is not there to print or did not match.
 func TestFollower_Rest(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -133,35 +134,36 @@ func TestFollower_Rest(t *testing.T) {
 		start     int64  // the first byte the server kept
 		truncated bool
 		status    int
-		stored    string
+		stored    string // what the server kept, from start on
 		wantOut   string
 		wantWarn  string
 	}{
 		{"nothing streamed", "", 0, false, http.StatusOK, "all\n", "all\n", ""},
 		{"output ends mid-line", "", 0, false, http.StatusOK, "partial", "partial\n", ""},
-		{"the rest after a stream", "first\n", 0, false, http.StatusOK, "rest\n", "first\nrest\n", ""},
-		{"everything streamed", "all\n", 0, false, http.StatusOK, "", "all\n", ""},
+		{"the rest after a stream", "first\n", 0, false, http.StatusOK, "first\nrest\n", "first\nrest\n", ""},
+		{"everything streamed", "all\n", 0, false, http.StatusOK, "all\n", "all\n", ""},
+		{"a stream that lost a line", "one\nthree\n", 0, false, http.StatusOK, "one\ntwo\nthree\nfour\n", "one\nthree\none\ntwo\nthree\nfour\n", "does not match the stored copy"},
+		{"a stream past the stored copy", "one\none\n", 0, false, http.StatusOK, "one\n", "one\none\none\n", "does not match the stored copy"},
 		{"front dropped, nothing streamed", "", 100, false, http.StatusOK, "tail\n", "tail\n", "100 bytes of output were not kept"},
 		{"front dropped past the stream", "first\n", 100, false, http.StatusOK, "tail\n", "first\ntail\n", "94 bytes of output were not kept"},
-		{"front dropped, all streamed", "first\n", 4, false, http.StatusOK, "", "first\n", ""},
+		{"front dropped, all streamed", "first\n", 4, false, http.StatusOK, "t\n", "first\n", ""},
 		{"provider gave part", "", 0, true, http.StatusOK, "part\n", "part\n", "The provider gave only part of the output."},
+		{"provider gave less than streamed", "one\ntwo\n", 0, true, http.StatusOK, "one\n", "one\ntwo\n", "The provider gave only part of the output."},
 		{"stored copy unreadable", "", 0, false, http.StatusInternalServerError, `{"Error":"boom"}`, "", "Could not read the output"},
+		{"stored copy unreadable after a stream", "one\n", 0, false, http.StatusInternalServerError, `{"Error":"boom"}`, "one\n", "Could not read the output"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// An offset of zero is not sent at all.
-			wantOffset := ""
-			if n := len(tc.streamed); n > 0 {
-				wantOffset = strconv.Itoa(n)
-			}
-
+			// Served from the offset asked for, as the server places it in what it kept
 			client := stubLogs(t, func(offset string) (int, string) {
-				if offset != wantOffset {
-					t.Errorf("stored copy read from offset %q, want %q", offset, wantOffset)
+				if tc.status != http.StatusOK {
+					return tc.status, tc.stored
 				}
 
-				return tc.status, tc.stored
+				from, _ := strconv.ParseInt(cmp.Or(offset, "0"), 10, 64)
+
+				return http.StatusOK, tc.stored[min(max(from, tc.start)-tc.start, int64(len(tc.stored))):]
 			})
 
 			var stdout bytes.Buffer
