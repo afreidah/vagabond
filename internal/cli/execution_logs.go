@@ -40,8 +40,9 @@ Usage: vagabond execution logs [options] <id>
   keeps up to max_log_mib of it (16 MiB by default), the end of it, for
   log_retention after the execution ends (7 days by default). With -f,
   streams the output while the execution runs, on providers that can stream
-  it (Cloud Run, Code Engine and agent pools), prints what did not stream once
-  it ends, and exits.
+  it (Cloud Run, Cloud Build, Code Engine and agent pools), prints what did
+  not stream once it ends, and exits. Output that streamed and does not match
+  the stored copy is followed by the stored copy in full.
 
 Logs Options:
 

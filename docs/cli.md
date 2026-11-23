@@ -358,20 +358,22 @@ to finish. The job is not registered. The server makes the same selection
   stderr and each task's output to stdout, so redirecting stdout captures the
   build alone.
 - Output streams while the task runs, from the moment its execution leaves
-  `pending`, on providers that can stream: Cloud Run and pools. A stream that
-  ends before the task does is reopened a second later from the bytes already
-  printed. Once the task has a result, the CLI waits for the stream to finish,
-  then prints whatever of the stored copy did not stream, then the verdict
-  line. On a provider that cannot stream, all of the output is printed when the
-  task finishes.
-- A Cloud Run tail can only start at what is being logged now, so the server
-  refuses to reopen one at an offset (`416`). Once a Cloud Run stream that has
-  printed output ends early, the CLI stops streaming that task and prints the
-  rest from the stored copy when the task finishes. A stream that ends before
-  printing anything is reopened at offset 0, which starts a new tail at what is
-  being logged now. Lines logged between the two tails do not stream, and the
-  stored copy printed at the end is read from the byte count that streamed, so
-  it can repeat or skip some lines.
+  `pending`, on providers that can stream: Cloud Run, Cloud Build, Code Engine
+  and pools. A stream that ends before the task does is reopened a second later
+  from the bytes already printed. Once the task has a result, the CLI waits for
+  the stream to finish, then prints whatever of the stored copy did not
+  stream, then the verdict line. On a provider that cannot stream, all of the
+  output is printed when the task finishes.
+- The stored copy is checked against what streamed. The CLI keeps a CRC-32 of
+  every byte it printed, reads the stored copy from its first byte, and
+  compares the sum of that many bytes. A live source can lose or reorder lines
+  the stored copy has, as Cloud Logging can. When the two differ, the CLI
+  warns `The output that streamed does not match the stored copy, which
+  follows in full.` and prints the whole stored copy. A stored copy missing its
+  front or its end is read from the bytes streamed, unchecked.
+- A stream the server cannot place at the offset asked for is refused with
+  `416`, as when a Cloud Logging backfill fails. The CLI stops streaming that
+  task and prints the rest from the stored copy when the task finishes.
 - A poll the server does not answer, from a refused or dropped connection, a
   name that does not resolve, or a `429`, `502`, `503` or `504`, is retried,
   waiting 1s doubling to 15s, up to 10 more tries: about two minutes, enough

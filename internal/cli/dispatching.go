@@ -6,7 +6,7 @@
 // job run and job dispatch start a run on the server and follow it here until
 // it ends. Progress goes to stderr and each task's output to stdout. Output
 // streams as each task runs, and whatever did not stream is read from the
-// stored copy once the task finishes.
+// stored copy once the task finishes, after checking what streamed against it.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"net/http"
 	"strings"
@@ -42,6 +43,10 @@ const cancelTimeout = 30 * time.Second
 // followRetries is how a command following a run rides out a server that
 // stops answering, a redeploy or a lookup that fails. A test shortens it.
 var followRetries = api.DefaultRetries
+
+// errDiffers stops a read of the stored copy whose start is not the output
+// that streamed.
+var errDiffers = errors.New("the stored output differs from what streamed")
 
 // Dispatch states, as the API reports them.
 const (
@@ -301,7 +306,7 @@ func (f *follower) rest(ctx context.Context, e *api.Execution) {
 		f.Ui.Warn(fmt.Sprintf("%d bytes of output were not kept: only the end of long output is kept.", dropped))
 	}
 
-	if err := f.client.Logs(ctx, e.ID, streamed, out); err != nil {
+	if err := f.stored(ctx, e, out); err != nil {
 		f.Ui.Warn(fmt.Sprintf("Could not read the output of %s: %s", e.ID, err))
 	}
 
@@ -314,16 +319,83 @@ func (f *follower) rest(ctx context.Context, e *api.Execution) {
 	}
 }
 
-// output is one execution's share of stdout. It counts what it wrote, where a
-// reopened stream resumes, under one lock every output shares.
+// stored prints what of e's stored output did not stream to out. A stored copy
+// holding the whole output is read from its first byte and checked against
+// what streamed, since a live source can lose or reorder lines the stored copy
+// has; when the two differ, it warns and prints the stored copy in full.
+func (f *follower) stored(ctx context.Context, e *api.Execution, out *output) error {
+	streamed, sum := out.written(), out.checksum()
+
+	// Nothing streamed, or the stored copy lost its front or its end, leaves nothing to check
+	if streamed == 0 || e.LogsStart > 0 || e.LogsTruncated {
+		return f.client.Logs(ctx, e.ID, streamed, out)
+	}
+
+	check := &afterStreamed{w: out, left: streamed, want: sum}
+
+	err := f.client.Logs(ctx, e.ID, 0, check)
+	if err == nil && check.left > 0 {
+		err = errDiffers
+	}
+
+	if !errors.Is(err, errDiffers) {
+		return err
+	}
+
+	f.Ui.Warn("The output that streamed does not match the stored copy, which follows in full.")
+
+	return f.client.Logs(ctx, e.ID, 0, out)
+}
+
+// afterStreamed is the stored copy read from its first byte. It sums the first
+// left bytes, the ones that streamed, and passes what follows them to w only
+// when their sum is want.
+type afterStreamed struct {
+	w    io.Writer
+	left int64
+	sum  uint32
+	want uint32
+}
+
+// Write sums the part of p that streamed and passes on the rest, failing with
+// errDiffers once every streamed byte is summed and the sums differ.
+func (a *afterStreamed) Write(p []byte) (int, error) {
+	n := len(p)
+
+	if a.left > 0 {
+		take := min(int64(n), a.left)
+		a.sum = crc32.Update(a.sum, crc32.IEEETable, p[:take])
+		a.left -= take
+		p = p[take:]
+
+		if a.left > 0 {
+			return n, nil
+		}
+
+		if a.sum != a.want {
+			return 0, errDiffers
+		}
+	}
+
+	if _, err := a.w.Write(p); err != nil {
+		return 0, err
+	}
+
+	return n, nil
+}
+
+// output is one execution's share of stdout. It counts and sums what it
+// wrote, the count where a reopened stream resumes and the sum what the stored
+// copy is checked against, under one lock every output shares.
 type output struct {
 	mu   *sync.Mutex
 	w    io.Writer
 	n    int64
+	sum  uint32
 	last byte
 }
 
-// Write writes p to stdout and counts it.
+// Write writes p to stdout, counting and summing it.
 func (o *output) Write(p []byte) (int, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -331,11 +403,21 @@ func (o *output) Write(p []byte) (int, error) {
 	n, err := o.w.Write(p)
 
 	o.n += int64(n)
+	o.sum = crc32.Update(o.sum, crc32.IEEETable, p[:n])
+
 	if n > 0 {
 		o.last = p[n-1]
 	}
 
 	return n, err
+}
+
+// checksum is the CRC-32 of every byte written.
+func (o *output) checksum() uint32 {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	return o.sum
 }
 
 // written is how many bytes have reached stdout.

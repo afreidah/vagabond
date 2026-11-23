@@ -3,6 +3,7 @@ module github.com/afreidah/vagabond
 go 1.27.4
 
 require (
+	github.com/adhocore/gronx v1.20.8
 	github.com/aws/aws-sdk-go-v2 v1.48.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.13
 	github.com/aws/aws-sdk-go-v2/credentials v1.21.0
@@ -60,7 +61,6 @@ require (
 	github.com/Masterminds/sprig/v3 v3.2.3 // indirect
 	github.com/Microsoft/go-winio v0.6.4 // indirect
 	github.com/Microsoft/hcsshim v0.15.0-rc.4 // indirect
-	github.com/adhocore/gronx v1.20.8 // indirect
 	github.com/agext/levenshtein v1.2.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
