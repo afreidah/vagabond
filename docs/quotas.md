@@ -257,6 +257,9 @@ pools the duration the row uses.
   function's configured size, not the task's declaration, and no CPU is
   reported, so `cpu_seconds` pools are charged 0 for that execution. See
   [Lambda](providers/lambda.md).
+- **OCI Functions** reports the function's configured memory over the
+  measured invocation, and no CPU, so `cpu_seconds` pools are charged 0 for
+  that execution. See [OCI Functions](providers/oci-functions.md).
 - Every other provider's result settles at declared resources * the result's
   duration.
 

@@ -3,9 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// One synchronous invoke per execution. The response carries the verdict, the
-// last four kilobytes of log, and the REPORT line stating what AWS billed, so
-// there is nothing to poll, fetch, cancel or clean up afterwards.
+// One synchronous invoke per execution. The function's reply carries the task's
+// exit code and output, and the log tail the REPORT line stating what AWS
+// billed, so there is nothing to poll, fetch, cancel or clean up afterwards.
 // -------------------------------------------------------------------------------
 
 package aws
@@ -37,9 +37,6 @@ const (
 	maxMemory   = 10240
 	maxDuration = 15 * time.Minute
 )
-
-// logTailSize is how much log Lambda returns with a synchronous invoke.
-const logTailSize = 4096
 
 // -------------------------------------------------------------------------
 // CONSTRUCTOR
@@ -111,12 +108,13 @@ func (p *Provider) Capabilities(context.Context) (plugin.Capabilities, error) {
 	}, nil
 }
 
-// Submit invokes the task's function and waits for it. A function error is the
-// task failing, not the provider: it becomes exit code 1, and success 0.
+// Submit invokes the task's function and waits for its reply. A handler that
+// threw or timed out replies with Lambda's error instead, which fails the task
+// with exit code 1 rather than the provider.
 func (p *Provider) Submit(
 	ctx context.Context, id execution.ID, task *job.Task,
 ) (plugin.Submission, error) {
-	function, payload, err := invocation(id, task)
+	function, err := plugin.FunctionOf(id, task)
 	if err != nil {
 		return plugin.Submission{}, err
 	}
@@ -124,8 +122,8 @@ func (p *Provider) Submit(
 	started := time.Now()
 
 	out, err := p.Client().Invoke(ctx, &lambda.InvokeInput{
-		FunctionName:   sdkaws.String(function),
-		Payload:        payload,
+		FunctionName:   sdkaws.String(function.Name),
+		Payload:        function.Event,
 		InvocationType: types.InvocationTypeRequestResponse,
 		LogType:        types.LogTypeTail,
 	})
@@ -133,32 +131,16 @@ func (p *Provider) Submit(
 		return plugin.Submission{}, classify(err)
 	}
 
-	result := &execution.Result{
-		ID:       id,
-		ExitCode: new(0),
-		Duration: time.Since(started),
-	}
+	sub := plugin.Replied(id, function.Name, out.Payload, time.Since(started))
 
-	state := execution.StateSucceeded
-	if out.FunctionError != nil {
-		state = execution.StateFailed
-		result.ExitCode = new(1)
-	}
-
+	// The log tail is read only for the REPORT line closing it
 	if logs, err := base64.StdEncoding.DecodeString(sdkaws.ToString(out.LogResult)); err == nil {
-		result.Logs = logs
-		result.LogsTruncated = len(logs) >= logTailSize
-
 		if r, ok := parseReport(string(logs)); ok {
-			applyReport(result, r)
+			applyReport(sub.Result, r)
 		}
 	}
 
-	return plugin.Submission{
-		ProviderID: function,
-		State:      state,
-		Result:     result,
-	}, nil
+	return sub, nil
 }
 
 // applyReport replaces the measured duration with Lambda's, and records the

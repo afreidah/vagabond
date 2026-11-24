@@ -219,3 +219,17 @@ func TestCall_CallersOwnFaults(t *testing.T) {
 		}
 	}
 }
+
+// An unrecognized body is trimmed and cut at 500 characters.
+func TestExcerpt(t *testing.T) {
+	t.Parallel()
+
+	if got := Excerpt([]byte(" down\n")); got != "down" {
+		t.Errorf("Excerpt(short) = %q, want it trimmed", got)
+	}
+
+	got := Excerpt([]byte(strings.Repeat("x", 600)))
+	if len(got) != 503 || !strings.HasSuffix(got, "...") {
+		t.Errorf("Excerpt(long) is %d characters", len(got))
+	}
+}

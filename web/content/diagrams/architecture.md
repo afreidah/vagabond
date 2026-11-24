@@ -26,7 +26,8 @@ window.vagabondDiagram = {
     '        UPKEEP[Upkeep<br>loops]:::background',
     '        FOLLOW[Output follow<br>from the store]:::process',
     '        PLUGIN[plugin.Provider]:::filter',
-    '        POOL[containerd and<br>firecracker providers]:::process',
+    '        CTRDP[containerd<br>provider]:::process',
+    '        FCP[firecracker<br>provider]:::process',
     '        NODES[(Connected<br>nodes)]:::storage',
     '        AGENTL[Agent listener<br>mTLS, yamux]:::filter',
     '    end',
@@ -38,6 +39,7 @@ window.vagabondDiagram = {
     '        CODEENGINE[code-engine<br>Code Engine Jobs]:::data',
     '        CEKUBE[Code Engine<br>Kubernetes API]:::data',
     '        LAMBDA[lambda<br>AWS Lambda]:::data',
+    '        OCIFN[oci-functions<br>OCI Functions]:::data',
     '    end',
     '',
     '    subgraph AGENTNODE [Agent node]',
@@ -67,14 +69,18 @@ window.vagabondDiagram = {
     '    PLUGIN --> CLOUDBUILD',
     '    PLUGIN --> CODEENGINE',
     '    PLUGIN --> LAMBDA',
-    '    PLUGIN --> POOL',
+    '    PLUGIN --> OCIFN',
+    '    PLUGIN --> CTRDP',
+    '    PLUGIN --> FCP',
     '    CLOUDRUN -->|output| CLOG',
     '    CLOUDBUILD -->|output| CLOG',
     '    CODEENGINE -->|exit code, output| CEKUBE',
-    '    POOL -->|room, reserve| NODES',
+    '    CTRDP -->|room, reserve| NODES',
+    '    FCP -->|room, reserve| NODES',
     '    AGENTL -->|register, remove| NODES',
     '    AGENTL <-->|session the agent dials| AGENT',
-    '    POOL -->|AgentExecutions gRPC| AGENT',
+    '    CTRDP -->|AgentExecutions gRPC| AGENT',
+    '    FCP -->|AgentExecutions gRPC| AGENT',
     '    AGENT -->|containers, images| CONTAINERD',
     '    AGENT -->|microVMs| FIRECRACKER',
     '',
@@ -117,7 +123,7 @@ window.vagabondDiagram = {
     REG: {
       title: 'Provider registry',
       badge: 'process', badgeText: 'registry',
-      body: '<p><code>registry</code> builds every <code>provider</code> block into its plugin, the one package that imports them all: <code>cloud-run</code>, <code>cloud-build</code>, <code>code-engine</code>, <code>lambda</code>, <code>containerd</code>, <code>firecracker</code>, and the <code>fake-container</code>, <code>fake-function</code> and <code>fake-worker</code> test providers, each one row of a table. It holds each one&rsquo;s capability snapshot, health, tags, tier and quota pools. A disabled provider is kept, so a plan can say why it was not used.</p><p><code>Refresh</code> asks every enabled provider for <code>Capabilities</code> in parallel, 30s each, at startup and every minute. One that fails is marked unhealthy and keeps its last snapshot. <code>containerd</code> and <code>firecracker</code> providers are skipped: their capabilities are built from connected nodes on every read.</p><p>Resolves a provider&rsquo;s credential again when the platform rejects it, at most once a minute.</p>'
+      body: '<p><code>registry</code> builds every <code>provider</code> block into its plugin, the one package that imports them all: <code>cloud-run</code>, <code>cloud-build</code>, <code>code-engine</code>, <code>lambda</code>, <code>oci-functions</code>, <code>containerd</code>, <code>firecracker</code>, and the <code>fake-container</code>, <code>fake-function</code> and <code>fake-worker</code> test providers, each one row of a table. It holds each one&rsquo;s capability snapshot, health, tags, tier and quota pools. A disabled provider is kept, so a plan can say why it was not used.</p><p><code>Refresh</code> asks every enabled provider for <code>Capabilities</code> in parallel, 30s each, at startup and every minute. One that fails is marked unhealthy and keeps its last snapshot. <code>containerd</code> and <code>firecracker</code> providers are skipped: their capabilities are built from connected nodes on every read.</p><p>Resolves a provider&rsquo;s credential again when the platform rejects it, at most once a minute.</p>'
     },
     UPKEEP: {
       title: 'Upkeep loops',
@@ -134,10 +140,15 @@ window.vagabondDiagram = {
       badge: 'filter', badgeText: 'boundary',
       body: '<p>The interface every provider implements: <code>Name</code>, <code>Capabilities</code>, <code>Submit</code>, <code>Status</code>, <code>Result</code>, <code>Cancel</code>. Optional interfaces are found by type assertion: <code>LogCapturer</code>, <code>Releaser</code>, <code>Live</code>, <code>Nodes</code>, <code>Reserver</code>, <code>Recredentialer</code>.</p><p>A plugin translates a task into its platform&rsquo;s API and classifies failures as <code>infrastructure</code> (rerouted) or <code>internal</code> (not). It never retries or picks another provider; retries, rerouting, quota, records and leases belong to the control plane.</p><p>depguard keeps cloud SDKs inside <code>internal/providers/</code>, and provider imports out of <code>scheduler</code>, <code>job</code> and <code>quota</code>.</p><p><a href="../../docs/writing-a-provider/">Writing a provider &rarr;</a></p>'
     },
-    POOL: {
-      title: 'containerd and firecracker providers',
+    CTRDP: {
+      title: 'containerd provider',
       badge: 'process', badgeText: 'provider',
-      body: '<p><code>providers/pool</code>, one package behind two provider types: <code>containerd</code> runs its work as containers, <code>firecracker</code> in microVMs. Each draws on the agent nodes started with the <code>-pool</code> its <code>config</code> block names, default the provider&rsquo;s label, that run its executor. <code>LiveCapabilities</code> builds one member per such node, sized by the room it has left after the executor&rsquo;s overhead, on every plan and dispatch, publishing <code>provider.isolation</code> as <code>container</code> or <code>vm</code>. With no nodes the provider is unhealthy.</p><p>Admission judges each node on its own, and every passing node is a candidate of its own, ordered among equal scores by <code>placement</code>: <code>spread</code> (default) most free memory first, <code>pack</code> least. Dispatch reserves room on the node before recording the execution with its node; a node without room is refused without spending an attempt.</p><p>Every later call goes to the node the record names. While that node is not connected, calls fail as infrastructure and the execution is <code>lost</code>; <code>Release</code> succeeds, and the node releases the workload when it returns.</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
+      body: '<p><code>providers/pool</code> as type <code>containerd</code>: each task runs as a container through containerd on one of the agent nodes started with the <code>-pool</code> its <code>config</code> block names, default the provider&rsquo;s label. <code>LiveCapabilities</code> builds one member per such node, sized by the room it has left, on every plan and dispatch, publishing <code>provider.isolation</code> as <code>container</code>. With no nodes the provider is unhealthy.</p><p>Admission judges each node on its own, and every passing node is a candidate of its own, ordered among equal scores by <code>placement</code>: <code>spread</code> (default) most free memory first, <code>pack</code> least. Dispatch reserves room on the node before recording the execution with its node; a node without room is refused without spending an attempt.</p><p>Every later call goes to the node the record names. While that node is not connected, calls fail as infrastructure and the execution is <code>lost</code>; <code>Release</code> succeeds, and the node releases the workload when it returns.</p><p><a href="../../docs/containerd/">containerd &rarr;</a></p>'
+    },
+    FCP: {
+      title: 'firecracker provider',
+      badge: 'process', badgeText: 'provider',
+      body: '<p><code>providers/pool</code> as type <code>firecracker</code>: each task runs in a Firecracker microVM of its own, through vagabond-firecracker on one of the agent nodes started with the <code>-pool</code> its <code>config</code> block names, default the provider&rsquo;s label. <code>LiveCapabilities</code> builds one member per node running vagabond-firecracker, sized by the room it has left after each microVM&rsquo;s overhead, on every plan and dispatch, publishing <code>provider.isolation</code> as <code>vm</code>. With no nodes the provider is unhealthy.</p><p>Admission judges each node on its own, and every passing node is a candidate of its own, ordered among equal scores by <code>placement</code>: <code>spread</code> (default) most free memory first, <code>pack</code> least. Dispatch reserves room on the node before recording the execution with its node; a node without room is refused without spending an attempt.</p><p>Every later call goes to the node the record names. While that node is not connected, calls fail as infrastructure and the execution is <code>lost</code>; <code>Release</code> succeeds, and the node releases the workload when it returns.</p><p><a href="../agents/">Agents diagram &rarr;</a></p>'
     },
     NODES: {
       title: 'Connected nodes',
@@ -182,7 +193,12 @@ window.vagabondDiagram = {
     LAMBDA: {
       title: 'lambda: AWS Lambda',
       badge: 'data', badgeText: 'provider',
-      body: '<p><code>providers/aws</code>, for <code>function</code> tasks. Invokes a function the operator deployed; Vagabond creates none.</p><p>The invocation is synchronous: the answer, the last 4 KB of the log and the billed duration come back from <code>Submit</code>, so nothing is polled. The charge settles at the billed duration when the log tail reports it, otherwise at the declared shape over the measured invocation.</p><p><code>Status</code>, <code>Result</code> and <code>Cancel</code> are unsupported, so a <code>Submit</code> that fails other than as <code>internal</code> cannot be asked about and is charged as reserved.</p><p><a href="../../docs/providers/lambda/">Lambda provider &rarr;</a></p>'
+      body: '<p><code>providers/aws</code>, for <code>function</code> tasks. Invokes a function the operator deployed; Vagabond creates none.</p><p>The invocation is synchronous: the function&rsquo;s reply, carrying the task&rsquo;s exit code and output, comes back from <code>Submit</code> with the log tail, so nothing is polled. The charge settles at the billed duration when the log tail&rsquo;s <code>REPORT</code> line states it, otherwise at the declared shape over the measured invocation.</p><p><code>Status</code>, <code>Result</code> and <code>Cancel</code> are unsupported, so a <code>Submit</code> that fails other than as <code>internal</code> cannot be asked about and is charged as reserved.</p><p><a href="../../docs/providers/lambda/">Lambda provider &rarr;</a></p>'
+    },
+    OCIFN: {
+      title: 'oci-functions: OCI Functions',
+      badge: 'data', badgeText: 'provider',
+      body: '<p><code>providers/oci</code>, for <code>function</code> tasks. Invokes a function the operator deployed; Vagabond creates none. Every request is signed with the operator&rsquo;s API key.</p><p><code>Submit</code> looks the function up for its invoke endpoint and memory, then invokes it synchronously: the reply carries the task&rsquo;s exit code and output, so nothing is polled. A function that crashes or runs past its timeout fails the task with OCI&rsquo;s error as its output, not the provider. The charge settles at the function&rsquo;s configured memory over the measured invocation.</p><p><code>Status</code>, <code>Result</code> and <code>Cancel</code> are unsupported, so a <code>Submit</code> that fails other than as <code>internal</code> cannot be asked about and is charged as reserved.</p><p><a href="../../docs/providers/oci-functions/">OCI Functions provider &rarr;</a></p>'
     },
     AGENT: {
       title: 'vagabond agent',

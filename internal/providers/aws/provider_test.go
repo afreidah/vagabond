@@ -26,7 +26,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 
 	"github.com/afreidah/vagabond/internal/execution"
-	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/plugin/plugintest"
 	"github.com/afreidah/vagabond/internal/quota"
@@ -37,21 +36,30 @@ import (
 // FAKE LAMBDA
 // -------------------------------------------------------------------------
 
-// fakeLambda answers one invoke with whatever a test sets.
+// okReply is a function's reply to a task that succeeded.
+const okReply = `{"exit_code":0,"output":"hello\n"}`
+
+// fakeLambda answers one invoke with whatever a test sets, the reply okReply
+// unless it sets one.
 type fakeLambda struct {
 	status        int
 	errorType     string
 	functionError string
+	reply         string
 	logs          string
 
 	path    string
 	headers http.Header
-	event   event
-	calls   int
+	event   struct {
+		ExecutionID string            `json:"execution_id"`
+		Args        []string          `json:"args"`
+		Env         map[string]string `json:"env"`
+	}
+	calls int
 }
 
 // ServeHTTP records the invoke and answers with the configured refusal, or with
-// the function error and log tail.
+// the reply, function error and log tail.
 func (f *fakeLambda) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.calls++
 	f.path = r.URL.Path
@@ -72,9 +80,14 @@ func (f *fakeLambda) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Amz-Function-Error", f.functionError)
 	}
 
+	reply := f.reply
+	if reply == "" {
+		reply = okReply
+	}
+
 	w.Header().Set("X-Amz-Log-Result", base64.StdEncoding.EncodeToString([]byte(f.logs)))
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"ok":true}`))
+	_, _ = w.Write([]byte(reply))
 }
 
 // newTestProvider points a provider's SDK client at f.
@@ -98,23 +111,6 @@ func newTestProvider(t *testing.T, f *fakeLambda) *Provider {
 	return &Provider{Credentialed: creds, name: "aws-lambda"}
 }
 
-// functionTask builds a task from a driver config fragment.
-func functionTask(t *testing.T, config, env string) *job.Task {
-	t.Helper()
-
-	task := &job.Task{
-		Name:   "test",
-		Driver: job.DriverFunction,
-		Config: plugintest.RawBlock(t, config),
-	}
-
-	if env != "" {
-		task.Env = plugintest.RawBlock(t, env)
-	}
-
-	return task
-}
-
 // -------------------------------------------------------------------------
 // SUBMIT
 // -------------------------------------------------------------------------
@@ -128,7 +124,7 @@ func TestSubmit_InvokesSynchronouslyWithTheEvent(t *testing.T) {
 	p := newTestProvider(t, f)
 	id := testkit.NewID(t)
 
-	task := functionTask(t, `
+	task := plugintest.FunctionTask(t, `
 function = "vagabond-runner"
 args     = ["go", "test", "./..."]
 `, `GOFLAGS = "-mod=mod"`)
@@ -161,25 +157,9 @@ args     = ["go", "test", "./..."]
 	if sub.State != execution.StateSucceeded || sub.Result.ExitCode == nil || *sub.Result.ExitCode != 0 {
 		t.Errorf("state = %s, exit = %v; want a success", sub.State, sub.Result.ExitCode)
 	}
-}
 
-// The task's metadata reaches the function as VAGABOND_META_* in the event's
-// env.
-func TestSubmit_EventCarriesMetadata(t *testing.T) {
-	t.Parallel()
-
-	f := &fakeLambda{logs: reportLine}
-	p := newTestProvider(t, f)
-
-	task := functionTask(t, `function = "f"`, "")
-	task.Meta = map[string]string{"commit": "abc123"}
-
-	if _, err := p.Submit(t.Context(), testkit.NewID(t), task); err != nil {
-		t.Fatalf("Submit() = %v", err)
-	}
-
-	if got := f.event.Env["VAGABOND_META_COMMIT"]; got != "abc123" {
-		t.Errorf("event env = %v, want VAGABOND_META_COMMIT", f.event.Env)
+	if sub.ProviderID != "vagabond-runner" || string(sub.Result.Logs) != "hello\n" {
+		t.Errorf("provider id = %q, logs = %q; want the function and the reply's output", sub.ProviderID, sub.Result.Logs)
 	}
 }
 
@@ -190,7 +170,7 @@ func TestSubmit_ReportsWhatAWSBilled(t *testing.T) {
 
 	p := newTestProvider(t, &fakeLambda{logs: "hello\n" + reportLine})
 
-	sub, err := p.Submit(t.Context(), testkit.NewID(t), functionTask(t, `function = "f"`, ""))
+	sub, err := p.Submit(t.Context(), testkit.NewID(t), plugintest.FunctionTask(t, `function = "f"`, ""))
 	if err != nil {
 		t.Fatalf("Submit() = %v", err)
 	}
@@ -204,10 +184,6 @@ func TestSubmit_ReportsWhatAWSBilled(t *testing.T) {
 	if sub.Result.Duration != 12340*time.Microsecond {
 		t.Errorf("Duration = %v, want the reported 12.34ms", sub.Result.Duration)
 	}
-
-	if string(sub.Result.Logs) != "hello\n"+reportLine {
-		t.Errorf("Logs = %q", sub.Result.Logs)
-	}
 }
 
 // No REPORT line leaves the bill unset, so the ledger falls back to the
@@ -217,7 +193,7 @@ func TestSubmit_NoReportLeavesTheBillUnset(t *testing.T) {
 
 	p := newTestProvider(t, &fakeLambda{logs: "hello\n"})
 
-	sub, err := p.Submit(t.Context(), testkit.NewID(t), functionTask(t, `function = "f"`, ""))
+	sub, err := p.Submit(t.Context(), testkit.NewID(t), plugintest.FunctionTask(t, `function = "f"`, ""))
 	if err != nil {
 		t.Fatalf("Submit() = %v", err)
 	}
@@ -231,23 +207,43 @@ func TestSubmit_NoReportLeavesTheBillUnset(t *testing.T) {
 	}
 }
 
-// A handler that threw is the task failing: it ran and gave an answer.
-func TestSubmit_FunctionErrorIsAFailedTask(t *testing.T) {
+// The reply's exit code and output are the task's, and a failing run is still
+// billed, since AWS charges for it.
+func TestSubmit_ReplyDecidesTheTask(t *testing.T) {
 	t.Parallel()
 
-	p := newTestProvider(t, &fakeLambda{functionError: "Unhandled", logs: reportLine})
+	p := newTestProvider(t, &fakeLambda{reply: `{"exit_code":3,"output":"3 issues\n"}`, logs: reportLine})
 
-	sub, err := p.Submit(t.Context(), testkit.NewID(t), functionTask(t, `function = "f"`, ""))
+	sub, err := p.Submit(t.Context(), testkit.NewID(t), plugintest.FunctionTask(t, `function = "f"`, ""))
 	if err != nil {
 		t.Fatalf("Submit() = %v, want a failed task rather than an error", err)
 	}
 
-	if sub.State != execution.StateFailed || sub.Result.ExitCode == nil || *sub.Result.ExitCode == 0 {
-		t.Errorf("state = %s, exit = %v; want a failure", sub.State, sub.Result.ExitCode)
+	if sub.State != execution.StateFailed || *sub.Result.ExitCode != 3 || string(sub.Result.Logs) != "3 issues\n" {
+		t.Errorf("state = %s, exit = %d, logs = %q; want exit 3 with the reply's output",
+			sub.State, *sub.Result.ExitCode, sub.Result.Logs)
 	}
 
 	if sub.Result.Billed == nil {
-		t.Error("a failed run was not billed; AWS charges for it")
+		t.Error("a failed run was not billed")
+	}
+}
+
+// A handler that threw replies with Lambda's error, which fails the task with
+// exit code 1 and keeps the error as its output.
+func TestSubmit_HandlerErrorIsAFailedTask(t *testing.T) {
+	t.Parallel()
+
+	crash := `{"errorMessage":"boom","errorType":"Error"}`
+	p := newTestProvider(t, &fakeLambda{functionError: "Unhandled", reply: crash, logs: reportLine})
+
+	sub, err := p.Submit(t.Context(), testkit.NewID(t), plugintest.FunctionTask(t, `function = "f"`, ""))
+	if err != nil {
+		t.Fatalf("Submit() = %v, want a failed task rather than an error", err)
+	}
+
+	if sub.State != execution.StateFailed || *sub.Result.ExitCode != 1 || string(sub.Result.Logs) != crash {
+		t.Errorf("state = %s, exit = %d, logs = %q; want exit 1 with the error", sub.State, *sub.Result.ExitCode, sub.Result.Logs)
 	}
 }
 
@@ -258,7 +254,7 @@ func TestSubmit_TaskNamingNoFunction(t *testing.T) {
 	f := &fakeLambda{}
 	p := newTestProvider(t, f)
 
-	_, err := p.Submit(t.Context(), testkit.NewID(t), functionTask(t, `args = ["x"]`, ""))
+	_, err := p.Submit(t.Context(), testkit.NewID(t), plugintest.FunctionTask(t, `args = ["x"]`, ""))
 
 	var classified *plugin.Error
 	if !errors.As(err, &classified) || classified.Class != plugin.ClassInternal {
@@ -306,7 +302,7 @@ func TestSubmit_ClassifiesRefusals(t *testing.T) {
 			f := &fakeLambda{status: tt.status, errorType: tt.errorType}
 			p := newTestProvider(t, f)
 
-			_, err := p.Submit(t.Context(), testkit.NewID(t), functionTask(t, `function = "f"`, ""))
+			_, err := p.Submit(t.Context(), testkit.NewID(t), plugintest.FunctionTask(t, `function = "f"`, ""))
 
 			var classified *plugin.Error
 			if !errors.As(err, &classified) {

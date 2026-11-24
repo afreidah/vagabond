@@ -641,8 +641,8 @@ task "test" {
 
 | Driver | Contract | Providers offering it |
 |---|---|---|
-| `container` | Run an arbitrary container image to completion; the exit status is the result | Cloud Run (`cloud-run`), Code Engine (`code-engine`), agent nodes (`containerd`, `firecracker`) |
-| `function` | Invoke a predeployed function that implements the platform's handler contract | Lambda (`lambda`) |
+| `container` | Run an arbitrary container image to completion; the exit status is the result | Cloud Run (`cloud-run`), Cloud Build (`cloud-build`), Code Engine (`code-engine`), agent nodes (`containerd`, `firecracker`) |
+| `function` | Invoke a predeployed function that replies with the task's exit code and output | Lambda (`lambda`), OCI Functions (`oci-functions`) |
 | `worker` | Invoke a predeployed constrained executor, such as an edge or Wasm runtime | None; every provider rejects it with `driver-unsupported` |
 
 A provider that does not offer the task's driver is rejected with
@@ -702,7 +702,8 @@ A container task without `image` fails validation:
 
 #### `function` driver
 
-Read by the Lambda provider.
+Read by the Lambda and OCI Functions providers, which invoke a function
+deployed outside Vagabond with the same event and read the same reply.
 
 ```hcl
 config {
@@ -713,10 +714,10 @@ config {
 
 | Key | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `function` | string | yes | - | Function name or ARN to invoke |
+| `function` | string | yes | - | The function to invoke: a Lambda function name or ARN, or an OCI function OCID |
 | `args` | list(string) | no | - | Passed in the event as `args` |
 
-Do not set `image` on a function task: Lambda publishes
+Do not set `image` on a function task: both providers publish
 `provider.arbitrary_images = false` and would reject the task with
 `image-unsupported`.
 
@@ -734,7 +735,23 @@ are omitted when empty:
 }
 ```
 
-A normal return is exit code `0`; a function error is exit code `1`.
+Neither platform reports an exit code, so the function replies with the
+task's:
+
+```json
+{
+  "exit_code": 0,
+  "output": "lint: 0 issues\n"
+}
+```
+
+| Reply | Result |
+|---|---|
+| `exit_code` 0 | `succeeded`, with `output` as the task's logs |
+| Any other `exit_code` | `failed` with that exit code, with `output` as the task's logs |
+| Anything else: no `exit_code`, not JSON, or the platform's own error for a function that crashed or timed out | `failed` with exit code 1, with the whole reply as the task's logs |
+
+What the function prints goes to the platform's own logs, not the task's.
 `function` is not checked at validation. A task without it passes
 validation and fails at dispatch as an internal failure
 (`task "<task>" names no function`).
@@ -763,8 +780,8 @@ env {
   a string`, at its line, so the job is refused by `job validate`,
   `register` and `run`.
 
-Cloud Run passes the variables sorted by name. Lambda passes them in the
-event's `env` object, not as the function's process environment.
+Cloud Run passes the variables sorted by name. Lambda and OCI Functions pass
+them in the event's `env` object, not as the function's process environment.
 
 ### `source` block
 
@@ -822,6 +839,7 @@ against CPU- and memory-metered pools. See [quotas](quotas.md).
 | Cloud Run | 1000 | 2048 | CPU rounded up to whole vCPUs (minimum 1); memory in MiB. Limits 8000 millicores, 32768 MiB |
 | `containerd`, `firecracker` | 1000 | 1024 | Passed to the agent as the workload's cgroup limits, and for a microVM its vCPUs and memory. Limit is the largest node's capacity |
 | Lambda | - | - | Not applied; the function's own configuration decides. Limits 6000 millicores, 10240 MiB |
+| OCI Functions | - | - | Not applied; the function's own configuration decides. Limit 3072 MiB; no CPU limit, as Oracle publishes none |
 
 **Validation:**
 
@@ -851,6 +869,7 @@ timeout = "15m"
 | Cloud Run | 24h | 24h |
 | `containerd`, `firecracker` | No timeout; the agent never stops the workload | none |
 | Lambda | Not applied; the function's configured timeout decides | 15m |
+| OCI Functions | Not applied; the function's configured timeout decides | 5m |
 
 **Validation:**
 
@@ -882,6 +901,7 @@ provider. A provider lacking a required capability is rejected with
 |---|---|---|
 | Cloud Run | `true` | `false` |
 | Lambda | `true` | `false` |
+| OCI Functions | `true`; reached only when the application's subnet routes to the internet | `false` |
 | `containerd`, `firecracker` | `true` | `true` |
 
 ### `execution` block
@@ -899,9 +919,9 @@ execution {
 | `architecture` | string | no | any | `amd64` or `arm64`. A provider not offering it is rejected with `arch-unsupported` |
 | `privileged` | bool | no | - | Accepted and stored. No provider or admission check reads it |
 
-Architectures offered: Cloud Run `amd64`; Lambda `amd64`, `arm64`; a
-`containerd` provider each connected node's own; a `firecracker` provider
-`amd64`, as vagabond-firecracker runs only there.
+Architectures offered: Cloud Run `amd64`; Lambda and OCI Functions `amd64`,
+`arm64`; a `containerd` provider each connected node's own; a `firecracker`
+provider `amd64`, as vagabond-firecracker runs only there.
 
 **Validation:** `Unknown architecture in "<job>" task "<task>"`
 (`Architecture "x86_64" is not one Vagabond schedules against. Valid architectures are amd64, arm64.`).

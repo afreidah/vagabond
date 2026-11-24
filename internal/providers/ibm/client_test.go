@@ -311,13 +311,3 @@ func TestIAMError(t *testing.T) {
 		t.Errorf("iamError(plain) = %q", got)
 	}
 }
-
-// An unrecognized body is cut at 500 characters.
-func TestBounded(t *testing.T) {
-	t.Parallel()
-
-	got := bounded([]byte(strings.Repeat("x", 600)))
-	if len(got) != 503 || !strings.HasSuffix(got, "...") {
-		t.Errorf("bounded() is %d characters", len(got))
-	}
-}

@@ -45,9 +45,9 @@ func ContainerOf(task *job.Task, defaults Resources) (Container, error) {
 		return Container{}, Internal(fmt.Errorf("task %q names no image", task.Name))
 	}
 
-	env, diags := task.Environment()
-	if diags.HasErrors() {
-		return Container{}, Internal(fmt.Errorf("task %q env: %s", task.Name, diags.Error()))
+	env, err := environment(task)
+	if err != nil {
+		return Container{}, err
 	}
 
 	size := Declared(task).Or(defaults)
@@ -76,6 +76,17 @@ func ContainerOf(task *job.Task, defaults Resources) (Container, error) {
 	}
 
 	return out, nil
+}
+
+// environment evaluates a task's env, which every platform passes on whole. One
+// that does not evaluate is an internal failure, the task's own.
+func environment(task *job.Task) (map[string]string, error) {
+	env, diags := task.Environment()
+	if diags.HasErrors() {
+		return nil, Internal(fmt.Errorf("task %q env: %s", task.Name, diags.Error()))
+	}
+
+	return env, nil
 }
 
 // Declared is the size a task declared, zero for what it did not.

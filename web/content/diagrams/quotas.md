@@ -124,7 +124,7 @@ window.vagabondDiagram = {
     BILLEDCHG: {
       title: 'Billed Charge',
       badge: 'process', badgeText: 'platform figure',
-      body: '<p>Billed memory &times; billed duration, and billed CPU &times; billed duration, with CPU 0 when the platform reports none. <code>executions</code> pools are charged 1.</p><p>On Lambda the memory is the function&rsquo;s configured size, not the task&rsquo;s declaration, and no CPU is reported, so <code>cpu_seconds</code> pools are charged 0 for that execution.</p>'
+      body: '<p>Billed memory &times; billed duration, and billed CPU &times; billed duration, with CPU 0 when the platform reports none. <code>executions</code> pools are charged 1.</p><p>On Lambda the memory is the function&rsquo;s configured size, not the task&rsquo;s declaration, and no CPU is reported, so <code>cpu_seconds</code> pools are charged 0 for that execution. OCI Functions reports the same way: the function&rsquo;s configured memory over the measured invocation, with no CPU.</p>'
     },
     DECLCHG: {
       title: 'Declared Charge',
@@ -134,7 +134,7 @@ window.vagabondDiagram = {
     RESERVEDCHG: {
       title: 'Charged as Reserved',
       badge: 'process', badgeText: 'never answered',
-      body: '<p>The declared CPU and memory &times; the declared timeout (<code>executions.timeout_ms</code>), which is what was reserved. <code>executions</code> pools are charged 1.</p><p>Charged when nothing says what ran: an execution whose <code>Status</code> still fails after 24 hours lost, or a failed <code>Submit</code> or a cancel the provider cannot be asked about, with no start on the record. A failed <code>Submit</code> on AWS Lambda, where <code>Status</code> is unsupported, is charged this way.</p>'
+      body: '<p>The declared CPU and memory &times; the declared timeout (<code>executions.timeout_ms</code>), which is what was reserved. <code>executions</code> pools are charged 1.</p><p>Charged when nothing says what ran: an execution whose <code>Status</code> still fails after 24 hours lost, or a failed <code>Submit</code> or a cancel the provider cannot be asked about, with no start on the record. A failed <code>Submit</code> on AWS Lambda or OCI Functions, where <code>Status</code> is unsupported, is charged this way.</p>'
     },
     SEENCHG: {
       title: 'Time Seen Running',
