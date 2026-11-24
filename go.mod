@@ -26,7 +26,7 @@ require (
 	github.com/oracle/oci-go-sdk/v65 v65.131.0
 	github.com/pressly/goose/v3 v3.30.1
 	github.com/testcontainers/testcontainers-go v0.45.0
-	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
+	github.com/testcontainers/testcontainers-go/modules/postgres v0.45.0
 	github.com/zclconf/go-cty v1.20.0
 	go.uber.org/mock v0.6.0
 	golang.org/x/oauth2 v0.38.0
