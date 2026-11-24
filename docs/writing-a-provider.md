@@ -19,7 +19,8 @@ time.
 | Cloud Run Jobs | `internal/providers/gcp/cloudrun` | Asynchronous family, a `LogCapturer` over Cloud Logging that tails entries and catches up by listing them, `Releaser`, `Recredentialer`, raw HTTP against `httptest` |
 | Cloud Build | `internal/providers/gcp/cloudbuild` | A second provider on the same platform, both embedding `gcp.API` for the signed client and the Cloud Logging reader; a resource the platform names and the plugin finds again by tag; a `Result` that reports a run the platform ended as infrastructure |
 | Code Engine Jobs | `internal/providers/ibm` | Asynchronous family, a `LogCapturer` that follows one log and reads it whole when the follow did not see the container exit, `Releaser`, a `Recredentialer` whose token refusals are unauthorized, a fixed size table, two APIs behind one token |
-| AWS Lambda | `internal/providers/aws` | Synchronous family, the `NotSupported` embeds, `Result.Billed`, output in `Result.Logs`, `Recredentialer`, a cloud SDK against `httptest` |
+| AWS Lambda | `internal/providers/aws` | Synchronous family, the `NotSupported` embeds, the function contract, `Result.Billed` from the platform's own report, output in `Result.Logs`, `Recredentialer`, a cloud SDK against `httptest` |
+| OCI Functions | `internal/providers/oci` | The function contract on a second platform, a signing transport from the vendor SDK under the shared rest path, a platform error that is the task's answer rather than a failure, `Result.Billed` from the function's configuration |
 | containerd, firecracker | `internal/providers/pool` | One package behind two types, `Live`, `Targeter` and `Reserver`, a `LogCapturer` that places output past what the node dropped, `Releaser`, `Capabilities.Members`, an optional config block |
 | Fakes | `internal/plugin/fake.go` | The smallest implementations of both families |
 
@@ -376,7 +377,8 @@ Reason codes are listed in [Scheduling](scheduling.md#reason-codes).
   limit; `0` is a real limit that admits nothing, as a full node reports.
   A zero `MaxDuration` advertises no limit. A platform that derives CPU from
   memory advertises the CPU its largest tier implies rather than nil, as Lambda
-  advertises 6000.
+  advertises 6000. One that publishes no CPU figure at all leaves it nil, as
+  OCI Functions does.
 - **Attributes:** the dotted names are what job `constraint` and `affinity`
   blocks match. A nil resource limit and a zero `MaxDuration` are omitted from
   the attribute map; a limit of `0` is published as `0`. Booleans and
@@ -433,8 +435,8 @@ A platform that uses a status unusually builds the `*Error` directly.
 
 ### `ClassifyResponse`
 
-A plugin calling a JSON API sends through `internal/rest`, as Cloud Run and
-Code Engine do, and classifies what failed with
+A plugin calling a JSON API sends through `internal/rest`, as Cloud Run, Code
+Engine and OCI Functions do, and classifies what failed with
 `plugin.ClassifyResponse(err error, refused func(*rest.Refusal) error) error`:
 
 | `rest` failure | Classified as |
@@ -445,7 +447,13 @@ Code Engine do, and classifies what failed with
 | Anything else: a payload that does not encode, a URL that does not parse, an answer that does not decode | `internal` |
 
 `r.RetryAfter()` reads a `Retry-After` header in whole seconds, 0 when absent
-or malformed.
+or malformed. `rest.Excerpt(r.Body)` is the message for a body that matched
+none of the platform's error shapes, trimmed and cut at 500 characters.
+
+A refusal that is the task's own answer is not a failure. OCI Functions
+answers a function that crashed or timed out with a 502 or 504 naming the
+fault; its plugin checks the code before `ClassifyResponse` and hands the body
+to `plugin.Replied`, so the task fails rather than being rerouted.
 
 ### Sentinels
 
@@ -501,13 +509,16 @@ func decodeConfig(name string, body hcl.Body) (*Config, hcl.Diagnostics)
   line.
 
 A container plugin reads its task once with `plugin.ContainerOf`, which the
-built-in container providers share; anything else in the driver `config` is
-read with helpers on `*job.Task`:
+built-in container providers share. A function plugin reads its task with
+`plugin.FunctionOf` and the function's answer with `plugin.Replied`, so every
+function platform sends the same event and reads the same reply. Anything
+else in the driver `config` is read with helpers on `*job.Task`:
 
 | Helper | Returns |
 |---|---|
 | `plugin.ContainerOf(task, defaults)` | `(plugin.Container, error)`: the image, `command`, `args`, environment, working directory, size with `defaults` for what the task leaves unset, and timeout; a task with no image, or an `env` or `timeout` that does not evaluate, is `plugin.Internal` |
-| `plugin.CloudContainer(plugin.Cloud{...})` | The capabilities of a managed container platform from its maximum, default size, longest run and isolation, so admission sizes a task as `ContainerOf` does |
+| `plugin.FunctionOf(id, task)` | `(plugin.Function, error)`: the function `config.function` names and the encoded event `{execution_id, args, env}`; a task naming no function, or an `env` that does not evaluate, is `plugin.Internal` |
+| `plugin.Replied(id, providerID, body, took)` | The `Submission` of a function that answered with `body`: a reply `{exit_code, output}` sets the exit code and the logs; any other body fails the task with exit code 1 and is kept whole as its logs || `plugin.CloudContainer(plugin.Cloud{...})` | The capabilities of a managed container platform from its maximum, default size, longest run and isolation, so admission sizes a task as `ContainerOf` does |
 | `task.ConfigString(name)` | `(string, bool)`: a string attribute evaluated against the job's variables |
 | `task.ConfigStrings(name)` | `([]string, bool)`: a list of strings; false when absent or empty |
 | `task.Environment()` | `(map[string]string, hcl.Diagnostics)`: the `env` block plus `VAGABOND_META_<KEY>` per job `meta` key |

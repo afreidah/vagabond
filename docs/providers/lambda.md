@@ -7,8 +7,9 @@ weight: 620
 
 The `lambda` provider runs `function` tasks by invoking an AWS Lambda function
 the operator has already deployed. Vagabond does not create, update or delete
-functions. Each execution is one synchronous invoke, and the verdict, the log
-tail and the billed duration all come back from `Submit`.
+functions. Each execution is one synchronous invoke: the function's reply,
+carrying the task's exit code and output, and the billed duration come back
+from `Submit`.
 
 | | |
 |---|---|
@@ -180,9 +181,11 @@ task "test" {
 Other keys are ignored, and so is an `args` that is not a list of strings.
 Values are evaluated against the job's variables.
 
-### The event
+### The event and the reply
 
-The function is invoked with this JSON payload:
+The function is invoked with the event every function provider sends, and
+replies with the task's exit code and output; both are described under the
+[`function` driver](../job-specification.md#function-driver):
 
 ```json
 {
@@ -192,14 +195,14 @@ The function is invoked with this JSON payload:
 }
 ```
 
-| Field | Content | Omitted when |
-|---|---|---|
-| `execution_id` | Vagabond's execution ID | never |
-| `args` | `config.args` | empty |
-| `env` | The `env` block plus `VAGABOND_META_<KEY>` per job `meta` key; an `env` entry wins over a metadata variable of the same name | empty |
+```json
+{"exit_code": 0, "output": "ok  example.com/lint  0.412s\n"}
+```
 
-What the function does with the event is up to its handler. `env` is data in
-the event, not the function's process environment.
+A handler that throws or times out replies with Lambda's own error, such as
+`{"errorMessage": "Task timed out after 30.03 seconds"}`, which fails the task
+with exit code 1 and that error as its output. `env` is data in the event, not
+the function's process environment.
 
 **Not applied:** `resources`, `timeout`, `source`, `working_directory` and
 `network` are not sent. Memory and timeout are function configuration, set
@@ -220,14 +223,14 @@ the capabilities above and still drive the quota reservation.
 | Field | Value |
 |---|---|
 | `ProviderID` | The `function` value as written in the task |
-| `State` | `failed` if the response carries `X-Amz-Function-Error`, else `succeeded` |
-| `Result.ExitCode` | `1` when failed, `0` when succeeded |
+| `State` | `succeeded` when the reply's `exit_code` is 0, else `failed` |
+| `Result.ExitCode` | The reply's `exit_code`; `1` for a reply without one |
 | `Result.Duration` | The `REPORT` line's `Duration`, rounded up to the nanosecond; wall time of the invoke when there is no `REPORT` line |
-| `Result.Logs` | The decoded `LogResult`: the last 4 KB of the invocation's log |
-| `Result.LogsTruncated` | `true` when the tail is 4096 bytes or longer |
+| `Result.Logs` | The reply's `output`; the whole reply for one without an `exit_code` |
 | `Result.Billed` | From the `REPORT` line; see [Quota](#quota) |
 
-The function's response payload is not read or stored.
+The decoded `LogResult`, the last 4 KB of the invocation's log, is read only
+for its `REPORT` line and not stored.
 
 **Retries:** the SDK retryer is replaced with a no-op, so each `Submit` makes
 exactly one HTTP request. A throttled or failed invoke is returned to dispatch,
@@ -253,7 +256,7 @@ stream or sweep.
 | HTTP 401 or 403 (access denied, expired token) | internal | no | Wraps `ErrUnauthorized`. With a `credentials` block, the block is resolved again and the call made once more; with the default chain, the error is returned as is |
 | Other HTTP 4xx (invalid parameters, payload too large) | internal | no | |
 | No HTTP response: network failure, DNS, or the default chain found no credential | infrastructure | yes | |
-| Function returns with `X-Amz-Function-Error` (handled or unhandled error, including the function timing out) | none | | An answer: state `failed`, exit code 1, not rerouted |
+| Function returns with `X-Amz-Function-Error` (handled or unhandled error, including the function timing out) | none | | An answer: the reply is Lambda's error, not the contract, so state `failed`, exit code 1, the error as output; not rerouted |
 
 Dispatch reroutes `infrastructure` failures within the task's retry budget and
 stops on `internal` ones. See [Dispatch](../dispatch.md).
@@ -343,11 +346,11 @@ provider "aws-lambda" {
   `max_duration`. The effective limit is the function's configured timeout,
   which Vagabond cannot see; a function that times out returns a function error
   and the task fails with exit code 1.
-- **Logs:** only the last 4 KB of the invocation log is returned. Longer output
-  is cut from the front; read the full log in CloudWatch Logs.
-- **Payload size:** the event is subject to Lambda's synchronous request payload
-  limit. An `env` or `args` too large for it fails with a 4xx, classified
-  internal.
+- **Logs:** the task's output is what the function puts in its reply. What it
+  prints goes to CloudWatch Logs.
+- **Payload size:** the event and the reply are subject to Lambda's synchronous
+  payload limit. An `env` or `args` too large for it fails with a 4xx,
+  classified internal.
 - **Blocking:** `Submit` holds a connection open for the whole invocation. A
   caller that gives up cancels the request; the function keeps running on AWS
   and is billed, since `Cancel` is unsupported.

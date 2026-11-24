@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -207,4 +208,17 @@ func build(ctx context.Context, req *Request) (*http.Request, error) {
 	}
 
 	return httpReq, nil
+}
+
+// Excerpt shows a refusal's body that matched none of its platform's error
+// shapes, cut short so a page of HTML cannot flood the error it goes into.
+func Excerpt(body []byte) string {
+	const limit = 500
+
+	s := strings.TrimSpace(string(body))
+	if len(s) > limit {
+		return s[:limit] + "..."
+	}
+
+	return s
 }

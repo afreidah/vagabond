@@ -365,7 +365,7 @@ to finish. The job is not registered. The server makes the same selection
   when the task has just ended, otherwise a second later. Once the task has a
   result, the CLI waits for the last of the output, then prints the verdict
   line. A provider that hands the output over with its answer, as Lambda
-  does, has all of it printed when the task finishes.
+  and OCI Functions do, has all of it printed when the task finishes.
 - Every byte is printed once, in the order the server stored it. On Cloud Run
   and Cloud Build, a line Cloud Logging delivers late is printed where it
   arrived, after lines the task printed later; see
@@ -695,7 +695,7 @@ only the [client flags](#connecting-to-the-server).
 | `Attempt` | Attempt number within the task, from 1 |
 | `Previous` | Execution ID of the previous attempt |
 | `State` | `pending`, `submitted`, `accepted`, `running`, `succeeded`, `failed`, `cancelled` or `lost` |
-| `Provider ID` | The provider's own identifier: Cloud Run execution name, Lambda function, or for an agent pool the execution ID, which names the workload on its node |
+| `Provider ID` | The provider's own identifier: Cloud Run execution name, Lambda function, OCI Functions request ID, or for an agent pool the execution ID, which names the workload on its node |
 | `Failure` | Failure class when it failed without a result: `infrastructure` or `internal` |
 | `Created`, `Started`, `Ended` | Timestamps |
 | `Duration` | Run time, once there is a result |

@@ -248,7 +248,7 @@ func ibmError(body []byte) (codes []string, message string) {
 	}
 
 	if json.Unmarshal(body, &out) != nil {
-		return nil, bounded(body)
+		return nil, rest.Excerpt(body)
 	}
 
 	if len(out.Errors) > 0 {
@@ -262,7 +262,7 @@ func ibmError(body []byte) (codes []string, message string) {
 	}
 
 	if out.Message == "" {
-		return nil, bounded(body)
+		return nil, rest.Excerpt(body)
 	}
 
 	// v1 carries its code as a string; a Kubernetes Status carries a number and a reason
@@ -289,18 +289,5 @@ func iamError(body []byte) string {
 		return out.Code + ": " + out.Message
 	}
 
-	return bounded(body)
-}
-
-// bounded shows an unrecognized body, cut short so a page of HTML cannot flood
-// the error.
-func bounded(body []byte) string {
-	const limit = 500
-
-	s := strings.TrimSpace(string(body))
-	if len(s) > limit {
-		return s[:limit] + "..."
-	}
-
-	return s
+	return rest.Excerpt(body)
 }

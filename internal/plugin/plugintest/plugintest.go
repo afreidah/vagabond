@@ -4,9 +4,9 @@
 // Author: Alex Freidah
 //
 // What the cloud providers' tests share: configuration parsed the way the
-// loaders leave it, a container task shaped like the documented example, and
-// the live round trip each container provider proves itself with against a
-// real account, its output captured the way a dispatcher captures it.
+// loaders leave it, container and function tasks, and the live round trip each
+// container provider proves itself with against a real account, its output
+// captured the way a dispatcher captures it.
 // -------------------------------------------------------------------------------
 
 package plugintest
@@ -69,6 +69,19 @@ func ContainerTask(t *testing.T) *job.Task {
 		Resources: &job.Resources{CPU: new(1000), Memory: new(2048)},
 		Timeout:   new(job.Duration("15m")),
 	}
+}
+
+// FunctionTask is a function task with the given driver config and, unless
+// env is empty, env block.
+func FunctionTask(t *testing.T, config, env string) *job.Task {
+	t.Helper()
+
+	task := &job.Task{Name: "test", Driver: job.DriverFunction, Config: RawBlock(t, config)}
+	if env != "" {
+		task.Env = RawBlock(t, env)
+	}
+
+	return task
 }
 
 // -------------------------------------------------------------------------

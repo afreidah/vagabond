@@ -23,6 +23,7 @@ require (
 	github.com/hashicorp/yamux v0.1.2
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/opencontainers/runtime-spec v1.3.0
+	github.com/oracle/oci-go-sdk/v65 v65.131.0
 	github.com/pressly/goose/v3 v3.30.1
 	github.com/testcontainers/testcontainers-go v0.45.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
@@ -160,6 +161,7 @@ require (
 	github.com/shirou/gopsutil/v4 v4.26.6 // indirect
 	github.com/shopspring/decimal v1.6.0 // indirect
 	github.com/sirupsen/logrus v1.10.2 // indirect
+	github.com/sony/gobreaker/v2 v2.4.0 // indirect
 	github.com/spf13/cast v1.3.1 // indirect
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
@@ -168,6 +170,7 @@ require (
 	github.com/tidwall/btree v1.8.1 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
+	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.lsp.dev/jsonrpc2 v0.10.0 // indirect
 	go.lsp.dev/pkg v0.0.0-20210717090340-384b27a52fb2 // indirect

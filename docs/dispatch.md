@@ -326,7 +326,7 @@ waiting client the output is whole, and releasing may destroy it.
 | Provider | Where the output comes from |
 |---|---|
 | Implements `plugin.LogCapturer` (Cloud Run, Cloud Build, Code Engine, `containerd`, `firecracker`) | `CaptureLogs`, called while the execution runs |
-| Any other (Lambda) | `Result.Logs`, the output that came with the answer, stored once it arrives |
+| Any other (Lambda, OCI Functions) | `Result.Logs`, the output that came with the answer, stored once it arrives |
 
 - One capture per execution, whichever servers and clients read it. Every
   client reads the store, so all of them see the same bytes, and no client

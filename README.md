@@ -24,10 +24,11 @@ in Nomad-style HCL. For each task, the server rejects backends that fail the
 job's constraints, resources, cost limit or remaining quota, scores the rest,
 runs the task on the selected backend, and stores the result.
 
-Backends are provider plugins: Google Cloud Run Jobs, IBM Code Engine Jobs, AWS
-Lambda, and agent nodes, which are hosts running `vagabond agent` that execute
-tasks on the host's containerd, or in Firecracker microVMs through the
-`vagabond-firecracker` daemon the agent starts.
+Backends are provider plugins: Google Cloud Run Jobs, Google Cloud Build, IBM
+Code Engine Jobs, AWS Lambda, OCI Functions, and agent nodes, which are hosts
+running `vagabond agent` that execute tasks on the host's containerd, or in
+Firecracker microVMs through the `vagabond-firecracker` daemon the agent
+starts.
 
 Usage is recorded for every run and checked against quotas set per backend,
 optionally split per namespace. `job plan` prints every backend with its score
@@ -87,6 +88,7 @@ Backends:
 | Google Cloud Build | `container` | [cloud-build.md](docs/providers/cloud-build.md) |
 | IBM Code Engine Jobs | `container` | [code-engine.md](docs/providers/code-engine.md) |
 | AWS Lambda | `function` | [lambda.md](docs/providers/lambda.md) |
+| OCI Functions | `function` | [oci-functions.md](docs/providers/oci-functions.md) |
 | Agent nodes in containers (`vagabond agent`, `containerd` provider) | `container` | [containerd.md](docs/containerd.md) |
 | Agent nodes in microVMs (`vagabond agent -firecracker`, `firecracker` provider) | `container` | [firecracker.md](docs/firecracker.md) |
 
@@ -206,12 +208,16 @@ job "go-test" {
   |  dispatch  reserve, submit, watch, release,    |
   |            settle; reroute on outage           |
   +------------------------------------------------+
-        |                  |                   |
-        v                  v                   v
-   cloud providers    agent nodes         store: jobs, dispatches,
-   Cloud Run, Lambda  containerd,         executions, quota
-                      Firecracker
-                                          (Postgres / CockroachDB)
+        |                                     |
+        v                                     v
+   providers, one per execution option   store: jobs, dispatches,
+     cloud-run      Cloud Run Jobs       executions, quota
+     cloud-build    Cloud Build          (Postgres / CockroachDB)
+     code-engine    Code Engine Jobs
+     lambda         AWS Lambda
+     oci-functions  OCI Functions
+     containerd     agent node containers
+     firecracker    agent node microVMs
 ```
 
 - The CLI holds no credentials; the server holds provider credentials and the
@@ -248,6 +254,7 @@ Details: [architecture.md](docs/architecture.md).
 | Google Cloud Build | [providers/cloud-build.md](docs/providers/cloud-build.md) |
 | IBM Code Engine Jobs | [providers/code-engine.md](docs/providers/code-engine.md) |
 | AWS Lambda | [providers/lambda.md](docs/providers/lambda.md) |
+| OCI Functions | [providers/oci-functions.md](docs/providers/oci-functions.md) |
 | Writing a provider plugin | [writing-a-provider.md](docs/writing-a-provider.md) |
 | Coding conventions | [style-guide.md](docs/style-guide.md) |
 | Build, test, contribute | [CONTRIBUTING.md](CONTRIBUTING.md) |

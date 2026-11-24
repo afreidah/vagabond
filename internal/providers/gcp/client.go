@@ -150,10 +150,5 @@ func googleError(body []byte) string {
 		return out.Error.Message
 	}
 
-	const limit = 500
-	if len(body) > limit {
-		return string(body[:limit]) + "..."
-	}
-
-	return string(body)
+	return rest.Excerpt(body)
 }

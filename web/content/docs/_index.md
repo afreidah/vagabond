@@ -6,7 +6,8 @@ description: "Vagabond documentation: job files, scheduling, quotas, dispatch, c
 ---
 
 Vagabond is a compute broker for short-lived, stateless jobs on Cloud Run Jobs,
-Code Engine Jobs, AWS Lambda and agent nodes. Jobs are written in Nomad-style HCL. For each task,
+Cloud Build, Code Engine Jobs, AWS Lambda, OCI Functions and agent nodes. Jobs
+are written in Nomad-style HCL. For each task,
 the server rejects backends that fail the job's constraints, resources, cost
 limit or remaining quota, scores the rest, runs the task on the selected
 backend, and records what it used.
@@ -33,6 +34,7 @@ backend, and records what it used.
 | | [Cloud Build](providers/cloud-build.md) | The `cloud-build` provider |
 | | [Code Engine Jobs](providers/code-engine.md) | The `code-engine` provider |
 | | [AWS Lambda](providers/lambda.md) | The `lambda` provider |
+| | [OCI Functions](providers/oci-functions.md) | The `oci-functions` provider |
 | | [Writing a provider](writing-a-provider.md) | The plugin contract |
 | Contributing | [Style guide](style-guide.md) | Coding conventions |
 | | [Contributing](../CONTRIBUTING.md) | Build, test and pull request workflow |
