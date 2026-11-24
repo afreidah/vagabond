@@ -3,9 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// An execution's output, in chunks apart from its row. A write replaces what it
-// supersedes in the same transaction, so a capture that starts over or drops
-// the front never leaves both versions readable. A read takes one chunk at a
+// An execution's output, in chunks apart from its row, written as it arrives.
+// A write replaces the chunk it names and drops every one after it and the
+// front past the ceiling in the same transaction, so the last chunk grows in
+// place and no read sees two versions of one. A read takes one chunk at a
 // time, so serving 16 MiB holds 256 KiB.
 // -------------------------------------------------------------------------------
 
@@ -15,7 +16,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -53,9 +53,9 @@ func (s *Store) AppendLog(
 	})
 }
 
-// ReadLog writes id's stored output from chunk fromSeq on to w, in order. An
-// execution with none writes nothing.
-func (s *Store) ReadLog(ctx context.Context, id execution.ID, fromSeq int64, w io.Writer) error {
+// ReadLog hands each of id's stored chunks from fromSeq on to each, in order,
+// with its number. An execution with none hands over nothing.
+func (s *Store) ReadLog(ctx context.Context, id execution.ID, fromSeq int64, each func(seq int64, data []byte) error) error {
 	seq := fromSeq
 
 	for {
@@ -68,7 +68,7 @@ func (s *Store) ReadLog(ctx context.Context, id execution.ID, fromSeq int64, w i
 			return fmt.Errorf("read output of %s: %w", id, err)
 		}
 
-		if _, err := w.Write(chunk.Data); err != nil {
+		if err := each(chunk.Seq, chunk.Data); err != nil {
 			return err
 		}
 

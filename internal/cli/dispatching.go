@@ -4,9 +4,9 @@
 // Author: Alex Freidah
 //
 // job run and job dispatch start a run on the server and follow it here until
-// it ends. Progress goes to stderr and each task's output to stdout. Output
-// streams as each task runs, and whatever did not stream is read from the
-// stored copy once the task finishes, after checking what streamed against it.
+// it ends. Progress goes to stderr and each task's output to stdout, followed
+// from the server's copy as the server stores it, from where it got to after
+// any interruption, until the task has ended and its output is whole.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -15,9 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -33,9 +31,14 @@ import (
 // pollInterval is how often a run is read back while it runs.
 const pollInterval = time.Second
 
-// reconnectDelay is how long a follow waits before reopening a stream that
-// ended while its execution still ran.
-const reconnectDelay = time.Second
+// reconnectDelay is how long a follow waits before asking again after a
+// response that broke, or that ended while its execution still ran. A test
+// shortens it.
+var reconnectDelay = time.Second
+
+// finalTries is how many reads of an ended execution's output may break before
+// the follow gives up on the rest of it.
+const finalTries = 3
 
 // cancelTimeout bounds asking the server to stop a run after an interrupt.
 const cancelTimeout = 30 * time.Second
@@ -43,10 +46,6 @@ const cancelTimeout = 30 * time.Second
 // followRetries is how a command following a run rides out a server that
 // stops answering, a redeploy or a lookup that fails. A test shortens it.
 var followRetries = api.DefaultRetries
-
-// errDiffers stops a read of the stored copy whose start is not the output
-// that streamed.
-var errDiffers = errors.New("the stored output differs from what streamed")
 
 // Dispatch states, as the API reports them.
 const (
@@ -203,8 +202,8 @@ func (f *follower) introduce(e *api.Execution) string {
 	return " (execution " + e.ID + ")"
 }
 
-// result prints the rest of a finished execution's output, unless -no-logs,
-// and its verdict with the platform's reason when it gave one, once.
+// result waits for the rest of a finished execution's output, unless -no-logs,
+// then prints its verdict with the platform's reason when it gave one, once.
 func (f *follower) result(ctx context.Context, e *api.Execution) {
 	if f.reported[e.ID] {
 		return
@@ -228,15 +227,18 @@ func (f *follower) result(ctx context.Context, e *api.Execution) {
 // LIVE OUTPUT
 // -------------------------------------------------------------------------
 
-// live is one execution's output, followed to stdout while it runs.
+// live is one execution's output, followed to stdout until it is whole. err
+// is why the follow gave up before then, read once done has closed.
 type live struct {
-	out  *output
-	end  func()        // tells the follow its execution is over; safe to repeat
-	done chan struct{} // closed once the follow has stopped
+	out      *output
+	complete chan struct{} // closed once the execution has ended, its output whole
+	end      func()        // closes complete; safe to repeat
+	done     chan struct{} // closed once the follow has stopped
+	err      error
 }
 
 // watch follows a submitted execution's output, once, unless -no-logs, and
-// stops following one that ended with no result, since nothing more can come.
+// tells the follow once the execution has ended, its output then whole.
 func (f *follower) watch(ctx context.Context, e *api.Execution) {
 	l, followed := f.live[e.ID]
 
@@ -247,70 +249,106 @@ func (f *follower) watch(ctx context.Context, e *api.Execution) {
 		}
 	case f.noLogs, followed, e.State == executionPending:
 	default:
-		f.live[e.ID] = f.start(ctx, e.ID)
+		f.live[e.ID] = f.start(ctx, e)
 	}
 }
 
-// start follows id's output to stdout, reopening the stream from what arrived
-// when it ends early, and leaves the rest to the stored copy on a 416.
-func (f *follower) start(ctx context.Context, id string) *live {
-	ended := make(chan struct{})
+// start follows e's output to stdout, asking again from where it got to after
+// a response that ends before the output is whole. One that ended cleanly
+// waits for the execution to end, the likely reason, or reconnectDelay, since
+// a server shutting down ends one too; one that broke waits reconnectDelay,
+// and once the output is whole gives up after finalTries.
+func (f *follower) start(ctx context.Context, e *api.Execution) *live {
+	complete := make(chan struct{})
 
 	l := &live{
-		out:  &output{mu: &f.stdout, w: f.Stdout},
-		end:  sync.OnceFunc(func() { close(ended) }),
-		done: make(chan struct{}),
+		out:      f.output(),
+		complete: complete,
+		end:      sync.OnceFunc(func() { close(complete) }),
+		done:     make(chan struct{}),
+	}
+
+	if e.Ended != nil {
+		l.end()
 	}
 
 	go func() {
 		defer close(l.done)
 
-		for {
-			err := f.client.FollowLogs(ctx, id, l.out.written(), l.out)
-
-			if failure, ok := errors.AsType[*api.ResponseError](err); ok &&
-				failure.Status == http.StatusRequestedRangeNotSatisfiable {
-				return
-			}
-
-			select {
-			case <-ended:
-				return
-			case <-ctx.Done():
-				return
-			case <-time.After(reconnectDelay):
-			}
-		}
+		l.err = l.follow(ctx, f.client, e.ID)
 	}()
 
 	return l
 }
 
-// rest prints what of a finished execution's stored output did not stream, and
-// warns of output that is not there to print: dropped past the server's or the
-// node's ceiling before it could stream, or never given by the provider.
+// follow asks for id's output from where it got to until a response asked
+// for once the output was whole has ended, returning why it gave up first.
+func (l *live) follow(ctx context.Context, client *api.Client, id string) error {
+	for broken := 0; ; {
+		whole := closed(l.complete)
+		err := client.FollowLogs(ctx, id, l.out.position(), l.out)
+
+		switch {
+		case whole && err == nil:
+			return nil
+		case whole:
+			if broken++; broken >= finalTries {
+				return err
+			}
+		}
+
+		if !l.pause(ctx, err == nil) {
+			return nil
+		}
+	}
+}
+
+// pause waits before asking again: until the execution ends or reconnectDelay
+// after a response that ended cleanly, reconnectDelay after one that broke. It
+// reports false once ctx has ended.
+func (l *live) pause(ctx context.Context, clean bool) bool {
+	var ending <-chan struct{}
+	if clean {
+		ending = l.complete
+	}
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-ending:
+	case <-time.After(reconnectDelay):
+	}
+
+	return true
+}
+
+// rest waits until a finished execution's output has all been printed,
+// following it from the start when it was not followed while it ran, then
+// closes it.
 func (f *follower) rest(ctx context.Context, e *api.Execution) {
-	out := &output{mu: &f.stdout, w: f.Stdout}
-
-	if l, ok := f.live[e.ID]; ok {
-		// The stream ends with the execution, so its tail precedes the verdict
-		l.end()
-		<-l.done
-
-		out = l.out
+	l, ok := f.live[e.ID]
+	if !ok {
+		l = f.start(ctx, e)
+		f.live[e.ID] = l
 	}
 
-	streamed := out.written()
+	// The follow ends with the output, so all of it precedes the verdict
+	l.end()
+	<-l.done
 
-	if dropped := e.LogsStart - streamed; dropped > 0 {
-		f.Ui.Warn(fmt.Sprintf("%d bytes of output were not kept: only the end of long output is kept.", dropped))
-	}
+	f.closeOutput(e, l.out, l.err)
+}
 
-	if err := f.stored(ctx, e, out); err != nil {
+// closeOutput ends e's printed output on a line of its own and warns of
+// output that is not there: unread, as the read failed with err, or never
+// given by the provider. Output dropped past the server's ceiling was warned
+// of where it was skipped.
+func (f *follower) closeOutput(e *api.Execution, out *output, err error) {
+	if err != nil {
 		f.Ui.Warn(fmt.Sprintf("Could not read the output of %s: %s", e.ID, err))
 	}
 
-	if out.written() > 0 && !out.endsLine() {
+	if out.endsMidLine() {
 		_, _ = out.Write([]byte("\n"))
 	}
 
@@ -319,121 +357,77 @@ func (f *follower) rest(ctx context.Context, e *api.Execution) {
 	}
 }
 
-// stored prints what of e's stored output did not stream to out. A stored copy
-// holding the whole output is read from its first byte and checked against
-// what streamed, since a live source can lose or reorder lines the stored copy
-// has; when the two differ, it warns and prints the stored copy in full.
-func (f *follower) stored(ctx context.Context, e *api.Execution, out *output) error {
-	streamed, sum := out.written(), out.checksum()
-
-	// Nothing streamed, or the stored copy lost its front or its end, leaves nothing to check
-	if streamed == 0 || e.LogsStart > 0 || e.LogsTruncated {
-		return f.client.Logs(ctx, e.ID, streamed, out)
-	}
-
-	check := &afterStreamed{w: out, left: streamed, want: sum}
-
-	err := f.client.Logs(ctx, e.ID, 0, check)
-	if err == nil && check.left > 0 {
-		err = errDiffers
-	}
-
-	if !errors.Is(err, errDiffers) {
-		return err
-	}
-
-	f.Ui.Warn("The output that streamed does not match the stored copy, which follows in full.")
-
-	return f.client.Logs(ctx, e.ID, 0, out)
-}
-
-// afterStreamed is the stored copy read from its first byte. It sums the first
-// left bytes, the ones that streamed, and passes what follows them to w only
-// when their sum is want.
-type afterStreamed struct {
-	w    io.Writer
-	left int64
-	sum  uint32
-	want uint32
-}
-
-// Write sums the part of p that streamed and passes on the rest, failing with
-// errDiffers once every streamed byte is summed and the sums differ.
-func (a *afterStreamed) Write(p []byte) (int, error) {
-	n := len(p)
-
-	if a.left > 0 {
-		take := min(int64(n), a.left)
-		a.sum = crc32.Update(a.sum, crc32.IEEETable, p[:take])
-		a.left -= take
-		p = p[take:]
-
-		if a.left > 0 {
-			return n, nil
-		}
-
-		if a.sum != a.want {
-			return 0, errDiffers
-		}
-	}
-
-	if _, err := a.w.Write(p); err != nil {
-		return 0, err
-	}
-
-	return n, nil
-}
-
-// output is one execution's share of stdout. It counts and sums what it
-// wrote, the count where a reopened stream resumes and the sum what the stored
-// copy is checked against, under one lock every output shares.
+// output is one execution's share of stdout, under one lock every output
+// shares. pos is where in the execution's output the next write continues,
+// which a follow asks again from.
 type output struct {
-	mu   *sync.Mutex
-	w    io.Writer
-	n    int64
-	sum  uint32
-	last byte
+	mu    *sync.Mutex
+	w     io.Writer
+	warn  func(string)
+	pos   int64
+	wrote bool
+	last  byte
 }
 
-// Write writes p to stdout, counting and summing it.
+// output returns an execution's share of stdout, nothing written yet.
+func (f *follower) output() *output {
+	return &output{mu: &f.stdout, w: f.Stdout, warn: f.Ui.Warn}
+}
+
+// Write writes p to stdout, counting it.
 func (o *output) Write(p []byte) (int, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
 	n, err := o.w.Write(p)
-
-	o.n += int64(n)
-	o.sum = crc32.Update(o.sum, crc32.IEEETable, p[:n])
+	o.pos += int64(n)
 
 	if n > 0 {
-		o.last = p[n-1]
+		o.wrote, o.last = true, p[n-1]
 	}
 
 	return n, err
 }
 
-// checksum is the CRC-32 of every byte written.
-func (o *output) checksum() uint32 {
+// StartsAt continues the output at offset, warning of the bytes before it,
+// which the server dropped before they could be printed.
+func (o *output) StartsAt(offset int64) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	return o.sum
+	if dropped := offset - o.pos; dropped > 0 {
+		o.warn(fmt.Sprintf("%d bytes of output were not kept: only the end of long output is kept.", dropped))
+		o.pos = offset
+	}
+
+	return nil
 }
 
-// written is how many bytes have reached stdout.
-func (o *output) written() int64 {
+// position is where in the execution's output the next write continues.
+func (o *output) position() int64 {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	return o.n
+	return o.pos
 }
 
-// endsLine reports whether the last byte written ended a line.
-func (o *output) endsLine() bool {
+// endsMidLine reports whether output was written and its last byte did not
+// end a line.
+func (o *output) endsMidLine() bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	return o.last == '\n'
+	return o.wrote && o.last != '\n'
+}
+
+// closed reports whether ch has closed.
+func closed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 // -------------------------------------------------------------------------

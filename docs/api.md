@@ -109,8 +109,7 @@ Every non-2xx response from a route in the table below has this body:
 | 401 | No verified client certificate, on a server whose `tls` block names a `ca`. Body `this server requires a client certificate`. Never on `/v1/health` |
 | 404 | Job not registered in the namespace; no such dispatch or execution |
 | 409 | Dispatching or planning (by `Name`) a stopped job |
-| 416 | `GET /v1/execution/{id}/logs?follow=true` on a running execution whose provider cannot place its stream at `offset`: on Cloud Run, a backfill that failed or stopped at its page cap. Sent before any output |
-| 500 | Anything else: a store error other than an unreachable store, an internal error. Logged by the server. A panic in a handler is `{"Error":"internal error"}`, never the panic value, and is logged with its stack; one in a live output stream already begun cuts the connection instead ([Panics](dispatch.md#panics)) |
+| 500 | Anything else: a store error other than an unreachable store, an internal error. Logged by the server. A panic in a handler is `{"Error":"internal error"}`, never the panic value, and is logged with its stack; one in an output response already begun cuts the connection instead ([Panics](dispatch.md#panics)) |
 | 503 | The store is unreachable: connection refused, broken or timed out. Nothing was written; the same request can be retried once the store is back. Other store errors are 500 |
 
 Error messages carry the identifier, for example
@@ -338,11 +337,12 @@ continues in the server after the response.
 
 **Following a run:** poll `GET /v1/dispatch/{id}` until `State` is not
 `running`. Executions appear as each task is reserved and recorded, so a
-multi-task job's later tasks show up as earlier ones finish. Stream an
-execution's output with [`/logs?follow=true`](#read-execution-logs) while it
-runs, and once `HasResult` is `true`, read whatever did not stream with
-`/logs?offset=<bytes received>`. The CLI polls the dispatch once a second.
-There is no blocking query.
+multi-task job's later tasks show up as earlier ones finish. Follow an
+execution's output with [`/logs?follow=true`](#read-execution-logs), asking
+again with `offset=<bytes received>` whenever a response ends before the
+execution has; once `Ended` is set, the next response ends with the last of
+the output. The CLI polls the dispatch once a second. There is no blocking
+query.
 
 **Ownership:** the server that accepted the request runs the dispatch and holds
 a lease on it until every execution is released, which can be after `State`
@@ -727,7 +727,7 @@ Errors: 400 (malformed ID), 404, 503.
 
 `GET /v1/execution/{id}/logs`
 
-Interactive version of how output streams, end to end:
+Interactive version of how output is captured and read, end to end:
 [Live output](https://vagabond.munchbox.cc/diagrams/live-output/).
 
 The execution's combined stdout and stderr as `text/plain`. Errors use the
@@ -737,52 +737,48 @@ JSON error body.
 |---|---|---|---|
 | `id` | path | | Execution ID |
 | `offset` | query | `0` | Bytes of output the caller already has. The body starts after them |
-| `follow` | query | `false` | `true` streams the output while the execution runs |
+| `follow` | query | `false` | `true` holds the response open, sending output as it is stored, until the output is complete |
 
-**Stored output.** Without `follow`, or once the execution has ended, the body
-is the stored copy, captured once the execution ends: up to the server's
-`max_log_mib` (16 MiB by default), the end of it, kept for `log_retention`
-(7 days by default). Before it is captured, and after it is pruned, the body
-is empty with status 200.
+**Stored output.** The server holding the execution's dispatch copies its
+output into the store while it runs, storing what arrives at least once a
+second, so any server answers with the same bytes. The body is what is stored
+so far: up to the server's `max_log_mib` (16 MiB by default), the end of it,
+kept for `log_retention` (7 days by default) after the execution ends. Before
+any output arrives, and after it is pruned, the body is empty with status 200.
+On Cloud Run and Cloud Build, a line Cloud Logging delivers late is stored
+where it arrives, after lines printed later; see
+[Cloud Run](providers/cloud-run.md#output).
 
 Offsets count from the first byte the task printed, whether or not the front
-was dropped.
+was dropped. The `Vagabond-Logs-Start` header says where in the output the
+body begins.
 
-| `offset` | Body |
-|---|---|
-| `0` | All that is stored |
-| At or after `LogsStart` | From `offset` on |
-| Before `LogsStart`, in output dropped past the ceiling | From `LogsStart` on |
-| At or past the end | Empty |
+| `offset` | Body | `Vagabond-Logs-Start` |
+|---|---|---|
+| `0` | All that is stored | `0`, or where what is kept begins |
+| At or after the first byte kept | From `offset` on | `offset` |
+| In output dropped past the ceiling | From the first byte kept on | The first byte kept |
+| At or past the end | Empty | `offset` |
 
 The body is read from the store one 256 KiB chunk at a time. A read that fails
 before anything is written is answered with its error; one that fails later
 ends the body early, and the server logs `reading stored output ended early`.
 
-**Following.** With `follow=true` on an execution that has not ended, on a
-provider that can stream ([`LogStreamer`](writing-a-provider.md#logstreamer)),
-the server opens the provider's stream from `offset` and writes output as it
-arrives, flushing each write. Headers go out with the first output.
+**Following.** With `follow=true`, the server sends what is stored from
+`offset`, then reads the record and the store again every second, sending
+output as it is stored and flushing each write. Headers go out with the first
+output.
 
-- The response ends 5 s after the server sees the execution end, which it
-  checks every second, because some providers' logs trail the work: Cloud
-  Logging runs seconds behind the container. A stream the
-  provider ends itself, as an agent does when its workload exits, ends the
-  response at once.
-- It also ends when the client disconnects or the server begins shutting down.
-- A provider stream that breaks ends the response early, still with status
-  200, and the server logs `log stream ended early`. Reconnect with `offset`
-  set to the bytes received.
-- Every streaming provider starts at the first byte the task printed and
-  honours `offset`. Cloud Run lists what was logged before its tail opened to
-  do so; when that list fails or stops at its page cap, the follow is answered
-  `416` with the JSON error body, before any output. Read the rest from the
-  stored copy with `?offset=` once the execution ends.
-- A provider that cannot stream, or an execution that has ended, gets the
-  stored output as above, so a client can always ask to follow.
+- The response ends once the output is complete: after a read made once the
+  record was terminal, which the runner writes only after the last of the
+  output is stored. A follow of an ended execution is a plain read.
+- It also ends when the client disconnects or the server begins shutting
+  down. A response that ends before the client has seen the execution end is
+  asked for again with `offset` set to the bytes received.
+- Output dropped past the ceiling after the body began ends the response, so
+  the client asks again and is told where the output now begins.
 
-Errors: 400 (malformed ID; `offset "<value>" is not a whole number of at least zero`), 404, 416
-(`this provider's log stream cannot resume from an offset`), 503.
+Errors: 400 (malformed ID; `offset "<value>" is not a whole number of at least zero`), 404, 503.
 
 ### Cancel an execution
 
@@ -1162,8 +1158,8 @@ client retries: a connection failure, or one of those four statuses.
 | `DispatchStatus(ctx, id)` | `GET /v1/dispatch/{id}` |
 | `ListExecutions(ctx, namespace, ExecutionFilter)` | `GET /v1/executions`; a filter field left empty, or `Limit` 0, is not sent |
 | `Execution(ctx, id)` | `GET /v1/execution/{id}` |
-| `Logs(ctx, id, offset, w)` | `GET /v1/execution/{id}/logs?offset=`, copied to `w` |
-| `FollowLogs(ctx, id, offset, w)` | `GET /v1/execution/{id}/logs?follow=true&offset=`, copied to `w` until the server ends the stream. An error means it broke |
+| `Logs(ctx, id, offset, w)` | `GET /v1/execution/{id}/logs?offset=`, copied to `w`, an `api.LogWriter` told through `StartsAt` where the body begins when that is past `offset` |
+| `FollowLogs(ctx, id, offset, w)` | `GET /v1/execution/{id}/logs?follow=true&offset=`, copied to `w` as `Logs` does until the server ends the response. An error means it broke |
 | `Cancel(ctx, id)` | `DELETE /v1/execution/{id}` |
 | `Nodes(ctx)` | `GET /v1/nodes` |
 | `Providers(ctx)` | `GET /v1/providers` |

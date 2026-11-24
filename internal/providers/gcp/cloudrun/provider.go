@@ -14,7 +14,6 @@ package cloudrun
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 
 	"github.com/hashicorp/hcl/v2"
@@ -38,8 +37,7 @@ const runEndpoint = "https://run.googleapis.com"
 // Compile-time proof the contract is met.
 var (
 	_ plugin.Provider       = (*Provider)(nil)
-	_ plugin.LogStreamer    = (*Provider)(nil)
-	_ plugin.LogReader      = (*Provider)(nil)
+	_ plugin.LogCapturer    = (*Provider)(nil)
 	_ plugin.Releaser       = (*Provider)(nil)
 	_ plugin.Recredentialer = (*Provider)(nil)
 )
@@ -137,7 +135,7 @@ func (p *Provider) Status(
 // -------------------------------------------------------------------------
 
 // Result returns the exit code and run time from the task. The output is read
-// apart, by ReadLogs.
+// apart, by CaptureLogs.
 func (p *Provider) Result(
 	ctx context.Context, id execution.ID,
 ) (*execution.Result, error) {
@@ -164,16 +162,10 @@ func (p *Provider) Result(
 // OUTPUT
 // -------------------------------------------------------------------------
 
-// ReadLogs writes what a finished job's container printed. The entries outlive
-// the job, so Release destroys nothing this reads.
-func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w execution.LogWriter) error {
-	return p.ReadEntries(ctx, jobLogs(id), w)
-}
-
-// StreamLogs writes a running job's output to w from byte offset on, as it is
-// logged.
-func (p *Provider) StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error {
-	return p.StreamEntries(ctx, jobLogs(id), offset, w)
+// CaptureLogs copies what a job's container prints into log as it is logged.
+// The entries outlive the job, so Release destroys nothing this reads.
+func (p *Provider) CaptureLogs(ctx context.Context, id execution.ID, log execution.Log, ended <-chan struct{}) error {
+	return p.CaptureEntries(ctx, jobLogs(id), log, ended)
 }
 
 // jobLogs is the filter picking out the output of an execution's job.

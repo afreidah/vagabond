@@ -17,7 +17,7 @@ through the project's Kubernetes API, then deletes the run.
 | Package | `internal/providers/ibm` |
 | Drivers | `container` |
 | Execution family | asynchronous: `Submit` returns `accepted`, dispatch polls `Status` |
-| Optional interfaces | `LogStreamer`, `Releaser`, `Recredentialer` |
+| Optional interfaces | `LogCapturer`, `Releaser`, `Recredentialer` |
 | APIs | Code Engine API v2 and v1 (`api.<region>.codeengine.cloud.ibm.com`), the project's Kubernetes API (`proxy.<region>.codeengine.cloud.ibm.com`), IAM (`iam.cloud.ibm.com`) |
 
 The plugin calls every API over plain HTTPS with an OAuth2 client. It does not
@@ -134,9 +134,9 @@ The calls the plugin makes:
 | `GET /v2/projects/{p}/job_runs/{run}` | `Status`, `Result` |
 | `DELETE /v2/projects/{p}/job_runs/{run}` | `Cancel`, `Release` |
 | `GET /api/v1/project/{p}/config` | the first pod lookup, for the namespace |
-| `GET /api/v1/namespaces/{ns}/pods?labelSelector=codeengine.cloud.ibm.com/job-run={run}` | `Result`, `ReadLogs`, `StreamLogs` |
-| `GET .../pods/{pod}/log?container=user-container` | `ReadLogs` |
-| `GET .../pods/{pod}/log?container=user-container&follow=true` | `StreamLogs` |
+| `GET /api/v1/namespaces/{ns}/pods?labelSelector=codeengine.cloud.ibm.com/job-run={run}` | `Result`, `CaptureLogs` |
+| `GET .../pods/{pod}/log?container=user-container&follow=true` | `CaptureLogs`, while the run goes |
+| `GET .../pods/{pod}/log?container=user-container` | `CaptureLogs`, once the run is over, when the follow did not see the container exit |
 
 Every v2 call carries `version=2026-09-04`.
 
@@ -341,10 +341,9 @@ A task needing more disk declares more memory.
 | `Submit` | `POST .../job_runs` | `ProviderID` = run name, state `accepted` |
 | `Status` | `GET .../job_runs/{run}` | State from the run's `status`; `StartedAt`, `EndedAt` from the run's `start_time`, `completion_time` |
 | `Result` | `GET .../job_runs/{run}`, then the pod lookup | Exit code, reason, duration |
-| `ReadLogs` | the pod lookup, then the pod's log | Writes the whole output; an error when the pod is gone or the read is cut |
+| `CaptureLogs` | the pod lookup until the container starts, the followed log, and the whole log when needed | Writes the output into the log as the container prints it; `nil` once the run is over and the log holds all of it |
 | `Cancel` | `DELETE .../job_runs/{run}` | `nil`, also when the run is already gone (404) |
 | `Release` | `DELETE .../job_runs/{run}` | Same call as `Cancel` |
-| `StreamLogs` | the pod lookup until the container starts, then the followed log | Writes output from `offset` until the container exits |
 
 **Stateless:** every call derives the run name from the execution ID. The
 plugin keeps nothing between calls but the project's namespace, so a server
@@ -410,67 +409,65 @@ not recorded as a missing exit code.
 `Completed`, `Error` and `ContainerExitedCode<N>` say no more than the exit code
 and are not a reason. A run that exited on its own has none.
 
-### Logs
+### Output
 
-`ReadLogs` looks the pod up once and reads its whole log, streamed rather
-than read into memory:
+`CaptureLogs` copies the task container's log into the execution's log while
+the run goes. The runner calls it from submission until the output is whole
+([Dispatch](../dispatch.md#output)), and every client reads what it stores
+([API](../api.md#read-execution-logs)).
+
+stdout and stderr arrive interleaved in one log. Lines keep their order within
+each stream, but not always across the two: a stderr line written just after a
+stdout line can come first.
+
+**While the run goes:**
+
+- The pod lookup is polled every 2 seconds until `user-container` is running
+  or has exited. The log cannot be opened before; asking answers 400.
+- `GET .../pods/{pod}/log?container=user-container&follow=true` is copied
+  into the log as bytes arrive. The log starts at the container's first line,
+  so the bytes the execution's log already holds, from an earlier call or
+  another server, are skipped.
+- When the follow ends, the pod is looked up again. A container still running
+  means the follow was cut, as a proxy cuts a quiet connection; the call
+  returns `the log of job run <run> ended while its container runs`, and the
+  runner opens another. A container that exited means the log was followed to
+  its end, and nothing more is read.
+
+**Once the run is over**, a log the follow did not see to the container's
+exit is read whole and the bytes already held are skipped:
 
 ```text
 GET /api/v1/namespaces/{ns}/pods/{pod}/log?container=user-container
 ```
 
-stdout and stderr arrive interleaved in one log. Lines keep their order within
-each stream, but not always across the two: a stderr line written just after a
-stdout line can come first. Dispatch calls it once the execution ends, before
-`Release`, and stores what it writes; see [Dispatch](../dispatch.md#output).
-
-| Case | `ReadLogs` |
+| Case | Once the run is over |
 |---|---|
-| Container ran | Writes the log, nil |
+| Container ran | Writes what the log lacks, nil |
 | Container never started, as when its image cannot be pulled | Writes nothing, nil |
-| Pod gone, so the log went with it | Infrastructure error; dispatch marks the output truncated |
+| Pod gone, so the log went with it | Infrastructure error; three of them leave the output marked truncated |
 | Body cut before its end | Infrastructure error after writing what arrived |
 | Pod lookup or log refused | Classified as for any call |
 
 The pod and its log stay readable after the container exits, for at least five
 minutes in testing, until the run is deleted.
 
-### Live output
-
-`StreamLogs`:
-
-- Polls the pod lookup every 2 seconds until `user-container` is running or
-  has exited. The log cannot be opened before; asking answers 400.
-- Opens `GET .../pods/{pod}/log?container=user-container&follow=true` and
-  copies bytes to the caller as they arrive, until the container exits.
-- **Resumes from an offset.** The followed log starts at the container's first
-  line, so an `offset` above zero is skipped from the stream rather than
-  refused. A follower that reconnects gets only what it does not have.
-- A container that never starts, such as one whose image cannot be pulled, is
-  waited on until the server ends the stream, 5 seconds after the execution
-  ends.
-- Once the stream is open, a read error ends it without an error. A refusal to
-  open it is classified as for any call, and the server logs it; the execution
-  is unaffected.
-
-`StreamLogs` is called for `GET /v1/execution/{id}/logs?follow=true`
-([API](../api.md#read-execution-logs)).
-
 ## Cleanup
 
 | Mechanism | When | Effect |
 |---|---|---|
-| `Release` | Last step of every execution, by its runner, after `Result`, `ReadLogs` and the settle; retried until it succeeds | Deletes the run and its pod |
+| `Release` | Last step of every execution, by its runner, after `Result`, the output capture and the settle; retried until it succeeds | Deletes the run and its pod |
 | `Cancel` | When the execution's dispatch is cancelled, or after a `Submit` that failed as `infrastructure` | Deletes the run, stopping it |
 
 **Cancel destroys the result.** Code Engine has no way to stop a run except
 deleting it, and deleting it removes its pod, with the exit code and output.
-`Result` after `Cancel` fails with `ErrUnknownExecution`, and `ReadLogs` with
-the pod gone. The `Status` call that follows a cancel also finds the run
-unknown, so a cancelled execution is charged for the time Vagabond saw it
-running, and nothing if it never reached `running`. The runner always reads
-`Result` and `ReadLogs` before `Release`; a run cancelled before it ended has
-no output to capture.
+`Result` after `Cancel` fails with `ErrUnknownExecution`, and a capture that
+still needs the whole log finds the pod gone. The `Status` call that follows a
+cancel also finds the run unknown, so a cancelled execution is charged for the
+time Vagabond saw it running, and nothing if it never reached `running`. The
+runner always reads `Result` and finishes the capture before `Release`. A run
+cancelled before it ended keeps what was captured while it ran, marked
+truncated when the follow had not reached the container's exit.
 
 A project holds 100 job runs before old ones must be removed, so leftover runs
 eventually stop new submissions. A run outlives its execution until its runner
@@ -504,8 +501,9 @@ within the task's retry budget and stops on `internal` ones; see
 | Kubeconfig names no namespace | internal | no | |
 | Task names no `image`, `timeout` does not parse or is over 24h, resources above the largest size | internal | no | Raised before any call |
 | Container exits non-zero | none | | An answer: state `failed`, `Result.ExitCode` set, not rerouted |
-| `ReadLogs` with the pod gone, or a log body cut short | infrastructure | yes | Dispatch stores what was read and marks it truncated; the execution is unaffected |
-| Followed log cannot be opened | as for any call | | The server logs it and ends the response |
+| The whole log with the pod gone, or a log body cut short | infrastructure | yes | The runner calls again; three failures after the run ended leave the output marked truncated; the execution is unaffected |
+| A follow cut while the container runs | infrastructure | yes | The runner logs it and calls again |
+| Followed log cannot be opened | as for any call | | The runner logs it and calls again |
 
 Error messages are lifted from whichever shape the answer takes: the v2 API's
 `errors` list, the v1 API's single `code` and `message`, or a Kubernetes
@@ -617,10 +615,10 @@ go test -run TestLive -v -timeout 10m ./internal/providers/ibm/
 | `VAGABOND_IBM_REGION` | yes, since a wrong one answers 403 | none |
 
 `TestLiveRoundTrip` runs `alpine:3.20` at 0.125 vCPU / 0.5G, writing one line
-to stdout and one to stderr, sleeping 10 seconds and exiting 3. It follows the
+to stdout and one to stderr, sleeping 30 seconds and exiting 3. It captures the
 output while the run is going, polls to completion for up to 6 minutes, and
-asserts state `failed`, exit code 3, and both lines in both the stream and
-the stored output, with the `$` in its args and env as written. It then releases the run, asserts the run is gone, and deletes it
+asserts state `failed`, exit code 3, and both lines captured, the first before
+the run ends, with the `$` in its args and env as written. It then releases the run, asserts the run is gone, and deletes it
 again in a cleanup that runs even when an assertion fails.
 
 `TestLiveMultiLine` runs a multi-line `sh -ec` script with a one-line argument

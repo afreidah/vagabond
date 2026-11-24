@@ -30,10 +30,11 @@ var (
 	_ Provider = (*FakeSyncProvider)(nil)
 )
 
-// The asynchronous fake offers its output live and whole, as Cloud Run does.
+// The asynchronous fake holds its output, as Cloud Run does, and the memory
+// log takes a capture.
 var (
-	_ LogStreamer = (*FakeContainerProvider)(nil)
-	_ LogReader   = (*FakeContainerProvider)(nil)
+	_ LogCapturer   = (*FakeContainerProvider)(nil)
+	_ execution.Log = (*MemoryLog)(nil)
 )
 
 // -------------------------------------------------------------------------
@@ -230,14 +231,38 @@ func TestProvider_ContainerResultIsFetched(t *testing.T) {
 		t.Errorf("exit code = %v, want 0", result.ExitCode)
 	}
 
-	var logs strings.Builder
+	ended := make(chan struct{})
+	close(ended)
 
-	if err := p.ReadLogs(t.Context(), id, &execution.PlacedWriter{Writer: &logs}); err != nil || logs.String() != fakeOutput {
-		t.Errorf("ReadLogs() = %q, %v; want the run's output", logs.String(), err)
+	// A second capture resumes where the first left off, so it adds nothing
+	logs := &MemoryLog{}
+
+	for range 2 {
+		if err := p.CaptureLogs(t.Context(), id, logs, ended); err != nil || logs.String() != fakeOutput {
+			t.Errorf("CaptureLogs() = %q, %v; want the run's output once", logs.String(), err)
+		}
 	}
 
-	if err := p.ReadLogs(t.Context(), testkit.NewID(t), &execution.PlacedWriter{Writer: &logs}); err == nil {
-		t.Error("ReadLogs() of an unknown run succeeded")
+	if err := p.CaptureLogs(t.Context(), testkit.NewID(t), &MemoryLog{}, ended); err == nil {
+		t.Error("CaptureLogs() of an unknown run succeeded")
+	}
+}
+
+// The memory log counts from where it was placed, and holds only what was
+// written after.
+func TestMemoryLog_StartsAt(t *testing.T) {
+	logs := &MemoryLog{}
+	_, _ = logs.Write([]byte("dropped"))
+
+	if err := logs.StartsAt(100); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _ = logs.Write([]byte("kept"))
+
+	var out strings.Builder
+	if _, err := logs.WriteTo(&out); err != nil || out.String() != "kept" || logs.Len() != 104 || logs.Start() != 100 {
+		t.Errorf("holds %q from %d, %d long, %v; want kept from 100, 104 long", out.String(), logs.Start(), logs.Len(), err)
 	}
 }
 

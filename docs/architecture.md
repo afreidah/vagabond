@@ -108,7 +108,7 @@ Every package under `internal/`. `cmd/vagabond` only calls `cli.Run`.
 | `registry` | Builds providers from configuration and holds their capability snapshots; resolves a provider's credential again after a 401 or 403 |
 | `rest` | The one JSON-over-HTTP request path, for the API client, Cloud Run, Cloud Build, Code Engine and IBM IAM: a refusal kept with its status and body for the caller to classify, told apart from no answer |
 | `scheduler` | Admission and ranking |
-| `server` | HTTP routes, live output streams, agent connections, dispatches in the background, upkeep timers, lifecycle |
+| `server` | HTTP routes, followed output read from the store, agent connections, dispatches in the background, upkeep timers, lifecycle |
 | `state` | Errors and records shared by every store |
 | `state/memory` | In-memory job, execution and disabled provider stores for `-dev` and tests |
 | `state/postgres` | Postgres and CockroachDB store: migrations, jobs, dispatches, executions, quota |
@@ -209,10 +209,10 @@ Optional interfaces, detected by type assertion:
 
 | Interface | Method | Used for | Implemented by |
 |---|---|---|---|
-| `plugin.LogStreamer` | `StreamLogs` | Output before the execution ends, for `GET /v1/execution/{id}/logs?follow=true` | `cloud-run`, `cloud-build`, `code-engine`, `containerd`, `firecracker`, `fake-container` |
+| `plugin.LogCapturer` | `CaptureLogs` | Copying the output into the store while the execution runs, which every client reads | `cloud-run`, `cloud-build`, `code-engine`, `containerd`, `firecracker`, `fake-container` |
 | `plugin.Releaser` | `Release` | Deleting what an execution left behind, last, however it ended | `cloud-run`, `code-engine`, `containerd`, `firecracker` |
 | `plugin.Live` | `LiveCapabilities` | Capabilities read on every plan instead of on the refresh timer | `containerd`, `firecracker` |
-| `plugin.Targeter` | `Target` | The provider for the executions on one node, which dispatch and log following use for a node candidate or a record naming a node | `containerd`, `firecracker` |
+| `plugin.Targeter` | `Target` | The provider for the executions on one node, which dispatch uses for a node candidate or a record naming a node | `containerd`, `firecracker` |
 | `plugin.Reserver` | `Reserve` | Holding room on a node before the execution is recorded; `ErrNoRoom` is a refusal that spends no attempt | `containerd`, `firecracker` |
 | `plugin.Recredentialer` | `Recredential` | Taking a credential resolved again from its source after the platform answered 401 or 403; the call is then made once more | `cloud-run`, `cloud-build`, `code-engine`, `lambda` |
 
@@ -239,8 +239,8 @@ One server process runs these concurrently:
 | Agent listener | Until shutdown | Accepts agent connections, one goroutine per session |
 | Dispatch | One per running dispatch | Runs the job's tasks to the end on a context that outlives the request that started it, then waits for every execution to be released |
 | Execution runner | One per execution not yet released | Submits, watches, collects, settles and releases one execution; the only writer of its record |
+| Output capture | One per running execution on a `LogCapturer` provider, with one storing what arrived every second | Copies the provider's output into the store from submission until the runner collects it |
 | Lease renewal | One per dispatch not yet done | Renews the dispatch lease every 20 seconds; the lease runs 60 seconds |
-| Log stream | One per open `?follow=true` request on a `LogStreamer` provider | Re-reads the execution record every second while the request copies the provider's stream; ends the response 5 s after the execution does, or at once when shutdown begins |
 | Upkeep | Seven loops until shutdown | Capability refresh (1 min), usage refresh (15 s), disabled provider read (5 s), reservation reaping (5 min), lapsed-lease claiming (30 s), output retention (1 h), periodic launches (at each launch, 1 min at most) |
 
 **Startup order:** load configuration, build the registry and refresh every
@@ -254,8 +254,9 @@ periodic launches at once, and serve HTTP.
 **Shutdown:** on SIGINT or SIGTERM the server stops accepting requests and gives
 in-flight ones 10 seconds to finish. Running dispatches are not cancelled; their
 leases lapse once the process exits, and the next server to claim them resumes
-each execution at the first step its record does not show done. Open
-`?follow=true` streams end at once. The agent listener closes and every agent
+each execution at the first step its record does not show done, its output
+capture from what the store holds. Open `?follow=true` responses end at once;
+the client asks the next server from the bytes it has. The agent listener closes and every agent
 session is closed; agents reconnect with backoff.
 
 Intervals, locks and failure handling for every loop are in

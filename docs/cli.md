@@ -357,23 +357,22 @@ to finish. The job is not registered. The server makes the same selection
 - The CLI polls the run every second. Progress lines (`==> ...`) go to
   stderr and each task's output to stdout, so redirecting stdout captures the
   build alone.
-- Output streams while the task runs, from the moment its execution leaves
-  `pending`, on providers that can stream: Cloud Run, Cloud Build, Code Engine
-  and pools. A stream that ends before the task does is reopened a second later
-  from the bytes already printed. Once the task has a result, the CLI waits for
-  the stream to finish, then prints whatever of the stored copy did not
-  stream, then the verdict line. On a provider that cannot stream, all of the
-  output is printed when the task finishes.
-- The stored copy is checked against what streamed. The CLI keeps a CRC-32 of
-  every byte it printed, reads the stored copy from its first byte, and
-  compares the sum of that many bytes. A live source can lose or reorder lines
-  the stored copy has, as Cloud Logging can. When the two differ, the CLI
-  warns `The output that streamed does not match the stored copy, which
-  follows in full.` and prints the whole stored copy. A stored copy missing its
-  front or its end is read from the bytes streamed, unchecked.
-- A stream the server cannot place at the offset asked for is refused with
-  `416`, as when a Cloud Logging backfill fails. The CLI stops streaming that
-  task and prints the rest from the stored copy when the task finishes.
+- Output is printed as the server stores it, from the moment the task's
+  execution leaves `pending`. The server copies it from the provider while the
+  task runs and stores what arrives at least once a second; the CLI follows
+  that copy, the same bytes every later read gets. A response that ends before
+  the task does is asked for again from the bytes already printed: at once
+  when the task has just ended, otherwise a second later. Once the task has a
+  result, the CLI waits for the last of the output, then prints the verdict
+  line. A provider that hands the output over with its answer, as Lambda
+  does, has all of it printed when the task finishes.
+- Every byte is printed once, in the order the server stored it. On Cloud Run
+  and Cloud Build, a line Cloud Logging delivers late is printed where it
+  arrived, after lines the task printed later; see
+  [Cloud Run](providers/cloud-run.md#output).
+- Output dropped past the server's ceiling before it was printed is warned of
+  where it is skipped: `<n> bytes of output were not kept: only the end of
+  long output is kept.`
 - A poll the server does not answer, from a refused or dropped connection, a
   name that does not resolve, or a `429`, `502`, `503` or `504`, is retried,
   waiting 1s doubling to 15s, up to 10 more tries: about two minutes, enough
@@ -411,9 +410,9 @@ to finish. The job is not registered. The server makes the same selection
 | `==> <task> succeeded on <provider> in <duration>` | The task exited 0 |
 | `==> <task> failed (exit <n>) on <provider> in <duration>` | The task exited non-zero |
 | `...: <reason>` | Appended to either when the platform ended the task and said why: `Evicted: Pod ephemeral local storage usage exceeds ...`, `OOMKilled` |
-| `<n> bytes of output were not kept: only the end of long output is kept.` | Output past the server's `max_log_mib`, or past the node's `-max-log-mib` on an agent node, was dropped from the front before it could stream; what follows starts after the gap |
-| `The provider gave only part of the output.` | The provider's output could not all be read, or arrived cut, as a function's tail does |
-| `Could not read the output of <id>: <error>` | The stored output could not be fetched after the task finished; the verdict line still follows |
+| `<n> bytes of output were not kept: only the end of long output is kept.` | Output past the server's `max_log_mib`, or past the node's `-max-log-mib` on an agent node, was dropped from the front before it was printed; what follows starts after the gap |
+| `The provider gave only part of the output.` | The provider's output could not all be captured, or arrived cut, as a function's tail does |
+| `Could not read the output of <id>: <error>` | The rest of the stored output could not be fetched after the task finished, three reads in a row; the verdict line still follows |
 | `Could not stop <id>: <error>` | After an interrupt, the cancel request failed; the interrupted line still follows |
 | `Lost contact with the server at <address>, retrying.` | A poll got no answer and is being retried |
 | `Dispatch <id> may still be running. Check it with vagabond dispatch status <id>.` | After `Error: ...`, once the server stayed unreachable past the retries |
@@ -734,18 +733,19 @@ Exit Code   = 0
 vagabond execution logs [options] <id>
 ```
 
-Prints the output stored for an execution, captured once it ends: up to the
-server's `max_log_mib` (16 MiB by default), the end of it, kept for
-`log_retention` (7 days by default). Nothing is printed for an execution with
-no stored output. The warnings are those of [`job run`](#job-run): output
-dropped past the ceiling, and output the provider did not give.
+Prints the output stored for an execution so far, which the server stores
+while the execution runs: up to the server's `max_log_mib` (16 MiB by
+default), the end of it, kept for `log_retention` (7 days by default) after
+the execution ends. Nothing is printed for an execution with no stored output.
+The warnings are those of [`job run`](#job-run): output dropped past the
+ceiling, and output the provider did not give.
 
-With `-f`, follows the output while the execution runs, the same way
-[`job run`](#job-run) does: streamed once the execution leaves `pending`, from
-the first line wherever the task has got to, reopened from the bytes already
-printed when a stream ends early, and finished from the stored copy once the
-execution ends, when the command exits. An execution that has already ended
-prints its stored output. An interrupt stops following and leaves the execution
+With `-f`, follows the output as it is stored, the same way
+[`job run`](#job-run) does: from the first line once the execution leaves
+`pending`, wherever the task has got to, asked for again from the bytes
+already printed when a response ends early, until the execution ends and the
+last of it is printed, when the command exits. An execution that has already
+ended prints its stored output. An interrupt stops following and leaves the execution
 running; [`DELETE /v1/execution/{id}`](api.md#cancel-an-execution) stops it. A
 server that stops answering is retried as `job run` retries it; past the
 retries the command exits 1 with

@@ -3,9 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// The copies are told apart by what a failed read means, so each is driven
-// through a read that fails partway and one that ends cleanly. The skip is
-// driven across write boundaries, where an off-by-one would show.
+// The copy is driven through a read that fails partway and one that ends
+// cleanly, since a failed read must not pass for the end of the output. The
+// skip is driven across write boundaries, where an off-by-one would show.
 // -------------------------------------------------------------------------------
 
 package plugin
@@ -109,34 +109,18 @@ func TestSkipWriter_CountsSkippedBytesOnAFailedWrite(t *testing.T) {
 // COPYING
 // -------------------------------------------------------------------------
 
-// Both copies pass everything through, read a byte at a time, and end cleanly
+// The copy passes everything through, read a byte at a time, and ends cleanly
 // at the end of the output.
-func TestCopy_CopiesToTheEnd(t *testing.T) {
-	copies := map[string]func(io.Writer, io.Reader) error{"live": CopyLive, "all": CopyAll}
-
-	for name, copyFn := range copies {
-		t.Run(name, func(t *testing.T) {
-			var out bytes.Buffer
-
-			err := copyFn(&out, iotest.OneByteReader(strings.NewReader("one\ntwo\n")))
-			if err != nil || out.String() != "one\ntwo\n" {
-				t.Errorf("copy = %q, %v, want everything and nil", out.String(), err)
-			}
-		})
-	}
-}
-
-// A live view ends quietly on a failed read, keeping what arrived.
-func TestCopyLive_EndsQuietlyOnAFailedRead(t *testing.T) {
+func TestCopyAll_CopiesToTheEnd(t *testing.T) {
 	var out bytes.Buffer
 
-	if err := CopyLive(&out, cutReader("partial\n")); err != nil || out.String() != "partial\n" {
-		t.Errorf("CopyLive() = %q, %v, want the partial output and nil", out.String(), err)
+	err := CopyAll(&out, iotest.OneByteReader(strings.NewReader("one\ntwo\n")))
+	if err != nil || out.String() != "one\ntwo\n" {
+		t.Errorf("CopyAll() = %q, %v, want everything and nil", out.String(), err)
 	}
 }
 
-// A read of the whole output reports a failed read as the platform's, after
-// writing what arrived.
+// A failed read is the platform's, reported after writing what arrived.
 func TestCopyAll_ReportsAFailedRead(t *testing.T) {
 	var out bytes.Buffer
 
@@ -151,17 +135,11 @@ func TestCopyAll_ReportsAFailedRead(t *testing.T) {
 	}
 }
 
-// Both copies return a failed write as Internal, whatever the read would do.
-func TestCopy_ReturnsAFailedWrite(t *testing.T) {
-	copies := map[string]func(io.Writer, io.Reader) error{"live": CopyLive, "all": CopyAll}
+// A failed write is returned as Internal, whatever the read would do.
+func TestCopyAll_ReturnsAFailedWrite(t *testing.T) {
+	err := CopyAll(failingWriter{}, strings.NewReader("line\n"))
 
-	for name, copyFn := range copies {
-		t.Run(name, func(t *testing.T) {
-			err := copyFn(failingWriter{}, strings.NewReader("line\n"))
-
-			if classOf(err) != ClassInternal || !errors.Is(err, errSink) {
-				t.Errorf("copy = %v, want an Internal error wrapping %v", err, errSink)
-			}
-		})
+	if classOf(err) != ClassInternal || !errors.Is(err, errSink) {
+		t.Errorf("CopyAll() = %v, want an Internal error wrapping %v", err, errSink)
 	}
 }

@@ -61,9 +61,10 @@ does not use or require Nomad.
 - Namespaces, declared in configuration.
 - Execution history: every dispatch and attempt, with its whole output up to a
   16 MiB ceiling that keeps the end, for 7 days by default.
-- Live output: `job run`, `job dispatch` and `execution logs -f` stream output
-  from Cloud Run, Code Engine and agent nodes while the task runs, from the
-  first line however late they attach, then finish from the stored copy.
+- Live output: the server copies each task's output into its store while the
+  task runs, from Cloud Run, Cloud Build, Code Engine and agent nodes, and
+  `job run`, `job dispatch` and `execution logs -f` print it as it is stored,
+  from the first line however late they attach, every byte once.
 - Server: HTTP API over the same operations, optionally over TLS with client
   certificates. Dispatches are leased; a server resumes ones a dead process
   left running.
@@ -149,7 +150,7 @@ See [quickstart.md](docs/quickstart.md). `make install` puts the binary on your
 | `agent` | Run the agent on a node that executes workloads ([agent.md](docs/agent.md)) |
 | `execution list` | A namespace's recent executions, narrowed by job, state and provider |
 | `execution status <id>` | One execution's record and result |
-| `execution logs <id>` | One execution's stored output, or with `-f` its live output |
+| `execution logs <id>` | One execution's stored output, or with `-f` followed as it is stored |
 | `dispatch status <id>` | One run and every execution it created |
 | `server [-dev]` | Serve the [HTTP API](docs/api.md) and accept agents |
 

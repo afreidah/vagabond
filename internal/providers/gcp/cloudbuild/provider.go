@@ -16,7 +16,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"net/http"
 	"net/url"
@@ -65,8 +64,7 @@ var platform = plugin.Cloud{
 // Compile-time proof the contract is met.
 var (
 	_ plugin.Provider       = (*Provider)(nil)
-	_ plugin.LogStreamer    = (*Provider)(nil)
-	_ plugin.LogReader      = (*Provider)(nil)
+	_ plugin.LogCapturer    = (*Provider)(nil)
 	_ plugin.Recredentialer = (*Provider)(nil)
 )
 
@@ -256,7 +254,7 @@ func (p *Provider) Status(ctx context.Context, id execution.ID) (execution.Statu
 
 // Result returns the step's exit code and how long the build ran, which is
 // what the free minutes count. A build Google ended itself is infrastructure.
-// The output is read apart, by ReadLogs.
+// The output is read apart, by CaptureLogs.
 func (p *Provider) Result(ctx context.Context, id execution.ID) (*execution.Result, error) {
 	b, err := p.build(ctx, id)
 	if err != nil {
@@ -288,25 +286,15 @@ func (p *Provider) Result(ctx context.Context, id execution.ID) (*execution.Resu
 // OUTPUT
 // -------------------------------------------------------------------------
 
-// ReadLogs writes what a finished build's step printed.
-func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w execution.LogWriter) error {
+// CaptureLogs copies what a build's step prints into log as it is logged. A
+// cancelled build keeps its output, so nothing this reads is destroyed.
+func (p *Provider) CaptureLogs(ctx context.Context, id execution.ID, log execution.Log, ended <-chan struct{}) error {
 	filter, err := p.buildLogs(ctx, id)
 	if err != nil {
 		return err
 	}
 
-	return p.ReadEntries(ctx, filter, w)
-}
-
-// StreamLogs writes a running build's output to w from byte offset on, as it
-// is logged.
-func (p *Provider) StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error {
-	filter, err := p.buildLogs(ctx, id)
-	if err != nil {
-		return err
-	}
-
-	return p.StreamEntries(ctx, filter, offset, w)
+	return p.CaptureEntries(ctx, filter, log, ended)
 }
 
 // buildLogs is the filter picking out the output of an execution's build.

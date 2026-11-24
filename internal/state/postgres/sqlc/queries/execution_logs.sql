@@ -1,8 +1,8 @@
 -- -----------------------------------------------------------------------------
 -- Execution output, in chunks numbered from the start of it.
 --
--- A chunk is written once and read many times; it changes only when a capture
--- starts over or the front is dropped past the ceiling.
+-- Written while the execution runs: the last chunk again each time output
+-- arrives, every other once, and the front dropped past the ceiling.
 -- -----------------------------------------------------------------------------
 
 -- name: DropExecutionLogs :exec

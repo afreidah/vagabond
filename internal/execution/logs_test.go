@@ -10,7 +10,11 @@
 
 package execution
 
-import "testing"
+import (
+	"slices"
+	"strings"
+	"testing"
+)
 
 // What is kept never exceeds the limit, and is cut only at chunk boundaries.
 func TestKeepFrom(t *testing.T) {
@@ -42,29 +46,59 @@ func TestKeepFrom(t *testing.T) {
 	}
 }
 
-// A read begins in the chunk holding its offset, or at the first byte kept
-// when its offset was dropped.
-func TestPlaceLogs(t *testing.T) {
+// A read skips what of its first chunk precedes its offset, and is placed
+// past output dropped before the chunk it reaches.
+func TestPlace(t *testing.T) {
+	type chunk struct {
+		seq  int64
+		data string
+	}
+
 	tests := []struct {
-		name          string
-		start, offset int64
-		seq, skip     int64
+		name   string
+		offset int64
+		chunks []chunk
+		want   string
+		starts []int64
 	}{
-		{name: "from the start", start: 0, offset: 0, seq: 0, skip: 0},
-		{name: "inside the first chunk", start: 0, offset: 10, seq: 0, skip: 10},
-		{name: "at a boundary", start: 0, offset: LogChunk, seq: 1, skip: 0},
-		{name: "past a boundary", start: 0, offset: LogChunk + 3, seq: 1, skip: 3},
-		{name: "in dropped output", start: 2 * LogChunk, offset: 5, seq: 2, skip: 0},
-		{name: "past the dropped output", start: 2 * LogChunk, offset: 2*LogChunk + 7, seq: 2, skip: 7},
+		{name: "from the start", offset: 0, chunks: []chunk{{0, "abc"}}, want: "abc"},
+		{name: "inside a chunk", offset: 1, chunks: []chunk{{0, "abc"}}, want: "bc"},
+		{name: "at the end of a chunk", offset: 3, chunks: []chunk{{0, "abc"}}, want: ""},
+		{name: "in the next chunk", offset: LogChunk + 1, chunks: []chunk{{1, "xyz"}}, want: "yz"},
+		{name: "in dropped output", offset: 5, chunks: []chunk{{2, "kept"}}, want: "kept", starts: []int64{2 * LogChunk}},
+		{
+			name: "past a gap", offset: 0, chunks: []chunk{{0, "a"}, {3, "d"}},
+			want: "ad", starts: []int64{3 * LogChunk},
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			seq, skip := PlaceLogs(tc.start, tc.offset)
-			if seq != tc.seq || skip != tc.skip {
-				t.Errorf("PlaceLogs(%d, %d) = %d, %d; want %d, %d",
-					tc.start, tc.offset, seq, skip, tc.seq, tc.skip)
+			out := &placed{}
+			each := Place(tc.offset, out)
+
+			for _, c := range tc.chunks {
+				if err := each(c.seq, []byte(c.data)); err != nil {
+					t.Fatalf("chunk %d: %v", c.seq, err)
+				}
+			}
+
+			if out.String() != tc.want || !slices.Equal(out.starts, tc.starts) {
+				t.Errorf("wrote %q placed at %v, want %q placed at %v", out.String(), out.starts, tc.want, tc.starts)
 			}
 		})
 	}
+}
+
+// placed is a LogWriter recording what it was written and where it was placed.
+type placed struct {
+	strings.Builder
+	starts []int64
+}
+
+// StartsAt records offset.
+func (p *placed) StartsAt(offset int64) error {
+	p.starts = append(p.starts, offset)
+
+	return nil
 }

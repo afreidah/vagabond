@@ -5,7 +5,7 @@ description: "Interactive diagram of every loop and long-running goroutine the s
 weight: 9
 ---
 
-Every loop the server and the agent run, with its interval and what it touches. The server runs seven upkeep loops plus one goroutine per dispatch, lease, execution, agent session and followed log; the agent holds one connection to the server and reports its workloads on a timer. **Hover over any component** for implementation details.
+Every loop the server and the agent run, with its interval and what it touches. The server runs seven upkeep loops plus one goroutine per dispatch, lease, execution, output capture, agent session and followed log; the agent holds one connection to the server and reports its workloads on a timer. **Hover over any component** for implementation details.
 
 {{< diagram >}}
 
@@ -23,7 +23,8 @@ window.vagabondDiagram = {
     '    LAUNCH[Periodic<br>launches]:::background',
     '    API([HTTP<br>requests]):::entry',
     '    HEALTH[Store<br>health]:::filter',
-    '    FOLLOW[Live output<br>follow]:::process',
+    '    FOLLOW[Output<br>follow]:::process',
+    '    CAPTURE[Output<br>capture]:::process',
     '    DISPATCH[Dispatch<br>run]:::process',
     '    LEASE[Lease<br>renewal 20s]:::process',
     '    RUNNER[Execution<br>runner]:::process',
@@ -76,10 +77,12 @@ window.vagabondDiagram = {
     '    DISPATCH --> STORE',
     '    RUNNER --> STORE',
     '    RUNNER --> PROVIDERS',
+    '    RUNNER --> CAPTURE',
+    '    CAPTURE --> PROVIDERS',
+    '    CAPTURE --> STORE',
     '    LEASE --> STORE',
     '    HEALTH --> STORE',
     '    FOLLOW --> STORE',
-    '    FOLLOW --> PROVIDERS',
     '    LISTENER --> NODES',
     '    POOLRES --> NODES',
     '',
@@ -170,9 +173,14 @@ window.vagabondDiagram = {
       body: '<p>Not a loop. <code>GET /v1/health</code> pings the store on each request with a 5s timeout: 200 with <code>Store</code> <code>ok</code>, or 503 with <code>Store</code> <code>unreachable</code> and <code>StoreError</code>. It also reports <code>UsageRefreshed</code> and how many dispatches this server is running.</p><p>The server recovers from an outage on its own: execution runners retry each write until the store takes it, a dispatch whose lease lapsed meanwhile is claimed and its runners restored while the old owner&rsquo;s writes are refused, the loops retry on their next tick, and the reaper drops reservations whose execution was never recorded.</p><p><a href="../../docs/dispatch/#store-outage">Store outage &rarr;</a></p>'
     },
     FOLLOW: {
-      title: 'Live output follow',
+      title: 'Output follow',
       badge: 'process', badgeText: 'per request',
-      body: '<p><code>Server.follow</code>, one per open <code>?follow=true</code> request on an execution that has not ended, whose provider is a <code>LogStreamer</code> (<code>cloud-run</code>, <code>code-engine</code>, <code>containerd</code>). Copies <code>StreamLogs</code> output to the client, flushing every write.</p><p>A second goroutine re-reads the execution record every 1s; once it has ended, the stream ends 5s later, since some providers&rsquo; logs trail the work. A record that cannot be read is retried. It ends at once when the client goes or shutdown begins.</p><p class="dg-metric">Logs: warn <code>log stream ended early</code> when the provider stream breaks</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
+      body: '<p><code>Server.sendLogs</code>, one per open <code>?follow=true</code> request, on whichever server it reaches. Sends the execution&rsquo;s stored output from <code>offset</code>, then reads the record and the store again every 1s and sends what was stored since, flushing every write. It never reaches the provider.</p><p>It ends after a read made once the record was terminal, which the runner writes only after the last of the output; at once when the client goes or shutdown begins. A record that cannot be read is tried again.</p><p class="dg-metric">Logs: warn <code>reading stored output ended early</code> when a read fails after the body began</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
+    },
+    CAPTURE: {
+      title: 'Output capture',
+      badge: 'process', badgeText: 'per execution',
+      body: '<p><code>capture.run</code>, one per running execution whose provider holds its output (<code>cloud-run</code>, <code>cloud-build</code>, <code>code-engine</code>, <code>containerd</code>, <code>firecracker</code>), started by its runner once the provider has the work and ended by <code>collect</code>. Calls <code>CaptureLogs</code> until the output is whole, and a second goroutine stores what has arrived every 1s, so the store is never more than a second behind.</p><p>A call that returns early is made again after 1s doubling to 30s; once the execution has ended, three failed calls or 5 minutes end it with what it has, marked truncated. A capture a claimed dispatch restores begins from what the store holds. A write the lease refused stops it.</p><p class="dg-metric">Logs: warn <code>capturing output</code> with <code>execution</code> and <code>error</code> per call that returned early; warn <code>reading stored output back</code>; warn <code>output left incomplete</code></p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
     },
     AGENT: {
       title: 'vagabond agent',
@@ -202,7 +210,7 @@ window.vagabondDiagram = {
     PROVIDERS: {
       title: 'Providers',
       badge: 'data', badgeText: 'external',
-      body: '<p>The configured plugins and the platforms behind them: <code>cloud-run</code>, <code>code-engine</code>, <code>lambda</code> and <code>containerd</code>. The capability refresh calls <code>Capabilities</code> (<code>containerd</code> providers excepted); execution runners call <code>Submit</code>, <code>Status</code>, <code>Cancel</code>, <code>Result</code>, <code>ReadLogs</code> and <code>Release</code>; live output calls <code>StreamLogs</code>. The reaper calls none.</p><p>A call made through dispatch that the platform rejects as unauthorized has the provider&rsquo;s credential resolved again from its source, at most once a minute, and is made once more.</p>'
+      body: '<p>The configured plugins and the platforms behind them: <code>cloud-run</code>, <code>cloud-build</code>, <code>code-engine</code>, <code>lambda</code>, <code>containerd</code> and <code>firecracker</code>. The capability refresh calls <code>Capabilities</code> (<code>containerd</code> and <code>firecracker</code> providers excepted); execution runners call <code>Submit</code>, <code>Status</code>, <code>Cancel</code>, <code>Result</code> and <code>Release</code>, and their output captures <code>CaptureLogs</code>. The reaper and the output follow call none.</p><p>A call made through dispatch that the platform rejects as unauthorized has the provider&rsquo;s credential resolved again from its source, at most once a minute, and is made once more.</p>'
     },
     REGSNAP: {
       title: 'Capability snapshots',
@@ -259,7 +267,8 @@ window.vagabondDiagram = {
 | Execution runner | Server | Per execution, `Status` every 2s to 15s | | `runner.run` |
 | Lease renewal | Server | 20s per dispatch, until it is done | | `Dispatcher.hold` |
 | Agent listener | Server | Long-running | Yes | `Server.ServeAgents`, `Conns.Serve` |
-| Live output follow | Server | Per request, record re-read every 1s | | `Server.follow` |
+| Output capture | Server | Per running execution, storing every 1s | For a claimed dispatch's running executions | `capture.run` |
+| Output follow | Server | Per request, record and output read every 1s | | `Server.sendLogs` |
 | Server connection | Agent | Backoff 1s to 30s | Yes | `Agent.Run` |
 | Workload report | Agent | 10s, and on every change | On connecting | `Agent.connect` |
 | Timeout watcher | Agent | Per container | For every held container | `Containerd.watch` |

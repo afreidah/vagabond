@@ -18,13 +18,13 @@
 package cloudrun
 
 import (
-	"bytes"
 	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/afreidah/vagabond/internal/job"
+	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/plugin/plugintest"
 	"github.com/afreidah/vagabond/internal/providers/gcp/gcptest"
 	"github.com/afreidah/vagabond/internal/testkit"
@@ -52,22 +52,22 @@ func liveProvider(t *testing.T) *Provider {
 // ROUND TRIP
 // -------------------------------------------------------------------------
 
-// A failing container comes back with its exit code and both streams, read
-// whole and followed while it runs.
+// A failing container comes back with its exit code and both streams,
+// captured while it runs.
 func TestLiveRoundTrip(t *testing.T) {
 	gcptest.Live.RoundTrip(t, liveProvider(t), job.Resources{CPU: new(1000), Memory: new(512)})
 }
 
 // -------------------------------------------------------------------------
-// LATE FOLLOW
+// LATE CAPTURE
 // -------------------------------------------------------------------------
 
-// Output past 64 KiB comes back whole, and a follow that attaches after the
-// container has printed most of it starts at the first line, as does one
-// reopened at an offset. The container prints, then waits, so the follow
-// attaches late; 12,000 lines keep each read to 12 of the 60 list calls a
-// minute allows.
-func TestLiveLateFollow(t *testing.T) {
+// Output past 64 KiB comes back whole and once, from a capture begun after the
+// container printed most of it, as a server taking one over begins. One begun
+// on a log holding the first lines adds only the rest. The container prints,
+// then waits, so the capture begins late; 12,000 lines keep each catch-up to
+// 12 of the 60 list calls a minute allows.
+func TestLiveLateCapture(t *testing.T) {
 	p := liveProvider(t)
 	id := testkit.NewID(t)
 
@@ -97,47 +97,31 @@ args    = ["-c", "seq 1 12000; sleep 45; echo the-end"]
 
 	gcptest.Live.AwaitRunning(t, p, id)
 
-	// The first output is logged before the follow opens
+	// The first output is logged before the capture begins
 	time.Sleep(20 * time.Second)
 
-	var streamed bytes.Buffer
-
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-
-	go func() { done <- p.StreamLogs(ctx, id, 0, &streamed) }()
+	logs, end, wait := gcptest.Live.Capture(t, p, id)
 
 	gcptest.Live.Finish(t, p, id)
+	end()
+	wait()
 
-	// A tail trails the container by seconds, and never ends by itself
-	time.Sleep(15 * time.Second)
-	cancel()
+	whole := logs.String()
 
-	if err := <-done; err != nil {
-		t.Errorf("StreamLogs failed: %v", err)
+	if !strings.HasPrefix(whole, "1\n2\n") || !strings.HasSuffix(whole, "12000\nthe-end\n") ||
+		strings.Count(whole, "\n") != 12001 {
+		t.Errorf("the late capture gave %d bytes in %d lines, want 12,001 lines from the first",
+			len(whole), strings.Count(whole, "\n"))
 	}
 
-	whole := plugintest.ReadAll(t, p, id)
+	// Begun on a log holding the first lines, it adds the rest
+	ended := make(chan struct{})
+	close(ended)
 
-	if !strings.HasPrefix(whole, "1\n2\n") || !strings.HasSuffix(whole, "12000\nthe-end\n") || len(whole) <= 64<<10 {
-		t.Errorf("ReadLogs gave %d bytes, want all of the output", len(whole))
-	}
+	resumed := &plugin.MemoryLog{}
+	_, _ = resumed.Write([]byte("1\n2\n3\n"))
 
-	if streamed.String() != whole {
-		t.Errorf("the late follow streamed %d bytes, want the %d stored, from the first line", streamed.Len(), len(whole))
-	}
-
-	// Reopened at an offset, it picks up exactly there
-	var rest bytes.Buffer
-
-	resumed, stop := context.WithTimeout(t.Context(), 30*time.Second)
-	defer stop()
-
-	if err := p.StreamLogs(resumed, id, 2, &rest); err != nil {
-		t.Errorf("StreamLogs from an offset failed: %v", err)
-	}
-
-	if rest.String() != whole[2:] {
-		t.Errorf("StreamLogs from offset 2 gave %d bytes, want the %d after it", rest.Len(), len(whole)-2)
+	if err := p.CaptureLogs(t.Context(), id, resumed, ended); err != nil || resumed.String() != whole {
+		t.Errorf("a resumed capture gave %d bytes, %v; want the %d of the whole", len(resumed.String()), err, len(whole))
 	}
 }

@@ -231,21 +231,31 @@ func (c *Client) Execution(ctx context.Context, id string) (*Execution, error) {
 	return call[Execution](ctx, c, http.MethodGet, executionPath(id), nil, nil)
 }
 
-// Logs copies an execution's stored output from byte offset on to w.
-func (c *Client) Logs(ctx context.Context, id string, offset int64, w io.Writer) error {
+// LogWriter is where output read from the server goes. StartsAt is told where
+// the output written next begins when that is past the offset asked for, the
+// output between dropped past the server's ceiling.
+type LogWriter interface {
+	io.Writer
+	StartsAt(offset int64) error
+}
+
+// Logs copies an execution's output stored so far from byte offset on to w.
+func (c *Client) Logs(ctx context.Context, id string, offset int64, w LogWriter) error {
 	return c.copyLogs(ctx, id, offset, false, w)
 }
 
-// FollowLogs copies a running execution's output from byte offset on to w as
-// it is written, until the server ends the stream. An error means the stream
-// broke rather than ended.
-func (c *Client) FollowLogs(ctx context.Context, id string, offset int64, w io.Writer) error {
+// FollowLogs copies an execution's output from byte offset on to w as it is
+// stored, until the server ends the response: once the output is complete, or
+// earlier when the server shuts down. An error means the response broke rather
+// than ended.
+func (c *Client) FollowLogs(ctx context.Context, id string, offset int64, w LogWriter) error {
 	return c.copyLogs(ctx, id, offset, true, w)
 }
 
-// copyLogs copies an execution's output from byte offset on to w, followed
-// live when follow is set.
-func (c *Client) copyLogs(ctx context.Context, id string, offset int64, follow bool, w io.Writer) error {
+// copyLogs copies an execution's output from byte offset on to w, placed
+// through w.StartsAt where the server says it begins later, and followed when
+// follow is set.
+func (c *Client) copyLogs(ctx context.Context, id string, offset int64, follow bool, w LogWriter) error {
 	query := url.Values{}
 
 	if offset > 0 {
@@ -264,6 +274,13 @@ func (c *Client) copyLogs(ctx context.Context, id string, offset int64, follow b
 	}
 
 	defer func() { _ = resp.Body.Close() }()
+
+	// A server that does not say begins the body where it was asked
+	if start, err := strconv.ParseInt(resp.Header.Get(LogsStartHeader), 10, 64); err == nil && start > offset {
+		if err := w.StartsAt(start); err != nil {
+			return err
+		}
+	}
 
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		return fmt.Errorf("reading the output of %s: %w", id, err)

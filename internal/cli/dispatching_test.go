@@ -4,7 +4,7 @@
 // Author: Alex Freidah
 //
 // The parts of following a run that a real server cannot be made to produce on
-// demand: a stream that cannot resume or that lost lines, a stored copy
+// demand: a response that ends or breaks before the output is whole, output
 // missing its front, cut by the provider or unreadable, an execution that ends
 // with no result, a platform's reason for ending one, and a server that stops
 // answering mid-run. A stub answers the routes.
@@ -34,21 +34,66 @@ import (
 // HARNESS
 // -------------------------------------------------------------------------
 
+// logsAnswer is what a stub's logs route sends: a status, where the body
+// begins in the output, and the body.
+type logsAnswer struct {
+	status int
+	start  int64
+	body   string
+}
+
 // stubLogs is a client for a server whose logs route answers with answer,
-// given the offset asked for.
-func stubLogs(t *testing.T, answer func(offset string) (int, string)) *api.Client {
+// given the offset asked for, 0 when none was.
+func stubLogs(t *testing.T, answer func(offset int64) logsAnswer) *api.Client {
 	t.Helper()
 
 	return stubServer(t, func(w http.ResponseWriter, r *http.Request) {
-		status, body := answer(r.URL.Query().Get("offset"))
+		offset, _ := strconv.ParseInt(cmp.Or(r.URL.Query().Get("offset"), "0"), 10, 64)
+		a := answer(offset)
 
-		if status != http.StatusOK {
+		if a.status != http.StatusOK {
 			w.Header().Set("Content-Type", "application/json")
 		}
 
-		w.WriteHeader(status)
-		_, _ = io.WriteString(w, body)
+		w.Header().Set(api.LogsStartHeader, strconv.FormatInt(max(a.start, offset), 10))
+		w.WriteHeader(a.status)
+		_, _ = io.WriteString(w, a.body)
 	})
+}
+
+// stored answers from the output a server kept, from byte start on, placed
+// where each read asks as the server places it.
+func stored(start int64, kept string) func(offset int64) logsAnswer {
+	return func(offset int64) logsAnswer {
+		from := max(offset, start)
+
+		return logsAnswer{status: http.StatusOK, start: from, body: kept[min(from-start, int64(len(kept))):]}
+	}
+}
+
+// awaitPrinted waits for out to print something, failing the test past five
+// seconds.
+func awaitPrinted(t *testing.T, out *output) {
+	t.Helper()
+
+	for deadline := time.Now().Add(5 * time.Second); out.position() == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("nothing was printed")
+		}
+
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// quickReconnects shortens a follow's wait between responses until the test
+// ends.
+func quickReconnects(t *testing.T) {
+	t.Helper()
+
+	saved := reconnectDelay
+	reconnectDelay = time.Millisecond
+
+	t.Cleanup(func() { reconnectDelay = saved })
 }
 
 // stubServer is a client for a server answering every request with handler,
@@ -99,71 +144,29 @@ func failFirst(n int32, status int, body string) http.HandlerFunc {
 // LIVE OUTPUT
 // -------------------------------------------------------------------------
 
-// A follow stops reopening the stream at the server's 416, keeping what it
-// printed and leaving the rest to the stored copy.
-func TestFollower_StopsWhenTheStreamCannotResume(t *testing.T) {
-	client := stubLogs(t, func(offset string) (int, string) {
-		if offset == "" {
-			return http.StatusOK, "first\n"
-		}
-
-		return http.StatusRequestedRangeNotSatisfiable, `{"Error":"this provider's log stream cannot resume from an offset"}`
-	})
-
-	var stdout bytes.Buffer
-
-	l := (&Meta{Stdout: &stdout}).newFollower(client, false).start(t.Context(), "exec-1")
-
-	select {
-	case <-l.done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the follow kept reopening a stream that cannot resume")
-	}
-
-	if stdout.String() != "first\n" {
-		t.Errorf("stdout %q, want the first stream's output", stdout.String())
-	}
-}
-
-// The stored copy finishes what did not stream, after checking what streamed
-// against it, and says when output is not there to print or did not match.
-func TestFollower_Rest(t *testing.T) {
+// A response that ends while the execution runs is asked for again from where
+// the output got to, at once once the execution ends, and a follow ends with a
+// response asked for after that, printing every byte once. Output dropped
+// between two responses is warned of where it was skipped.
+func TestFollower_AsksAgainFromWhereItGotTo(t *testing.T) {
 	tests := []struct {
-		name      string
-		streamed  string // what a follow already printed, empty for none
-		start     int64  // the first byte the server kept
-		truncated bool
-		status    int
-		stored    string // what the server kept, from start on
-		wantOut   string
-		wantWarn  string
+		name     string
+		second   logsAnswer // the answer from offset 6 on
+		wantOut  string
+		wantWarn string
 	}{
-		{"nothing streamed", "", 0, false, http.StatusOK, "all\n", "all\n", ""},
-		{"output ends mid-line", "", 0, false, http.StatusOK, "partial", "partial\n", ""},
-		{"the rest after a stream", "first\n", 0, false, http.StatusOK, "first\nrest\n", "first\nrest\n", ""},
-		{"everything streamed", "all\n", 0, false, http.StatusOK, "all\n", "all\n", ""},
-		{"a stream that lost a line", "one\nthree\n", 0, false, http.StatusOK, "one\ntwo\nthree\nfour\n", "one\nthree\none\ntwo\nthree\nfour\n", "does not match the stored copy"},
-		{"a stream past the stored copy", "one\none\n", 0, false, http.StatusOK, "one\n", "one\none\none\n", "does not match the stored copy"},
-		{"front dropped, nothing streamed", "", 100, false, http.StatusOK, "tail\n", "tail\n", "100 bytes of output were not kept"},
-		{"front dropped past the stream", "first\n", 100, false, http.StatusOK, "tail\n", "first\ntail\n", "94 bytes of output were not kept"},
-		{"front dropped, all streamed", "first\n", 4, false, http.StatusOK, "t\n", "first\n", ""},
-		{"provider gave part", "", 0, true, http.StatusOK, "part\n", "part\n", "The provider gave only part of the output."},
-		{"provider gave less than streamed", "one\ntwo\n", 0, true, http.StatusOK, "one\n", "one\ntwo\n", "The provider gave only part of the output."},
-		{"stored copy unreadable", "", 0, false, http.StatusInternalServerError, `{"Error":"boom"}`, "", "Could not read the output"},
-		{"stored copy unreadable after a stream", "one\n", 0, false, http.StatusInternalServerError, `{"Error":"boom"}`, "one\n", "Could not read the output"},
+		{"the rest", logsAnswer{http.StatusOK, 6, "second\n"}, "first\nsecond\n", ""},
+		{"past a dropped front", logsAnswer{http.StatusOK, 100, "tail\n"}, "first\ntail\n", "94 bytes of output were not kept"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// Served from the offset asked for, as the server places it in what it kept
-			client := stubLogs(t, func(offset string) (int, string) {
-				if tc.status != http.StatusOK {
-					return tc.status, tc.stored
+			client := stubLogs(t, func(offset int64) logsAnswer {
+				if offset == 0 {
+					return logsAnswer{http.StatusOK, 0, "first\n"}
 				}
 
-				from, _ := strconv.ParseInt(cmp.Or(offset, "0"), 10, 64)
-
-				return http.StatusOK, tc.stored[min(max(from, tc.start)-tc.start, int64(len(tc.stored))):]
+				return tc.second
 			})
 
 			var stdout bytes.Buffer
@@ -171,16 +174,51 @@ func TestFollower_Rest(t *testing.T) {
 			ui := cli.NewMockUi()
 			f := (&Meta{Ui: ui, Stdout: &stdout}).newFollower(client, false)
 
-			if tc.streamed != "" {
-				done := make(chan struct{})
-				close(done)
+			f.watch(t.Context(), &api.Execution{ID: "exec-1", State: "running"})
+			awaitPrinted(t, f.live["exec-1"].out)
 
-				l := &live{out: &output{mu: &f.stdout, w: &stdout}, end: func() {}, done: done}
-				_, _ = l.out.Write([]byte(tc.streamed))
-				f.live["exec-1"] = l
+			f.rest(t.Context(), &api.Execution{ID: "exec-1"})
+
+			warned := ui.ErrorWriter.String()
+
+			if stdout.String() != tc.wantOut || (tc.wantWarn == "") != (warned == "") || !strings.Contains(warned, tc.wantWarn) {
+				t.Errorf("stdout %q, warned %q; want %q and %q", stdout.String(), warned, tc.wantOut, tc.wantWarn)
 			}
+		})
+	}
+}
 
-			f.rest(t.Context(), &api.Execution{ID: "exec-1", LogsStart: tc.start, LogsTruncated: tc.truncated})
+// An ended execution's output is followed from the start when it was not
+// followed while it ran, ended on a line of its own, and what is not there to
+// print is warned of.
+func TestFollower_Rest(t *testing.T) {
+	quickReconnects(t)
+
+	tests := []struct {
+		name      string
+		answer    func(offset int64) logsAnswer
+		truncated bool
+		wantOut   string
+		wantWarn  string
+	}{
+		{"whole", stored(0, "all\n"), false, "all\n", ""},
+		{"output ends mid-line", stored(0, "partial"), false, "partial\n", ""},
+		{"front dropped", stored(100, "tail\n"), false, "tail\n", "100 bytes of output were not kept"},
+		{"provider gave part", stored(0, "part\n"), true, "part\n", "The provider gave only part of the output."},
+		{
+			"unreadable", func(int64) logsAnswer { return logsAnswer{http.StatusInternalServerError, 0, `{"Error":"boom"}`} },
+			false, "", "Could not read the output",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+
+			ui := cli.NewMockUi()
+			f := (&Meta{Ui: ui, Stdout: &stdout}).newFollower(stubLogs(t, tc.answer), false)
+
+			f.rest(t.Context(), &api.Execution{ID: "exec-1", Ended: new(time.Now()), LogsTruncated: tc.truncated})
 
 			warned := ui.ErrorWriter.String()
 

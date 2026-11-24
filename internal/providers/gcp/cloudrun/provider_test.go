@@ -13,7 +13,6 @@ package cloudrun
 
 import (
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -333,18 +332,21 @@ func TestResultReadsTheExitCode(t *testing.T) {
 // OUTPUT
 // -------------------------------------------------------------------------
 
-// The output is read through a filter naming the job, or one execution's
-// output is stored as another's, and followed from the same entries.
+// The output is captured through a filter naming the job, or one execution's
+// output is stored as another's, both tailed and listed.
 func TestLogsFilterToTheJob(t *testing.T) {
 	t.Parallel()
 
 	g, p := newFake(t)
-	g.Respond("POST /v2/entries:list", map[string]any{})
+	g.Respond("POST /v2/entries:list", map[string]any{"entries": []any{map[string]any{"textPayload": "hello"}}})
 
 	id := testkit.NewID(t)
+	ended := make(chan struct{})
+	close(ended)
 
-	if err := p.ReadLogs(t.Context(), id, &execution.PlacedWriter{Writer: io.Discard}); err != nil {
-		t.Fatalf("ReadLogs failed: %v", err)
+	logs := &plugin.MemoryLog{}
+	if err := p.CaptureLogs(t.Context(), id, logs, ended); err != nil || logs.String() != "hello\n" {
+		t.Fatalf("CaptureLogs() = %q, %v; want the job's output", logs.String(), err)
 	}
 
 	want := `resource.type="cloud_run_job" resource.labels.job_name="` + plugin.ResourceName(id) + `"`
@@ -352,9 +354,9 @@ func TestLogsFilterToTheJob(t *testing.T) {
 		t.Errorf("filter = %q, want %q", got, want)
 	}
 
-	// Nothing registered for entries:tail, so the stream ends at its refusal
-	if err := p.StreamLogs(t.Context(), id, 0, io.Discard); err == nil || g.Request(1).Path != "/v2/entries:tail" {
-		t.Errorf("StreamLogs() = %v, want the tail's refusal", err)
+	// Nothing registered for entries:tail, so a capture of a running job ends at its refusal
+	if err := p.CaptureLogs(t.Context(), id, logs, make(chan struct{})); err == nil || g.Request(1).Path != "/v2/entries:tail" {
+		t.Errorf("CaptureLogs() = %v, want the tail's refusal", err)
 	}
 }
 

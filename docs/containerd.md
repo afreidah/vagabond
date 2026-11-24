@@ -111,17 +111,14 @@ with its result.
   drops stored output. The freed bytes are a hole: they take no disk, and the
   file keeps its length, so offsets still count from the first byte the
   workload printed. The rest goes when `Release` deletes the file.
-- `Result` carries the exit code and run time only. Once the workload ends the
-  server reads its output through `AgentExecutions.StreamLogs` from offset 0,
-  before `Release` deletes the file, and stores it
-  ([Dispatch](dispatch.md#output)). When the front was dropped, the stream
-  begins where the kept part does, and the stored copy's `LogsStart` is there.
-- While the workload runs, the server streams its output through
-  `AgentExecutions.StreamLogs`, from the byte offset the client asks for, so a
-  `?follow=true` request ([API](api.md#read-execution-logs)) shows it live and
-  a reopened stream resumes where the last one stopped. A stream from before
-  the kept part is answered `416`, and the client finishes from the stored copy
-  once the workload ends.
+- `Result` carries the exit code and run time only. While the workload runs,
+  the server holding its dispatch copies its output through
+  `AgentExecutions.StreamLogs` into the store, which every client reads
+  ([Dispatch](dispatch.md#output)). A stream that breaks is opened again from
+  the bytes stored, so it resumes where the last one stopped. When the front
+  was dropped before the server read it, the stream begins where the kept part
+  does, and the stored copy's `LogsStart` is there. `Release` deletes the file
+  only after the capture has ended.
 - The stream ends when the workload ends, or when it is released mid-stream,
   after copying whatever the log file still holds.
 

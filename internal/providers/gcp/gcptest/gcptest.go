@@ -73,7 +73,8 @@ type Google struct {
 }
 
 // NewGoogle starts a fake Google, stopped when the test ends, and the shared
-// base of a provider named name with every request sent to it unsigned.
+// base of a provider named name with every request sent to it unsigned and no
+// wait for late entries.
 func NewGoogle(t *testing.T, name string) (*Google, *gcp.API) {
 	t.Helper()
 
@@ -96,7 +97,7 @@ func NewGoogle(t *testing.T, name string) (*Google, *gcp.API) {
 		t.Fatalf("NewCredentialed() = %s", diags.Error())
 	}
 
-	api.LogsURL = server.URL
+	api.LogsURL, api.Settle = server.URL, 0
 
 	return g, api
 }

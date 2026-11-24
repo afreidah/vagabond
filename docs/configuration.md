@@ -336,9 +336,7 @@ re-resolved at most once a minute per provider, so a credential that is wrong
 does not rerun its command on every call. A renewed session token or a rotated
 secret therefore takes effect without a restart. This covers
 every call an execution runner makes: `Submit`, `Status`, `Result`,
-`ReadLogs`, `Cancel` and `Release`. Live output streams call the provider
-directly: a rejected credential fails them until a runner's call has
-re-resolved it.
+`CaptureLogs`, `Cancel` and `Release`. No other call reaches a provider.
 
 | Source | Behaviour |
 |---|---|

@@ -3,11 +3,9 @@
 //
 // Author: Alex Freidah
 //
-// Copying a task's output from a platform to a caller. A failed write is the
-// caller's sink breaking, an Internal error; a failed read is the platform's.
-// A live view ends quietly on a failed read, since a broken stream fails no
-// work, while a read of the whole output reports it, since the copy is then
-// incomplete.
+// Copying a task's output from a platform into its log. A failed write is the
+// log breaking, an Internal error; a failed read is the platform's, an
+// Infrastructure one, since what was written is then not all of it.
 // -------------------------------------------------------------------------------
 
 package plugin
@@ -70,32 +68,9 @@ func (s *skipWriter) Write(p []byte) (int, error) {
 	return skipped + n, err
 }
 
-// CopyLive copies r to w until r ends, for a live view. A failed read ends the
-// copy quietly; a failed write is returned.
-func CopyLive(w io.Writer, r io.Reader) error {
-	_, err := copyLog(w, r)
-
-	return err
-}
-
-// CopyAll copies r to w until r ends, for a read of the whole output. A failed
-// read is an Infrastructure error, since what was written is incomplete.
+// CopyAll copies r to w until r ends. A failed write is an Internal error and
+// a failed read an Infrastructure one, after what arrived before it is written.
 func CopyAll(w io.Writer, r io.Reader) error {
-	readErr, err := copyLog(w, r)
-	if err != nil {
-		return err
-	}
-
-	if readErr != nil {
-		return Infrastructure(fmt.Errorf("reading log output: %w", readErr))
-	}
-
-	return nil
-}
-
-// copyLog copies r to w, returning a failed read and a failed write apart. The
-// end of r is neither.
-func copyLog(w io.Writer, r io.Reader) (readErr, writeErr error) {
 	out := LogOutput(w)
 	buf := make([]byte, copyBuffer)
 
@@ -103,15 +78,15 @@ func copyLog(w io.Writer, r io.Reader) (readErr, writeErr error) {
 		n, err := r.Read(buf)
 		if n > 0 {
 			if _, werr := out.Write(buf[:n]); werr != nil {
-				return nil, werr
+				return werr
 			}
 		}
 
 		switch {
 		case errors.Is(err, io.EOF):
-			return nil, nil
+			return nil
 		case err != nil:
-			return err, nil
+			return Infrastructure(fmt.Errorf("reading log output: %w", err))
 		}
 	}
 }

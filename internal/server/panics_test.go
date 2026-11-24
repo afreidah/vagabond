@@ -4,8 +4,8 @@
 // Author: Alex Freidah
 //
 // A handler's panic is a 500 in the API's error body, or a cut connection once
-// its response has begun; an upkeep task's panic leaves the next tick to run;
-// and a panic while following output stops the follow.
+// its response has begun, and an upkeep task's panic leaves the next tick to
+// run.
 // -------------------------------------------------------------------------------
 
 package server
@@ -23,9 +23,6 @@ import (
 	"time"
 
 	"github.com/afreidah/vagabond/internal/api"
-	"github.com/afreidah/vagabond/internal/execution"
-	"github.com/afreidah/vagabond/internal/state/memory"
-	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // quiet is a server with only a logger that discards.
@@ -136,38 +133,4 @@ func TestEvery_RunsOnAfterAPanicOrAnError(t *testing.T) {
 	if calls.Load() < 3 {
 		t.Errorf("called %d times, want the loop to go on after the panic", calls.Load())
 	}
-}
-
-// panickingGets is a memory store whose reads panic.
-type panickingGets struct {
-	*memory.Executions
-}
-
-// Get panics.
-func (panickingGets) Get(context.Context, execution.ID) (*execution.Record, error) {
-	panic("unreadable record")
-}
-
-// A panic while watching for an execution's end stops the follow.
-func TestEndFollow_PanicStopsTheFollow(t *testing.T) {
-	s := quiet()
-	s.executions = panickingGets{memory.NewExecutions()}
-	s.followPoll = time.Millisecond
-	s.stopping = make(chan struct{})
-
-	stopped := make(chan struct{})
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		s.endFollow(t.Context(), func() { close(stopped) }, testkit.NewID(t))
-	}()
-
-	select {
-	case <-stopped:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the follow was not stopped after a panic")
-	}
-
-	<-done
 }

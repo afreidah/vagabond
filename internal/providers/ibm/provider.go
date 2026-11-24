@@ -30,8 +30,7 @@ import (
 // Compile-time proof the contract is met.
 var (
 	_ plugin.Provider       = (*Provider)(nil)
-	_ plugin.LogStreamer    = (*Provider)(nil)
-	_ plugin.LogReader      = (*Provider)(nil)
+	_ plugin.LogCapturer    = (*Provider)(nil)
 	_ plugin.Releaser       = (*Provider)(nil)
 	_ plugin.Recredentialer = (*Provider)(nil)
 )
@@ -164,7 +163,7 @@ func (p *Provider) Status(
 
 // Result returns the exit code and the platform's reason from the run's pod. A
 // pod already gone leaves what Code Engine recorded. The output is read apart,
-// by ReadLogs.
+// by CaptureLogs.
 func (p *Provider) Result(
 	ctx context.Context, id execution.ID,
 ) (*execution.Result, error) {
@@ -210,7 +209,7 @@ func (p *Provider) Result(
 
 // Cancel stops an execution by deleting its job run: Code Engine has no other
 // way to stop one. The pod goes with it, so this destroys what Result and
-// ReadLogs read.
+// CaptureLogs read.
 func (p *Provider) Cancel(ctx context.Context, id execution.ID) error {
 	return p.deleteJobRun(ctx, plugin.ResourceName(id))
 }

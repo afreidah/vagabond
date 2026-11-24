@@ -62,9 +62,9 @@ elsewhere with `-address` or `$VAGABOND_ADDR`.
 
 Fake provider behaviour:
 
-- `fake-container` accepts a task and never finishes it. Its live output stream
-  prints `fake execution output` once and stays open. A run placed on one waits
-  until it is interrupted.
+- `fake-container` accepts a task and never finishes it. Its output is
+  `fake execution output`, printed once while it runs. A run placed on one
+  waits until it is interrupted.
 - `fake-function` finishes inside the submit call with exit code 0, a duration
   of one second, and no output.
 - Capability snapshots report the time the server started as their observation

@@ -3,9 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// Following a running execution's output over the API, from an offset, and
-// what is served once it has ended; how a follow ends, with its execution or
-// with the server; and that writes flush through the request log.
+// Following an execution's output over the API as its dispatch stores it,
+// from an offset, and what is served once it has ended; where a response says
+// its body begins; how a follow ends, with the output or with the server; and
+// that writes flush through the request log.
 // -------------------------------------------------------------------------------
 
 package server
@@ -85,8 +86,8 @@ func (h *harness) firstLine(t *testing.T, exec *api.Execution, query string) (*b
 // FOLLOWING
 // -------------------------------------------------------------------------
 
-// A followed execution's output streams from its provider, from the requested
-// offset, and each stream ends with the run.
+// A followed execution's output arrives as its dispatch stores it, from the
+// requested offset, and each follow ends once the run has, its output whole.
 func TestExecutionLogs_FollowsARunningExecution(t *testing.T) {
 	h := newHarness(t)
 	exec := h.startSleepy(t)
@@ -107,23 +108,6 @@ func TestExecutionLogs_FollowsARunningExecution(t *testing.T) {
 		if tail, err := io.ReadAll(r); err != nil || len(tail) != 0 {
 			t.Errorf("after the run ended = %q, %v; want the stream closed", tail, err)
 		}
-	}
-}
-
-// A provider that cannot resume refuses a follow from an offset with 416,
-// before sending any output, and still streams from the start.
-func TestExecutionLogs_FollowCannotResume(t *testing.T) {
-	h := newHarness(t)
-	h.box.NoResume = true
-
-	exec := h.startSleepy(t)
-
-	if status, _ := h.openLogs(t, exec.ID, "follow=true&offset=5"); status != http.StatusRequestedRangeNotSatisfiable {
-		t.Errorf("follow from offset 5 = %d, want 416", status)
-	}
-
-	if _, line := h.firstLine(t, &exec, "follow=true"); line != "fake execution output\n" {
-		t.Errorf("follow from the start = %q, want the provider's output", line)
 	}
 }
 
@@ -157,7 +141,7 @@ func TestExecutionLogs_StoredFromAnOffset(t *testing.T) {
 
 // Output whose front was dropped past the ceiling is still read by position in
 // the whole output, and an offset in what was dropped starts at the first byte
-// kept.
+// kept, which the response's header names.
 func TestExecutionLogs_StoredPastTheCeiling(t *testing.T) {
 	h := newHarness(t)
 	id, lease := ended(t, h.executions, time.Now(), execution.LogChunk)
@@ -166,16 +150,37 @@ func TestExecutionLogs_StoredPastTheCeiling(t *testing.T) {
 		t.Fatalf("AppendLog() = %v", err)
 	}
 
-	for query, want := range map[string]string{
-		"":         "the end\n",
-		"offset=5": "the end\n",
-		"offset=" + strconv.Itoa(execution.LogChunk+4): "end\n",
+	chunk := strconv.Itoa(execution.LogChunk)
+
+	for query, want := range map[string]struct{ body, start string }{
+		"":         {"the end\n", chunk},
+		"offset=5": {"the end\n", chunk},
+		"offset=" + strconv.Itoa(execution.LogChunk+4): {"end\n", strconv.Itoa(execution.LogChunk + 4)},
 	} {
-		status, body := h.openLogs(t, id.String(), query)
-		if got := readLogs(t, body); status != http.StatusOK || got != want {
-			t.Errorf("logs?%s = %d %q, want %q", query, status, got, want)
+		status, start, got := h.getLogs(t, id.String(), query)
+		if status != http.StatusOK || got != want.body || start != want.start {
+			t.Errorf("logs?%s = %d %q from %s, want %q from %s", query, status, got, start, want.body, want.start)
 		}
 	}
+}
+
+// getLogs requests an execution's output with query and returns the status,
+// where the response says the body begins, and the body.
+func (h *harness) getLogs(t *testing.T, id, query string) (int, string, string) {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, h.url+"/v1/execution/"+id+"/logs?"+query, nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET logs: %v", err)
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode, resp.Header.Get(api.LogsStartHeader), readLogs(t, resp.Body)
 }
 
 // Pruning takes the output of executions that ended longer ago than the
@@ -202,7 +207,12 @@ func TestPrune_TakesOutputPastTheRetention(t *testing.T) {
 	for id, want := range map[execution.ID]string{old: "", recent: "output"} {
 		var out strings.Builder
 
-		if err := executions.ReadLog(t.Context(), id, 0, &out); err != nil || out.String() != want {
+		err := executions.ReadLog(t.Context(), id, 0, func(_ int64, data []byte) error {
+			out.Write(data)
+
+			return nil
+		})
+		if err != nil || out.String() != want {
 			t.Errorf("ReadLog(%s) = %q, %v; want %q", id, out.String(), err, want)
 		}
 	}
@@ -257,149 +267,157 @@ func ended(t *testing.T, s *memory.Executions, at time.Time, start int64) (execu
 	return id, d.Lease()
 }
 
-// streamerFunc is a LogStreamer from a function.
-type streamerFunc func(ctx context.Context, id execution.ID, offset int64, w io.Writer) error
+// followed is a server over store, which reads mem, following every 10ms, a
+// running execution recorded in mem, and the lease its output is written
+// under.
+func followed(t *testing.T, store serverExecutions, mem *memory.Executions) (*Server, *execution.Record, execution.Lease) {
+	t.Helper()
 
-// StreamLogs calls f.
-func (f streamerFunc) StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error {
-	return f(ctx, id, offset, w)
-}
-
-// Only a follow of a running execution on a provider that can stream is
-// streamed; anything else is served the stored output.
-func TestStreamer(t *testing.T) {
 	reg, led := fixtures(t)
-	s := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler))
-
-	running := execution.Status{State: execution.StateRunning}
-
-	tests := []struct {
-		name  string
-		query string
-		rec   execution.Record
-		want  bool
-	}{
-		{"following a running execution", "follow=true", execution.Record{Status: running, Provider: "box"}, true},
-		{"not following", "", execution.Record{Status: running, Provider: "box"}, false},
-		{"ended", "follow=true", execution.Record{State: execution.StateSucceeded, Provider: "box"}, false},
-		{"provider no longer configured", "follow=true", execution.Record{Status: running, Provider: "gone"}, false},
-		{"provider cannot stream", "follow=true", execution.Record{Status: running, Provider: "fn"}, false},
-	}
-
-	for i := range tests {
-		tc := &tests[i]
-
-		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/execution/x/logs?"+tc.query, nil)
-
-			if _, got := s.streamer(r, &tc.rec); got != tc.want {
-				t.Errorf("streamer() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-// A stream that fails ends the response with whatever it sent, and one that
-// cannot resume is answered 416 only while nothing has been sent.
-func TestFollow_StreamErrors(t *testing.T) {
-	reg, led := fixtures(t)
-	s := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler))
-
-	tests := []struct {
-		name     string
-		wrote    string
-		err      error
-		want     int
-		wantBody string
-	}{
-		{"broken", "", errors.New("connection reset"), http.StatusOK, ""},
-		{"cannot resume", "", plugin.ErrNoResume, http.StatusRequestedRangeNotSatisfiable, ""},
-		{"cannot resume after output", "line\n", plugin.ErrNoResume, http.StatusOK, "line\n"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			w := httptest.NewRecorder()
-
-			stream := streamerFunc(func(_ context.Context, _ execution.ID, _ int64, out io.Writer) error {
-				if tc.wrote != "" {
-					_, _ = io.WriteString(out, tc.wrote)
-				}
-
-				return tc.err
-			})
-
-			s.follow(t.Context(), w, stream, testkit.NewID(t), 5)
-
-			if w.Code != tc.want || (tc.wantBody != "" && w.Body.String() != tc.wantBody) {
-				t.Errorf("follow() = %d %q, want %d %q", w.Code, w.Body.String(), tc.want, tc.wantBody)
-			}
-		})
-	}
-}
-
-// -------------------------------------------------------------------------
-// ENDING
-// -------------------------------------------------------------------------
-
-// A follow ends once its execution has ended and the linger has passed, and at
-// once when shutdown begins, even while its record cannot be read.
-func TestEndFollow(t *testing.T) {
-	reg, led := fixtures(t)
-	store := memory.NewExecutions()
-
 	s := New(reg, led, store, NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler))
-	s.followPoll, s.followLinger = time.Millisecond, 100*time.Millisecond
+	s.followPoll = 10 * time.Millisecond
 
-	d := dispatched(t, store)
+	d := dispatched(t, mem)
 
 	rec := &execution.Record{ID: testkit.NewID(t), State: execution.StateRunning, Dispatch: d.ID}
-	if err := store.Create(t.Context(), rec, d.Lease()); err != nil {
+	if err := mem.Create(t.Context(), rec, d.Lease()); err != nil {
 		t.Fatalf("Create() = %v", err)
 	}
 
-	ended := make(chan struct{})
+	return s, rec, d.Lease()
+}
 
-	go s.endFollow(t.Context(), func() { close(ended) }, rec.ID)
+// A follow sends output as it is stored, the last chunk as it grows, and ends
+// once a read made after the record was terminal has been sent.
+func TestSendLogs_EndsWithTheOutput(t *testing.T) {
+	store := memory.NewExecutions()
+	s, rec, lease := followed(t, store, store)
 
-	select {
-	case <-ended:
-		t.Fatal("the follow ended while its execution ran")
-	case <-time.After(20 * time.Millisecond):
+	if err := store.AppendLog(t.Context(), rec.ID, 0, []byte("a"), 0, lease); err != nil {
+		t.Fatalf("AppendLog() = %v", err)
 	}
 
-	finished := time.Now()
+	w := httptest.NewRecorder()
+	done := make(chan error, 1)
 
-	if err := rec.To(execution.StateSucceeded, finished); err != nil {
+	go func() { done <- s.sendLogs(t.Context(), rec, newLogsResponse(w, 0), true) }()
+
+	time.Sleep(30 * time.Millisecond)
+
+	// The output is whole before the record is terminal, as collect writes them
+	if err := store.AppendLog(t.Context(), rec.ID, 0, []byte("ab"), 0, lease); err != nil {
+		t.Fatalf("AppendLog() = %v", err)
+	}
+
+	ended := *rec
+	if err := ended.To(execution.StateSucceeded, time.Now()); err != nil {
 		t.Fatalf("To() = %v", err)
 	}
 
-	if err := store.Save(t.Context(), rec, d.Lease()); err != nil {
+	if err := store.Save(t.Context(), &ended, lease); err != nil {
 		t.Fatalf("Save() = %v", err)
 	}
 
 	select {
-	case <-ended:
-		if waited := time.Since(finished); waited < s.followLinger {
-			t.Errorf("ended %s after the execution, before the %s linger", waited, s.followLinger)
+	case err := <-done:
+		if err != nil || w.Body.String() != "ab" {
+			t.Errorf("sendLogs() = %v, sent %q; want every byte once", err, w.Body.String())
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("the follow did not end with its execution")
+		t.Fatal("the follow did not end with the output")
+	}
+}
+
+// A follow ends at once when shutdown begins, and when the client goes.
+func TestSendLogs_EndsWithTheServerOrClient(t *testing.T) {
+	store := memory.NewExecutions()
+	s, rec, _ := followed(t, store, store)
+
+	stopped := make(chan error, 1)
+
+	go func() { stopped <- s.sendLogs(t.Context(), rec, newLogsResponse(httptest.NewRecorder(), 0), true) }()
+
+	time.Sleep(20 * time.Millisecond)
+	s.endStreams()
+	s.endStreams()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	gone := make(chan error, 1)
+
+	go func() { gone <- s.sendLogs(ctx, rec, newLogsResponse(httptest.NewRecorder(), 0), true) }()
+
+	cancel()
+
+	for name, ch := range map[string]chan error{"shutdown": stopped, "client gone": gone} {
+		select {
+		case err := <-ch:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Errorf("%s: sendLogs() = %v", name, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: the follow outlived it", name)
+		}
+	}
+}
+
+// failingReads is a memory store whose reads of output hand over what is
+// stored, then fail.
+type failingReads struct {
+	*memory.Executions
+}
+
+// ReadLog hands over the stored chunks, then fails.
+func (f failingReads) ReadLog(ctx context.Context, id execution.ID, fromSeq int64, each func(int64, []byte) error) error {
+	if err := f.Executions.ReadLog(ctx, id, fromSeq, each); err != nil {
+		return err
 	}
 
-	stopped := make(chan struct{})
+	return errors.New("store unreachable")
+}
 
-	// Nothing recorded this one, so every read of it fails and is retried.
-	go s.endFollow(t.Context(), func() { close(stopped) }, testkit.NewID(t))
+// A read that fails before anything is sent is answered with its error, and
+// one that fails after ends the response with what was sent.
+func TestExecutionLogs_ReadFails(t *testing.T) {
+	store := failingReads{memory.NewExecutions()}
+	s, rec, lease := followed(t, store, store.Executions)
 
-	time.Sleep(10 * time.Millisecond)
-	s.endStreams()
-	s.endStreams()
+	for stored, begun := range map[string]bool{"": false, "partial": true} {
+		if stored != "" {
+			if err := store.AppendLog(t.Context(), rec.ID, 0, []byte(stored), 0, lease); err != nil {
+				t.Fatalf("AppendLog() = %v", err)
+			}
+		}
 
-	select {
-	case <-stopped:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the follow outlived shutdown")
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/execution/"+rec.ID.String()+"/logs", nil)
+		r.SetPathValue("id", rec.ID.String())
+
+		w := httptest.NewRecorder()
+		s.executionLogs(w, r)
+
+		if (w.Code == http.StatusOK) != begun || (begun && w.Body.String() != stored) {
+			t.Errorf("with %q stored: %d %q, want the response begun %t", stored, w.Code, w.Body.String(), begun)
+		}
+	}
+}
+
+// A response is placed past a gap through its header until its body begins,
+// and ended after; an empty write begins nothing.
+func TestLogsResponse_StartsAt(t *testing.T) {
+	w := httptest.NewRecorder()
+	out := newLogsResponse(w, 5)
+
+	if n, err := out.Write(nil); n != 0 || err != nil || out.wrote {
+		t.Errorf("Write(nil) = %d, %v, began %t; want nothing begun", n, err, out.wrote)
+	}
+
+	if err := out.StartsAt(execution.LogChunk); err != nil || w.Header().Get(api.LogsStartHeader) != strconv.Itoa(execution.LogChunk) {
+		t.Errorf("StartsAt() before the body = %v, header %q; want the header moved", err, w.Header().Get(api.LogsStartHeader))
+	}
+
+	_, _ = out.Write([]byte("x"))
+
+	if err := out.StartsAt(2 * execution.LogChunk); !errors.Is(err, errMoved) || out.next != execution.LogChunk+1 {
+		t.Errorf("StartsAt() after the body began = %v at %d, want errMoved at %d", err, out.next, execution.LogChunk+1)
 	}
 }
 

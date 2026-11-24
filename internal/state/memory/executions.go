@@ -15,7 +15,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"maps"
 	"slices"
 	"strings"
@@ -331,10 +330,10 @@ func (s *Executions) AppendLog(
 	return nil
 }
 
-// ReadLog writes id's stored output from chunk fromSeq on to w, in order. An
-// execution with none writes nothing.
-func (s *Executions) ReadLog(_ context.Context, id execution.ID, fromSeq int64, w io.Writer) error {
-	// A chunk is never changed once stored, so it is written outside the lock.
+// ReadLog hands each of id's stored chunks from fromSeq on to each, in order,
+// with its number. An execution with none hands over nothing.
+func (s *Executions) ReadLog(_ context.Context, id execution.ID, fromSeq int64, each func(seq int64, data []byte) error) error {
+	// A write replaces a chunk's slice rather than changing it, so they are read outside the lock
 	s.mu.Lock()
 	chunks := maps.Clone(s.logs[id])
 	s.mu.Unlock()
@@ -344,7 +343,7 @@ func (s *Executions) ReadLog(_ context.Context, id execution.ID, fromSeq int64, 
 			continue
 		}
 
-		if _, err := w.Write(chunks[seq]); err != nil {
+		if err := each(seq, chunks[seq]); err != nil {
 			return err
 		}
 	}

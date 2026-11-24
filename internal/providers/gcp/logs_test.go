@@ -3,22 +3,21 @@
 //
 // Author: Alex Freidah
 //
-// Paging is the whole subject here. entries.list scans storage in shards and
-// returns empty pages before the one holding the output, so a reader stopping
-// at the first page reports a build with no logs at all.
+// Paging is the whole subject here, driven through the catch-up of a finished
+// run. entries.list scans storage in shards and returns empty pages before the
+// one holding the output, so a reader stopping at the first page reports a
+// build with no logs at all.
 // -------------------------------------------------------------------------------
 
 package gcp
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 
-	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/plugin"
 )
 
@@ -41,15 +40,15 @@ func page(token string, entries ...any) map[string]any {
 	return out
 }
 
-// read runs ReadEntries against f and returns what it wrote.
+// read captures a finished run's output from f into an empty log and returns
+// what it wrote.
 func read(t *testing.T, f *fakeLogging) (string, error) {
 	t.Helper()
 
-	var out bytes.Buffer
+	log := &plugin.MemoryLog{}
+	err := newLogging(t, f).CaptureEntries(t.Context(), testFilter, log, ended())
 
-	err := newLogging(t, f).ReadEntries(t.Context(), testFilter, &execution.PlacedWriter{Writer: &out})
-
-	return out.String(), err
+	return log.String(), err
 }
 
 // classOf returns the class err carries, empty when it carries none.
@@ -62,11 +61,11 @@ func classOf(err error) plugin.Class {
 }
 
 // -------------------------------------------------------------------------
-// READING
+// LISTING
 // -------------------------------------------------------------------------
 
 // An empty page is not the end of the scan.
-func TestReadEntries_FollowsEmptyPages(t *testing.T) {
+func TestListEntries_FollowsEmptyPages(t *testing.T) {
 	t.Parallel()
 
 	f := &fakeLogging{pages: []any{
@@ -76,20 +75,20 @@ func TestReadEntries_FollowsEmptyPages(t *testing.T) {
 	}}
 
 	if got, err := read(t, f); err != nil || got != "hello-stdout\nhello-stderr\n" {
-		t.Errorf("ReadEntries() = %q, %v; want both lines", got, err)
+		t.Errorf("the capture = %q, %v; want both lines", got, err)
 	}
 }
 
 // The token is carried forward, or the second page is the first page again and
 // the scan never ends. Every page is asked for oldest first, in the project,
 // with the filter it was given.
-func TestReadEntries_SendsThePageToken(t *testing.T) {
+func TestListEntries_SendsThePageToken(t *testing.T) {
 	t.Parallel()
 
 	f := &fakeLogging{pages: []any{page("shard-2", entry("first")), page("", entry("second"))}}
 
 	if _, err := read(t, f); err != nil {
-		t.Fatalf("ReadEntries failed: %v", err)
+		t.Fatalf("the capture failed: %v", err)
 	}
 
 	if got := f.lists[0]["pageToken"]; got != nil {
@@ -110,7 +109,7 @@ func TestReadEntries_SendsThePageToken(t *testing.T) {
 
 // A filter matching nothing anywhere would otherwise walk every shard in the
 // project to say so. Stopping there is reported, after what was read.
-func TestReadEntries_StopsAtThePageCap(t *testing.T) {
+func TestListEntries_StopsAtThePageCap(t *testing.T) {
 	t.Parallel()
 
 	// Always another page.
@@ -118,11 +117,11 @@ func TestReadEntries_StopsAtThePageCap(t *testing.T) {
 
 	got, err := read(t, f)
 	if !errors.Is(err, errPageCap) || classOf(err) != plugin.ClassInfrastructure {
-		t.Errorf("ReadEntries() = %v, want an Infrastructure error wrapping errPageCap", err)
+		t.Errorf("the capture = %v, want an Infrastructure error wrapping errPageCap", err)
 	}
 
-	if len(f.lists) != maxLogPages {
-		t.Errorf("made %d requests, want the cap of %d", len(f.lists), maxLogPages)
+	if f.listed() != maxLogPages {
+		t.Errorf("made %d requests, want the cap of %d", f.listed(), maxLogPages)
 	}
 
 	if got != strings.Repeat("more\n", maxLogPages) {
@@ -132,34 +131,21 @@ func TestReadEntries_StopsAtThePageCap(t *testing.T) {
 
 // Cloud Logging emits structural records with no text alongside the
 // container's output, and a blank line each would pad a short log with noise.
-func TestReadEntries_SkipsEmptyPayloads(t *testing.T) {
+func TestListEntries_SkipsEmptyPayloads(t *testing.T) {
 	t.Parallel()
 
 	f := &fakeLogging{pages: []any{page("", entry(""), entry("real output"), entry(""))}}
 
 	if got, err := read(t, f); err != nil || got != "real output\n" {
-		t.Errorf("ReadEntries() = %q, %v; want only the real output", got, err)
+		t.Errorf("the capture = %q, %v; want only the real output", got, err)
 	}
 }
 
-// A page Google refuses ends the read with the refusal.
-func TestReadEntries_ReportsARefusedPage(t *testing.T) {
+// A page Google refuses ends the scan with the refusal, rerouted.
+func TestListEntries_ReportsARefusedPage(t *testing.T) {
 	t.Parallel()
 
 	if _, err := read(t, &fakeLogging{listStatus: http.StatusTooManyRequests}); classOf(err) != plugin.ClassInfrastructure {
-		t.Errorf("ReadEntries() = %v, want the refusal, rerouted", err)
-	}
-}
-
-// A write that fails is the caller's sink, so it is Internal.
-func TestReadEntries_ReportsAFailedWrite(t *testing.T) {
-	t.Parallel()
-
-	f := &fakeLogging{pages: []any{page("", entry("line"))}}
-	gone := writerFunc(func([]byte) (int, error) { return 0, errors.New("client gone") })
-
-	err := newLogging(t, f).ReadEntries(t.Context(), testFilter, &execution.PlacedWriter{Writer: gone})
-	if classOf(err) != plugin.ClassInternal {
-		t.Errorf("ReadEntries() = %v, want an Internal error", err)
+		t.Errorf("the capture = %v, want the refusal, rerouted", err)
 	}
 }

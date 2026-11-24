@@ -317,45 +317,55 @@ every 15s.
 
 ## Output
 
-Once an execution ends, its runner reads the result, captures the output into
-the store, and records both in one write; releasing comes after settling. In
-that order: recording the result is what tells a waiting client to read the
-output, and releasing may destroy it.
+An execution's runner copies its output into the store while it runs, from
+the moment the provider has the work. Once the execution ends, the runner reads
+the result, has the capture finish, and records both in one write; releasing
+comes after settling. In that order: recording the result is what tells a
+waiting client the output is whole, and releasing may destroy it.
 
 | Provider | Where the output comes from |
 |---|---|
-| Implements `plugin.LogReader` (Cloud Run, Cloud Build, Code Engine, `containerd`, `firecracker`) | `ReadLogs`, which writes the whole output |
-| Any other (Lambda) | `Result.Logs`, the output that came with the answer |
+| Implements `plugin.LogCapturer` (Cloud Run, Cloud Build, Code Engine, `containerd`, `firecracker`) | `CaptureLogs`, called while the execution runs |
+| Any other (Lambda) | `Result.Logs`, the output that came with the answer, stored once it arrives |
 
-- The output is written in 256 KiB chunks as it is read, so a capture holds one
-  chunk whatever the task printed ([Database](database.md#execution_logs)).
+- One capture per execution, whichever servers and clients read it. Every
+  client reads the store, so all of them see the same bytes, and no client
+  opens the provider's own stream.
+- What arrives is stored at least once a second, in 256 KiB chunks numbered
+  from the start of the output; the last chunk is written again as it grows
+  ([Database](database.md#execution_logs)).
 - Past the server's `max_log_mib` (16 MiB by default) the oldest chunks are
   dropped, so the end is kept. `LogsStart` is then the first byte still stored.
   Offsets count from the first byte the task printed either way.
 - A provider that kept only the end itself, as an agent node does past its
   `-max-log-mib`, says where that end begins before writing it, through the
-  writer's `StartsAt`. The capture stores it from there, and `LogsStart` is at
+  log's `StartsAt`. The capture stores it from there, and `LogsStart` is at
   least that.
-- A capture runs on its own context with a 5 minute timeout, through the same
-  credential retry as every provider call. A retry starts the output over at
-  chunk 0, so nothing is stored twice.
-- A capture never fails the execution. A `ReadLogs` error keeps what arrived
+- A call that returns before the output is whole, a stream cut or refused, is
+  logged as `capturing output` and made again after 1s doubling to 30s, back to
+  1s after a call that added output, from what the store holds. The same
+  credential retry as every provider call applies.
+- When the runner sees the execution end, it tells the capture, which finishes
+  what the provider still holds: Cloud Logging's late entries, the end of a
+  pod log a follow missed. Three failed calls after that, or 5 minutes, end
+  the capture with what it has.
+- A capture never fails the execution. One that ends short keeps what arrived
   and sets `LogsTruncated`, as does `Result.LogsTruncated` on an answer that
   carried only part of the output. A store that refuses the chunks also sets
-  it.
+  it; a write refused because the lease moved stops the capture, which the
+  new holder resumes.
+- A runner restored after a claim resumes the capture from what the store
+  holds, for an execution whose `logs_at` is null.
 - Every ending is captured: a result, a run cancelled by Vagabond, one whose
   result could not be read, one `failed` after 24 hours `lost`. `Result` is
   not called for a cancelled run or one that failed without an answer. A
-  failed submission has nothing to capture. A runner restored after a claim
-  captures an ended execution whose `logs_at` is null.
+  failed submission has nothing to capture.
 - The server deletes stored output `log_retention` (7 days by default) after
   the execution ends ([Background services](background-services.md#output-retention)).
-- Read it from `GET /v1/execution/{id}/logs` (plain text, empty until it is
-  captured) or with `vagabond execution logs` ([CLI](cli.md)).
-- A runner never streams. While an execution runs, a client streams its
-  output with `GET /v1/execution/{id}/logs?follow=true`, which the server
-  serves from the provider's `LogStreamer` ([API](api.md#read-execution-logs)).
-  `vagabond job run` and `vagabond execution logs -f` follow it that way.
+- Read it from `GET /v1/execution/{id}/logs`, or follow it as it is stored
+  with `?follow=true` ([API](api.md#read-execution-logs)), or with
+  `vagabond execution logs` ([CLI](cli.md)). `vagabond job run` follows each
+  task's output that way.
 
 ## Release
 
