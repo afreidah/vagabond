@@ -152,7 +152,7 @@ window.vagabondDiagram = {
     SYNC: {
       title: 'Synchronous?',
       badge: 'decision', badgeText: 'synchronous',
-      body: '<p>A function or worker finishes inside <code>Submit</code> and returns its result with it, as an AWS Lambda invocation does. There is nothing to poll: the execution is written <code>submitted</code> as <code>Submit</code> returns, and the runner collects with the result <code>Submit</code> carried, writing the terminal state with it.</p><p>Everything else, such as a Cloud Run Job, a Cloud Build build or a pool workload, reports <code>accepted</code> or <code>running</code> and is watched, its output captured while it runs.</p>'
+      body: '<p>A function or worker finishes inside <code>Submit</code> and returns its result with it, as an AWS Lambda or OCI Functions invocation does. There is nothing to poll: the execution is written <code>submitted</code> as <code>Submit</code> returns, and the runner collects with the result <code>Submit</code> carried, writing the terminal state with it.</p><p>Everything else, such as a Cloud Run Job, a Cloud Build build or a pool workload, reports <code>accepted</code> or <code>running</code> and is watched, its output captured while it runs.</p>'
     },
     WATCH: {
       title: 'Watch',

@@ -210,7 +210,7 @@ window.vagabondDiagram = {
     PROVIDERS: {
       title: 'Providers',
       badge: 'data', badgeText: 'external',
-      body: '<p>The configured plugins and the platforms behind them: <code>cloud-run</code>, <code>cloud-build</code>, <code>code-engine</code>, <code>lambda</code>, <code>containerd</code> and <code>firecracker</code>. The capability refresh calls <code>Capabilities</code> (<code>containerd</code> and <code>firecracker</code> providers excepted); execution runners call <code>Submit</code>, <code>Status</code>, <code>Cancel</code>, <code>Result</code> and <code>Release</code>, and their output captures <code>CaptureLogs</code>. The reaper and the output follow call none.</p><p>A call made through dispatch that the platform rejects as unauthorized has the provider&rsquo;s credential resolved again from its source, at most once a minute, and is made once more.</p>'
+      body: '<p>The configured plugins and the platforms behind them: <code>cloud-run</code>, <code>cloud-build</code>, <code>code-engine</code>, <code>lambda</code>, <code>oci-functions</code>, <code>containerd</code> and <code>firecracker</code>. The capability refresh calls <code>Capabilities</code> (<code>containerd</code> and <code>firecracker</code> providers excepted); execution runners call <code>Submit</code>, <code>Status</code>, <code>Cancel</code>, <code>Result</code> and <code>Release</code>, and their output captures <code>CaptureLogs</code>. The reaper and the output follow call none.</p><p>A call made through dispatch that the platform rejects as unauthorized has the provider&rsquo;s credential resolved again from its source, at most once a minute, and is made once more.</p>'
     },
     REGSNAP: {
       title: 'Capability snapshots',

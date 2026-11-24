@@ -24,6 +24,7 @@ import (
 	"github.com/afreidah/vagabond/internal/providers/gcp/cloudbuild"
 	"github.com/afreidah/vagabond/internal/providers/gcp/cloudrun"
 	"github.com/afreidah/vagabond/internal/providers/ibm"
+	"github.com/afreidah/vagabond/internal/providers/oci"
 	"github.com/afreidah/vagabond/internal/providers/pool"
 )
 
@@ -70,6 +71,7 @@ var builders = []struct {
 	{cloudbuild.Type, cloud(cloudbuild.New)},
 	{ibm.Type, cloud(ibm.New)},
 	{aws.Type, cloud(aws.New)},
+	{oci.Type, cloud(oci.New)},
 	{pool.TypeContainerd, onNodes(pool.TypeContainerd)},
 	{pool.TypeFirecracker, onNodes(pool.TypeFirecracker)},
 

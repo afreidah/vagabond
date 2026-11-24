@@ -12,7 +12,7 @@ them, dispatches to the best, and records what the run used.
 
 ## Components
 
-![The vagabond CLI calls the server's HTTP API. The server admits, ranks, dispatches and accounts for each task, keeps its records in Postgres or CockroachDB, and runs work on Cloud Run Jobs, Code Engine Jobs, AWS Lambda, or agent nodes, as containers or in Firecracker microVMs.](assets/architecture.svg)
+![The vagabond CLI calls the server's HTTP API. The server admits, ranks, dispatches and accounts for each task, keeps its records in Postgres or CockroachDB, and runs work on Google Cloud Run Jobs, Google Cloud Build, IBM Code Engine Jobs, AWS Lambda, OCI Functions, containerd on agent nodes, or Firecracker microVMs on agent nodes.](assets/architecture.svg)
 
 Interactive version, with notes on each component:
 [System architecture](https://vagabond.munchbox.cc/diagrams/architecture/).
@@ -23,7 +23,7 @@ Interactive version, with notes on each component:
 | CLI | `vagabond job ...`, `execution ...`, `node ...`, `provider ...` | Validates job files locally, then calls the server's [API](api.md). Holds no state. See the [CLI reference](cli.md). |
 | Agent | `vagabond agent` | Runs on a node apart from the server. Dials the server, reports the node's architecture, CPU, memory and executors, and runs the tasks placed on it in containerd, or in Firecracker microVMs through [vagabond-firecracker](firecracker.md). See [Agent](agent.md). |
 | Store | Postgres or CockroachDB | Holds registered jobs, dispatches and their leases, executions, and quota usage and reservations. Replaced by in-memory stores under `-dev`. See [Database](database.md). |
-| Providers | `provider` blocks in [configuration](configuration.md) | Plugins that run tasks on a backend: `cloud-run`, `cloud-build`, `code-engine`, `lambda`, `containerd` and `firecracker` (agent nodes), and the `fake-container`, `fake-function` and `fake-worker` test providers. |
+| Providers | `provider` blocks in [configuration](configuration.md) | Plugins that run tasks on a backend: `cloud-run`, `cloud-build`, `code-engine`, `lambda`, `oci-functions`, `containerd` and `firecracker` (agent nodes), and the `fake-container`, `fake-function` and `fake-worker` test providers. |
 
 **Connections:**
 
@@ -95,8 +95,9 @@ Every package under `internal/`. `cmd/vagabond` only calls `cli.Run`.
 | `ledger` | Quota reservations and settlement over a store, and the usage snapshot admission reads |
 | `nodes` | The agent nodes connected to a server, each node's room and reservations, and the loop that serves agents |
 | `plugin` | The `Provider` interface, capability model, failure classes, the helpers every plugin shares, and the fake providers |
-| `plugin/plugintest` | What provider tests share: configuration fixtures, a container task, and the live round trip against a real account |
+| `plugin/plugintest` | What provider tests share: configuration fixtures, container and function tasks, and the live round trip against a real account |
 | `providers/aws` | The `lambda` provider: function tasks on AWS Lambda |
+| `providers/oci` | The `oci-functions` provider: function tasks on OCI Functions |
 | `providers/gcp` | What the Google providers share: the signed client, the config block, and the Cloud Logging reader and stream |
 | `providers/gcp/cloudrun` | The `cloud-run` provider: container tasks on Cloud Run Jobs |
 | `providers/gcp/cloudbuild` | The `cloud-build` provider: container tasks as Cloud Build builds |
@@ -214,7 +215,7 @@ Optional interfaces, detected by type assertion:
 | `plugin.Live` | `LiveCapabilities` | Capabilities read on every plan instead of on the refresh timer | `containerd`, `firecracker` |
 | `plugin.Targeter` | `Target` | The provider for the executions on one node, which dispatch uses for a node candidate or a record naming a node | `containerd`, `firecracker` |
 | `plugin.Reserver` | `Reserve` | Holding room on a node before the execution is recorded; `ErrNoRoom` is a refusal that spends no attempt | `containerd`, `firecracker` |
-| `plugin.Recredentialer` | `Recredential` | Taking a credential resolved again from its source after the platform answered 401 or 403; the call is then made once more | `cloud-run`, `cloud-build`, `code-engine`, `lambda` |
+| `plugin.Recredentialer` | `Recredential` | Taking a credential resolved again from its source after the platform answered 401 or 403; the call is then made once more | `cloud-run`, `cloud-build`, `code-engine`, `lambda`, `oci-functions` |
 
 See [Writing a provider](writing-a-provider.md).
 
@@ -226,7 +227,7 @@ advertises which of these it satisfies.
 | Driver | Contract | Providers |
 |---|---|---|
 | `container` | Run an arbitrary container image to completion; the exit status is the result | `cloud-run`, `cloud-build`, `code-engine`, `pool`, `fake-container` |
-| `function` | Invoke a handler that implements the platform's runtime contract | `lambda`, `fake-function` |
+| `function` | Invoke a predeployed function that replies with the task's exit code and output | `lambda`, `oci-functions`, `fake-function` |
 | `worker` | Invoke a predeployed constrained executor, such as an edge or Wasm runtime | `fake-worker` |
 
 ## Server concurrency
@@ -301,4 +302,5 @@ agents, so any server on the same store can resume a dispatch another left.
 - [Cloud Build](providers/cloud-build.md)
 - [Code Engine](providers/code-engine.md)
 - [Lambda](providers/lambda.md)
+- [OCI Functions](providers/oci-functions.md)
 - [Writing a provider](writing-a-provider.md)
