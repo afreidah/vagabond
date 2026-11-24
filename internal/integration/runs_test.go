@@ -25,6 +25,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/api"
 	"github.com/afreidah/vagabond/internal/cli"
+	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
 )
@@ -110,7 +111,7 @@ func TestRun_EndToEnd(t *testing.T) {
 		t.Errorf("execution = %+v, %v", e, err)
 	}
 
-	if err := client.Logs(context.Background(), e.ID, 0, io.Discard); err != nil {
+	if err := client.Logs(context.Background(), e.ID, 0, &execution.PlacedWriter{Writer: io.Discard}); err != nil {
 		t.Errorf("Logs() = %v", err)
 	}
 
