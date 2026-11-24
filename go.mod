@@ -11,7 +11,7 @@ require (
 	github.com/containerd/cgroups/v3 v3.1.3
 	github.com/containerd/containerd/v2 v2.4.2
 	github.com/containerd/errdefs v1.0.0
-	github.com/containerd/ttrpc v1.2.9
+	github.com/containerd/ttrpc v1.2.10
 	github.com/distribution/reference v0.6.0
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
