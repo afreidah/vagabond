@@ -1,6 +1,6 @@
 ---
 title: "Vagabond"
-description: "Compute broker for short-lived, stateless jobs on Cloud Run Jobs, Code Engine Jobs, AWS Lambda and agent nodes, with quota admission and per-run usage tracking."
+description: "Compute broker for short-lived, stateless jobs on Cloud Run Jobs, Cloud Build, Code Engine Jobs, AWS Lambda and agent nodes, with quota admission and per-run usage tracking."
 layout: hextra-home
 ---
 
@@ -17,7 +17,7 @@ layout: hextra-home
 
 <div class="hx:mb-10">
 {{< hextra/hero-subtitle style="margin: 0 auto;" >}}
-  Jobs are written in Nomad-style HCL and run on Cloud Run Jobs, Code Engine Jobs, AWS Lambda or agent nodes.<br class="hx:sm:block hx:hidden" /> Backends are checked against each job's constraints, resources, cost limit and quota, and usage is recorded per run.
+  Jobs are written in Nomad-style HCL and run on Cloud Run Jobs, Cloud Build, Code Engine Jobs, AWS Lambda or agent nodes.<br class="hx:sm:block hx:hidden" /> Backends are checked against each job's constraints, resources, cost limit and quota, and usage is recorded per run.
 {{< /hextra/hero-subtitle >}}
 </div>
 
@@ -34,7 +34,7 @@ layout: hextra-home
 </div>
 
 <div class="vb-diagram">
-<img src="images/architecture.svg" width="1200" height="560" alt="The vagabond CLI calls the server's HTTP API. The server admits, ranks, dispatches and accounts for each task, keeps its records in Postgres or CockroachDB, and runs work on Cloud Run Jobs, Code Engine Jobs, AWS Lambda, or agent nodes, as containers or in Firecracker microVMs.">
+<img src="images/architecture.svg" width="1200" height="560" alt="The vagabond CLI calls the server's HTTP API. The server admits, ranks, dispatches and accounts for each task, keeps its records in Postgres or CockroachDB, and runs work on Cloud Run Jobs, Cloud Build, Code Engine Jobs, AWS Lambda, or agent nodes, as containers or in Firecracker microVMs.">
 </div>
 
 <div class="vb-sections">
@@ -191,8 +191,8 @@ unfinished.
 
 ### Provider plugins
 
-Cloud Run Jobs, Code Engine Jobs, AWS Lambda and agent pools, as containers
-or Firecracker microVMs, today. A plugin
+Cloud Run Jobs, Cloud Build, Code Engine Jobs, AWS Lambda and agent pools, as
+containers or Firecracker microVMs, today. A plugin
 translates a task and classifies failures; scheduling, retries and accounting
 stay in Vagabond.
 

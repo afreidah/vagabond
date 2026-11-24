@@ -4,9 +4,9 @@
 // Author: Alex Freidah
 //
 // Where a container's output comes from, for Cloud Run and Cloud Build alike,
-// each picking out its own entries with a filter. Entries are readable the
-// moment a run finishes, and the free tier is 50 GiB a month against output
-// measured in kilobytes.
+// each picking out its own entries with a filter. Entries outlive the run, so
+// cleaning it up destroys nothing a capture reads, and the free tier is 50 GiB
+// a month against output measured in kilobytes.
 // -------------------------------------------------------------------------------
 
 package gcp
@@ -16,9 +16,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-
-	"github.com/afreidah/vagabond/internal/execution"
-	"github.com/afreidah/vagabond/internal/plugin"
 )
 
 // -------------------------------------------------------------------------
@@ -84,22 +81,8 @@ func writeEntry(w io.Writer, entry *logEntry) error {
 }
 
 // -------------------------------------------------------------------------
-// READING
+// LISTING
 // -------------------------------------------------------------------------
-
-// ReadEntries writes what a finished run printed, the entries filter matches.
-// Both streams arrive interleaved in timestamp order, as a failed build reads.
-// The entries outlive the run, so cleaning it up destroys nothing this reads.
-func (a *API) ReadEntries(ctx context.Context, filter string, w execution.LogWriter) error {
-	out := plugin.LogOutput(w)
-
-	err := a.listEntries(ctx, filter, func(entry *logEntry) error { return writeEntry(out, entry) })
-	if errors.Is(err, errPageCap) {
-		return plugin.Infrastructure(err)
-	}
-
-	return err
-}
 
 // listEntries calls each on the entries filter matches, oldest first, until
 // the entries run out or each fails. Stopping at maxLogPages returns errPageCap.

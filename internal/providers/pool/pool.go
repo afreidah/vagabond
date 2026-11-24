@@ -63,8 +63,7 @@ var (
 	_ plugin.Live        = (*Provider)(nil)
 	_ plugin.Targeter    = (*Provider)(nil)
 	_ plugin.Reserver    = (*Provider)(nil)
-	_ plugin.LogStreamer = (*Provider)(nil)
-	_ plugin.LogReader   = (*Provider)(nil)
+	_ plugin.LogCapturer = (*Provider)(nil)
 	_ plugin.Releaser    = (*Provider)(nil)
 )
 

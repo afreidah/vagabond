@@ -97,9 +97,10 @@ On `SIGINT` or `SIGTERM` the server stops accepting requests and gives
 in-flight ones 10 seconds to finish. Dispatches it is running are not
 cancelled: their executions keep running at the providers, their leases lapse,
 and the next server to claim them follows them to the end. See
-[dispatch](dispatch.md#resuming). Live output streams end at once, the upkeep
-loops stop, and the agent listener closes every session; agents reconnect with
-backoff.
+[dispatch](dispatch.md#resuming), output capture included, from what the store
+holds. Followed output responses end at once, and the CLI asks again from what
+it printed. The upkeep loops stop, and the agent listener closes every
+session; agents reconnect with backoff.
 
 ### systemd
 
@@ -244,10 +245,10 @@ configured providers, not with registered jobs.
 | Lease claim | Server | One `UPDATE ... RETURNING` every 30s |
 | Reaper | Server | One locking read of reservations older than 1 hour every 5 minutes, plus one execution record read per stale reservation |
 | Record writes | Execution | One conditional `INSERT` or `UPDATE` per state change, plus one each for the result and the release |
-| Output capture | Ended execution | One provider `ReadLogs`, and one transaction per 256 KiB of output, up to `max_log_mib`. On Cloud Run, one `entries:list` request per page, against a quota of 60 a minute per project |
+| Output capture | Running execution | One provider capture, and at most one transaction a second while output arrives, each writing the chunk filling, up to 256 KiB. On Cloud Run and Cloud Build, one open `entries:tail` and one `entries:list` scan, a request per page, each time a tail opens and once at the end, against quotas of 10 open tails and 60 list requests a minute per project |
 | Settle and release | Ended execution | A reservation lookup and a settle; one provider `Release`, retried from 250ms doubling to 10s while it fails |
 | Output retention | Server | One `DELETE` of output past `log_retention` every hour |
-| Live output | Followed request | One execution read per second, plus the provider's stream |
+| Output follow | Followed request | One execution read and one output read per second, from the store |
 | Dispatch follow | `job run` / `job dispatch` | One `GET /v1/dispatch/{id}` per second: the dispatch and all of its executions |
 
 - Database connections: pgxpool, at most `pool_max_conns` (default the

@@ -4,9 +4,9 @@
 // Author: Alex Freidah
 //
 // The task container's log through the Kubernetes API, followed while the task
-// runs and read whole once it has ended. The log starts at the container's
-// first line rather than at the present, so unlike a tail a follow can resume
-// from an offset by skipping what the caller already has.
+// runs and read whole once it has ended when the follow did not see it exit.
+// The log starts at the container's first line rather than at the present, so
+// a capture resumes by skipping what the execution's log already holds.
 // -------------------------------------------------------------------------------
 
 package ibm
@@ -14,7 +14,6 @@ package ibm
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -27,42 +26,81 @@ import (
 // CONSTANTS
 // -------------------------------------------------------------------------
 
-// defaultPodPoll is how often a follower checks whether the task's container
+// defaultPodPoll is how often a capture checks whether the task's container
 // has started.
 const defaultPodPoll = 2 * time.Second
 
 // -------------------------------------------------------------------------
-// STREAMING
+// CAPTURE
 // -------------------------------------------------------------------------
 
-// StreamLogs writes a running execution's output to w as it is written, from
-// byte offset on. It waits for the container to start, since its log cannot be
-// opened before, and returns when the container exits or ctx ends.
-func (p *Provider) StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error {
-	name, err := p.awaitStart(ctx, plugin.ResourceName(id))
+// CaptureLogs copies the task container's log into log as it is written, from
+// log.Len() on. Before the workload has ended, the log is followed until the
+// container exits; a follow that ends while it still runs was cut, and is
+// reported for the capture to be made again. Once ended has closed, a log the
+// follow did not see to the container's exit is read whole, so output a cut
+// follow missed is not lost.
+func (p *Provider) CaptureLogs(ctx context.Context, id execution.ID, log execution.Log, ended <-chan struct{}) error {
+	run := plugin.ResourceName(id)
+
+	if !plugin.Ended(ended) {
+		exited, err := p.follow(ctx, run, log, ended)
+		if err != nil {
+			return err
+		}
+
+		select {
+		case <-ended:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+		if exited {
+			return nil
+		}
+	}
+
+	return p.readRest(ctx, run, log)
+}
+
+// follow copies the container's log into log as it is written, once the
+// container has started, and reports whether the container had exited when
+// the log ended. Nothing is followed when ended closes first.
+func (p *Provider) follow(ctx context.Context, run string, log execution.Log, ended <-chan struct{}) (bool, error) {
+	name, err := p.awaitStart(ctx, run, ended)
 	if err != nil || name == "" {
-		return err
+		return false, err
 	}
 
 	resp, err := p.openLog(ctx, name, true)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer resp.Body.Close()
 
-	return plugin.CopyLive(plugin.SkipWriter(w, offset), resp.Body)
+	if err := plugin.CopyAll(plugin.SkipWriter(log, log.Len()), resp.Body); err != nil {
+		return false, err
+	}
+
+	// A follow ends when the container exits, or when something on the way cuts it
+	found, err := p.runPod(ctx, run)
+	if err != nil {
+		return false, err
+	}
+
+	if found != nil && found.started() && found.exitCode() == nil {
+		return false, plugin.Infrastructure(fmt.Errorf("the log of job run %s ended while its container runs", run))
+	}
+
+	return found != nil && found.exitCode() != nil, nil
 }
 
 // awaitStart polls for the run's pod until its task container has started,
-// returning the pod's name, or "" once ctx ends.
-func (p *Provider) awaitStart(ctx context.Context, run string) (string, error) {
+// returning the pod's name, or "" once ended closes first.
+func (p *Provider) awaitStart(ctx context.Context, run string, ended <-chan struct{}) (string, error) {
 	for {
 		found, err := p.runPod(ctx, run)
 		if err != nil {
-			if ctx.Err() != nil {
-				return "", nil
-			}
-
 			return "", err
 		}
 
@@ -72,21 +110,17 @@ func (p *Provider) awaitStart(ctx context.Context, run string) (string, error) {
 
 		select {
 		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ended:
 			return "", nil
 		case <-time.After(p.podPoll):
 		}
 	}
 }
 
-// -------------------------------------------------------------------------
-// READING
-// -------------------------------------------------------------------------
-
-// ReadLogs writes a finished run's output, the task container's whole log. The
-// pod goes with the run, so a pod already gone is output lost.
-func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w execution.LogWriter) error {
-	run := plugin.ResourceName(id)
-
+// readRest copies what of a finished run's container log log does not hold
+// yet. The pod goes with the run, so a pod already gone is output lost.
+func (p *Provider) readRest(ctx context.Context, run string, log execution.Log) error {
 	found, err := p.runPod(ctx, run)
 	if err != nil {
 		return err
@@ -107,7 +141,7 @@ func (p *Provider) ReadLogs(ctx context.Context, id execution.ID, w execution.Lo
 	}
 	defer resp.Body.Close()
 
-	return plugin.CopyAll(w, resp.Body)
+	return plugin.CopyAll(plugin.SkipWriter(log, log.Len()), resp.Body)
 }
 
 // -------------------------------------------------------------------------

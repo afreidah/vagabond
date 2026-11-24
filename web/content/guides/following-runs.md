@@ -57,7 +57,7 @@ No vulnerabilities found.
 | `==> dispatch <id> of "<job>"` | The server accepted the run. The ID is the dispatch's |
 | `==> make pending on gcp-cloud-run (execution <id>)` | The task's execution, recorded and about to be sent to Cloud Run. The first line about an execution carries its ID |
 | `==> make accepted on gcp-cloud-run`, `running` | Cloud Run took it, then started it. The CLI reads the run once a second and prints each new state it sees |
-| task output | What the task prints, streamed from Cloud Run while it runs |
+| task output | What the task prints, as the server stores it from Cloud Run while it runs |
 | `==> make succeeded on gcp-cloud-run in 4m11.584s` | The task exited 0, after the run time Cloud Run reported |
 
 The command exits 0. Progress lines go to stderr and task output to stdout, so

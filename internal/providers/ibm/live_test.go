@@ -95,8 +95,8 @@ func submitLive(t *testing.T, p *Provider, id execution.ID, task *job.Task) {
 // ROUND TRIP
 // -------------------------------------------------------------------------
 
-// A failing container comes back with its exit code and both streams, read
-// whole and followed while it runs. Released, the run is gone.
+// A failing container comes back with its exit code and both streams,
+// captured while it runs. Released, the run is gone.
 func TestLiveRoundTrip(t *testing.T) {
 	p := liveProvider(t)
 	id := live.RoundTrip(t, p, liveSize)
@@ -134,7 +134,7 @@ args    = ["-ec", "if true; then\n  echo line-one\nfi\necho \"$0 / $LIVE_PRICE\"
 		t.Errorf("state = %s, want succeeded", state)
 	}
 
-	logs := plugintest.ReadAll(t, p, id)
+	logs := live.ReadAll(t, p, id)
 
 	t.Logf("logs=%q", logs)
 
@@ -165,9 +165,9 @@ args    = ["-c", "seq 1 20000"]
 		t.Errorf("state = %s, want succeeded", state)
 	}
 
-	logs := plugintest.ReadAll(t, p, id)
+	logs := live.ReadAll(t, p, id)
 
 	if !strings.HasPrefix(logs, "1\n2\n") || !strings.HasSuffix(logs, "\n20000\n") || len(logs) <= 64<<10 {
-		t.Errorf("ReadLogs gave %d bytes, want all of the output", len(logs))
+		t.Errorf("the capture gave %d bytes, want all of the output", len(logs))
 	}
 }

@@ -12,7 +12,6 @@ package statetest
 
 import (
 	"context"
-	"io"
 	"testing"
 	"time"
 
@@ -41,7 +40,7 @@ type Store interface {
 	ListExecutions(ctx context.Context, f execution.Filter) ([]*execution.Record, error)
 
 	AppendLog(ctx context.Context, id execution.ID, seq int64, data []byte, keepFrom int64, lease execution.Lease) error
-	ReadLog(ctx context.Context, id execution.ID, fromSeq int64, w io.Writer) error
+	ReadLog(ctx context.Context, id execution.ID, fromSeq int64, each func(seq int64, data []byte) error) error
 	PruneLogs(ctx context.Context, before time.Time) (int, error)
 }
 

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
   <title id="title">Vagabond architecture</title>
-  <desc id="desc">The vagabond CLI calls the server's HTTP API. The server admits, ranks, dispatches and accounts for each task, keeps its records in Postgres or CockroachDB, and runs work on Google Cloud Run Jobs, IBM Code Engine Jobs, AWS Lambda, or agent nodes, as containers or in Firecracker microVMs.</desc>
+  <desc id="desc">The vagabond CLI calls the server's HTTP API. The server admits, ranks, dispatches and accounts for each task, keeps its records in Postgres or CockroachDB, and runs work on Google Cloud Run Jobs or Cloud Build, IBM Code Engine Jobs, AWS Lambda, or agent nodes, as containers or in Firecracker microVMs.</desc>
   <defs>
     <style>
       .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:21px;font-weight:700;fill:#f8fafc}.small{font-size:15px;font-weight:600;fill:#c9ccd3}.micro{font-size:14px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}.icon{fill:none;stroke:#ff8a2b;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
@@ -51,7 +51,7 @@
       <path transform="translate(0,228)" d="M922 104h36a12 12 0 0 0 0-24 17 17 0 0 0-32-3 13 13 0 0 0-4 27z"/>
       <g transform="translate(0,48)"><rect x="918" y="370" width="44" height="16" rx="4"/><rect x="918" y="394" width="44" height="16" rx="4"/><path d="M926 378h2M926 402h2"/></g>
     </g>
-    <text x="980" y="81" class="label">Cloud Run Jobs</text><text x="980" y="107" class="small">Google Cloud</text>
+    <text x="980" y="81" class="label">Google Cloud</text><text x="980" y="107" class="small">Cloud Run, Cloud Build</text>
     <text x="980" y="201" class="label">Code Engine</text><text x="980" y="227" class="small">IBM Cloud jobs</text>
     <text x="980" y="321" class="label">AWS Lambda</text><text x="980" y="347" class="small">functions</text>
     <text x="980" y="441" class="label">Agent nodes</text><text x="980" y="467" class="small">containers, microVMs</text>

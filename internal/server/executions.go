@@ -3,20 +3,20 @@
 //
 // Author: Alex Freidah
 //
-// Reading one execution, its output stored or live, and cancelling it. A
-// cancel stops the whole dispatch: at once when this process is running it,
-// otherwise through the dispatch's lease, so only its holder acts on the
-// provider.
+// Reading one execution, its output stored or followed as it is stored, and
+// cancelling it. A cancel stops the whole dispatch: at once when this process
+// is running it, otherwise through the dispatch's lease, so only its holder
+// acts on the provider.
 // -------------------------------------------------------------------------------
 
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/afreidah/vagabond/internal/execution"
-	"github.com/afreidah/vagabond/internal/plugin"
 )
 
 // maxListed is the most executions one listing answers with.
@@ -83,11 +83,11 @@ func (s *Server) executionStatus(_ http.ResponseWriter, r *http.Request) (any, e
 // OUTPUT
 // -------------------------------------------------------------------------
 
-// executionLogs writes an execution's output as plain text, from the requested
-// byte offset on: streamed live while it runs when the request follows and its
-// provider can, and otherwise what is stored, empty until it is captured. An
-// offset in output dropped past the ceiling starts at the first byte kept. Not
-// wrapped, since the body is not JSON.
+// executionLogs writes an execution's stored output as plain text from the
+// requested byte offset on, as much as has been stored; with follow, it sends
+// what is stored after until the output is complete. The Vagabond-Logs-Start
+// header says where the body begins, past the offset when the output there
+// was dropped past the ceiling. Not wrapped, since the body is not JSON.
 func (s *Server) executionLogs(w http.ResponseWriter, r *http.Request) {
 	rec, offset, err := s.logsRequest(r)
 	if err != nil {
@@ -97,26 +97,17 @@ func (s *Server) executionLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-
-	if streamer, ok := s.streamer(r, rec); ok {
-		s.follow(r.Context(), w, streamer, rec.ID, offset)
-
-		return
-	}
-
 	// Headers wait for the first write, so a read that fails at once can still set a status
-	out := &flushing{w: w, rc: http.NewResponseController(w)}
-	seq, skip := execution.PlaceLogs(rec.LogsStart, offset)
+	out := newLogsResponse(w, offset)
 
-	err = s.executions.ReadLog(r.Context(), rec.ID, seq, plugin.SkipWriter(out, skip))
+	err = s.sendLogs(r.Context(), rec, out, r.URL.Query().Get("follow") == "true")
 
 	switch {
-	case err != nil && !out.wrote:
+	case err == nil, errors.Is(err, errMoved):
+	case !out.wrote:
 		status, body := s.failure(r, err)
 		write(w, status, body)
-	case err != nil && r.Context().Err() == nil:
+	case r.Context().Err() == nil:
 		s.logger.WarnContext(r.Context(), "reading stored output ended early", "execution", rec.ID, "error", err)
 	}
 }

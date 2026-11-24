@@ -16,11 +16,11 @@ time.
 
 | Reference | Package | Shows |
 |---|---|---|
-| Cloud Run Jobs | `internal/providers/gcp/cloudrun` | Asynchronous family, a paged `LogReader`, a `LogStreamer` that lists what was logged before its tail, `Releaser`, `Recredentialer`, raw HTTP against `httptest` |
+| Cloud Run Jobs | `internal/providers/gcp/cloudrun` | Asynchronous family, a `LogCapturer` over Cloud Logging that tails entries and catches up by listing them, `Releaser`, `Recredentialer`, raw HTTP against `httptest` |
 | Cloud Build | `internal/providers/gcp/cloudbuild` | A second provider on the same platform, both embedding `gcp.API` for the signed client and the Cloud Logging reader; a resource the platform names and the plugin finds again by tag; a `Result` that reports a run the platform ended as infrastructure |
-| Code Engine Jobs | `internal/providers/ibm` | Asynchronous family, `LogReader` and `LogStreamer` over one log, `Releaser`, a `Recredentialer` whose token refusals are unauthorized, a fixed size table, two APIs behind one token |
+| Code Engine Jobs | `internal/providers/ibm` | Asynchronous family, a `LogCapturer` that follows one log and reads it whole when the follow did not see the container exit, `Releaser`, a `Recredentialer` whose token refusals are unauthorized, a fixed size table, two APIs behind one token |
 | AWS Lambda | `internal/providers/aws` | Synchronous family, the `NotSupported` embeds, `Result.Billed`, output in `Result.Logs`, `Recredentialer`, a cloud SDK against `httptest` |
-| containerd, firecracker | `internal/providers/pool` | One package behind two types, `Live`, `Targeter` and `Reserver`, `LogStreamer` with `offset` and `LogReader` on top of it, `Releaser`, `Capabilities.Members`, an optional config block |
+| containerd, firecracker | `internal/providers/pool` | One package behind two types, `Live`, `Targeter` and `Reserver`, a `LogCapturer` that places output past what the node dropped, `Releaser`, `Capabilities.Members`, an optional config block |
 | Fakes | `internal/plugin/fake.go` | The smallest implementations of both families |
 
 ## Package boundaries
@@ -163,7 +163,8 @@ to learn whether the platform ever got it.
 ### `Result`
 
 What a finished execution produced. Called once by the execution's runner
-after `Status` reports a terminal state, before `ReadLogs` and `Release`. Not
+after `Status` reports a terminal state, before the output capture finishes
+and before `Release`. Not
 called for a run Vagabond cancelled, or one that ended without an answer. A
 failed call is not repeated: the execution keeps its terminal state without a
 result.
@@ -174,7 +175,7 @@ result.
 | `ExitCode` | `*int`; nil means the driver has no process to exit |
 | `Duration` | How long the work ran; settles the quota charge when `Billed` is nil |
 | `Billed` | `*quota.Execution` the platform reported charging; nil when it reports nothing |
-| `Logs` | Combined output, for a provider that hands it over with the answer and does not implement `LogReader`. Dispatch stores it; a stored result carries none |
+| `Logs` | Combined output, for a provider that hands it over with the answer and does not implement `LogCapturer`. Dispatch stores it; a stored result carries none |
 | `LogsTruncated` | `Logs` is not all of the output, as when the platform returns only its tail |
 | `Reason` | Why the platform ended the workload, in its words: an eviction, an OOM kill. Empty when the process exited on its own, or the platform's reason says no more than the exit code |
 
@@ -182,9 +183,9 @@ result.
 - The terminal state is the verdict: dispatch counts a task as succeeded only
   when the provider reports `succeeded`, whatever the exit code. Map exit
   codes to the state; a nil `ExitCode` is fine for a task that never ran.
-- A platform that holds the output after the run should not read it here.
-  Implement [`LogReader`](#logreader), which dispatch calls once, streaming,
-  and leave `Logs` empty.
+- A platform that holds the output should not read it here. Implement
+  [`LogCapturer`](#logcapturer), which dispatch calls while the execution
+  runs, and leave `Logs` empty.
 - Set `Billed` when the platform reports its charge, as Lambda's `REPORT` line
   does. Settlement uses it in full in place of declared shape times `Duration`.
 - Read the platform's timestamps with `plugin.ParseTime` and take `Duration`
@@ -201,8 +202,8 @@ a `Submit` that failed as `infrastructure` or unclassified, since the run may
 exist. One `Status` call follows, for the times it ran. Its error is ignored.
 
 - Cancelling a finished or already deleted execution returns `nil`.
-- If cancelling destroys what `Result` or `ReadLogs` reads, document it on the
-  provider page.
+- If cancelling destroys what `Result` or `CaptureLogs` reads, document it on
+  the provider page.
 - If cancelling makes `Status` report the execution unknown, as deleting it
   does, a cancelled run is charged for the time Vagabond saw it running
   rather than the times the platform kept. Document that on the provider page
@@ -240,58 +241,54 @@ is absent.
 
 | Interface | Method | Called by | When |
 |---|---|---|---|
-| `LogStreamer` | `StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error` | Server | While a client follows a running execution's output |
-| `LogReader` | `ReadLogs(ctx context.Context, id execution.ID, w execution.LogWriter) error` | Execution runner | Once the execution ends, however it ended, after `Result` and before the result is recorded and `Release`; not after a failed `Submit` |
-| `Releaser` | `Release(ctx context.Context, id execution.ID) error` | Execution runner | Last, for every ending: after `Result`, `ReadLogs` and the settle |
-| `Recredentialer` | `Recredential(ctx context.Context, credential []byte) error` | Registry, for the execution runner | After a runner call (`Submit`, `Status`, `Result`, `ReadLogs`, `Cancel`, `Release`) failed with `ErrUnauthorized`, when the provider block has a `credentials` block; at most once a minute per provider |
+| `LogCapturer` | `CaptureLogs(ctx context.Context, id execution.ID, log execution.Log, ended <-chan struct{}) error` | Execution runner | From when the provider has the work until the output is whole, called again whenever it returns early; before the result is recorded and `Release`; not after a failed `Submit` |
+| `Releaser` | `Release(ctx context.Context, id execution.ID) error` | Execution runner | Last, for every ending: after `Result`, the output capture and the settle |
+| `Recredentialer` | `Recredential(ctx context.Context, credential []byte) error` | Registry, for the execution runner | After a runner call (`Submit`, `Status`, `Result`, `CaptureLogs`, `Cancel`, `Release`) failed with `ErrUnauthorized`, when the provider block has a `credentials` block; at most once a minute per provider |
 | `Live` | `LiveCapabilities() (Capabilities, error)` | Registry | On every plan, in place of the refreshed snapshot |
 | `Targeter` | `Target(node string) Provider` | Dispatch, server | For every call on an execution whose candidate or record names a node |
 | `Reserver` | `Reserve(id execution.ID, task *job.Task) error` | Dispatch | On the provider `Target` returned, after quota is reserved and before the execution is recorded |
 
-### `LogStreamer`
+### `LogCapturer`
 
-- Start at the first byte the task printed, whenever the stream opens, and
-  write output to `w` as it arrives from byte `offset` on: the caller already
-  has the bytes before it. `plugin.SkipWriter(w, offset)` drops them, and
-  `plugin.CopyLive` copies a body until it ends. These are the same bytes
-  `ReadLogs` stores, so a client can finish from the stored copy where the
-  stream left off.
-- A platform whose tail starts at what is being written now lists what was
-  written before it, as Cloud Run does. A stream that cannot be placed at
-  `offset` returns `plugin.ErrNoResume`, before writing anything when it can.
-  Never start somewhere else: the caller's count would stop being a position.
-  The server answers `416`, and the client finishes from the stored copy.
-- Return when the execution ends, the stream closes or `ctx` is cancelled.
-- The server calls it for each `GET /v1/execution/{id}/logs?follow=true` on an
-  execution that has not ended. It cancels `ctx` 5 seconds after it sees the
-  execution end, when the client goes, or when shutdown begins.
-- An error is logged and ends the client's response. It never touches the
-  execution.
-- Once the stream is open, treat every way it stops as the end rather than as
-  an error. The client reopens it from the bytes it has.
-- Synchronous providers have nothing to stream and should not implement it.
+The execution's runner copies the output into the store while the execution
+runs, through this, and every client reads that copy; no client reaches the
+provider.
 
-### `LogReader`
-
-- Write a finished execution's whole output to `w`, from the first byte. Write
-  as it is read rather than collecting it: dispatch stores it in 256 KiB
-  chunks as it arrives and keeps the end past the server's `max_log_mib`.
+- Copy the output into `log` as the platform has it, from `log.Len()` on:
+  `log` holds what an earlier call, or another server before it took the
+  dispatch over, already captured. A byte stream skips those bytes with
+  `plugin.SkipWriter(log, log.Len())`. Cloud Logging has no byte positions,
+  so its capture matches the lines it lists against `log.WriteTo` instead
+  ([Cloud Run](providers/cloud-run.md#output)).
+- Return `nil` only once `ended` has closed and `log` holds all of the output.
+  `ended` closes when the runner sees the execution terminal. A platform whose
+  stream ends exactly when the workload does may then wait for `ended`, as
+  agent nodes do. One that cannot tell a stream that ended from one that was
+  cut reports the cut, and once `ended` closes reads what is left, as Code
+  Engine does.
+- Return an error for any other end: a stream cut, a refusal, a read that
+  failed. The runner logs it as `capturing output`, waits 1s doubling to 30s,
+  back to 1s after a call that added output, and calls again. Once `ended`
+  has closed, three failed calls end the capture: what was written is kept and
+  the output is marked truncated. The execution is never failed over it.
+- Write as the output arrives rather than collecting it. The runner stores
+  what arrives at least once a second, in 256 KiB chunks, and keeps the end
+  past the server's `max_log_mib`.
 - A platform that keeps only the end of long output, knowing where that end
-  begins, calls `w.StartsAt(offset)` before writing it, with `offset` a
-  multiple of 256 KiB (`execution.LogChunk`), as agent nodes do. One that
-  cannot say where it begins writes what it has as the whole.
-- Return an error when what was written is not all of it: a body cut short, a
-  page cap reached, the output already gone. Write what arrived first;
-  `plugin.CopyAll` copies a body and reports a failed read as infrastructure.
-  Dispatch keeps what was written and marks the output truncated. The
-  execution is never failed over it.
-- Wrap `w` in `plugin.LogOutput` when writing to it directly, so a failed
+  begins, calls `log.StartsAt(offset)` before writing it, with `offset` a
+  multiple of 256 KiB (`execution.LogChunk`) at or past `log.Len()`, as agent
+  nodes do. What `log` held before it is dropped.
+- Wrap `log` in `plugin.LogOutput` when writing to it directly, so a failed
   write is `internal` and told apart from the platform's failures.
-- Called on its own context with a 5 minute timeout, and retried once after a
-  credential refresh. A retry starts the output over, so write from the first
-  byte every time.
-- For a platform that holds the output after the run. A provider whose output
-  comes with the answer puts it in `Result.Logs` instead.
+  `plugin.CopyAll` copies a body and reports a failed read as infrastructure.
+- `ctx` is cancelled when the capture is stopped: the dispatch's lease moved,
+  the server is shutting down, or 5 minutes passed after `ended` closed.
+  `plugin.Ended(ended)` reports whether `ended` has closed.
+- A call refused as unauthorized is made again after a credential refresh,
+  from what `log` holds.
+- For a platform that holds the output. A provider whose output comes with the
+  answer puts it in `Result.Logs` instead; synchronous providers should not
+  implement it.
 
 ### `Releaser`
 
@@ -300,8 +297,8 @@ is absent.
   which executions are released and calls it for every one that is not.
 - The execution's runner calls it last, however the execution ended: a
   result, a cancel, a failed `Submit`, a failed `Result`, a `lost` execution
-  once resolved. It comes after `Result` and `ReadLogs`, because releasing may
-  destroy what they read, and after the quota settle. A runner restored after
+  once resolved. It comes after `Result` and the output capture, because
+  releasing may destroy what they read, and after the quota settle. A runner restored after
   a claim calls it for an execution whose last runner did not.
 - Called on a context with no deadline; a call that never returns holds the
   dispatch open.
@@ -325,8 +322,7 @@ is absent.
   nothing to resolve again.
 - Called at most once a minute per provider. A rejection within a minute of the
   last refresh is retried on the credential already in place.
-- Only a runner's calls are retried. A rejection from `StreamLogs` is returned
-  as is.
+- Only a runner's calls are retried, `CaptureLogs` among them.
 
 ### `Live`
 
@@ -461,7 +457,6 @@ or malformed.
 | `plugin.ErrUnknownExecution` | The platform has no record of the execution | Execution runner: while polling, fails the execution at once, or makes it `lost` when classified `infrastructure`; from the `Status` after a cancel or failed `Submit`, charges for the time seen running, or drops the reservation for a run never seen running; from `Release`, counts the execution released |
 | `plugin.ErrUnsupported` | The platform has no such operation | Nobody specially; an `internal` failure like any other |
 | `plugin.ErrInvalidSubmission` | `Submission.Validate` failed | Dispatch |
-| `plugin.ErrNoResume` | The log stream cannot be placed at the requested offset | Server: answers 416 when nothing was written yet; the client finishes from the stored output |
 
 ### How dispatch reacts
 
@@ -478,8 +473,7 @@ or malformed.
 | `Status` reports `cancelled` | `Result` read, output captured, `Release` called | `cancelled` | Treated as `infrastructure`: reroute if allowed |
 | `Result` returns an error | Output captured, `Release` called | Terminal state from `Status`, no result | Reroute if `infrastructure`, else stop |
 | `Status` reports `succeeded` or `failed`, `Result` returns | Output captured, then `Release` called | Terminal state and result | Task ends; a non-zero exit stops the job |
-| `ReadLogs` returns an error | What was written is stored | `LogsTruncated` set | None; the execution's outcome is unchanged |
-| `StreamLogs` returns an error | Logged; the client's response ends | Unchanged | None |
+| `CaptureLogs` returns an error | Logged and called again; past three failures once the execution ended, what was written is kept | `LogsTruncated` set when it gives up | None; the execution's outcome is unchanged |
 | `Release` returns an error | Retried, 250ms doubling to 10s, until it succeeds or returns `ErrUnknownExecution`; the dispatch stays open meanwhile | `released_at` set once it does | None |
 
 Retry budgets, backoff and reroute rules are in [Dispatch](dispatch.md).
@@ -841,8 +835,10 @@ Cover at least:
 | Non-zero exit | Result returned, no error |
 | Cancel twice, or after the resource is gone | `nil` |
 | Missing config block, empty attribute, bad credential | Diagnostics from `New` |
-| `ReadLogs` of a long output | All of it, in order, and an error after what arrived when it is cut short, read into an `execution.PlacedWriter` |
-| `ReadLogs` of output the platform kept only the end of | The `PlacedWriter`'s `Start`, where that end begins |
+| `CaptureLogs` of a finished run's long output | All of it, in order, and an error after what arrived when it is cut short, captured into a `plugin.MemoryLog` |
+| `CaptureLogs` into a log holding the start of the output | Only the rest added |
+| `CaptureLogs` of a stream cut while the run goes | An error, after what arrived |
+| `CaptureLogs` of output the platform kept only the end of | The `MemoryLog`'s `Start`, where that end begins |
 
 **Compile-time assertions** for every interface the plugin means to satisfy:
 
@@ -850,8 +846,7 @@ Cover at least:
 var (
     _ plugin.Provider    = (*Provider)(nil)
     _ plugin.Releaser    = (*Provider)(nil)
-    _ plugin.LogStreamer = (*Provider)(nil)
-    _ plugin.LogReader   = (*Provider)(nil)
+    _ plugin.LogCapturer = (*Provider)(nil)
 )
 ```
 
@@ -863,11 +858,11 @@ catches it.
 environment variable and skipped when it is unset, so `make test` needs no
 cloud account (see `internal/providers/gcp/cloudrun/live_test.go`). For a container
 provider, `plugintest.Live{Poll, Deadline}.RoundTrip(t, p, resources)` is the
-whole test: a container printing to both streams and exiting 3, followed live
-when the provider streams, its exit code and output checked, and cancelled in
-a cleanup. It returns the execution ID for checks of the provider's own.
-`Finish`, `AwaitRunning`, `Follow` and `ReadAll` are there for other live
-tests. A cleanup registered by hand needs its own context: `t.Context()` is
+whole test: a container printing to both streams and exiting 3, its output
+captured as the runner captures it and its first line required before the
+task ends, its exit code checked, and cancelled in a cleanup. It returns the
+execution ID for checks of the provider's own. `Finish`, `AwaitRunning`,
+`Capture` and `ReadAll` are there for other live tests. A cleanup registered by hand needs its own context: `t.Context()` is
 cancelled before `t.Cleanup` functions run, so a delete on it leaks the
 resource.
 
@@ -877,9 +872,8 @@ above the boundary: `NewFakeContainerProvider`, `NewFakeFunctionProvider` and
 `FixtureFunction` and `FixtureWorker`. They are also registered as the
 `fake-container`, `fake-function` and `fake-worker` types, which the
 integration tests (`make integration-test`) and `examples/config.hcl` use.
-`FakeContainerProvider` exposes `Caps`, `SubmitErr`, `ExitCode` and `NoResume`,
-which makes `StreamLogs` return `ErrNoResume` for an offset above zero; its
-`ReadLogs` writes the same fixed output its stream does.
+`FakeContainerProvider` exposes `Caps`, `SubmitErr` and `ExitCode`; its
+`CaptureLogs` writes one fixed line, then waits for `ended`.
 `Advance(id, state)` moves a recorded run as the platform would between polls.
 `FakeSyncProvider` exposes `Caps`, `SubmitErr` and `ExitCode`; a nil `ExitCode`
 succeeds.

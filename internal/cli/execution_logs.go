@@ -3,10 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// Prints an execution's stored output, or with -f follows it live until the
-// execution ends, as job run does for its own tasks. Either way the warnings
-// are a run's: output dropped past the server's ceiling, and output the
-// provider did not give.
+// Prints the output the server has stored for an execution, or with -f
+// follows it as it is stored until the execution ends, as job run does for its
+// own tasks. Either way the warnings are a run's: output dropped past the
+// server's ceiling, and output the provider did not give.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -36,13 +36,11 @@ func (c *ExecutionLogsCommand) Help() string {
 	text := `
 Usage: vagabond execution logs [options] <id>
 
-  Prints the output stored for an execution, once it has ended. The server
-  keeps up to max_log_mib of it (16 MiB by default), the end of it, for
-  log_retention after the execution ends (7 days by default). With -f,
-  streams the output while the execution runs, on providers that can stream
-  it (Cloud Run, Cloud Build, Code Engine and agent pools), prints what did
-  not stream once it ends, and exits. Output that streamed and does not match
-  the stored copy is followed by the stored copy in full.
+  Prints the output the server has stored for an execution so far, which it
+  stores while the execution runs. The server keeps up to max_log_mib of it
+  (16 MiB by default), the end of it, for log_retention after the execution
+  ends (7 days by default). With -f, prints the output as it is stored until
+  the execution ends, then exits.
 
 Logs Options:
 
@@ -81,14 +79,17 @@ func (c *ExecutionLogsCommand) Run(args []string) int {
 		return c.apiFailure(err)
 	}
 
-	c.newFollower(client, false).rest(ctx, e)
+	f := c.newFollower(client, false)
+	out := f.output()
+
+	f.closeOutput(e, out, client.Logs(ctx, e.ID, 0, out))
 
 	return ExitSuccess
 }
 
-// follow streams id's output until the execution ends, then prints whatever
-// of its stored copy did not stream. An interrupt, ctx ending, stops
-// following only, as does a server that stays unreachable past the retries.
+// follow prints id's output as it is stored until the execution ends. An
+// interrupt, ctx ending, stops following only, as does a server that stays
+// unreachable past the retries.
 func (c *ExecutionLogsCommand) follow(ctx context.Context, client *api.Client, id string) int {
 	f := c.newFollower(client, false)
 	reads := c.retrying(client)

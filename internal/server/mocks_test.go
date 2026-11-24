@@ -11,7 +11,6 @@ package server
 
 import (
 	context "context"
-	io "io"
 	reflect "reflect"
 	time "time"
 
@@ -472,17 +471,17 @@ func (mr *MockserverExecutionsMockRecorder) PruneLogs(ctx, before any) *gomock.C
 }
 
 // ReadLog mocks base method.
-func (m *MockserverExecutions) ReadLog(ctx context.Context, id execution.ID, fromSeq int64, w io.Writer) error {
+func (m *MockserverExecutions) ReadLog(ctx context.Context, id execution.ID, fromSeq int64, each func(int64, []byte) error) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ReadLog", ctx, id, fromSeq, w)
+	ret := m.ctrl.Call(m, "ReadLog", ctx, id, fromSeq, each)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // ReadLog indicates an expected call of ReadLog.
-func (mr *MockserverExecutionsMockRecorder) ReadLog(ctx, id, fromSeq, w any) *gomock.Call {
+func (mr *MockserverExecutionsMockRecorder) ReadLog(ctx, id, fromSeq, each any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadLog", reflect.TypeOf((*MockserverExecutions)(nil).ReadLog), ctx, id, fromSeq, w)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadLog", reflect.TypeOf((*MockserverExecutions)(nil).ReadLog), ctx, id, fromSeq, each)
 }
 
 // RenewDispatch mocks base method.

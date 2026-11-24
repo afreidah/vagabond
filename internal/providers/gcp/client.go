@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"golang.org/x/oauth2"
@@ -49,13 +50,15 @@ var ErrNoCredential = errors.New("no credential supplied")
 
 // API is what both providers embed: the client their requests are signed
 // with, swapped whole when the key is resolved again, the configuration they
-// act under, and the Cloud Logging endpoint their output is read from.
-// LogsURL is a field so a test can point it at a local server.
+// act under, and the Cloud Logging endpoint their output is read from. LogsURL
+// and Settle, how long a capture waits for late entries once the run is over,
+// are fields so a test can point it at a local server and not wait.
 type API struct {
 	*plugin.Credentialed[http.Client]
 
 	Config  *Config
 	LogsURL string
+	Settle  time.Duration
 
 	name string
 }
@@ -76,7 +79,7 @@ func NewAPI(
 		return nil, append(diags, credDiags...)
 	}
 
-	return &API{Credentialed: client, Config: cfg, LogsURL: loggingEndpoint, name: name}, diags
+	return &API{Credentialed: client, Config: cfg, LogsURL: loggingEndpoint, Settle: settleWait, name: name}, diags
 }
 
 // Name returns the routing identifier, the label of the provider block the

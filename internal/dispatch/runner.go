@@ -4,10 +4,11 @@
 // Author: Alex Freidah
 //
 // One goroutine per execution, the only writer of its record, takes it from
-// submission through release: submit, watch, collect, settle, release. Each
-// step leaves its mark on the record, so a runner restored after a claim
-// starts at the first step not done. Every write is checked against the
-// dispatch's lease; a refused one stops the runner.
+// submission through release: submit, watch, collect, settle, release, with
+// its output captured from submission until collect. Each step leaves its
+// mark on the record, so a runner restored after a claim starts at the first
+// step not done. Every write is checked against the dispatch's lease; a
+// refused one stops the runner.
 // -------------------------------------------------------------------------------
 
 package dispatch
@@ -50,6 +51,7 @@ type runner struct {
 	task     *job.Task
 
 	submitted  *execution.Result // the answer Submit carried, from a synchronous provider
+	logs       *capture          // the output being copied into the store, nil when it came with the answer
 	ranNothing bool              // the provider turned the work down or never got it
 	unanswered bool              // nothing says what ran, so it is charged as reserved
 	abandoned  error             // why the runner cancelled the work itself
@@ -122,6 +124,12 @@ func (r *runner) drive(ctx, work context.Context) error {
 		if err != nil || done {
 			return errors.Join(err, r.finish(work, err == nil))
 		}
+	}
+
+	// Once the provider has the work, its output is copied while it runs, until collect
+	if r.rec.LogsAt.IsZero() && r.submitted == nil {
+		r.logs = r.d.startCapture(work, r.provider, r.rec.ID, r.lease.key)
+		defer r.logs.stop()
 	}
 
 	// A restored execution already lost answers as it stands; it is resolved in the background
@@ -352,9 +360,9 @@ func (r *runner) abandon(ctx, work context.Context) error {
 	return nil
 }
 
-// collect reads the result, unless the record has one, and the output, in
-// that order, then records both. A result that cannot be read leaves the
-// output captured and the record without one.
+// collect reads the result, unless the record has one, then has the output
+// finished, and records both. A result that cannot be read leaves the output
+// captured and the record without one.
 func (r *runner) collect(work context.Context) error {
 	result := r.submitted
 	if result == nil {
@@ -370,7 +378,7 @@ func (r *runner) collect(work context.Context) error {
 		}
 	}
 
-	r.d.capture(work, r.provider, &r.rec, result, r.lease.key)
+	r.d.collectLogs(work, r.logs, &r.rec, result, r.lease.key)
 
 	if result != nil {
 		r.rec.Result = result

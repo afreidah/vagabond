@@ -18,7 +18,7 @@ project can use both.
 | Package | `internal/providers/gcp/cloudbuild`, on the shared `internal/providers/gcp` |
 | Drivers | `container` |
 | Execution family | asynchronous: `Submit` returns `accepted`, dispatch polls `Status` |
-| Optional interfaces | `LogStreamer`, `Recredentialer` |
+| Optional interfaces | `LogCapturer`, `Recredentialer` |
 | APIs | Cloud Build API v1 (`cloudbuild.googleapis.com`), Cloud Logging API v2 (`logging.googleapis.com`) |
 
 The plugin's client, credential handling, error classification and Cloud
@@ -83,10 +83,10 @@ The calls the plugin makes:
 | Call | Used by |
 |---|---|
 | `POST /v1/projects/{p}/locations/{r}/builds` | `Submit` |
-| `GET .../builds?filter=tags="vagabond-<id>"` | `Status`, `Result`, `Cancel`, `ReadLogs`, `StreamLogs` |
+| `GET .../builds?filter=tags="vagabond-<id>"` | `Status`, `Result`, `Cancel`, `CaptureLogs` |
 | `POST .../builds/{id}:cancel` | `Cancel` |
-| `POST /v2/entries:list` | `ReadLogs`, `StreamLogs` |
-| `POST /v2/entries:tail` | `StreamLogs` |
+| `POST /v2/entries:list` | `CaptureLogs` |
+| `POST /v2/entries:tail` | `CaptureLogs` |
 
 ## Capabilities
 
@@ -152,8 +152,7 @@ does.
 | `Status` | Finds the build by its tag and reports its state and its own start and finish times |
 | `Result` | The step's exit code, and `finishTime` minus `startTime` as the duration |
 | `Cancel` | Cancels the build; a build no listing shows, or one already gone, is not an error |
-| `ReadLogs` | Reads the build's Cloud Logging entries, filtered by `resource.type="build" resource.labels.build_id="<id>"` |
-| `StreamLogs` | Follows the same entries, as `cloud-run` does; see [live output](cloud-run.md#live-output) |
+| `CaptureLogs` | Captures the build's Cloud Logging entries, filtered by `resource.type="build" resource.labels.build_id="<id>"`, while the build runs, as `cloud-run` does; see [output](cloud-run.md#output). Each call finds the build by its tag first |
 
 A build's record and output stay after it ends, so the provider has no
 `Release`.
@@ -220,7 +219,7 @@ go test -run TestLive -v -timeout 15m ./internal/providers/gcp/cloudbuild/
 
 The key's account needs the dispatcher roles above, and the runtime account
 `roles/logging.logWriter`. The test runs the shared round trip: `alpine:3.20`
-writes one line to stdout and one to stderr, sleeps 10 seconds so a follow
-attaches, and exits 3. It asserts state `failed`, exit code 3, and both lines,
-read whole and streamed, with the `$` in its args and env as written, and
-cancels the build in a cleanup.
+writes one line to stdout and one to stderr, sleeps 30 seconds so its first
+line is captured while it runs, and exits 3. It asserts state `failed`, exit
+code 3, and both lines captured, the first before the build ends, with the `$`
+in its args and env as written, and cancels the build in a cleanup.

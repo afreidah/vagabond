@@ -6,12 +6,13 @@
 // In-memory providers covering the three execution families. They prove the
 // interface can be satisfied without contorting an implementation, and let
 // admission, scheduling, and dispatch be tested end to end with no cloud
-// account.
+// account. An in-memory log takes a provider's capture under test.
 // -------------------------------------------------------------------------------
 
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -37,14 +38,12 @@ const fakeOutput = "fake execution output\n"
 // like IBM Code Engine or Google Cloud Run Jobs.
 //
 // The exported fields let a test make the provider fail or advertise something
-// unusual without a constructor per scenario. NoResume makes its log stream
-// refuse an offset, as a Cloud Run stream does when its backfill fails.
+// unusual without a constructor per scenario.
 type FakeContainerProvider struct {
 	ProviderName string
 	Caps         Capabilities
 	SubmitErr    error
 	ExitCode     int
-	NoResume     bool
 
 	mu    sync.Mutex
 	runs  map[execution.ID]execution.Status
@@ -137,7 +136,7 @@ func (p *FakeContainerProvider) Cancel(_ context.Context, id execution.ID) error
 }
 
 // Result reports what a recorded run produced, derived rather than stored:
-// ExitCode is the one knob a test needs. The output is read by ReadLogs.
+// ExitCode is the one knob a test needs. The output is read by CaptureLogs.
 func (p *FakeContainerProvider) Result(
 	_ context.Context, id execution.ID,
 ) (*execution.Result, error) {
@@ -155,44 +154,25 @@ func (p *FakeContainerProvider) Result(
 	}, nil
 }
 
-// StreamLogs writes a recorded run's output from offset on, then holds the
-// stream open until the run ends or ctx does.
-func (p *FakeContainerProvider) StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error {
+// CaptureLogs writes what of a recorded run's output log does not hold yet,
+// then waits for the run to be over or ctx to end.
+func (p *FakeContainerProvider) CaptureLogs(
+	ctx context.Context, id execution.ID, log execution.Log, ended <-chan struct{},
+) error {
 	if _, err := p.Status(ctx, id); err != nil {
 		return err
 	}
 
-	if p.NoResume && offset > 0 {
-		return ErrNoResume
-	}
-
-	if _, err := io.WriteString(SkipWriter(w, offset), fakeOutput); err != nil {
+	if _, err := io.WriteString(SkipWriter(log, log.Len()), fakeOutput); err != nil {
 		return err
 	}
 
-	for {
-		status, err := p.Status(ctx, id)
-		if err != nil || status.Terminal() {
-			return err
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(10 * time.Millisecond):
-		}
+	select {
+	case <-ended:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-}
-
-// ReadLogs writes a recorded run's whole output.
-func (p *FakeContainerProvider) ReadLogs(ctx context.Context, id execution.ID, w execution.LogWriter) error {
-	if _, err := p.Status(ctx, id); err != nil {
-		return err
-	}
-
-	_, err := io.WriteString(w, fakeOutput)
-
-	return err
 }
 
 // Advance moves a recorded run into the given state, standing in for whatever
@@ -289,4 +269,67 @@ func (p *FakeSyncProvider) Submit(
 		State:      state,
 		Result:     result,
 	}, nil
+}
+
+// -------------------------------------------------------------------------
+// LOG
+// -------------------------------------------------------------------------
+
+// MemoryLog is a Log held in memory for a capture under test, safe to read
+// while the capture writes it. Its zero value is empty.
+type MemoryLog struct {
+	mu    sync.Mutex
+	buf   bytes.Buffer
+	start int64
+}
+
+// Write appends p.
+func (l *MemoryLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.buf.Write(p)
+}
+
+// StartsAt drops what the log holds, so that what is written next begins at
+// offset.
+func (l *MemoryLog) StartsAt(offset int64) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.buf.Reset()
+	l.start = offset
+
+	return nil
+}
+
+// Len is where what is written next begins.
+func (l *MemoryLog) Len() int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.start + int64(l.buf.Len())
+}
+
+// WriteTo writes what the log holds to w.
+func (l *MemoryLog) WriteTo(w io.Writer) (int64, error) {
+	n, err := io.WriteString(w, l.String())
+
+	return int64(n), err
+}
+
+// String is what the log holds.
+func (l *MemoryLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.buf.String()
+}
+
+// Start is where what the log holds begins.
+func (l *MemoryLog) Start() int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.start
 }

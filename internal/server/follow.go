@@ -1,12 +1,14 @@
 // -------------------------------------------------------------------------------
-// Live Output
+// Following Output
 //
 // Author: Alex Freidah
 //
-// Streams a running execution's output to a client from the provider running
-// it. The stream is a view: it never touches the execution, and a broken one
-// only ends the response. It ends once the record has ended and the linger has
-// passed, since some providers' logs trail the work by seconds.
+// Sends an execution's stored output to a client, and for a request that
+// follows, what is stored after, as the dispatch holding the execution stores
+// it. Any server answers, since every one reads the same store; none opens the
+// provider's own stream. A follow ends with the output, once a read made after
+// the record was terminal is sent, since the terminal state is written only
+// after the last of it.
 // -------------------------------------------------------------------------------
 
 package server
@@ -16,108 +18,110 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/afreidah/vagabond/internal/api"
 	"github.com/afreidah/vagabond/internal/execution"
-	"github.com/afreidah/vagabond/internal/panics"
-	"github.com/afreidah/vagabond/internal/plugin"
 )
 
 // -------------------------------------------------------------------------
 // CONSTANTS
 // -------------------------------------------------------------------------
 
-const (
-	defaultFollowPoll   = time.Second     // how often a followed execution's record is re-read
-	defaultFollowLinger = 5 * time.Second // how long a stream outlives its execution
-)
+// defaultFollowPoll is how often a followed execution's record and output are
+// read again.
+const defaultFollowPoll = time.Second
+
+// errMoved ends a response whose next output was dropped past the ceiling after
+// the body began, so the client asks again from where it got to and is told
+// where the output now begins.
+var errMoved = errors.New("the output to send next was dropped past the ceiling")
 
 // -------------------------------------------------------------------------
-// STREAMING
+// SENDING
 // -------------------------------------------------------------------------
 
-// streamer is the provider streaming rec's output, when the request asked to
-// follow and rec has not ended.
-func (s *Server) streamer(r *http.Request, rec *execution.Record) (plugin.LogStreamer, bool) {
-	if r.URL.Query().Get("follow") != "true" || rec.Terminal() {
-		return nil, false
-	}
-
-	provider, ok := s.registry.Provider(rec.Provider)
-	if !ok {
-		return nil, false
-	}
-
-	streamer, ok := plugin.Target(provider, rec.Node).(plugin.LogStreamer)
-
-	return streamer, ok
-}
-
-// follow copies id's output from byte offset on, from streamer to w as it is
-// written, until the execution has ended and the linger passed, the client
-// goes, or the server shuts down. A provider that cannot resume from offset is
-// answered 416, so the client finishes from the stored output.
-func (s *Server) follow(
-	ctx context.Context, w http.ResponseWriter, streamer plugin.LogStreamer, id execution.ID, offset int64,
-) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	go s.endFollow(ctx, cancel, id)
-
-	// Headers wait for the first write, so an early refusal can still set a status.
-	out := &flushing{w: w, rc: http.NewResponseController(w)}
-
-	err := streamer.StreamLogs(ctx, id, offset, out)
-
-	switch {
-	case errors.Is(err, plugin.ErrNoResume) && !out.wrote:
-		write(w, http.StatusRequestedRangeNotSatisfiable, api.Error{Error: err.Error()})
-	case err != nil && ctx.Err() == nil:
-		s.logger.WarnContext(ctx, "log stream ended early", "execution", id, "error", err)
-	}
-}
-
-// endFollow re-reads id's record until it has ended, then calls stop once the
-// linger has passed. A shutdown stops it at once, and a panic stops it then.
-func (s *Server) endFollow(ctx context.Context, stop context.CancelFunc, id execution.ID) {
-	defer panics.Catch(ctx, s.logger, "following the output of "+id.String(), func(error) { stop() })
-
-	ended := false
-
+// sendLogs writes rec's stored output to out from out.next on, and when follow
+// is set what is stored after, reading the record and output again every
+// followPoll, until a read made once the record was terminal is sent, the
+// client goes, or the server shuts down.
+func (s *Server) sendLogs(ctx context.Context, rec *execution.Record, out *logsResponse, follow bool) error {
 	for {
-		wait := s.followPoll
-		if ended {
-			wait = s.followLinger
+		complete := rec.Terminal()
+
+		err := s.executions.ReadLog(ctx, rec.ID, out.next/execution.LogChunk, execution.Place(out.next, out))
+		if err != nil || complete || !follow {
+			return err
 		}
 
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-s.stopping:
-			stop()
-
-			return
-		case <-time.After(wait):
+			return nil
+		case <-time.After(s.followPoll):
 		}
 
-		if ended {
-			stop()
-
-			return
+		// A record that cannot be read is tried again; the client going ends this
+		if next, err := s.executions.Get(ctx, rec.ID); err == nil {
+			rec = next
 		}
-
-		// A record that cannot be read is retried; the client going ends this.
-		rec, err := s.executions.Get(ctx, id)
-		ended = err == nil && rec.Terminal()
 	}
 }
 
-// endStreams ends every live output stream as shutdown begins. Safe to call
-// more than once.
+// endStreams ends every followed output as shutdown begins. Safe to call more
+// than once.
 func (s *Server) endStreams() {
 	s.stopOnce.Do(func() { close(s.stopping) })
+}
+
+// -------------------------------------------------------------------------
+// RESPONSE
+// -------------------------------------------------------------------------
+
+// logsResponse is a logs response being written, each write sent to the
+// client at once. next is where in the output the next write begins. Output
+// placed past a gap before the body has begun moves the header saying where it
+// begins; after, it ends the response with errMoved.
+type logsResponse struct {
+	flushing
+	header http.Header
+	next   int64
+}
+
+// newLogsResponse begins a response of output from byte offset on.
+func newLogsResponse(w http.ResponseWriter, offset int64) *logsResponse {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set(api.LogsStartHeader, strconv.FormatInt(offset, 10))
+
+	return &logsResponse{w: w, rc: http.NewResponseController(w), header: w.Header(), next: offset}
+}
+
+// Write sends p, unless it is empty, which would begin the body for nothing.
+func (l *logsResponse) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	n, err := l.flushing.Write(p)
+	l.next += int64(n)
+
+	return n, err
+}
+
+// StartsAt places what is written next at offset, the output before it
+// dropped.
+func (l *logsResponse) StartsAt(offset int64) error {
+	if l.wrote {
+		return errMoved
+	}
+
+	l.header.Set(api.LogsStartHeader, strconv.FormatInt(offset, 10))
+	l.next = offset
+
+	return nil
 }
 
 // -------------------------------------------------------------------------

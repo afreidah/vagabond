@@ -5,7 +5,7 @@
 //
 // The live helpers against a provider that runs nothing: it reports the states
 // it is given in turn, exits 3, and prints what a round trip expects, so the
-// waits, the follow and the checks run without a cloud account.
+// waits, the capture and the checks run without a cloud account.
 // -------------------------------------------------------------------------------
 
 package plugintest
@@ -31,12 +31,14 @@ import (
 var quick = Live{Poll: time.Millisecond, Deadline: time.Second}
 
 // scripted is a provider whose every execution moves through states, one per
-// Status call and then the last for good, exits 3, and prints both streams.
+// Status call and then the last for good, exits 3, and prints both streams. A
+// running state holds until the output is printed, as a task's sleep does.
 type scripted struct {
 	plugin.Provider
 
 	mu        sync.Mutex
 	states    []execution.State
+	printed   bool
 	cancelled bool
 }
 
@@ -55,7 +57,7 @@ func (s *scripted) Status(_ context.Context, id execution.ID) (execution.Status,
 	defer s.mu.Unlock()
 
 	state := s.states[0]
-	if len(s.states) > 1 {
+	if len(s.states) > 1 && (state != execution.StateRunning || s.printed) {
 		s.states = s.states[1:]
 	}
 
@@ -77,19 +79,29 @@ func (s *scripted) Cancel(context.Context, execution.ID) error {
 	return nil
 }
 
-// ReadLogs writes the run's output.
-func (s *scripted) ReadLogs(_ context.Context, _ execution.ID, w execution.LogWriter) error {
-	_, err := io.WriteString(w, output)
+// CaptureLogs writes what of the run's output log lacks, then waits for the
+// run to be over. Its first call fails, as a cut stream does, so the capture
+// has to make it again.
+func (s *scripted) CaptureLogs(ctx context.Context, _ execution.ID, log execution.Log, ended <-chan struct{}) error {
+	if _, err := io.WriteString(plugin.SkipWriter(log, log.Len()), output); err != nil {
+		return err
+	}
 
-	return err
-}
+	s.mu.Lock()
+	first := !s.printed
+	s.printed = true
+	s.mu.Unlock()
 
-// StreamLogs writes the run's output and ends, as a stream does once the
-// container has.
-func (s *scripted) StreamLogs(_ context.Context, _ execution.ID, _ int64, w io.Writer) error {
-	_, err := io.WriteString(w, output)
+	if first {
+		return io.ErrUnexpectedEOF
+	}
 
-	return err
+	select {
+	case <-ended:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // -------------------------------------------------------------------------
@@ -97,7 +109,7 @@ func (s *scripted) StreamLogs(_ context.Context, _ execution.ID, _ int64, w io.W
 // -------------------------------------------------------------------------
 
 // A round trip passes on a run that fails with exit 3 and prints both
-// streams, whole and followed, and cancels the run when the test ends.
+// streams, captured while it runs, and cancels the run when the test ends.
 func TestLive_RoundTrip(t *testing.T) {
 	p := &scripted{states: []execution.State{execution.StateRunning, execution.StateFailed}}
 
@@ -109,6 +121,16 @@ func TestLive_RoundTrip(t *testing.T) {
 
 	if !p.cancelled {
 		t.Error("the run was not cancelled when its test ended")
+	}
+}
+
+// ReadAll captures a finished run's output once, however often the capture
+// is made.
+func TestLive_ReadAll(t *testing.T) {
+	p := &scripted{states: []execution.State{execution.StateFailed}}
+
+	if got := quick.ReadAll(t, p, testkit.NewID(t)); got != output {
+		t.Errorf("ReadAll() = %q, want %q", got, output)
 	}
 }
 

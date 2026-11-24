@@ -33,7 +33,8 @@ Interactive version, with notes on each loop:
 | [Dispatch runner](#dispatch-runner) | Per dispatch | | Store, ledger | Dispatch ends `unanswered` |
 | [Execution runner](#execution-runner) | Per execution, polling 2s to 15s | | Provider, store, ledger | Write retried, warn; refused write stops it |
 | [Lease renewal](#lease-renewal) | 20s per open dispatch | | Store: the dispatch's lease | Ignored; stale lease stops every runner |
-| [Live output follow](#live-output-follow) | 1s record re-read, per followed request | | Store: one execution; provider `StreamLogs` | Response ends, warn |
+| [Output capture](#output-capture) | Per running execution, storing every 1s | | Provider `CaptureLogs`, store: the execution's output | Warn, called again; past the end, output marked truncated |
+| [Output follow](#output-follow) | 1s re-read, per followed request | | Store: one execution and its output | Response ends, warn |
 | [Agent listener](#agent-listener) | Long-running | Yes | Agent connections | Session dropped, node forgotten |
 | [Store health](#store-health) | Per request | | Store ping | 503 from `GET /v1/health` |
 
@@ -43,7 +44,7 @@ Interactive version, with notes on each loop:
 |---|---|---|---|
 | [Server connection](#server-connection) | Reconnect backoff 1s to 30s | Server's agent address | Warn, dial again |
 | [Workload report](#workload-report) | 10s, and on every change | containerd, vagabond-firecracker; server `Register` | Warn, next report carries everything |
-| [Log stream](#log-stream) | 250ms, per followed workload | Log file or `ReadLogs`; containerd task | Stream ends with an error |
+| [Log stream](#log-stream) | 250ms, per captured workload | Log file or `ReadLogs`; containerd task | Stream ends with an error |
 | [Timeout watcher](#timeout-watcher) | Per container | containerd task | Workload left running |
 
 vagabond-firecracker watches its own microVMs' timeouts and follows their
@@ -327,25 +328,48 @@ every execution is released ([Leases](dispatch.md#leases)).
 
 **Logs:** none.
 
-### Live output follow
+### Output capture
 
-Two goroutines per `GET /v1/execution/{id}/logs?follow=true` request on an
-execution that has not ended, when its provider streams output (`cloud-run`,
-`code-engine`, `pool`): one copies the provider's stream to the client, flushing every write;
-the other re-reads the record to end the stream.
+Two goroutines per running execution whose provider holds its output
+(`cloud-run`, `cloud-build`, `code-engine`, `pool`), started by its runner once
+the provider has the work: one calls `CaptureLogs` until the output is whole,
+the other stores what has arrived every second.
 
 | | |
 |---|---|
-| Interval | Record re-read every 1s |
-| Ends | 5s after the record is terminal; at once when the client goes or shutdown begins |
-| Touches | Store: the execution record; provider `StreamLogs` |
+| Interval | Stores every 1s; a call that returns early is made again after 1s doubling to 30s |
+| Ends | When a call returns the output whole after the runner saw the execution end; three failed calls after the end, or 5 minutes; the lease moving; shutdown |
+| Touches | Provider `CaptureLogs`; store: the execution's output chunks, under the dispatch's lease |
 
-- A record that cannot be read is retried the next second.
-- A provider that cannot place its stream at `offset` is answered 416, if no
-  output was written yet.
-- The stream never writes the record.
+- A capture begins from what the store holds, so one a claimed dispatch
+  restores carries on where the last server's stopped.
+- A store write that fails is kept for the next; one the lease refused ends
+  the capture.
+- A capture that ends short sets `LogsTruncated` when the runner records the
+  result. It never fails the execution.
 
-**Logs:** warn `log stream ended early` with `execution` and `error`.
+**Logs:** warn `capturing output` with `execution` and `error` for every call
+that returns early, which on Cloud Run names why the tail ended; warn `reading
+stored output back` when a resumed capture cannot read the store; warn `output
+left incomplete` when a capture ends short.
+
+### Output follow
+
+One goroutine per `GET /v1/execution/{id}/logs?follow=true` request, on
+whichever server it reaches, reading the execution's stored output and record
+and sending new output to the client, flushing every write.
+
+| | |
+|---|---|
+| Interval | Record and output read again every 1s |
+| Ends | After a read made once the record was terminal; at once when the client goes or shutdown begins |
+| Touches | Store: the execution record and its output |
+
+- A record that cannot be read is tried again the next second.
+- The follow never writes the record, and never reaches the provider.
+
+**Logs:** warn `reading stored output ended early` with `execution` and
+`error`.
 
 ### Agent listener
 
@@ -461,9 +485,9 @@ run that long.
 
 ### Log stream
 
-One goroutine per server `StreamLogs` call, copying the workload's output from
-the requested offset as it grows: a container's log file, or a microVM's
-output through vagabond-firecracker's `ReadLogs`.
+One goroutine per `StreamLogs` call from the server's output capture, copying
+the workload's output from the requested offset as it grows: a container's log
+file, or a microVM's output through vagabond-firecracker's `ReadLogs`.
 
 | | |
 |---|---|

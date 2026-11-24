@@ -16,7 +16,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"slices"
 	"time"
 
@@ -33,7 +32,7 @@ import (
 // Plugins translate and classify, nothing more: no retrying, no backoff, no
 // choosing another provider. Errors should be *Error. The id is the
 // idempotency key; the task is read-only. Cancel may destroy what Result and
-// ReadLogs read, so callers fetch the result and output first.
+// CaptureLogs read, so callers fetch the result and output first.
 type Provider interface {
 	Name() string
 	Capabilities(ctx context.Context) (Capabilities, error)
@@ -100,24 +99,24 @@ var submittableStates = []execution.State{
 // OPTIONAL CAPABILITIES
 // -------------------------------------------------------------------------
 
-// LogStreamer is implemented by providers that can show a running execution's
-// output before it finishes. A live view, never the record: the stored copy
-// stays authoritative, and a broken stream is not a failed execution.
-//
-// A stream starts at the first byte the task printed, whenever it opens, and
-// offset is how many bytes the caller already has. One that cannot be placed
-// there returns ErrNoResume, before writing anything when it can.
-type LogStreamer interface {
-	StreamLogs(ctx context.Context, id execution.ID, offset int64, w io.Writer) error
+// LogCapturer is implemented by providers holding the output of work that
+// outlives Submit. CaptureLogs copies it into log as it is printed, from
+// log.Len() on, since log may hold what an earlier call or another server
+// captured, and returns nil once ended has closed, the workload over, and log
+// holds all of it. A call that returns before then, nil or not, is made again.
+// Release may destroy the output, so a capture ends before it.
+type LogCapturer interface {
+	CaptureLogs(ctx context.Context, id execution.ID, log execution.Log, ended <-chan struct{}) error
 }
 
-// LogReader is implemented by providers that hold a finished execution's
-// output, read once it has ended and before Release, which may destroy it.
-// ReadLogs writes the whole output to w, or, holding only its end, says through
-// StartsAt where that begins before writing it; an error means what was written
-// is incomplete.
-type LogReader interface {
-	ReadLogs(ctx context.Context, id execution.ID, w execution.LogWriter) error
+// Ended reports whether a capture's ended has closed, the workload over.
+func Ended(ended <-chan struct{}) bool {
+	select {
+	case <-ended:
+		return true
+	default:
+		return false
+	}
 }
 
 // Live is implemented by providers whose capabilities change between
@@ -193,10 +192,6 @@ func UnknownExecution(format string, args ...any) error {
 // ErrNoRoom reports a node with too little room left for a task, so nothing
 // was placed on it.
 var ErrNoRoom = errors.New("no room on the node")
-
-// ErrNoResume reports a log stream that cannot be placed at an offset, so a
-// caller resuming one finishes from the stored output instead.
-var ErrNoResume = errors.New("this provider's log stream cannot resume from an offset")
 
 // StatusNotSupported is embedded by providers whose work finishes inside
 // Submit, so that declaring the fact is one line rather than a method body

@@ -14,7 +14,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -63,9 +62,9 @@ type serverLedger interface {
 
 // serverExecutions is where runs and attempts are recorded, read back and
 // listed, where dispatches a dead owner left are claimed and cancels are
-// requested, where stored output is read and pruned, and whose reachability
-// health reports. A schedule that prohibits overlap asks it whether a job
-// still has a dispatch running.
+// requested, where stored output is read, as dispatch reads it too, and
+// pruned, and whose reachability health reports. A schedule that prohibits
+// overlap asks it whether a job still has a dispatch running.
 type serverExecutions interface {
 	dispatch.Executions
 	GetDispatch(ctx context.Context, id execution.ID) (*execution.Dispatch, error)
@@ -75,7 +74,6 @@ type serverExecutions interface {
 		ctx context.Context, owner string, now, until time.Time, skip []execution.ID,
 	) ([]*execution.Dispatch, error)
 	RequestCancel(ctx context.Context, id execution.ID, at time.Time) error
-	ReadLog(ctx context.Context, id execution.ID, fromSeq int64, w io.Writer) error
 	PruneLogs(ctx context.Context, before time.Time) (int, error)
 	Ping(ctx context.Context) error
 }
@@ -128,10 +126,9 @@ type Server struct {
 	maxLogBytes int64         // how much of an execution's output is kept
 	retainLogs  time.Duration // how long output is kept after its execution ends
 
-	followPoll   time.Duration
-	followLinger time.Duration
-	stopping     chan struct{} // closed when shutdown begins, ending every live output stream
-	stopOnce     sync.Once
+	followPoll time.Duration
+	stopping   chan struct{} // closed when shutdown begins, ending every followed output
+	stopOnce   sync.Once
 
 	// A register or stop on this server sends here, so the next scheduled
 	// launch is worked out again at once.
@@ -190,25 +187,24 @@ func New(
 	providers serverProviders, logger *slog.Logger, opts ...Option,
 ) *Server {
 	s := &Server{
-		registry:     reg,
-		ledger:       ledger,
-		executions:   executions,
-		jobs:         jobStore,
-		providers:    providers,
-		owner:        dispatch.ProcessOwner("server"),
-		leaseTTL:     dispatch.LeaseTTL,
-		leaseRenew:   dispatch.LeaseRenew,
-		claimEvery:   claimInterval,
-		logger:       logger,
-		now:          time.Now,
-		maxLogBytes:  execution.DefaultMaxLogBytes,
-		retainLogs:   execution.DefaultLogRetention,
-		followPoll:   defaultFollowPoll,
-		followLinger: defaultFollowLinger,
-		stopping:     make(chan struct{}),
-		wake:         make(chan struct{}, 1),
-		running:      make(map[execution.ID]context.CancelFunc),
-		nodeConns:    nodes.New(),
+		registry:    reg,
+		ledger:      ledger,
+		executions:  executions,
+		jobs:        jobStore,
+		providers:   providers,
+		owner:       dispatch.ProcessOwner("server"),
+		leaseTTL:    dispatch.LeaseTTL,
+		leaseRenew:  dispatch.LeaseRenew,
+		claimEvery:  claimInterval,
+		logger:      logger,
+		now:         time.Now,
+		maxLogBytes: execution.DefaultMaxLogBytes,
+		retainLogs:  execution.DefaultLogRetention,
+		followPoll:  defaultFollowPoll,
+		stopping:    make(chan struct{}),
+		wake:        make(chan struct{}, 1),
+		running:     make(map[execution.ID]context.CancelFunc),
+		nodeConns:   nodes.New(),
 	}
 
 	for _, opt := range opts {

@@ -15,7 +15,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"slices"
@@ -467,10 +466,10 @@ func TestPool_UnwantedWorkloadsAreReleased(t *testing.T) {
 	}
 }
 
-// Results and cancellation reach the node; output streams from it and ends
-// with the workload, and reading it whole is the stream from the start. A
-// node that no longer holds the execution answers unknown, and a writer that
-// fails is internal.
+// Results and cancellation reach the node; output is captured from it, the
+// stream ending with the workload, and a capture made again adds only what
+// the log lacks. A node that no longer holds the execution answers unknown,
+// and a log that fails is internal.
 func TestPool_Executions(t *testing.T) {
 	h := newHarness(t, nil)
 	exec := &executortest.Fake{Output: "hello world\n"}
@@ -487,82 +486,93 @@ func TestPool_Executions(t *testing.T) {
 		t.Errorf("Result() = %+v, %v; want exit code 0", res, err)
 	}
 
-	streamer := on.(plugin.LogStreamer)
+	capturer := on.(plugin.LogCapturer)
 
-	var out strings.Builder
+	logs := &plugin.MemoryLog{}
 
-	if err := streamer.StreamLogs(t.Context(), id, 0, &out); err != nil || out.String() != "hello world\n" {
-		t.Errorf("StreamLogs() = %q, %v; want the node's output", out.String(), err)
+	if err := capturer.CaptureLogs(t.Context(), id, logs, ended()); err != nil || logs.String() != "hello world\n" {
+		t.Errorf("CaptureLogs() = %q, %v; want the node's output", logs.String(), err)
 	}
 
-	var rest strings.Builder
+	resumed := &plugin.MemoryLog{}
+	_, _ = resumed.Write([]byte("hello "))
 
-	if err := streamer.StreamLogs(t.Context(), id, int64(len("hello ")), &rest); err != nil || rest.String() != "world\n" {
-		t.Errorf("StreamLogs() from an offset = %q, %v; want the rest of the line", rest.String(), err)
+	if err := capturer.CaptureLogs(t.Context(), id, resumed, ended()); err != nil || resumed.String() != "hello world\n" {
+		t.Errorf("CaptureLogs() of a log holding the start = %q, %v; want the rest added", resumed.String(), err)
 	}
 
-	var whole strings.Builder
-
-	if err := on.(plugin.LogReader).ReadLogs(t.Context(), id, &execution.PlacedWriter{Writer: &whole}); err != nil || whole.String() != out.String() {
-		t.Errorf("ReadLogs() = %q, %v; want the node's whole output", whole.String(), err)
-	}
-
-	err := streamer.StreamLogs(t.Context(), id, 0, failingWriter{})
+	err := capturer.CaptureLogs(t.Context(), id, failingLog{}, ended())
 	if failure, ok := errors.AsType[*plugin.Error](err); !ok || failure.Class != plugin.ClassInternal {
-		t.Errorf("StreamLogs() into a failing writer = %v, want an internal failure", err)
+		t.Errorf("CaptureLogs() into a failing log = %v, want an internal failure", err)
 	}
 
 	// The node lets the workload go while its record still names the node.
 	_ = exec.Release(t.Context(), id.String())
 
-	if err := streamer.StreamLogs(t.Context(), id, 0, io.Discard); !errors.Is(err, plugin.ErrUnknownExecution) {
-		t.Errorf("StreamLogs() of a released workload = %v, want ErrUnknownExecution", err)
+	if err := capturer.CaptureLogs(t.Context(), id, &plugin.MemoryLog{}, ended()); !errors.Is(err, plugin.ErrUnknownExecution) {
+		t.Errorf("CaptureLogs() of a released workload = %v, want ErrUnknownExecution", err)
 	}
 
 	if _, err := on.Status(t.Context(), id); !errors.Is(err, plugin.ErrUnknownExecution) {
 		t.Errorf("Status() of a released workload = %v, want ErrUnknownExecution", err)
 	}
 
-	if err := h.pool.Target("gone").(plugin.LogStreamer).StreamLogs(t.Context(), id, 0, io.Discard); !plugin.Reroutable(err) {
-		t.Errorf("StreamLogs() on a node not connected = %v, want an infrastructure failure", err)
+	gone := h.pool.Target("gone").(plugin.LogCapturer)
+	if err := gone.CaptureLogs(t.Context(), id, &plugin.MemoryLog{}, ended()); !plugin.Reroutable(err) {
+		t.Errorf("CaptureLogs() on a node not connected = %v, want an infrastructure failure", err)
 	}
 }
 
-// Output a node kept only the end of is read whole from where that end begins,
-// placed there, while a live view from before it cannot resume.
+// The node's stream ends with the workload, and the capture then waits for
+// the run to be seen over, or its context to end.
+func TestPool_CaptureWaitsForTheEnd(t *testing.T) {
+	h := newHarness(t, nil)
+	h.join(t, "box1", 4096, &executortest.Fake{Output: "done\n"})
+
+	id := h.place(t, "box1", 1024)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+
+	logs := &plugin.MemoryLog{}
+
+	err := h.pool.Target("box1").(plugin.LogCapturer).CaptureLogs(ctx, id, logs, make(chan struct{}))
+	if !errors.Is(err, context.DeadlineExceeded) || logs.String() != "done\n" {
+		t.Errorf("CaptureLogs() = %q, %v; want the output, then the context's end", logs.String(), err)
+	}
+}
+
+// Output a node kept only the end of is captured from where that end begins,
+// placed there.
 func TestPool_OutputKeptOnlyFromItsEnd(t *testing.T) {
 	h := newHarness(t, nil)
 	exec := &executortest.Fake{Output: "dropped|the end\n", Start: int64(len("dropped|"))}
 	h.join(t, "box1", 4096, exec)
 
 	id := h.place(t, "box1", 1024)
-	on := h.pool.Target("box1")
+	logs := &plugin.MemoryLog{}
 
-	var whole strings.Builder
-
-	w := &execution.PlacedWriter{Writer: &whole}
-
-	if err := on.(plugin.LogReader).ReadLogs(t.Context(), id, w); err != nil || whole.String() != "the end\n" || w.Start != exec.Start {
-		t.Errorf("ReadLogs() = %q from %d, %v; want the end from %d", whole.String(), w.Start, err, exec.Start)
-	}
-
-	streamer := on.(plugin.LogStreamer)
-
-	var early strings.Builder
-
-	if err := streamer.StreamLogs(t.Context(), id, 0, &early); !errors.Is(err, plugin.ErrNoResume) || early.Len() > 0 {
-		t.Errorf("StreamLogs() from before the end = %q, %v; want nothing and no resume", early.String(), err)
-	}
-
-	var live strings.Builder
-
-	if err := streamer.StreamLogs(t.Context(), id, exec.Start, &live); err != nil || live.String() != "the end\n" {
-		t.Errorf("StreamLogs() from where the end begins = %q, %v; want the end", live.String(), err)
+	err := h.pool.Target("box1").(plugin.LogCapturer).CaptureLogs(t.Context(), id, logs, ended())
+	if err != nil || logs.String() != "the end\n" || logs.Start() != exec.Start {
+		t.Errorf("CaptureLogs() = %q from %d, %v; want the end from %d", logs.String(), logs.Start(), err, exec.Start)
 	}
 }
 
-// failingWriter refuses every write.
-type failingWriter struct{}
+// ended is an ended that has closed, for a capture of a finished workload.
+func ended() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+
+	return ch
+}
+
+// failingLog is a log that refuses every write.
+type failingLog struct {
+	*plugin.MemoryLog
+}
 
 // Write fails.
-func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("closed") }
+func (failingLog) Write([]byte) (int, error) { return 0, errors.New("closed") }
+
+// Len is where a capture into it begins.
+func (failingLog) Len() int64 { return 0 }

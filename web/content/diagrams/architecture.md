@@ -24,7 +24,7 @@ window.vagabondDiagram = {
     '        LEDGER[Quota<br>ledger]:::process',
     '        REG[Provider<br>registry]:::process',
     '        UPKEEP[Upkeep<br>loops]:::background',
-    '        FOLLOW[Live output<br>streams]:::process',
+    '        FOLLOW[Output follow<br>from the store]:::process',
     '        PLUGIN[plugin.Provider]:::filter',
     '        POOL[containerd and<br>firecracker providers]:::process',
     '        NODES[(Connected<br>nodes)]:::storage',
@@ -33,6 +33,7 @@ window.vagabondDiagram = {
     '',
     '    subgraph CLOUD [Cloud platforms]',
     '        CLOUDRUN[cloud-run<br>Cloud Run Jobs]:::data',
+    '        CLOUDBUILD[cloud-build<br>Cloud Build]:::data',
     '        CLOG[Cloud Logging]:::data',
     '        CODEENGINE[code-engine<br>Code Engine Jobs]:::data',
     '        CEKUBE[Code Engine<br>Kubernetes API]:::data',
@@ -53,9 +54,9 @@ window.vagabondDiagram = {
     '    REG -->|capabilities| SCHED',
     '    LEDGER -->|usage snapshot| SCHED',
     '    DISP -->|reserve, settle| LEDGER',
-    '    DISP -->|submit, poll, release| PLUGIN',
+    '    DISP -->|submit, poll, capture, release| PLUGIN',
     '    API -->|logs follow| FOLLOW',
-    '    FOLLOW -->|StreamLogs| PLUGIN',
+    '    FOLLOW -->|stored output| STORE',
     '    REG -->|Capabilities| PLUGIN',
     '    UPKEEP -->|refresh| REG',
     '    UPKEEP -->|refresh| LEDGER',
@@ -63,10 +64,12 @@ window.vagabondDiagram = {
     '    UPKEEP -->|prune output| STORE',
     '',
     '    PLUGIN --> CLOUDRUN',
+    '    PLUGIN --> CLOUDBUILD',
     '    PLUGIN --> CODEENGINE',
     '    PLUGIN --> LAMBDA',
     '    PLUGIN --> POOL',
     '    CLOUDRUN -->|output| CLOG',
+    '    CLOUDBUILD -->|output| CLOG',
     '    CODEENGINE -->|exit code, output| CEKUBE',
     '    POOL -->|room, reserve| NODES',
     '    AGENTL -->|register, remove| NODES',
@@ -76,7 +79,7 @@ window.vagabondDiagram = {
     '    AGENT -->|microVMs| FIRECRACKER',
     '',
     '    JOBS -->|jobs, versions| STORE',
-    '    DISP -->|dispatches, executions| STORE',
+    '    DISP -->|dispatches, executions, output| STORE',
     '    LEDGER -->|usage, reservations| STORE',
   ].join('\n'),
 
@@ -114,7 +117,7 @@ window.vagabondDiagram = {
     REG: {
       title: 'Provider registry',
       badge: 'process', badgeText: 'registry',
-      body: '<p><code>registry</code> builds every <code>provider</code> block into its plugin, the one package that imports them all: <code>cloud-run</code>, <code>code-engine</code>, <code>lambda</code>, <code>containerd</code>, <code>firecracker</code>, and the <code>fake-container</code>, <code>fake-function</code> and <code>fake-worker</code> test providers, each one row of a table. It holds each one&rsquo;s capability snapshot, health, tags, tier and quota pools. A disabled provider is kept, so a plan can say why it was not used.</p><p><code>Refresh</code> asks every enabled provider for <code>Capabilities</code> in parallel, 30s each, at startup and every minute. One that fails is marked unhealthy and keeps its last snapshot. <code>containerd</code> and <code>firecracker</code> providers are skipped: their capabilities are built from connected nodes on every read.</p><p>Resolves a provider&rsquo;s credential again when the platform rejects it, at most once a minute.</p>'
+      body: '<p><code>registry</code> builds every <code>provider</code> block into its plugin, the one package that imports them all: <code>cloud-run</code>, <code>cloud-build</code>, <code>code-engine</code>, <code>lambda</code>, <code>containerd</code>, <code>firecracker</code>, and the <code>fake-container</code>, <code>fake-function</code> and <code>fake-worker</code> test providers, each one row of a table. It holds each one&rsquo;s capability snapshot, health, tags, tier and quota pools. A disabled provider is kept, so a plan can say why it was not used.</p><p><code>Refresh</code> asks every enabled provider for <code>Capabilities</code> in parallel, 30s each, at startup and every minute. One that fails is marked unhealthy and keeps its last snapshot. <code>containerd</code> and <code>firecracker</code> providers are skipped: their capabilities are built from connected nodes on every read.</p><p>Resolves a provider&rsquo;s credential again when the platform rejects it, at most once a minute.</p>'
     },
     UPKEEP: {
       title: 'Upkeep loops',
@@ -122,14 +125,14 @@ window.vagabondDiagram = {
       body: '<p>Five tickers in <code>internal/server/upkeep.go</code>, started when the server begins serving and stopped at shutdown: capability refresh (1m), usage snapshot refresh (15s), reservation reaper (5m), dispatch claim (30s) and output retention (1h).</p><p>Capabilities and usage are read while the server is built, and the claim and the reaper run once before HTTP is served, so their first tick is one interval in. Output retention has no startup pass. A failure is logged and waits for the next tick.</p><p><a href="../background-services/">Background services diagram &rarr;</a></p>'
     },
     FOLLOW: {
-      title: 'Live output streams',
+      title: 'Output follow from the store',
       badge: 'process', badgeText: 'per request',
-      body: '<p><code>GET /v1/execution/{id}/logs?follow=true</code> on an execution that has not ended, whose provider implements <code>plugin.LogStreamer</code> (<code>cloud-run</code>, <code>code-engine</code>, <code>containerd</code>, on the node the record names), copies the provider&rsquo;s stream to the client from <code>offset</code>, flushing every write.</p><p>The record is re-read every second, and the response ends 5s after the execution does, when the client goes, or at once when shutdown begins. Every stream starts at the first byte the task printed; one that cannot be placed at <code>offset</code> is answered 416 before any output. Any other request gets the stored output from <code>execution_logs</code>, up to <code>max_log_mib</code>, the end of it.</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
+      body: '<p><code>GET /v1/execution/{id}/logs</code> sends the execution&rsquo;s stored output from <code>offset</code>, up to <code>max_log_mib</code>, the end of it. With <code>follow=true</code> the record and the store are read again every second and new output sent, flushing every write, until a read made once the record was terminal; at once when the client goes or shutdown begins.</p><p>The output gets there through the dispatcher: the runner holding the execution copies it from the provider into <code>execution_logs</code> while it runs, so any server answers with the same bytes and none opens the provider&rsquo;s stream.</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
     },
     PLUGIN: {
       title: 'plugin.Provider',
       badge: 'filter', badgeText: 'boundary',
-      body: '<p>The interface every provider implements: <code>Name</code>, <code>Capabilities</code>, <code>Submit</code>, <code>Status</code>, <code>Result</code>, <code>Cancel</code>. Optional interfaces are found by type assertion: <code>LogStreamer</code>, <code>LogReader</code>, <code>Releaser</code>, <code>Live</code>, <code>Nodes</code>, <code>Reserver</code>, <code>Recredentialer</code>.</p><p>A plugin translates a task into its platform&rsquo;s API and classifies failures as <code>infrastructure</code> (rerouted) or <code>internal</code> (not). It never retries or picks another provider; retries, rerouting, quota, records and leases belong to the control plane.</p><p>depguard keeps cloud SDKs inside <code>internal/providers/</code>, and provider imports out of <code>scheduler</code>, <code>job</code> and <code>quota</code>.</p><p><a href="../../docs/writing-a-provider/">Writing a provider &rarr;</a></p>'
+      body: '<p>The interface every provider implements: <code>Name</code>, <code>Capabilities</code>, <code>Submit</code>, <code>Status</code>, <code>Result</code>, <code>Cancel</code>. Optional interfaces are found by type assertion: <code>LogCapturer</code>, <code>Releaser</code>, <code>Live</code>, <code>Nodes</code>, <code>Reserver</code>, <code>Recredentialer</code>.</p><p>A plugin translates a task into its platform&rsquo;s API and classifies failures as <code>infrastructure</code> (rerouted) or <code>internal</code> (not). It never retries or picks another provider; retries, rerouting, quota, records and leases belong to the control plane.</p><p>depguard keeps cloud SDKs inside <code>internal/providers/</code>, and provider imports out of <code>scheduler</code>, <code>job</code> and <code>quota</code>.</p><p><a href="../../docs/writing-a-provider/">Writing a provider &rarr;</a></p>'
     },
     POOL: {
       title: 'containerd and firecracker providers',
@@ -156,10 +159,15 @@ window.vagabondDiagram = {
       badge: 'data', badgeText: 'provider',
       body: '<p><code>providers/gcp/cloudrun</code>, for <code>container</code> tasks. One Job per execution, named <code>vagabond-&lt;execution id&gt;</code>: <code>Submit</code> creates it and calls <code>:run</code>, <code>Status</code> reads the Job&rsquo;s executions, and <code>Cancel</code> and <code>Release</code> delete the Job.</p><p>Stateless: every call derives the Job name from the execution ID, so a server that takes over a dispatch can poll a run it did not submit. Calls the Cloud Run and Cloud Logging REST APIs over HTTP.</p><p><a href="../../docs/providers/cloud-run/">Cloud Run provider &rarr;</a></p>'
     },
+    CLOUDBUILD: {
+      title: 'cloud-build: Cloud Build',
+      badge: 'data', badgeText: 'provider',
+      body: '<p><code>providers/gcp/cloudbuild</code>, for <code>container</code> tasks, on the same shared Google client as <code>cloud-run</code>. One build per execution, with one step running the task&rsquo;s image, tagged <code>vagabond-&lt;execution id&gt;</code>: <code>Submit</code> creates it, <code>Status</code> and <code>Result</code> find it by its tag, and <code>Cancel</code> cancels it. Every <code>$</code> in the task&rsquo;s args and env is doubled, so Cloud Build does not read it as its own substitution.</p><p>A build keeps its record and output after it ends, so there is nothing to release. Cloud Build&rsquo;s free build-minutes are separate from Cloud Run&rsquo;s free tier, so a project can use both.</p><p><a href="../../docs/providers/cloud-build/">Cloud Build provider &rarr;</a></p>'
+    },
     CLOG: {
       title: 'Cloud Logging',
       badge: 'data', badgeText: 'output',
-      body: '<p>Where a Cloud Run execution&rsquo;s output comes from. <code>ReadLogs</code> pages <code>entries:list</code> filtered on the Job name, oldest first, up to 20 pages, and reports one stopped at the cap as incomplete, which dispatch stores marked truncated.</p><p><code>StreamLogs</code> opens <code>entries:tail</code> with a 1s buffer window, so live output arrives in order, then lists what was logged before it and drops the tail&rsquo;s copies of it, so a stream starts at the first byte and resumes from an offset.</p><p><a href="../../docs/providers/cloud-run/#logs">Cloud Run logs &rarr;</a></p>'
+      body: '<p>Where Cloud Run and Cloud Build output comes from, one entry per line, filtered on the Job name or the build&rsquo;s id. While the run goes, the capture holds <code>entries:tail</code> open with a 5s buffer window and, each time a tail opens and once at the end, lists the entries with <code>entries:list</code>, appending each whose line the stored log lacks. A line that arrives late is stored where it arrives.</p><p>A list stops at 20 pages; at the end, that leaves the output marked truncated.</p><p><a href="../../docs/providers/cloud-run/#output">Cloud Run output &rarr;</a></p>'
     },
     CODEENGINE: {
       title: 'code-engine: Code Engine Jobs',
@@ -169,7 +177,7 @@ window.vagabondDiagram = {
     CEKUBE: {
       title: 'Code Engine Kubernetes API',
       badge: 'data', badgeText: 'exit code, output',
-      body: '<p>Where a job run&rsquo;s exit code and output come from, since the v2 API reports neither. The run&rsquo;s pod is found by its <code>codeengine.cloud.ibm.com/job-run</code> label in the project&rsquo;s namespace, read once from the kubeconfig.</p><p><code>Result</code> reads the container&rsquo;s exit code and <code>ReadLogs</code> its whole log while the pod exists; deleting the run removes both. <code>StreamLogs</code> waits for the container to start, then follows its log from the first line, so it can resume from an offset.</p><p><a href="../../docs/providers/code-engine/#logs">Code Engine logs &rarr;</a></p>'
+      body: '<p>Where a job run&rsquo;s exit code and output come from, since the v2 API reports neither. The run&rsquo;s pod is found by its <code>codeengine.cloud.ibm.com/job-run</code> label in the project&rsquo;s namespace, read once from the kubeconfig.</p><p><code>Result</code> reads the container&rsquo;s exit code while the pod exists; deleting the run removes it and the log. <code>CaptureLogs</code> waits for the container to start, then follows its log from the first line, skipping what the stored log holds, and reads it whole once the run is over when the follow did not see the container exit.</p><p><a href="../../docs/providers/code-engine/#output">Code Engine output &rarr;</a></p>'
     },
     LAMBDA: {
       title: 'lambda: AWS Lambda',

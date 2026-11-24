@@ -16,7 +16,7 @@ resource and the output from Cloud Logging, then deletes the Job.
 | Package | `internal/providers/gcp/cloudrun`, on the shared `internal/providers/gcp` |
 | Drivers | `container` |
 | Execution family | asynchronous: `Submit` returns `accepted`, dispatch polls `Status` |
-| Optional interfaces | `LogStreamer`, `Releaser`, `Recredentialer` |
+| Optional interfaces | `LogCapturer`, `Releaser`, `Recredentialer` |
 | APIs | Cloud Run Admin API v2 (`run.googleapis.com`), Cloud Logging API v2 (`logging.googleapis.com`) |
 
 The plugin calls both APIs over plain HTTPS with an OAuth2 client. It does not
@@ -141,8 +141,8 @@ The permissions the plugin exercises, by call:
 | `GET .../jobs/{job}/executions` | `Status`, `Result` | `run.executions.list` |
 | `GET /v2/{execution}/tasks` | `Result` | `run.tasks.list` |
 | `DELETE .../jobs/{job}` | `Cancel`, `Release`, failed `Submit` | `run.jobs.delete` |
-| `POST /v2/entries:list` | `ReadLogs`, `StreamLogs` | `logging.logEntries.list` |
-| `POST /v2/entries:tail` | `StreamLogs` | `logging.logEntries.list` |
+| `POST /v2/entries:list` | `CaptureLogs` | `logging.logEntries.list` |
+| `POST /v2/entries:tail` | `CaptureLogs` | `logging.logEntries.list` |
 
 `roles/run.developer` covers every `run.*` permission above;
 `roles/logging.viewer` covers `logging.logEntries.list`. `roles/run.admin` is
@@ -261,10 +261,9 @@ limit).
 | `Submit` | `POST .../jobs?jobId=vagabond-<id>`, then `POST .../jobs/vagabond-<id>:run` | `ProviderID` = job name, state `accepted` |
 | `Status` | `GET .../jobs/vagabond-<id>/executions` | State from the execution's counters; `StartedAt`, `EndedAt` from `startTime`, `completionTime` |
 | `Result` | `GET .../executions` again, then `GET /v2/<execution>/tasks` | Exit code, duration |
-| `ReadLogs` | `POST /v2/entries:list` (paged) | Writes the whole output; an error after the page cap |
+| `CaptureLogs` | `POST /v2/entries:tail` while the job runs, `POST /v2/entries:list` (paged) with each tail and once at the end | Writes the output into the log as it is logged; `nil` once the job has ended and the last catch-up is done |
 | `Cancel` | `DELETE .../jobs/vagabond-<id>` | `nil`, also when the job is already gone (404) |
 | `Release` | `DELETE .../jobs/vagabond-<id>` | Same call as `Cancel` |
-| `StreamLogs` | `POST /v2/entries:tail`, then `POST /v2/entries:list` (paged) | Writes output from `offset` until the stream ends; `plugin.ErrNoResume` when the backfill fails |
 
 If the `:run` call fails, `Submit` deletes the job it just created, ignoring
 the delete's own error, and returns the `:run` error.
@@ -316,82 +315,82 @@ task that ended before it started.
 When the task was stopped before its process ran, `exitCode` is absent and
 `Result.ExitCode` is nil rather than 0.
 
-### Logs
+### Output
 
-`ReadLogs` reads Cloud Logging `entries:list` with:
+`CaptureLogs` copies the job's output from Cloud Logging into the execution's
+log while it runs. The runner calls it from submission until the output is
+whole ([Dispatch](../dispatch.md#output)), and every client reads what it
+stores ([API](../api.md#read-execution-logs)). The entries outlive the job, so
+`Release` and `Cancel` destroy nothing it reads. Both calls pick the job's
+entries with:
 
 ```text
 resourceNames = ["projects/<project>"]
 filter        = resource.type="cloud_run_job" resource.labels.job_name="vagabond-<id>"
-orderBy       = timestamp asc
-pageSize      = 1000
 ```
 
-stdout and stderr arrive interleaved in timestamp order, one `textPayload` per
-line. Entries with an empty `textPayload` (structured platform entries) are
-skipped. Dispatch calls it once the execution ends and stores what it writes;
-see [Dispatch](../dispatch.md#output). The entries outlive the job, so
-`Release` and `Cancel` destroy nothing it reads.
+stdout and stderr arrive one `textPayload` per line. Entries with an empty
+`textPayload` (structured platform entries) are skipped. Platform lines such
+as `Container called exit(0).` arrive the same way and are not filtered.
 
-`entries:list` returns one page per storage shard, so an empty page with a
-`nextPageToken` is not the end. The reader follows tokens until the token is
-empty or it has read 20 pages. Stopping at 20 pages returns an infrastructure
-error after writing what was read, and dispatch marks the stored output
-truncated.
+**Tail.** While the job runs, the capture holds `entries:tail` open, a
+streaming method, over HTTP through gRPC transcoding:
 
-Each page is one request against Cloud Logging's quota of 60 `entries:list`
-requests a minute per project, which cannot be raised. A capture reads the
-whole output, and every live stream that opens lists what was logged before it
-(below), so many executions ending or followed in the same minute can be
-refused with `429`. A refused capture leaves the output truncated; a refused
-backfill leaves the stream unplaced.
-
-### Live output
-
-`StreamLogs` opens `entries:tail`, a streaming method, over HTTP through gRPC
-transcoding, then lists what was logged before it opened:
-
-- The request body is a JSON array holding one request, with the same resource
-  name and filter as `entries:list` and `bufferWindow = "1s"`. A bare object is
-  rejected with `400 Invalid value (Object)`.
-- The response is one JSON array that stays open; each element is decoded as it
-  arrives. It is read into a queue of up to 10,000 entries from the moment it
-  opens, since Cloud Logging drops entries a client does not read quickly
+- The request body is a JSON array holding one request, with the resource
+  name and filter above and `bufferWindow = "5s"`. A bare object is rejected
+  with `400 Invalid value (Object)`.
+- Cloud Logging holds entries for the buffer window to deliver them in
+  timestamp order; within about a second, stderr arrives ahead of the stdout
+  printed before it. An entry later than the window is delivered on its own,
+  out of order. The window is also how far the live output trails the job.
+- The response is one JSON array that stays open; each element is decoded as
+  it arrives. It is read into a queue of up to 10,000 entries from the moment
+  it opens, since Cloud Logging drops entries a client does not read quickly
   enough (`suppressionInfo` reason `NOT_CONSUMED`).
-- With the tail open, `entries:list` writes the entries logged so far, oldest
-  first, under the same 20-page cap as `ReadLogs`. The tail's copies of those
-  entries, matched by `timestamp` and `insertId`, are dropped, and the rest are
-  written as they arrive.
-- The stream therefore starts at the first byte the task printed, the same
-  bytes the stored copy holds. The first `offset` bytes are skipped, across the
-  backfill and the tail, so a reopened stream picks up where the last ended.
-- A backfill that fails or stops at the page cap returns `plugin.ErrNoResume`,
-  which the server answers `416` when nothing was written yet; the client then
-  finishes from the stored copy.
-- The 1s buffer window lets Cloud Logging order entries by timestamp. Shorter
-  windows deliver stderr ahead of the stdout that preceded it.
-- Once the stream is open, a read or decode error ends it without an error.
-- Platform lines such as `Container called exit(0).` arrive on the same stream
-  and are not filtered.
+- A tail never ends of its own accord, so every end is an error, which the
+  runner logs as `capturing output` before calling again: the array closing,
+  a read or decode error, or the error Google sends as the array's last
+  element, with its status and message.
 
-The stream can differ from the stored copy. An entry that reaches Cloud
-Logging after the backfill listed later ones, with an earlier timestamp, is
-streamed after them but stored before them. A tail can also leave entries out,
-reported in `suppressionInfo`, which the stream does not read, and Google does
-not document what a tail does with an entry later than its buffer window. The
-CLI checks what streamed against the stored copy once the execution ends; see
-[`job run`](../cli.md#job-run).
+**Catch-up.** A tail starts at the present and can leave entries out, so each
+time one opens, and once more after the job ends, the capture lists the job's
+entries with `entries:list` (`orderBy = timestamp asc`, `pageSize = 1000`) and
+appends each whose line the log does not hold:
 
-Output runs several seconds behind the container, so the server holds a
-followed stream open for 5 s after the execution ends. `StreamLogs` is called
-for `GET /v1/execution/{id}/logs?follow=true`
-([API](../api.md#read-execution-logs)).
+- Lines are matched by their text and counted, so a line the log holds twice
+  matches two entries. Nothing lives only in one server's memory: a capture
+  another server began, as after a takeover, is finished from the log alone.
+- The tail's copies of what the catch-up listed, matched by `timestamp` and
+  `insertId`, are dropped.
+- A log ending part way through a line, as a server that stopped mid-write
+  leaves one, is ended with a line break before anything is appended.
+- After the job ends, the capture waits 5 s for entries still on their way,
+  then catches up once more and returns.
+
+A line found late is appended where it is found, after lines printed later.
+The log is never rewritten, so every client reads the same bytes in the same
+order, and nothing printed is left out. `entries:list` and the Cloud Console
+show the same entries in timestamp order.
+
+**Paging.** `entries:list` returns one page per storage shard, so an empty
+page with a `nextPageToken` is not the end. The reader follows tokens until
+the token is empty or it has read 20 pages. A catch-up that stops at 20 pages
+returns an infrastructure error after appending what it read; at the end, the
+output is then marked truncated.
+
+**Quotas.** Each page is one request against Cloud Logging's quota of 60
+`entries:list` requests a minute per project, which cannot be raised, and each
+running execution holds one of the project's 10 open tails. Many executions
+starting, reopening a tail or ending in the same minute can be refused with
+`429`; the runner calls again after its backoff. An execution whose tail is
+refused has no live output until one opens, and its output arrives whole in the
+catch-up at the end.
 
 ## Cleanup
 
 | Mechanism | When | Effect |
 |---|---|---|
-| `Release` | Last step of every execution, by its runner, after `Result`, `ReadLogs` and the settle; retried until it succeeds | Deletes the job |
+| `Release` | Last step of every execution, by its runner, after `Result`, the output capture and the settle; retried until it succeeds | Deletes the job |
 | `Cancel` | When the execution's dispatch is cancelled, or after a `Submit` that failed as `infrastructure` | Deletes the job, stopping its execution |
 | Failed `:run` | Inside `Submit` | Deletes the job |
 
@@ -432,9 +431,8 @@ within the task's retry budget and stops on `internal` ones; see
 | Execution has no task | infrastructure | yes | |
 | Execution reports `cancelled` | infrastructure | yes | Raised by dispatch after `Result`: no verdict was produced |
 | Container exits non-zero | none | | An answer: state `failed`, `Result.ExitCode` set, not rerouted |
-| `ReadLogs` fails or stops at 20 pages | as for any call; infrastructure at the cap | | Dispatch stores what was read and marks it truncated; the execution is unaffected |
-| `StreamLogs` backfill fails or stops at 20 pages | none | | Returns `plugin.ErrNoResume`; the server answers 416 when nothing was written |
-| `entries:tail` cannot be opened | as for any call | | The server logs it and ends the response; the execution is unaffected |
+| A catch-up fails or stops at 20 pages | as for any call; infrastructure at the cap | | The runner calls again; three failures after the job ended leave the output marked truncated; the execution is unaffected |
+| `entries:tail` cannot be opened, or ends | as for any call; an ended tail is infrastructure | | The runner logs it and calls again; the execution is unaffected |
 
 Google's error message is lifted out of the JSON error body; if the body is not
 in that shape, its first 500 bytes are used.
@@ -552,13 +550,13 @@ go test -run TestLive -v -timeout 12m ./internal/providers/gcp/cloudrun/
 
 `TestLiveRoundTrip` is the round trip every container provider shares, in
 `internal/plugin/plugintest`. It runs `alpine:3.20` writing one line to
-stdout and one to stderr, sleeping 10 seconds so a follow attaches, and
-exiting 3. It polls to completion for up to 6 minutes, asserts state
-`failed`, exit code 3, and both lines read whole and streamed, with the `$`
-in its args and env as written, and deletes the job in a cleanup that runs
-even when an assertion fails.
+stdout and one to stderr, sleeping 30 seconds so its first line is captured
+while it runs, and exiting 3. It polls to completion for up to 6 minutes,
+asserts state `failed`, exit code 3, and both lines captured, the first before
+the job ends, with the `$` in its args and env as written, and deletes the job
+in a cleanup that runs even when an assertion fails.
 
-`TestLiveLateFollow` prints 12,000 lines, waits, and prints one more. It
-asserts that all of it is stored, past 64 KiB, and that a follow opened after
-most of it was printed, and one reopened at an offset, both start where they
-should.
+`TestLiveLateCapture` prints 12,000 lines, waits, and prints one more. It
+asserts that a capture begun after most of it was printed, as a server taking
+one over begins, holds all 12,001 lines once, past 64 KiB, and that a capture
+begun on a log holding the first lines adds only the rest.

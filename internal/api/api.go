@@ -201,6 +201,11 @@ type Execution struct {
 	LogsTruncated bool
 }
 
+// LogsStartHeader is the header of a /logs response saying where in the output
+// its body begins: the offset asked for, or past it when the output there was
+// dropped past the server's ceiling.
+const LogsStartHeader = "Vagabond-Logs-Start"
+
 // ExecutionFilter is what GET /v1/executions narrows a listing by: each of
 // Job, State and Provider that is set, and at most Limit, the server's default
 // when 0.

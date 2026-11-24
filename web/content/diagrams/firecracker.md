@@ -174,7 +174,7 @@ window.vagabondDiagram = {
     READLOGS: {
       title: 'ReadLogs',
       badge: 'entry', badgeText: 'executor protocol',
-      body: '<p>What the agent&rsquo;s executor polls for the server&rsquo;s live output and for the whole output once the workload ends. An execution not started yet reads as empty.</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
+      body: '<p>What the agent&rsquo;s executor polls while the server captures the output, from where the server&rsquo;s copy got to. An execution not started yet reads as empty.</p><p><a href="../live-output/">Live output diagram &rarr;</a></p>'
     },
     STARTUP: {
       title: 'vagabond-firecracker Starts',

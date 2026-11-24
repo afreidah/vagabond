@@ -3,15 +3,16 @@
 //
 // Author: Alex Freidah
 //
-// What an execution store promises about output: chunks read back in order, a
-// write at chunk 0 starts the output over so a retried capture cannot repeat
-// it, the front drops as the ceiling asks, and pruning takes only what ended
-// before the cutoff.
+// What an execution store promises about output: chunks read back in order and
+// named, a write replaces its chunk and drops those after it so the last chunk
+// grows in place, the front drops as the ceiling asks, and pruning takes only
+// what ended before the cutoff.
 // -------------------------------------------------------------------------------
 
 package statetest
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +33,9 @@ func LogContract(t *testing.T, newStore func(t *testing.T) Store) {
 var logRules = []rule[Store]{
 	{"chunks read back in order", readsInOrder},
 	{"a write at chunk 0 starts over", startsOver},
+	{"the last chunk grows in place", growsInPlace},
 	{"the front drops past the ceiling", dropsTheFront},
+	{"a read names the chunks it hands over", namesChunks},
 	{"a read begins at its chunk", readsFromAChunk},
 	{"executions keep their own output", keepsExecutionsApart},
 	{"an execution with no output reads empty", readsEmpty},
@@ -62,6 +65,38 @@ func startsOver(t *testing.T, s Store) {
 
 	if got := read(t, s, o, 0); got != "second try" {
 		t.Errorf("read %q, want only the second capture", got)
+	}
+}
+
+// growsInPlace: writing the last chunk again replaces it, as a capture does
+// each time more output arrives.
+func growsInPlace(t *testing.T, s Store) {
+	o := logged(t, s, time.Time{})
+	appendAll(t, s, o, 0, "full,")
+	appendChunk(t, s, o, 1, "gro", 0)
+	appendChunk(t, s, o, 1, "grows", 0)
+
+	if got := read(t, s, o, 0); got != "full,grows" {
+		t.Errorf("read %q, want the last chunk as last written", got)
+	}
+}
+
+// namesChunks: a read hands each chunk over with its own number, so a reader
+// sees where the output it asked for was dropped.
+func namesChunks(t *testing.T, s Store) {
+	o := logged(t, s, time.Time{})
+	appendAll(t, s, o, 0, "a,", "b,")
+	appendChunk(t, s, o, 2, "c", 2)
+
+	var seqs []int64
+
+	err := s.ReadLog(t.Context(), o.id, 0, func(seq int64, _ []byte) error {
+		seqs = append(seqs, seq)
+
+		return nil
+	})
+	if err != nil || !slices.Equal(seqs, []int64{2}) {
+		t.Errorf("ReadLog() handed over chunks %v, %v; want only chunk 2", seqs, err)
 	}
 }
 
@@ -177,13 +212,26 @@ func appendChunk(t *testing.T, s Store, o output, seq int64, chunk string, keepF
 	}
 }
 
-// read returns o's stored output from chunk fromSeq on.
+// read returns o's stored output from chunk fromSeq on, failing the test if a
+// chunk is handed over out of order.
 func read(t *testing.T, s Store, o output, fromSeq int64) string {
 	t.Helper()
 
 	var out strings.Builder
 
-	if err := s.ReadLog(t.Context(), o.id, fromSeq, &out); err != nil {
+	last := fromSeq - 1
+
+	err := s.ReadLog(t.Context(), o.id, fromSeq, func(seq int64, data []byte) error {
+		if seq <= last {
+			t.Errorf("chunk %d handed over after chunk %d", seq, last)
+		}
+
+		last = seq
+		out.Write(data)
+
+		return nil
+	})
+	if err != nil {
 		t.Fatalf("ReadLog() = %v", err)
 	}
 

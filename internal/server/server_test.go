@@ -144,7 +144,10 @@ func newHarness(t *testing.T) *harness {
 	providers := memory.NewProviders()
 	logger := slog.New(slog.DiscardHandler)
 
-	srv := httptest.NewServer(New(reg, led, executions, jobStore, providers, logger).Handler())
+	s := New(reg, led, executions, jobStore, providers, logger)
+	s.followPoll = 10 * time.Millisecond
+
+	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 
 	box, _ := reg.Provider("box")

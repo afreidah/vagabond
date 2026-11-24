@@ -12,7 +12,6 @@
 package cloudbuild
 
 import (
-	"bytes"
 	"errors"
 	"net/url"
 	"testing"
@@ -328,23 +327,23 @@ func TestCancelWithNothingToStop(t *testing.T) {
 // OUTPUT
 // -------------------------------------------------------------------------
 
-// The output is read from Cloud Logging through the build's id, which the
+// The output is captured from Cloud Logging through the build's id, which the
 // tag lookup found.
-func TestReadLogs(t *testing.T) {
+func TestCaptureLogs(t *testing.T) {
 	t.Parallel()
 
 	g, p := newFake(t)
 	g.Respond("GET "+buildsPath, listing(map[string]any{"id": "b-1", "status": "SUCCESS"}))
 	g.Respond("POST /v2/entries:list", map[string]any{"entries": []any{map[string]any{"textPayload": "hello"}}})
 
-	var out bytes.Buffer
+	logs := &plugin.MemoryLog{}
 
-	if err := p.ReadLogs(t.Context(), testkit.NewID(t), &execution.PlacedWriter{Writer: &out}); err != nil {
-		t.Fatalf("ReadLogs failed: %v", err)
+	if err := p.CaptureLogs(t.Context(), testkit.NewID(t), logs, ended()); err != nil {
+		t.Fatalf("CaptureLogs failed: %v", err)
 	}
 
-	if out.String() != "hello\n" {
-		t.Errorf("output = %q, want hello", out.String())
+	if logs.String() != "hello\n" {
+		t.Errorf("output = %q, want hello", logs.String())
 	}
 
 	if filter := g.Request(1).Body["filter"]; filter != `resource.type="build" resource.labels.build_id="b-1"` {
@@ -352,7 +351,8 @@ func TestReadLogs(t *testing.T) {
 	}
 }
 
-// Output of a build no listing shows is the lookup's error, read or streamed.
+// Output of a build no listing shows is the lookup's error, the build running
+// or over.
 func TestLogsWithNoBuild(t *testing.T) {
 	t.Parallel()
 
@@ -361,13 +361,19 @@ func TestLogsWithNoBuild(t *testing.T) {
 
 	id := testkit.NewID(t)
 
-	if err := p.ReadLogs(t.Context(), id, &execution.PlacedWriter{Writer: &bytes.Buffer{}}); !errors.Is(err, plugin.ErrUnknownExecution) {
-		t.Errorf("ReadLogs() = %v, want an unknown execution", err)
+	for _, over := range []<-chan struct{}{ended(), make(chan struct{})} {
+		if err := p.CaptureLogs(t.Context(), id, &plugin.MemoryLog{}, over); !errors.Is(err, plugin.ErrUnknownExecution) {
+			t.Errorf("CaptureLogs() = %v, want an unknown execution", err)
+		}
 	}
+}
 
-	if err := p.StreamLogs(t.Context(), id, 0, &bytes.Buffer{}); !errors.Is(err, plugin.ErrUnknownExecution) {
-		t.Errorf("StreamLogs() = %v, want an unknown execution", err)
-	}
+// ended is an ended that has closed, for a capture of a finished build.
+func ended() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+
+	return ch
 }
 
 // -------------------------------------------------------------------------

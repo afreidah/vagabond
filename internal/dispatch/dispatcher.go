@@ -71,6 +71,7 @@ type Executions interface {
 	Save(ctx context.Context, r *execution.Record, lease execution.Lease) error
 	Get(ctx context.Context, id execution.ID) (*execution.Record, error)
 	AppendLog(ctx context.Context, id execution.ID, seq int64, data []byte, keepFrom int64, lease execution.Lease) error
+	ReadLog(ctx context.Context, id execution.ID, fromSeq int64, each func(seq int64, data []byte) error) error
 }
 
 // Origin is what a task runs for: the job, the namespace it runs in, and the
