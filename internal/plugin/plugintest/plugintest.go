@@ -179,15 +179,12 @@ func (l Live) Finish(t *testing.T, p plugin.Provider, id execution.ID) execution
 	deadline := time.Now().Add(l.Deadline)
 
 	for time.Now().Before(deadline) {
-		status, err := p.Status(t.Context(), id)
-		if err != nil {
-			t.Fatalf("Status failed: %v", err)
-		}
+		state := stateOf(t, p, id)
 
-		t.Logf("status: %s", status.State)
+		t.Logf("status: %s", state)
 
-		if status.State.Terminal() {
-			return status.State
+		if state.Terminal() {
+			return state
 		}
 
 		time.Sleep(l.Poll)
@@ -206,22 +203,30 @@ func (l Live) AwaitRunning(t *testing.T, p plugin.Provider, id execution.ID) {
 	deadline := time.Now().Add(l.Deadline)
 
 	for time.Now().Before(deadline) {
-		status, err := p.Status(t.Context(), id)
-		if err != nil {
-			t.Fatalf("Status failed: %v", err)
-		}
-
-		switch {
-		case status.State == execution.StateRunning:
+		switch state := stateOf(t, p, id); {
+		case state == execution.StateRunning:
 			return
-		case status.State.Terminal():
-			t.Fatalf("execution ended %s before it was seen running", status.State)
+		case state.Terminal():
+			t.Fatalf("execution ended %s before it was seen running", state)
 		}
 
 		time.Sleep(l.Poll)
 	}
 
 	t.Fatalf("execution did not start within %s", l.Deadline)
+}
+
+// stateOf asks p where the execution stands, failing the test when it cannot
+// say.
+func stateOf(t *testing.T, p plugin.Provider, id execution.ID) execution.State {
+	t.Helper()
+
+	status, err := p.Status(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Status failed: %v", err)
+	}
+
+	return status.State
 }
 
 // shows reports whether logs held want before the execution ended, polling
@@ -236,12 +241,7 @@ func (l Live) shows(t *testing.T, p plugin.Provider, id execution.ID, logs *plug
 			return true
 		}
 
-		status, err := p.Status(t.Context(), id)
-		if err != nil {
-			t.Fatalf("Status failed: %v", err)
-		}
-
-		if status.State.Terminal() {
+		if stateOf(t, p, id).Terminal() {
 			return false
 		}
 
