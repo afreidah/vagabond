@@ -22,6 +22,7 @@ import (
 	"github.com/afreidah/vagabond/internal/backoff"
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
+	"github.com/afreidah/vagabond/internal/logging"
 	"github.com/afreidah/vagabond/internal/panics"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
@@ -66,12 +67,12 @@ func (d *Dispatcher) newRunner(provider plugin.Provider, l *lease, rec *executio
 	return &runner{d: d, provider: provider, lease: l, rec: *rec, answered: make(chan answer, 1)}
 }
 
-// start runs the runner in the background, counted against its lease, and
-// returns it.
+// start runs the runner in the background, counted against its lease, on ctx
+// naming its execution on every line logged with it, and returns it.
 func (r *runner) start(ctx context.Context) *runner {
 	r.lease.runners.Add(1)
 
-	go r.run(ctx)
+	go r.run(logging.With(ctx, "execution_id", r.rec.ID))
 
 	return r
 }
@@ -91,7 +92,7 @@ func (r *runner) wait() answer {
 // it run however the run ends. A panic fails the execution as internal.
 func (r *runner) run(ctx context.Context) {
 	defer r.lease.runners.Done()
-	defer panics.Catch(ctx, r.d.logger, "execution "+r.rec.ID.String(), r.panicked)
+	defer panics.Catch(ctx, r.d.logger, "execution", func(err error) { r.panicked(ctx, err) })
 
 	work := context.WithoutCancel(ctx)
 
@@ -467,7 +468,7 @@ func (r *runner) release(work context.Context) error {
 				return ErrLeaseLost
 			}
 
-			r.d.logger.WarnContext(work, "releasing provider leftovers", "execution", r.rec.ID, "error", err)
+			r.d.logger.WarnContext(work, "releasing provider leftovers failed, retrying", "error", err)
 
 			if err := r.d.sleep(work, backoff.Exponential(persistRetry, persistRetryMax, n)); err != nil {
 				return err
@@ -525,16 +526,16 @@ func (r *runner) answer(a *answer) {
 // runner, after one attempt to record the execution failed. Settling and
 // releasing are skipped, since they could panic the same way: the execution's
 // quota stays reserved and its workload as the provider has it.
-func (r *runner) panicked(err error) {
-	r.recordPanic()
+func (r *runner) panicked(ctx context.Context, err error) {
+	r.recordPanic(ctx)
 	r.answer(&answer{state: r.rec.State, err: plugin.Internal(err)})
 }
 
 // recordPanic writes the record failed as internal, once and within
-// recordTimeout, and only logs a panic of its own. A record already terminal
-// keeps its verdict.
-func (r *runner) recordPanic() {
-	defer panics.Catch(context.Background(), r.d.logger, "recording panicked execution "+r.rec.ID.String(), nil)
+// recordTimeout however ctx stands, and only logs a panic of its own. A
+// record already terminal keeps its verdict.
+func (r *runner) recordPanic(ctx context.Context) {
+	defer panics.Catch(ctx, r.d.logger, "recording a panicked execution", nil)
 
 	if r.rec.To(execution.StateFailed, r.d.now()) != nil {
 		return
@@ -542,7 +543,7 @@ func (r *runner) recordPanic() {
 
 	r.rec.Failure = string(plugin.ClassInternal)
 
-	ctx, cancel := context.WithTimeout(context.Background(), recordTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
 
 	_ = r.d.executions.Save(ctx, &r.rec, r.lease.key)

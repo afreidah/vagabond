@@ -34,6 +34,7 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobs"
 	"github.com/afreidah/vagabond/internal/ledger"
+	"github.com/afreidah/vagabond/internal/logging"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/registry"
@@ -138,11 +139,17 @@ func fixtures(t *testing.T) (*registry.Registry, *ledger.Ledger) {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 
+	return loggedHarness(t, nil)
+}
+
+// loggedHarness is newHarness with the server logging to logger.
+func loggedHarness(t *testing.T, logger *slog.Logger) *harness {
+	t.Helper()
+
 	reg, led := fixtures(t)
 	jobStore := NewMockserverJobs(gomock.NewController(t))
 	executions := memory.NewExecutions()
 	providers := memory.NewProviders()
-	logger := slog.New(slog.DiscardHandler)
 
 	s := New(reg, led, executions, jobStore, providers, logger)
 	s.followPoll = 10 * time.Millisecond
@@ -473,7 +480,7 @@ func TestCancel_UnrecordableRequestFails(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(New(reg, led, executions, NewMockserverJobs(gomock.NewController(t)),
-		memory.NewProviders(), slog.New(slog.DiscardHandler)).Handler())
+		memory.NewProviders(), nil).Handler())
 	t.Cleanup(srv.Close)
 
 	h := &harness{url: srv.URL}
@@ -516,6 +523,41 @@ func (h *harness) ran(t *testing.T) api.Execution {
 	}
 
 	return h.awaitExecution(t, started.DispatchID, "succeeded")
+}
+
+// A dispatch's lines name it from the context it runs on, the server's own
+// line about how it finished included.
+func TestDispatch_LinesNameTheDispatch(t *testing.T) {
+	var out testkit.Buffer
+
+	h := loggedHarness(t, logging.New(&out, logging.Options{JSON: true}))
+	exec := h.ran(t)
+
+	var finished map[string]any
+
+	testkit.Eventually(t, 5*time.Second, "the dispatch finished line", func() bool {
+		for line := range strings.Lines(out.String()) {
+			var fields map[string]any
+			if json.Unmarshal([]byte(line), &fields) == nil && fields["msg"] == "dispatch finished" {
+				finished = fields
+
+				return true
+			}
+		}
+
+		return false
+	})
+
+	want := map[string]any{
+		"component": "server", "dispatch_id": exec.DispatchID, "namespace": "default", "job": "hello",
+		"job_version": float64(0), "succeeded": true,
+	}
+
+	for key, value := range want {
+		if finished[key] != value {
+			t.Errorf("%s = %v, want %v in %v", key, finished[key], value, finished)
+		}
+	}
 }
 
 // The listing is the namespace's newest first, cut at the limit and narrowed
@@ -631,7 +673,7 @@ func (downStore) Ping(context.Context) error {
 func TestStoreOutage_RefusesNewWork(t *testing.T) {
 	reg, led := fixtures(t)
 	srv := httptest.NewServer(New(reg, led, downStore{memory.NewExecutions()},
-		NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler)).Handler())
+		NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), nil).Handler())
 	t.Cleanup(srv.Close)
 
 	h := &harness{url: srv.URL}
@@ -708,7 +750,7 @@ func TestServeListener_ResumesAnAbandonedDispatch(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 
-	srv := New(reg, led, executions, memory.NewJobs(), memory.NewProviders(), slog.New(slog.DiscardHandler))
+	srv := New(reg, led, executions, memory.NewJobs(), memory.NewProviders(), nil)
 
 	serveCtx, stop := context.WithCancel(ctx)
 	defer stop()
@@ -753,7 +795,7 @@ func TestServeListener_StopsOnCancel(t *testing.T) {
 	reg.EXPECT().SetDisabled(map[string]state.Disabled{})
 
 	srv := New(reg, led, memory.NewExecutions(), memory.NewJobs(), memory.NewProviders(),
-		slog.New(slog.DiscardHandler))
+		nil)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)

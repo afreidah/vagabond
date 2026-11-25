@@ -14,7 +14,6 @@ package cli
 import (
 	"context"
 	"crypto/tls"
-	"log/slog"
 	"net"
 	"net/http/httptest"
 	"os"
@@ -95,7 +94,7 @@ func devFixture(t *testing.T, cfg string) (*server.Server, *registry.Registry) {
 		t.Fatalf("config: %s", diags.Error())
 	}
 
-	conns := nodes.New()
+	conns := nodes.New(nil)
 
 	reg, diags := registry.New(ctx, file, registry.WithNodes(conns))
 	if diags.HasErrors() {
@@ -106,7 +105,7 @@ func devFixture(t *testing.T, cfg string) (*server.Server, *registry.Registry) {
 		t.Fatalf("Refresh() = %v", err)
 	}
 
-	srv, err := devServer(ctx, reg, slog.New(slog.DiscardHandler), server.WithNodes(conns))
+	srv, err := devServer(ctx, reg, nil, server.WithNodes(conns))
 	if err != nil {
 		t.Fatalf("devServer() = %v", err)
 	}

@@ -997,6 +997,7 @@ on `agent_bind` (`127.0.0.1:4748` by default). See
 | `-config <path>` | `$VAGABOND_CONFIG`, then the search path | Configuration file, or a directory whose `.hcl` files are all loaded |
 | `-dev` | `false` | Keep jobs, executions, quota usage and disabled providers in memory, lost on exit. A `store` block is ignored with a warning |
 | `-log-level <level>` | `info` | `debug`, `info`, `warn` or `error`. Requests log at `debug`, dispatches at `info` |
+| `-log-json` | off | Write each log line as JSON in place of text ([logging](logging.md)) |
 
 **Configuration discovery:** `-config`, else `$VAGABOND_CONFIG`, else the first
 that exists of:
@@ -1025,7 +1026,8 @@ does not fall through to the search path.
 next server, which resumes them once their leases lapse (see
 [background services](background-services.md)).
 
-**Logs:** text-format `slog` lines on stderr.
+**Logs:** one line per event on stderr, `key=value` text or JSON with
+`-log-json`, each naming its `component`; see [logging](logging.md).
 
 **Startup errors (exit 1):**
 
@@ -1043,7 +1045,7 @@ next server, which resumes them once their leases lapse (see
 | `listening for agents on <addr>: ...` | Agent address in use or not bindable |
 | `could not read quota usage: ...` | The store opened but the quota ledger could not be loaded |
 | `listening on <addr>: ...` | API `bind` address in use or not bindable |
-| `Invalid -log-level "<value>": use debug, info, warn or error.` | Bad log level |
+| `invalid value "<value>" for flag -log-level: use debug, info, warn or error` | Bad log level |
 
 With `-dev` and a `store` block present, the server warns
 `Running with -dev: the store block is ignored and everything is kept in memory.`
@@ -1094,8 +1096,10 @@ snapshotter and a vagabond-firecracker answering on the socket too.
 | `-firecracker-uid <uid>`, `-firecracker-gid <gid>` | `990` | User and group Firecracker runs as |
 | `-firecracker-uplink <interface>` | the default route's | Interface microVM traffic leaves through |
 | `-data-dir <path>` | `/var/lib/vagabond` | Where workload output is kept. In a container, must be the same path inside and out |
+| `-max-log-mib <MiB>` | `16` | How much of each workload's output the node keeps, its front dropped past it. At least the server's `max_log_mib`, or the server keeps less |
 | `-cgroup-parent <path>` | agent's own cgroup | Operator-prepared cgroup to create workloads under, instead of delegating from the agent's own |
-| `-log-level <level>` | `info` | `debug`, `info`, `warn` or `error` |
+| `-log-level <level>` | `info` | `debug`, `info`, `warn` or `error`. vagabond-firecracker logs at the same level |
+| `-log-json` | off | Write each log line as JSON in place of text; vagabond-firecracker's own lines stay text ([logging](logging.md)) |
 
 **Capacity** is the smallest of the host's CPU and memory, the limits on the
 agent's cgroup, and `-cpu` / `-memory`. Workloads run in the containerd
@@ -1116,7 +1120,8 @@ namespace `vagabond`.
 | `loading the certificate <cert>: ...` / `loading the CA from <path>: ...` | TLS files unreadable or not PEM |
 | `-tls-server-name needs -tls-ca, -tls-cert and -tls-key` | `-tls-server-name` given with no TLS files |
 | `the agent's certificate has no common name` | TLS certificate has an empty CN |
-| `Invalid -log-level "<value>": use debug, info, warn or error.` | Bad log level |
+| `Invalid -max-log-mib <n>: a node keeps at least 1 MiB of each workload's output.` | `-max-log-mib` below 1 |
+| `invalid value "<value>" for flag -log-level: use debug, info, warn or error` | Bad log level |
 
 ```bash
 vagabond agent \

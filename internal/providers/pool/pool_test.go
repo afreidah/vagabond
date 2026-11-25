@@ -15,7 +15,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"slices"
 	"strings"
@@ -62,9 +61,9 @@ func newHarness(t *testing.T, unwanted nodes.Unwanted) *harness {
 		t.Fatalf("listen: %v", err)
 	}
 
-	conns := nodes.New()
+	conns := nodes.New(nil)
 
-	go func() { _ = conns.Serve(t.Context(), listener, unwanted, slog.New(slog.DiscardHandler)) }()
+	go func() { _ = conns.Serve(t.Context(), listener, unwanted) }()
 
 	return &harness{conns: conns, pool: provider(t, TypeContainerd, "", conns), address: listener.Addr().String()}
 }
@@ -189,17 +188,17 @@ func (h *harness) freeMemory(t *testing.T, name string) int {
 // The block is optional: the pool defaults to the label and placement to
 // spread, and an unknown placement is refused.
 func TestNew_Config(t *testing.T) {
-	if p := provider(t, TypeContainerd, "", nodes.New()); p.cfg.Pool != "homelab" || p.cfg.Placement != PlacementSpread {
+	if p := provider(t, TypeContainerd, "", nodes.New(nil)); p.cfg.Pool != "homelab" || p.cfg.Placement != PlacementSpread {
 		t.Errorf("defaults = %+v, want pool homelab and spread", p.cfg)
 	}
 
-	if p := provider(t, TypeFirecracker, "pool = \"lab\"\nplacement = \"pack\"", nodes.New()); p.cfg.Pool != "lab" || p.cfg.Placement != PlacementPack {
+	if p := provider(t, TypeFirecracker, "pool = \"lab\"\nplacement = \"pack\"", nodes.New(nil)); p.cfg.Pool != "lab" || p.cfg.Placement != PlacementPack {
 		t.Errorf("config = %+v, want pool lab and pack", p.cfg)
 	}
 
 	for _, src := range []string{`placement = "random"`, `colour = "red"`} {
 		f, _ := hclsyntax.ParseConfig([]byte(src), "test.hcl", hcl.InitialPos)
-		if p, diags := New("homelab", TypeContainerd, f.Body, nodes.New()); p != nil || !diags.HasErrors() {
+		if p, diags := New("homelab", TypeContainerd, f.Body, nodes.New(nil)); p != nil || !diags.HasErrors() {
 			t.Errorf("New(%s) = %v, %s; want refused", src, p, diags.Error())
 		}
 	}

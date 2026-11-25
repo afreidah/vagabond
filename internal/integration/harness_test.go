@@ -16,7 +16,6 @@ package integration
 import (
 	"bytes"
 	"context"
-	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -118,7 +117,7 @@ func (h *harness) serve(opts ...server.Option) *api.Client {
 		h.t.Fatalf("listen: %v", err)
 	}
 
-	srv := server.New(h.registry, led, h.store, h.store, h.store, slog.New(slog.DiscardHandler), opts...)
+	srv := server.New(h.registry, led, h.store, h.store, h.store, nil, opts...)
 	done := make(chan error, 1)
 
 	go func() { done <- srv.ServeListener(ctx, listener, nil) }()

@@ -268,7 +268,7 @@ provider.
   cut reports the cut, and once `ended` closes reads what is left, as Code
   Engine does.
 - Return an error for any other end: a stream cut, a refusal, a read that
-  failed. The runner logs it as `capturing output`, waits 1s doubling to 30s,
+  failed. The runner logs it as `capturing output failed`, waits 1s doubling to 30s,
   back to 1s after a call that added output, and calls again. Once `ended`
   has closed, three failed calls end the capture: what was written is kept and
   the output is marked truncated. The execution is never failed over it.

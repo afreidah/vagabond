@@ -342,7 +342,7 @@ waiting client the output is whole, and releasing may destroy it.
   log's `StartsAt`. The capture stores it from there, and `LogsStart` is at
   least that.
 - A call that returns before the output is whole, a stream cut or refused, is
-  logged as `capturing output` and made again after 1s doubling to 30s, back to
+  logged as `capturing output failed` and made again after 1s doubling to 30s, back to
   1s after a call that added output, from what the store holds. The same
   credential retry as every provider call applies.
 - When the runner sees the execution end, it tells the capture, which finishes
@@ -383,8 +383,9 @@ on providers that implement `plugin.Releaser`:
   delete what `Result` and the capture read.
 - Each call has a 30s timeout. A release that fails is made again, waiting
   250ms doubling to 10s, until it succeeds or the provider reports the
-  execution unknown; each failure logs warn `releasing provider leftovers`
-  with `execution` and `error`. Either sets the record's `released_at`.
+  execution unknown; each failure logs warn `releasing provider leftovers
+  failed, retrying` with `error` and the execution's `execution_id`. Either
+  sets the record's `released_at`.
 - A provider without `Release` is marked released with no call, as is an
   execution whose provider is no longer configured.
 - A failed release does not fail the execution or change its charge. It holds
@@ -512,8 +513,10 @@ ending every server that claimed it, as a fatal runtime error that no
 
 Server log lines: `dispatch resumed` (with `epoch`, the claim's), then
 `resumed dispatch finished` (with `state` and `reason`) once every execution
-is released, or `resuming dispatch` at warn with the error. A dispatch past
-the limit logs `abandoning dispatch` at error, with `epoch` and `reason`.
+is released, or `resuming the dispatch failed` at warn with the error. A
+dispatch past the limit logs `abandoning dispatch` at error, with `epoch` and
+`reason`. Each line carries the dispatch's `dispatch_id`, `namespace`, `job`
+and `job_version` ([Logging](logging.md#context-fields)).
 
 ## Panics
 

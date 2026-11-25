@@ -348,7 +348,7 @@ streaming method, over HTTP through gRPC transcoding:
   it opens, since Cloud Logging drops entries a client does not read quickly
   enough (`suppressionInfo` reason `NOT_CONSUMED`).
 - A tail never ends of its own accord, so every end is an error, which the
-  runner logs as `capturing output` before calling again: the array closing,
+  runner logs as `capturing output failed` before calling again: the array closing,
   a read or decode error, or the error Google sends as the array's last
   element, with its status and message.
 

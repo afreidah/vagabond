@@ -695,7 +695,7 @@ Other startup errors:
 | `No providers are configured, so there is nothing to run on.` | Configuration decoded with zero `provider` blocks |
 | `listening for agents on <addr>: ...` | `agent_bind` in use or not bindable |
 | `listening on <addr>: ...` | `bind` in use or not bindable |
-| `Invalid -log-level "x": use debug, info, warn or error.` | Bad `-log-level` |
+| `invalid value "x" for flag -log-level: use debug, info, warn or error` | Bad `-log-level` |
 | `Cannot read configuration` | A discovered path that cannot be read |
 | `loading the certificate <cert>: ...` | `tls` or `agent_tls` pair unreadable or mismatched |
 | `loading the CA from <path>: ...` | `tls` or `agent_tls` `ca` missing, or holding no PEM certificate |

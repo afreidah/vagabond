@@ -206,12 +206,41 @@ replies with the task's exit code and output; both are described under the
 {"exit_code": 0, "output": "lint: 0 issues\n"}
 ```
 
-OCI serves a function over the socket named in `FN_LISTENER`, which an Fn
-function development kit handles; with Go's,
-[`github.com/fnproject/fdk-go`](https://github.com/fnproject/fdk-go), a
-handler decodes the event from its input and encodes the reply to its output.
-`internal/providers/oci/testdata/livefn` is a complete function. `env` is data
-in the event, not the function's process environment.
+The function can be code-only, an archive run on one of OCI's managed
+runtimes, or image-based; either way it decodes the event from its input and
+returns the reply. This is a complete code-only function on the
+`python312.ol9` runtime, at `function/func.py` in its archive with the handler
+`func.handler`, and is the one the [live tests](#testing-against-a-tenancy)
+invoke:
+
+```python
+import io
+import json
+import time
+
+from fdk import response
+
+
+def handler(ctx, data: io.BytesIO = None):
+    event = json.loads(data.getvalue() or b"{}") if data else {}
+    args = event.get("args") or []
+    env = event.get("env") or {}
+
+    if args[:1] == ["sleep"]:
+        time.sleep(60)
+
+    output = "hello {} [{}] {}\n".format(event.get("execution_id", ""), "|".join(args), env.get("VAGABOND_LIVE", ""))
+
+    return response.Response(
+        ctx,
+        response_data=json.dumps({"exit_code": 3, "output": output}),
+        headers={"Content-Type": "application/json"},
+    )
+```
+
+The Python runtime carries the Fn function development kit, `fdk`, so the
+archive needs nothing else. `env` is data in the event, not the function's
+process environment.
 
 **Not applied:** `resources`, `timeout`, `source`, `working_directory` and
 `network` are not sent. Memory and timeout are function configuration, set
@@ -358,9 +387,9 @@ uses those figures. Vagabond ships no defaults.
 
 ## Testing against a tenancy
 
-`TestLive*` in `internal/providers/oci` invoke the function in
-`internal/providers/oci/testdata/livefn`, deployed with its `func.yaml` (128 MB,
-a 30 second timeout). They check the reply's exit code and output, the event's
+`TestLive*` in `internal/providers/oci` invoke the Python function under
+[The event and the reply](#the-event-and-the-reply), deployed with 128 MB and
+a 30 second timeout. They check the reply's exit code and output, the event's
 contents with a `$` passed through as written, the bill at the function's
 memory, and a timeout failing the task. They are skipped unless
 `VAGABOND_OCI_FUNCTION` is set:

@@ -12,16 +12,15 @@
 package cli
 
 import (
-	"bytes"
 	"regexp"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/afreidah/vagabond/internal/api"
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/plugin"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -64,32 +63,10 @@ job "ci" {
 }
 `
 
-// syncBuffer is a buffer a test can read while the CLI is still writing it.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-// Write appends p.
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.buf.Write(p)
-}
-
-// String returns everything written so far.
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.buf.String()
-}
-
 // background is a command running on its own goroutine, with streams a test
 // can read while it runs.
 type background struct {
-	stdout, stderr syncBuffer
+	stdout, stderr testkit.Buffer
 	code           chan int
 }
 

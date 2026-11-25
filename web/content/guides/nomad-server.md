@@ -279,9 +279,9 @@ The server's log, from `nomad alloc logs -stderr <alloc>`:
 
 ```text
 The API on 0.0.0.0:4747 is reachable beyond this machine and accepts any client. Name a ca in the server block's tls block so clients must present a certificate.
-time=2026-11-19T23:22:19.703Z level=INFO msg="serving agents" address=[::]:4748
-time=2026-11-19T23:22:19.710Z level=INFO msg=serving address=[::]:4747 tls=false
-time=2026-11-19T23:22:31.716Z level=INFO msg="node registered" node=nomad-client-04 pool=homelab address=192.168.68.73:52706 cpu=2010 memory=4608 held=0
+time=2026-11-19T23:22:19.703Z level=INFO msg="serving agents" component=nodes listen_addr=[::]:4748
+time=2026-11-19T23:22:19.710Z level=INFO msg=serving component=server listen_addr=[::]:4747 tls=false
+time=2026-11-19T23:22:31.716Z level=INFO msg="node registered" component=nodes node=nomad-client-04 pool=homelab remote_addr=192.168.68.73:52706 cpu=2010 memory=4608 held=0
 ```
 
 - The first line is the server's warning that its API has no authentication.

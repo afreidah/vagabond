@@ -37,8 +37,8 @@ repository root either way.
 ```
 
 ```shell
-time=2026-09-28T14:02:11.482Z level=INFO msg="serving agents" address=127.0.0.1:4748
-time=2026-09-28T14:02:11.483Z level=INFO msg=serving address=127.0.0.1:4747 tls=false
+time=2026-09-28T14:02:11.482Z level=INFO msg=serving component=server listen_addr=127.0.0.1:4747 tls=false
+time=2026-09-28T14:02:11.483Z level=INFO msg="serving agents" component=nodes listen_addr=127.0.0.1:4748
 ```
 
 | Item | Value |
@@ -46,6 +46,7 @@ time=2026-09-28T14:02:11.483Z level=INFO msg=serving address=127.0.0.1:4747 tls=
 | API address | `127.0.0.1:4747` |
 | Agent address | `127.0.0.1:4748` |
 | Log level | `info`; change with `-log-level debug\|info\|warn\|error` |
+| Log format | Text; `-log-json` for JSON lines ([Logging](logging.md)) |
 | Stop | Ctrl-C or SIGTERM; in-flight requests get 10 seconds to drain |
 
 Every other command looks for the server at `http://127.0.0.1:4747`. Point it

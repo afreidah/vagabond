@@ -13,7 +13,6 @@ package server
 
 import (
 	"crypto/tls"
-	"log/slog"
 	"testing"
 
 	"go.uber.org/mock/gomock"
@@ -50,7 +49,7 @@ func newTLSHarness(t *testing.T) *tlsHarness {
 	}
 
 	reg, led := fixtures(t)
-	srv := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler))
+	srv := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), nil)
 
 	return &tlsHarness{agentHarness: serveAgents(t, srv, serverTLS), ca: ca}
 }

@@ -30,7 +30,7 @@ agent finds them again when it starts.
 | `-data-dir` writable | startup | |
 | With `-firecracker`: containerd's devmapper snapshotter loaded | startup | [Startup errors](#startup-errors) |
 | With `-firecracker`: vagabond-firecracker answering on its socket | startup | [Startup errors](#startup-errors) |
-| TCP reach to the server's `agent_bind` | after startup, retried | `connecting to the server` warnings |
+| TCP reach to the server's `agent_bind` | after startup, retried | `connecting to the server failed` warnings |
 
 The agent needs no inbound port. The server calls it back down the
 connection the agent opened.
@@ -61,14 +61,15 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=no -memory 12288 \
 | `-data-dir <path>` | `/var/lib/vagabond` | Workload output, under `<data-dir>/logs`. Created mode `0750` if missing. In a container it must be the same path inside and out. |
 | `-max-log-mib <MiB>` | `16` | How much of each workload's output the node keeps, on both executors; the front of longer output is freed in 256 KiB chunks. Set it to at least the server's `max_log_mib`, or the server stores only what the node kept. At least `1`. |
 | `-cgroup-parent <path>` | empty | cgroup v2 path to create workloads under, prepared by the operator. Skips [cgroup delegation](#cgroup-delegation). |
-| `-log-level <level>` | `info` | `debug`, `info`, `warn` or `error`. Logs are text to stderr. |
+| `-log-level <level>` | `info` | `debug`, `info`, `warn` or `error`, for the agent and its vagabond-firecracker. |
+| `-log-json` | off | Write each log line as JSON in place of text, to stderr. vagabond-firecracker's own lines stay text ([Logging](logging.md)). |
 
 The full CLI reference is in [CLI](cli.md).
 
 ### Startup sequence
 
-1. Parse flags; with `-tls-*`, load the certificate, key and CA and take the
-   node's name from the certificate; parse the log level.
+1. Parse flags, the log level among them; with `-tls-*`, load the
+   certificate, key and CA and take the node's name from the certificate.
 2. Read the node: architecture, host CPU and memory, the agent's cgroup and
    the limits above it ([Capacity](#capacity)).
 3. Delegate the agent's cgroup, unless `-cgroup-parent` is set
@@ -87,8 +88,8 @@ The full CLI reference is in [CLI](cli.md).
    signal closes the session and exits 0; workloads keep running.
 
 ```text
-level=INFO msg=node name=box1 pool=homelab cpu=4000 memory=12288 cgroup=/system.slice/vagabond-agent.service
-level=INFO msg=connected server=10.0.0.5:4748 name=box1 pool=homelab
+level=INFO msg="node read" component=agent node=box1 pool=homelab cpu=4000 memory=12288 cgroup=/system.slice/vagabond-agent.service
+level=INFO msg=connected component=agent server_addr=10.0.0.5:4748 node=box1 pool=homelab
 ```
 
 Steps 1 to 7 exit with status 1 on failure, before the node registers. A
@@ -174,7 +175,7 @@ children, and the first `Submit` fails `creating the task: ...`.
 | `-firecracker` given, containerd has no devmapper snapshotter | `containerd at <socket> has no devmapper snapshotter` |
 | `-firecracker` given, devmapper failed to load (no thin pool, bad config) | `containerd's devmapper snapshotter did not load: <containerd's reason>` |
 | `-firecracker` given, vagabond-firecracker not serving | `vagabond-firecracker at <socket> does not answer: dialling vagabond-firecracker at <socket>: ...` |
-| Bad `-log-level` | `Invalid -log-level "<value>": use debug, info, warn or error.` |
+| Bad `-log-level` | `invalid value "<value>" for flag -log-level: use debug, info, warn or error` |
 | `-tls-ca`, `-tls-cert`, `-tls-key` partly set | `-tls-ca, -tls-cert and -tls-key go together: set all three or none` |
 | `-tls-server-name` without the other three | `-tls-server-name needs -tls-ca, -tls-cert and -tls-key` |
 | Certificate or key unreadable or mismatched | `loading the certificate <cert>: ...` |
@@ -320,7 +321,7 @@ node with `Node.Register`, and re-sends the same full report:
 | Every 10 seconds | Catches a workload that finished on its own. |
 
 Signals are coalesced: several changes while a report is pending send one
-report. A failed periodic report is logged as `reporting workloads` and not
+report. A failed periodic report is logged as `reporting workloads failed` and not
 retried; the next carries everything. The server answers every report with
 the held workloads it has no use for, which the agent releases; see
 [Releasing what nothing needs](#releasing-what-nothing-needs).
@@ -791,9 +792,9 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab \
 | `closest node <name>: ...` in plan | No node passes admission | Read the reason; check `node.label.*` constraints and free room. |
 | Dispatch reports `no node in pool "<pool>" has room for ...` | Every admitted node full, or reservations pending | Wait for work to finish or add capacity. Reservations expire after 2 minutes. |
 | Two agents alternate in `node status`, both logging `lost the server` | Same `-name` on two hosts. The server logs nothing while they alternate. | Give each a unique `-name`. |
-| Agent logs `connecting to the server ... registering: rpc error: code = Unavailable ...`; server logs `agent connection ... tls: first record does not look like a TLS handshake` | Agent started without `-tls-*` against a server with `agent_tls` | Pass `-tls-ca`, `-tls-cert` and `-tls-key`. |
+| Agent logs `connecting to the server failed ... registering: rpc error: code = Unavailable ...`; server logs `agent connection failed ... tls: first record does not look like a TLS handshake` | Agent started without `-tls-*` against a server with `agent_tls` | Pass `-tls-ca`, `-tls-cert` and `-tls-key`. |
 | Node disk fills under containerd's root | Pulled images are never removed | `ctr -n vagabond images rm <ref>`. |
-| `dropping the front of a workload's output error=... operation not supported` every 10 seconds | `-data-dir` is on a filesystem that cannot free part of a file, so logs grow until `Release` | Put `-data-dir` on ext4, XFS, btrfs or tmpfs. |
+| `trimming a workload's output failed error=... operation not supported` every 10 seconds | `-data-dir` is on a filesystem that cannot free part of a file, so logs grow until `Release` | Put `-data-dir` on ext4, XFS, btrfs or tmpfs. |
 | `cannot manage cgroups under ...` at startup | cgroup not delegated | `Delegate=yes`, or privileged container with `--cgroupns=host`. |
 | `the agent's cgroup is the root` at startup | Container without `--cgroupns=host` | Add it, or pass `-cgroup-parent`. |
 | Workloads die when the agent restarts under systemd | `KillMode=control-group` kills the unit's subtree | `KillMode=process`. |

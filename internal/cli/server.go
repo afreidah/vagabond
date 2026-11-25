@@ -25,6 +25,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/config"
 	"github.com/afreidah/vagabond/internal/ledger"
+	"github.com/afreidah/vagabond/internal/logging"
 	"github.com/afreidah/vagabond/internal/nodes"
 	"github.com/afreidah/vagabond/internal/registry"
 	"github.com/afreidah/vagabond/internal/server"
@@ -81,6 +82,9 @@ Server Options:
   -log-level <level>
     debug, info, warn or error. Defaults to info. Requests are logged at
     debug; dispatches at info.
+
+  -log-json
+    Write each log line as JSON, for a log collector, in place of text.
 `
 
 	return strings.TrimSpace(text)
@@ -90,29 +94,27 @@ Server Options:
 // it down.
 func (c *ServerCommand) Run(args []string) int {
 	var (
-		configPath, logLevel string
-		dev                  bool
+		configPath string
+		dev        bool
+		logs       logging.Options
 	)
 
 	flags := c.FlagSet("server")
 	flags.StringVar(&configPath, "config", "", "configuration file or directory")
 	flags.BoolVar(&dev, "dev", false, "keep every store in memory")
-	flags.StringVar(&logLevel, "log-level", "info", "debug, info, warn or error")
+	logs.Register(flags)
 
 	if err := flags.Parse(args); err != nil {
 		return ExitFailure
 	}
 
-	var level slog.Level
-	if err := level.UnmarshalText([]byte(logLevel)); err != nil {
-		return c.Errorf("Invalid -log-level %q: use debug, info, warn or error.", logLevel)
-	}
+	logger := logging.New(c.ErrStream, logs)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	// The server fills this as agents connect, and pool providers read it
-	conns := nodes.New()
+	conns := nodes.New(logger)
 
 	reg, cfg, code := c.loadRegistry(ctx, configPath, conns)
 	if reg == nil {
@@ -122,8 +124,6 @@ func (c *ServerCommand) Run(args []string) int {
 	if reg.Len() == 0 {
 		return c.Errorf("No providers are configured, so there is nothing to run on.")
 	}
-
-	logger := slog.New(slog.NewTextHandler(c.ErrStream, &slog.HandlerOptions{Level: level}))
 
 	var (
 		srv *server.Server

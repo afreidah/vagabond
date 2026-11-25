@@ -11,7 +11,6 @@ package agenttest
 
 import (
 	"context"
-	"log/slog"
 	"testing"
 
 	"github.com/afreidah/vagabond/internal/agent"
@@ -24,7 +23,7 @@ import (
 func Run(t *testing.T, cfg *agent.Config, node fingerprint.Node, execs ...agent.Executor) (stop func()) {
 	t.Helper()
 
-	a, err := agent.New(t.Context(), cfg, node, slog.New(slog.DiscardHandler), execs...)
+	a, err := agent.New(t.Context(), cfg, node, nil, execs...)
 	if err != nil {
 		t.Fatalf("agent.New() = %v", err)
 	}

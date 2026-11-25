@@ -585,7 +585,7 @@ func TestBuildNodeProviders(t *testing.T) {
 		t.Run(providerType, func(t *testing.T) {
 			t.Parallel()
 
-			if p, diags := Build(t.Context(), providerType, Settings{Name: "homelab", Nodes: nodes.New()}); diags.HasErrors() || p.Name() != "homelab" {
+			if p, diags := Build(t.Context(), providerType, Settings{Name: "homelab", Nodes: nodes.New(nil)}); diags.HasErrors() || p.Name() != "homelab" {
 				t.Errorf("Build() over a server's nodes = %v, %s", p, diags.Error())
 			}
 

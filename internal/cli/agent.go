@@ -19,7 +19,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -33,6 +32,7 @@ import (
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/config"
 	"github.com/afreidah/vagabond/internal/execution"
+	"github.com/afreidah/vagabond/internal/logging"
 	"github.com/afreidah/vagabond/internal/version"
 )
 
@@ -139,7 +139,12 @@ Agent Options:
     the agent's own.
 
   -log-level <level>
-    debug, info, warn or error. Defaults to info.
+    debug, info, warn or error. Defaults to info. vagabond-firecracker logs at
+    the same level.
+
+  -log-json
+    Write each log line as JSON, for a log collector, in place of text.
+    vagabond-firecracker's own lines stay text.
 `
 
 	return strings.TrimSpace(text)
@@ -149,13 +154,14 @@ Agent Options:
 // or SIGTERM.
 func (c *AgentCommand) Run(args []string) int {
 	var (
-		server, pool, name, socket, dataDir, cgroupParent, logLevel string
-		labels                                                      metaFlags
-		caps                                                        fingerprint.Caps
-		certs                                                       tlsFlags
-		firecracker                                                 bool
-		vmm                                                         executor.DaemonConfig
-		maxLogMiB                                                   int
+		server, pool, name, socket, dataDir, cgroupParent string
+		labels                                            metaFlags
+		caps                                              fingerprint.Caps
+		certs                                             tlsFlags
+		firecracker                                       bool
+		vmm                                               executor.DaemonConfig
+		maxLogMiB                                         int
+		logs                                              logging.Options
 	)
 
 	host, _ := os.Hostname()
@@ -175,7 +181,7 @@ func (c *AgentCommand) Run(args []string) int {
 	flags.StringVar(&dataDir, "data-dir", defaultDataDir, "where workload output is kept")
 	flags.IntVar(&maxLogMiB, "max-log-mib", int(execution.DefaultMaxLogBytes>>20), "MiB of each workload's output kept")
 	flags.StringVar(&cgroupParent, "cgroup-parent", "", "a cgroup to create workloads under")
-	flags.StringVar(&logLevel, "log-level", "info", "debug, info, warn or error")
+	logs.Register(flags)
 	certs.register(flags, tlsFlags{})
 
 	if err := flags.Parse(args); err != nil {
@@ -187,16 +193,11 @@ func (c *AgentCommand) Run(args []string) int {
 		return c.Errorf("%s", err)
 	}
 
-	var level slog.Level
-	if err := level.UnmarshalText([]byte(logLevel)); err != nil {
-		return c.Errorf("Invalid -log-level %q: use debug, info, warn or error.", logLevel)
-	}
-
 	if maxLogMiB < 1 {
 		return c.Errorf("Invalid -max-log-mib %d: a node keeps at least 1 MiB of each workload's output.", maxLogMiB)
 	}
 
-	logger := slog.New(slog.NewTextHandler(c.ErrStream, &slog.HandlerOptions{Level: level}))
+	logger := logging.New(c.ErrStream, logs)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -228,7 +229,8 @@ func (c *AgentCommand) Run(args []string) int {
 	// MicroVMs as well, through a vagabond-firecracker of the agent's own, whose
 	// exit stops the agent rather than leave it running without them.
 	if firecracker {
-		vmm.Binary, vmm.Dir, vmm.LogLevel = "vagabond-firecracker", filepath.Join(dataDir, "firecracker"), logLevel
+		vmm.Binary, vmm.Dir = "vagabond-firecracker", filepath.Join(dataDir, "firecracker")
+		vmm.LogLevel = strings.ToLower(logs.Level.String())
 		vmm.MaxLogMiB = maxLogMiB
 
 		var (
@@ -249,7 +251,8 @@ func (c *AgentCommand) Run(args []string) int {
 		return c.Errorf("Finding workloads from before: %s", err)
 	}
 
-	logger.InfoContext(ctx, "node", "name", name, "pool", pool, "cpu", node.CPU, "memory", node.Memory, "cgroup", parent)
+	logging.Named(logger, "agent").InfoContext(ctx, "node read",
+		"node", name, "pool", pool, "cpu", node.CPU, "memory", node.Memory, "cgroup", parent)
 
 	cfg := agent.Config{
 		Server: server, Pool: pool, Name: name, Labels: labels, TLS: tlsConfig, Version: version.String(),

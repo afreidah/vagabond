@@ -23,10 +23,12 @@ import (
 	"github.com/afreidah/vagabond/internal/backoff"
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
+	"github.com/afreidah/vagabond/internal/logging"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
 	"github.com/afreidah/vagabond/internal/state"
 	"github.com/afreidah/vagabond/internal/state/memory"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // -------------------------------------------------------------------------
@@ -752,14 +754,17 @@ func TestSave_TheEndIsWrittenWithTheOutput(t *testing.T) {
 }
 
 // Writes the store refuses while it is unreachable are made again until it
-// takes them, so the record ends with its result.
+// takes them, so the record ends with its result. Each retry is logged under
+// the dispatcher's name with the execution it was for.
 func TestSave_RetriedThroughAnOutage(t *testing.T) {
 	t.Parallel()
 
 	p := &scriptedProvider{name: "a", pollsToFinish: 2, finalState: execution.StateSucceeded}
 	reg := newRegistry(p)
 
-	d, store := flaky(reg)
+	var out testkit.Buffer
+
+	d, store := flaky(reg, WithLogger(logging.New(&out, logging.Options{})))
 	store.failSaves.Store(3)
 
 	outcome, err := d.runTaskIn(t, containerTask(t, nil), nil, nil)
@@ -769,6 +774,12 @@ func TestSave_RetriedThroughAnOutage(t *testing.T) {
 
 	if r := record(t, reg, outcome.ID); r.State != execution.StateSucceeded || r.Result == nil {
 		t.Errorf("record = %+v, want succeeded with its result", r)
+	}
+
+	for _, want := range []string{`msg="store write failed, retrying" component=dispatch`, "execution_id=" + outcome.ID.String()} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("logged %q, want it to contain %q", out.String(), want)
+		}
 	}
 }
 

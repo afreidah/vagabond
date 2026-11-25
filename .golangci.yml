@@ -47,6 +47,16 @@ linters:
     sloglint:
       context: "all"
       key-naming-case: snake
+      # Keys docs/logging.md replaces: error, execution_id, dispatch_id,
+      # job_version, remote_addr, listen_addr or server_addr.
+      forbidden-keys:
+        - err
+        - execution
+        - dispatch
+        - version
+        - from
+        - address
+        - server
     depguard:
       rules:
         # ---------------------------------------------------------------

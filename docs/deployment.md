@@ -74,6 +74,7 @@ vagabond server -config /etc/vagabond.d
 | `-config <path>` | discovery order | File or directory; see [configuration](configuration.md#discovery) |
 | `-dev` | off | Keep everything in memory; the `store` block is ignored |
 | `-log-level <level>` | `info` | `debug`, `info`, `warn` or `error` |
+| `-log-json` | off | Write each log line as JSON |
 
 Full flag reference: [CLI](cli.md).
 
@@ -373,23 +374,21 @@ $ curl -s http://127.0.0.1:4747/v1/health
 
 ## Logs
 
-The server and agent log to standard error through Go's `log/slog` text
-handler, one `key=value` line per event. There is no JSON format option.
-Under systemd, read them with `journalctl -u vagabond`.
+The server and agent log to standard error, one line per event: `key=value`
+text by default, or one JSON object per line with `-log-json`, for a
+collector that parses JSON. Under systemd, read them with
+`journalctl -u vagabond`.
 
 ```text
-time=2026-09-28T14:02:00.114Z level=INFO msg="serving agents" address=127.0.0.1:4748
-time=2026-09-28T14:02:00.131Z level=INFO msg=serving address=127.0.0.1:4747 tls=false
-time=2026-09-28T14:03:12.540Z level=INFO msg="dispatch started" dispatch=... job=go-test version=3 namespace=default
+time=2026-09-28T14:02:00.114Z level=INFO msg=serving component=server listen_addr=127.0.0.1:4747 tls=false
+time=2026-09-28T14:02:00.131Z level=INFO msg="serving agents" component=nodes listen_addr=127.0.0.1:4748
+time=2026-09-28T14:03:12.540Z level=INFO msg="dispatch started" component=server dispatch_id=... namespace=default job=go-test job_version=3
 ```
 
-| Level | Server events |
-|---|---|
-| `debug` | Every API request: `method`, `path`, `status`, `duration` |
-| `info` | `serving`, `serving agents`, `stopped`, `node registered`, `dispatch started`, `dispatch finished`, `dispatch resumed`, `resumed dispatch finished`, `resolved abandoned quota reservations`, `pruned stored output`, `provider disabled`, `provider enabled` |
-| `warn` | `dispatch finished without an answer`, `store unreachable`, `store write failed, retrying`, `node disconnected`, `agent connection`, `accepting agent connections failed, retrying`, `refreshing provider capabilities`, `refreshing quota usage`, `reading disabled providers`, `resolving abandoned quota reservations`, `releasing provider leftovers`, `claiming abandoned dispatches`, `resuming dispatch`, `pruning stored output`, `reading stored output ended early`, `log stream ended early` |
-| `error` | `request failed`: an API request that answered 500 |
+Every line names the `component` that wrote it, and a line about a dispatch
+or an execution carries its IDs, the dispatcher's lines included. Every
+message, its level and its fields are in [Logging](logging.md).
 
 Startup errors, configuration diagnostics, and the `Some providers did not
 answer` and `-dev` warnings are printed as plain text on standard error before
-the structured log starts.
+the structured log starts, in either format.

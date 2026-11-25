@@ -24,6 +24,7 @@ import (
 	"github.com/afreidah/vagabond/internal/agent/fingerprint"
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/backoff"
+	"github.com/afreidah/vagabond/internal/logging"
 	"github.com/afreidah/vagabond/internal/panics"
 )
 
@@ -68,12 +69,15 @@ type Agent struct {
 // -------------------------------------------------------------------------
 
 // New builds an agent reporting node and running work on execs, once each of
-// them has said what it is. One that does not answer stops it.
+// them has said what it is. One that does not answer stops it. It logs to
+// logger, every line naming its server, or nowhere when logger is nil.
 func New(ctx context.Context, cfg *Config, node fingerprint.Node, logger *slog.Logger, execs ...Executor) (*Agent, error) {
 	exec, err := newExecutors(ctx, execs...)
 	if err != nil {
 		return nil, err
 	}
+
+	logger = logging.Named(logger, "agent").With("server_addr", cfg.Server)
 
 	return &Agent{cfg: *cfg, node: node, exec: exec, logger: logger}, nil
 }
@@ -93,14 +97,14 @@ func (a *Agent) Run(ctx context.Context) error {
 
 		// A session that got going and then dropped starts the backoff over
 		if err == nil {
-			a.logger.WarnContext(ctx, "lost the server", "server", a.cfg.Server)
+			a.logger.WarnContext(ctx, "lost the server")
 			failures = 0
 		}
 
 		wait := backoff.Exponential(reconnectMin, reconnectMax, failures)
 
 		if err != nil {
-			a.logger.WarnContext(ctx, "connecting to the server", "server", a.cfg.Server, "error", err, "retry", wait)
+			a.logger.WarnContext(ctx, "connecting to the server failed", "error", err, "retry_in", wait)
 		}
 
 		if backoff.Sleep(ctx, wait) != nil {
@@ -137,7 +141,7 @@ func (a *Agent) connect(ctx context.Context) error {
 		return err
 	}
 
-	a.logger.InfoContext(ctx, "connected", "server", a.cfg.Server, "name", a.cfg.Name, "pool", a.cfg.Pool)
+	a.logger.InfoContext(ctx, "connected", "node", a.cfg.Name, "pool", a.cfg.Pool)
 
 	ticker := time.NewTicker(reportEvery)
 	defer ticker.Stop()
@@ -154,7 +158,7 @@ func (a *Agent) connect(ctx context.Context) error {
 
 		// Not fatal: the next report carries everything; a dead session ends via Done.
 		if err := a.register(ctx, session, local); err != nil {
-			a.logger.WarnContext(ctx, "reporting workloads", "error", err)
+			a.logger.WarnContext(ctx, "reporting workloads failed", "error", err)
 		}
 	}
 }
@@ -186,12 +190,12 @@ func (a *Agent) register(ctx context.Context, session *agentrpc.Session, local *
 	// Released as the server would, so the next report shows the room free.
 	for _, id := range answer.GetRelease() {
 		if _, err := local.Release(ctx, &agentrpc.ExecutionRequest{ExecutionId: id}); err != nil {
-			a.logger.WarnContext(ctx, "releasing a workload the server has no use for", "execution", id, "error", err)
+			a.logger.WarnContext(ctx, "releasing a workload the server has no use for failed", "execution_id", id, "error", err)
 
 			continue
 		}
 
-		a.logger.InfoContext(ctx, "released a workload the server has no use for", "execution", id)
+		a.logger.InfoContext(ctx, "released a workload the server has no use for", "execution_id", id)
 	}
 
 	return nil
