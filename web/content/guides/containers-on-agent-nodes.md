@@ -167,6 +167,7 @@ task "agent" {
   config {
     image          = "registry.example.com/vagabond:v0.1.34"
     network_mode   = "host"
+    pid_mode       = "host"
     privileged     = true
     cgroupns       = "host"
     cpu_hard_limit = true
@@ -209,6 +210,7 @@ EOH
 | Setting | Why |
 |---|---|
 | `user = "root"` | containerd's socket is root's |
+| `network_mode`, `pid_mode = "host"` | Each workload's link to the node, and the firewall rules that stop it reaching your network, belong on the host. The agent reaches each workload's network through its process on the host |
 | `privileged`, `cgroupns = "host"` | The agent reads its real cgroup and creates workloads' cgroups under `/vagabond` |
 | `cpu_hard_limit` | Nomad writes the task's CPU as a `cpu.max`, which the agent reads as capacity |
 | `-cgroup-parent /vagabond` | Workloads go under the cgroup from step 3 rather than the agent's own |

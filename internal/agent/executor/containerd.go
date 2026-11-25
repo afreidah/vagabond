@@ -4,11 +4,12 @@
 // Author: Alex Freidah
 //
 // Runs workloads as containers on the node's containerd, in their own
-// namespace. The container ID is the execution ID, output goes to a log file
-// containerd writes itself, its front freed past the cap, and everything the
-// executor needs to know about a workload is on the container as labels, so an
-// agent that restarts finds its workloads, their state, and their timeouts
-// where it left them.
+// namespace, each with a network of its own unless the agent runs them on the
+// node's network. The container ID is the execution ID, output goes to a log
+// file containerd writes itself, its front freed past the cap, and everything
+// the executor needs to know about a workload is on the container as labels,
+// so an agent that restarts finds its workloads, their state, their timeouts
+// and their addresses where it left them.
 // -------------------------------------------------------------------------------
 
 package executor
@@ -20,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -52,6 +54,8 @@ const (
 	labelCancelled = "vagabond.cancelled"
 	labelCPU       = "vagabond.cpu"
 	labelMemory    = "vagabond.memory"
+	labelPrivate   = "vagabond.private"
+	labelAddress   = "vagabond.address"
 )
 
 // stopGrace is how long a stopped workload gets between SIGTERM and SIGKILL.
@@ -86,33 +90,40 @@ type Config struct {
 	DataDir     string
 	Cgroup      string
 	MaxLogBytes int64
+	Network     NetworkConfig
 	Logger      *slog.Logger
 }
 
-// Containerd runs workloads on one containerd.
+// Containerd runs workloads on one containerd. net is nil when workloads share
+// the node's network.
 type Containerd struct {
 	client  *client.Client
 	cfg     Config
+	net     *network
 	mu      sync.Mutex
 	watched map[string]bool
 	untrim  context.CancelFunc
 }
 
 // workloadLabels are a container's labels read back: when its task started,
-// its timeout, whether Cancel stopped it, and what it declared.
+// its timeout, whether Cancel stopped it, what it declared, and whether it
+// reaches the node's private networks from its address.
 type workloadLabels struct {
 	started   time.Time
 	timeout   time.Duration
 	cancelled bool
 	declared  *agentrpc.Resources
+	private   bool
+	address   netip.Addr
 }
 
 // -------------------------------------------------------------------------
 // CONSTRUCTOR
 // -------------------------------------------------------------------------
 
-// New connects to containerd, makes the log directory, and starts cutting logs
-// back to the cap.
+// New connects to containerd, makes the log directory, readies workloads'
+// networks unless they share the node's, and starts cutting logs back to the
+// cap.
 func New(cfg *Config) (*Containerd, error) {
 	cl, err := client.New(cfg.Socket, client.WithDefaultNamespace(cfg.Namespace))
 	if err != nil {
@@ -125,9 +136,19 @@ func New(cfg *Config) (*Containerd, error) {
 		return nil, fmt.Errorf("creating the log directory: %w", err)
 	}
 
+	var nw *network
+
+	if !cfg.Network.Host {
+		if nw, err = newNetwork(&cfg.Network, cfg.DataDir, cfg.Namespace); err != nil {
+			_ = cl.Close()
+
+			return nil, err
+		}
+	}
+
 	ctx, untrim := context.WithCancel(context.Background())
 
-	c := &Containerd{client: cl, cfg: *cfg, watched: make(map[string]bool), untrim: untrim}
+	c := &Containerd{client: cl, cfg: *cfg, net: nw, watched: make(map[string]bool), untrim: untrim}
 	c.cfg.MaxLogBytes = cmp.Or(c.cfg.MaxLogBytes, execution.DefaultMaxLogBytes)
 	c.cfg.Logger = logging.Named(c.cfg.Logger, "executor")
 
@@ -171,6 +192,7 @@ func (c *Containerd) Submit(ctx context.Context, id string, w *agentrpc.Workload
 			labelTimeout: w.GetTimeout().AsDuration().String(),
 			labelCPU:     strconv.FormatInt(w.GetResources().GetCpu(), 10),
 			labelMemory:  strconv.FormatInt(w.GetResources().GetMemory(), 10),
+			labelPrivate: strconv.FormatBool(w.GetPrivateNetwork()),
 		}),
 	)
 	if err != nil {
@@ -188,16 +210,33 @@ func (c *Containerd) Submit(ctx context.Context, id string, w *agentrpc.Workload
 	return nil
 }
 
-// start creates the container's task writing to its log, labels the container
-// with when it started, and starts it.
+// start creates the container's task writing to its log, attaches its network
+// before anything runs in it, labels the container with when it started and
+// its address, and starts it.
 func (c *Containerd) start(ctx context.Context, container client.Container) error {
 	task, err := container.NewTask(ctx, cio.LogFile(c.logPath(container.ID())))
 	if err != nil {
 		return fmt.Errorf("creating the task: %w", err)
 	}
 
-	if _, err := container.SetLabels(ctx, map[string]string{labelStarted: time.Now().UTC().Format(time.RFC3339Nano)}); err != nil {
+	labels := map[string]string{labelStarted: time.Now().UTC().Format(time.RFC3339Nano)}
+
+	if c.net != nil {
+		addr, err := c.net.attach(ctx, container.ID(), task.Pid())
+		if err != nil {
+			return err
+		}
+
+		labels[labelAddress] = addr.String()
+	}
+
+	if _, err := container.SetLabels(ctx, labels); err != nil {
 		return fmt.Errorf("labelling the container: %w", err)
+	}
+
+	// Rewritten after the address label is set, so a private container is exempt before it runs
+	if err := c.rules(ctx); err != nil {
+		return err
 	}
 
 	if err := task.Start(ctx); err != nil {
@@ -207,10 +246,12 @@ func (c *Containerd) start(ctx context.Context, container client.Container) erro
 	return nil
 }
 
-// limits holds a workload to what it declared, under the executor's cgroup, on
-// the host's network.
+// limits holds a workload to what it declared, under the executor's cgroup.
+// runc gives it a new network namespace unless the agent uses the node's
+// network. Isolated workloads resolve through the configured name server;
+// private and host-network ones use the node's resolv.conf.
 func (c *Containerd) limits(id string, w *agentrpc.Workload) []oci.SpecOpts {
-	var opts []oci.SpecOpts
+	opts := []oci.SpecOpts{oci.WithCgroup(filepath.Join(c.cfg.Cgroup, id)), oci.WithHostHostsFile}
 
 	if memory := w.GetResources().GetMemory(); memory > 0 {
 		opts = append(opts, oci.WithMemoryLimit(uint64(memory)<<20)) //nolint:gosec // positive
@@ -220,12 +261,16 @@ func (c *Containerd) limits(id string, w *agentrpc.Workload) []oci.SpecOpts {
 		opts = append(opts, oci.WithCPUCFS(cpu*100, 100000))
 	}
 
-	return append(opts,
-		oci.WithCgroup(filepath.Join(c.cfg.Cgroup, id)),
-		oci.WithHostNamespace(specs.NetworkNamespace),
-		oci.WithHostResolvconf,
-		oci.WithHostHostsFile,
-	)
+	switch {
+	case c.net == nil:
+		return append(opts, oci.WithHostNamespace(specs.NetworkNamespace), oci.WithHostResolvconf)
+	case w.GetPrivateNetwork():
+		return append(opts, oci.WithHostResolvconf)
+	default:
+		return append(opts, oci.WithMounts([]specs.Mount{{
+			Destination: "/etc/resolv.conf", Type: "bind", Source: c.net.resolvConf, Options: []string{"rbind", "ro"},
+		}}))
+	}
 }
 
 // Cancel stops a workload: a SIGTERM, then a SIGKILL after stopGrace if it has
@@ -285,8 +330,9 @@ func (c *Containerd) Release(ctx context.Context, id string) error {
 	return c.remove(ctx, container)
 }
 
-// remove deletes a workload's task, killing it if it runs, its container with
-// its snapshot, and its log. Any of them already gone counts as deleted.
+// remove deletes a workload: its task, killing it if it still runs, its
+// network address, its container and snapshot, and its log. Parts already
+// gone are skipped.
 func (c *Containerd) remove(ctx context.Context, container client.Container) error {
 	task, err := container.Task(ctx, nil)
 
@@ -297,6 +343,13 @@ func (c *Containerd) remove(ctx context.Context, container client.Container) err
 		}
 	case !errdefs.IsNotFound(err):
 		return fmt.Errorf("loading the task: %w", err)
+	}
+
+	// Freed before the container goes, so a failure leaves it for the retry
+	if c.net != nil {
+		if err := c.net.detach(ctx, container.ID()); err != nil {
+			return err
+		}
 	}
 
 	if err := container.Delete(ctx, client.WithSnapshotCleanup); err != nil && !errdefs.IsNotFound(err) {
@@ -577,8 +630,8 @@ func (c *Containerd) Held(ctx context.Context) ([]*agentrpc.Held, error) {
 	return held, nil
 }
 
-// Recover watches the timeouts of every workload still running, after the
-// agent restarts.
+// Recover restarts the timeout watch on every workload still running, and
+// rewrites the firewall rules, which are gone if the node rebooted.
 func (c *Containerd) Recover(ctx context.Context) error {
 	containers, err := c.client.Containers(ctx)
 	if err != nil {
@@ -594,7 +647,35 @@ func (c *Containerd) Recover(ctx context.Context) error {
 		c.watch(container.ID(), labels.timeout, labels.started)
 	}
 
-	return nil
+	return c.rules(ctx)
+}
+
+// rules rewrites the firewall rules for the container address pool, exempting
+// from the private-network drops each container labelled as asking for them.
+func (c *Containerd) rules(ctx context.Context) error {
+	if c.net == nil {
+		return nil
+	}
+
+	containers, err := c.client.Containers(ctx)
+	if err != nil {
+		return fmt.Errorf("listing containers: %w", err)
+	}
+
+	var private []netip.Addr
+
+	for _, container := range containers {
+		labels, err := labelsOf(ctx, container)
+		if err != nil {
+			return err
+		}
+
+		if labels.private && labels.address.IsValid() {
+			private = append(private, labels.address)
+		}
+	}
+
+	return c.net.rules(ctx, private)
 }
 
 // -------------------------------------------------------------------------
@@ -699,7 +780,10 @@ func labelsOf(ctx context.Context, container client.Container) (workloadLabels, 
 		return workloadLabels{}, fmt.Errorf("reading the labels of %s: %w", container.ID(), err)
 	}
 
-	out := workloadLabels{cancelled: labels[labelCancelled] == "true", declared: &agentrpc.Resources{}}
+	out := workloadLabels{
+		cancelled: labels[labelCancelled] == "true", private: labels[labelPrivate] == "true", declared: &agentrpc.Resources{},
+	}
+	out.address, _ = netip.ParseAddr(labels[labelAddress])
 	out.started, _ = time.Parse(time.RFC3339Nano, labels[labelStarted])
 	out.timeout, _ = time.ParseDuration(labels[labelTimeout])
 	out.declared.Cpu, _ = strconv.ParseInt(labels[labelCPU], 10, 64)

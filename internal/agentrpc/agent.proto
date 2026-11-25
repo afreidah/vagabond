@@ -91,8 +91,9 @@ service AgentExecutions {
 }
 
 // Workload is a task already translated to what a node runs: the server
-// decodes the job, the agent only runs it, with the executor it names. Field 8
-// named a runtime.
+// decodes the job, the agent only runs it, with the executor it names.
+// private_network is set when the task asks to reach the node's private
+// networks, which a workload cannot reach otherwise. Field 8 named a runtime.
 message Workload {
   reserved 8;
   reserved "runtime";
@@ -105,6 +106,7 @@ message Workload {
   Resources resources = 6;
   google.protobuf.Duration timeout = 7;
   string executor = 9;
+  bool private_network = 10;
 }
 
 message SubmitRequest {

@@ -138,6 +138,24 @@ Agent Options:
     A cgroup to create workloads under, prepared by the operator, in place of
     the agent's own.
 
+  -host-network
+    Run containers on the node's own network, reaching everything the node
+    reaches. Off by default: each container gets its own network, which
+    cannot reach the node or its private networks unless the task sets
+    network.private.
+
+  -container-pool <cidr>
+    The range containers take their addresses from. Must not overlap a
+    network the node routes to. Defaults to 172.30.0.0/16.
+
+  -dns <address>
+    The name server microVMs, and containers whose task does not set
+    network.private, resolve through. Defaults to 1.1.1.1.
+
+  -cni-path <dir>
+    Where the CNI plugins ptp, host-local and loopback are. Defaults to
+    /opt/cni/bin, where the image has them.
+
   -log-level <level>
     debug, info, warn or error. Defaults to info. vagabond-firecracker logs at
     the same level.
@@ -162,6 +180,7 @@ func (c *AgentCommand) Run(args []string) int {
 		vmm                                               executor.DaemonConfig
 		maxLogMiB                                         int
 		logs                                              logging.Options
+		network                                           executor.NetworkConfig
 	)
 
 	host, _ := os.Hostname()
@@ -181,6 +200,10 @@ func (c *AgentCommand) Run(args []string) int {
 	flags.StringVar(&dataDir, "data-dir", defaultDataDir, "where workload output is kept")
 	flags.IntVar(&maxLogMiB, "max-log-mib", int(execution.DefaultMaxLogBytes>>20), "MiB of each workload's output kept")
 	flags.StringVar(&cgroupParent, "cgroup-parent", "", "a cgroup to create workloads under")
+	flags.BoolVar(&network.Host, "host-network", false, "run containers on the node's own network")
+	flags.TextVar(&network.Pool, "container-pool", executor.DefaultContainerPool, "the range container addresses come from")
+	flags.TextVar(&network.DNS, "dns", executor.DefaultDNS, "the name server isolated workloads resolve through")
+	flags.StringVar(&network.CNIPath, "cni-path", executor.DefaultCNIPath, "where the CNI plugins are")
 	logs.Register(flags)
 	certs.register(flags, tlsFlags{})
 
@@ -216,7 +239,7 @@ func (c *AgentCommand) Run(args []string) int {
 
 	exec, err := executor.New(&executor.Config{
 		Socket: socket, Namespace: workloadNamespace, DataDir: dataDir, Cgroup: parent,
-		MaxLogBytes: int64(maxLogMiB) << 20, Logger: logger,
+		MaxLogBytes: int64(maxLogMiB) << 20, Network: network, Logger: logger,
 	})
 	if err != nil {
 		return c.Errorf("%s", err)
@@ -231,7 +254,7 @@ func (c *AgentCommand) Run(args []string) int {
 	if firecracker {
 		vmm.Binary, vmm.Dir = "vagabond-firecracker", filepath.Join(dataDir, "firecracker")
 		vmm.LogLevel = strings.ToLower(logs.Level.String())
-		vmm.MaxLogMiB = maxLogMiB
+		vmm.MaxLogMiB, vmm.DNS = maxLogMiB, network.DNS
 
 		var (
 			vm   *executor.Firecracker

@@ -11,6 +11,9 @@ dist/
 # Rust build output
 /rust/*/target/
 
+# Test binaries and the CNI plugins make fetches
+/bin/
+
 # Hugo build output and caches
 /web/public/
 /web/resources/

@@ -7,8 +7,9 @@
 # Starts and stops what the executor tests run against, apart from anything the
 # host runs: a containerd of its own, with the devmapper snapshotter on a thin
 # pool over loop devices, and a vagabond-firecracker booting the pinned kernel
-# and initramfs. down clears everything up made, the microVMs' taps and rules
-# included, and passes over whatever is already gone. Run as root, by make.
+# and initramfs. down clears everything up made, and the firewall rules the
+# tests leave for microVMs and containers, and passes over whatever is already
+# gone. Run as root, by make.
 #
 # Usage: KVM_DIR=<dir> DAEMON=<vagabond-firecracker> executor-env.sh up|down
 # -------------------------------------------------------------------------------
@@ -26,6 +27,10 @@ RUN=/run/vagabond-test
 JAILS=/var/tmp/vagabond-test-jails
 POOL=vagabond-test-pool
 CGROUP=/sys/fs/cgroup/vagabond-test
+
+# The address range the containerd executor tests give containers, the agent's
+# default.
+CONTAINER_POOL=172.30.0.0/16
 
 # uplink is the interface the default route leaves through.
 uplink() {
@@ -146,6 +151,11 @@ down() {
 	iptables -w -D DOCKER-USER -i vfc+ -o "${out}" -j ACCEPT 2>/dev/null || true
 	iptables -w -D DOCKER-USER -i "${out}" -o vfc+ -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
 	rm -rf "${JAILS}"
+
+	# The containers' table and Docker rules, which the containerd executor tests leave.
+	nft delete table ip vagabond_test_containers 2>/dev/null || true
+	iptables -w -D DOCKER-USER -s "${CONTAINER_POOL}" -j ACCEPT 2>/dev/null || true
+	iptables -w -D DOCKER-USER -d "${CONTAINER_POOL}" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
 
 	stop "${RUN}/containerd.pid"
 

@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -91,7 +92,8 @@ func onPath(t *testing.T, mode string) {
 
 // runAgent runs the agent with -firecracker against a containerd that is not
 // there, so it gets as far as re-arming container timeouts, and returns its
-// exit code and stderr.
+// exit code and stderr. Containers use the host network, so the test needs no
+// CNI plugins.
 func runAgent(t *testing.T) (int, string) {
 	// Written by the agent and its daemon's output copier at once
 	var stderr testkit.Buffer
@@ -99,11 +101,29 @@ func runAgent(t *testing.T) (int, string) {
 	args := []string{
 		"agent", "-containerd", filepath.Join(t.TempDir(), "containerd.sock"),
 		"-cgroup-parent", "/vagabond-test", "-data-dir", t.TempDir(),
-		"-firecracker", "-firecracker-uplink", "lo",
+		"-firecracker", "-firecracker-uplink", "lo", "-host-network",
 	}
 	code := Run(args, strings.NewReader(""), io.Discard, &stderr)
 
 	return code, stderr.String()
+}
+
+// The agent's help names every flag it takes.
+func TestAgent_HelpNamesEveryFlag(t *testing.T) {
+	_, stdout, stderr := run("agent", "-help")
+
+	for _, flag := range []string{
+		"-server", "-pool", "-name", "-label", "-cpu", "-memory", "-containerd", "-firecracker",
+		"-firecracker-uid", "-firecracker-gid", "-firecracker-uplink", "-data-dir", "-max-log-mib",
+		"-tls-ca", "-tls-cert", "-tls-key", "-tls-server-name", "-cgroup-parent", "-host-network",
+		"-container-pool", "-dns", "-cni-path", "-log-level", "-log-json",
+	} {
+		// A whole flag, leading its line or after a comma, so -firecracker is not -firecracker-uid
+		listed := regexp.MustCompile(`(?m)(^\s+|, )` + regexp.QuoteMeta(flag) + `( |,|$)`)
+		if !listed.MatchString(stdout + stderr) {
+			t.Errorf("agent help does not list %q", flag)
+		}
+	}
 }
 
 // The agent starts its daemon before it needs containerd, and stops it when

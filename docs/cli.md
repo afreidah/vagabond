@@ -1098,6 +1098,10 @@ snapshotter and a vagabond-firecracker answering on the socket too.
 | `-data-dir <path>` | `/var/lib/vagabond` | Where workload output is kept. In a container, must be the same path inside and out |
 | `-max-log-mib <MiB>` | `16` | How much of each workload's output the node keeps, its front dropped past it. At least the server's `max_log_mib`, or the server keeps less |
 | `-cgroup-parent <path>` | agent's own cgroup | Operator-prepared cgroup to create workloads under, instead of delegating from the agent's own |
+| `-host-network` | off | Run containers on the node's own network. Off, each container gets its own network, which reaches the internet but not the node or its private networks unless the task sets `network.private` ([containerd networking](containerd.md#networking)) |
+| `-container-pool <cidr>` | `172.30.0.0/16` | Range container addresses come from. Must not overlap a network the node routes to |
+| `-dns <address>` | `1.1.1.1` | Name server microVMs, and containers whose task does not set `network.private`, resolve through |
+| `-cni-path <dir>` | `/opt/cni/bin` | Directory holding the CNI plugins `ptp`, `host-local` and `loopback`; the image has them there |
 | `-log-level <level>` | `info` | `debug`, `info`, `warn` or `error`. vagabond-firecracker logs at the same level |
 | `-log-json` | off | Write each log line as JSON in place of text; vagabond-firecracker's own lines stay text ([logging](logging.md)) |
 
@@ -1114,7 +1118,8 @@ namespace `vagabond`.
 | containerd error | Socket missing or not reachable |
 | `... devmapper snapshotter ...` | `-firecracker` given, and containerd has no working devmapper snapshotter |
 | `vagabond-firecracker at <socket> does not answer: ...` | `-firecracker` given, and the daemon is not serving |
-| `Finding workloads from before: ...` | Recovering existing workloads failed |
+| `Finding workloads from before: ...` | Recovering existing workloads failed, or writing the containers' firewall rules |
+| `the CNI plugin <name>: ...` | A CNI plugin missing from `-cni-path`, without `-host-network` |
 | `-tls-ca, -tls-cert and -tls-key go together: set all three or none` | Some TLS flags without the others |
 | `-name "<name>" does not match the certificate's common name "<cn>"` | `-name` disagrees with the certificate |
 | `loading the certificate <cert>: ...` / `loading the CA from <path>: ...` | TLS files unreadable or not PEM |

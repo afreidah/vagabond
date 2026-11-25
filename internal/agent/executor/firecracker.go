@@ -198,13 +198,14 @@ func (f *Firecracker) boot(ctx context.Context, container client.Container, w *a
 
 	_, err = call(ctx, f, func(d agentrpc.ExecutorService) (*agentrpc.Submission, error) {
 		return d.Submit(ctx, &agentrpc.ExecutorSubmitRequest{
-			ExecutionId: container.ID(),
-			Process:     processOf(spec.Process),
-			Resources:   w.GetResources(),
-			Timeout:     w.GetTimeout(),
-			RootDrive:   mounts[0].Source,
-			RootFstype:  mounts[0].Type,
-			Cgroup:      f.cfg.Cgroup,
+			ExecutionId:    container.ID(),
+			Process:        processOf(spec.Process),
+			Resources:      w.GetResources(),
+			Timeout:        w.GetTimeout(),
+			RootDrive:      mounts[0].Source,
+			RootFstype:     mounts[0].Type,
+			Cgroup:         f.cfg.Cgroup,
+			PrivateNetwork: w.GetPrivateNetwork(),
 		})
 	})
 

@@ -166,18 +166,3 @@ func (r *Request) Architecture() (job.Arch, bool) {
 
 	return *r.Task.Execution.Architecture, true
 }
-
-// NeedsInternet reports whether the task requires egress. Only an explicit
-// true is a requirement; absent leaves it to the provider, false denies it.
-func (r *Request) NeedsInternet() bool {
-	return r.Task.Network != nil &&
-		r.Task.Network.Internet != nil &&
-		*r.Task.Network.Internet
-}
-
-// NeedsPrivateNetwork reports whether the task requires private connectivity.
-func (r *Request) NeedsPrivateNetwork() bool {
-	return r.Task.Network != nil &&
-		r.Task.Network.Private != nil &&
-		*r.Task.Network.Private
-}

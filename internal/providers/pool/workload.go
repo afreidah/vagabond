@@ -26,7 +26,8 @@ var defaultResources = plugin.Resources{CPU: 1000, Memory: 1024}
 // workloadOf translates a task into the workload an agent runs. A task with no
 // image, or an unreadable environment or timeout, is an admission failure, not
 // the node's. No timeout is no timeout: the agent only stops a workload that
-// set one.
+// set one. Only a task that sets network.private reaches the node's private
+// networks.
 func workloadOf(task *job.Task) (*agentrpc.Workload, error) {
 	c, err := plugin.ContainerOf(task, defaultResources)
 	if err != nil {
@@ -34,12 +35,13 @@ func workloadOf(task *job.Task) (*agentrpc.Workload, error) {
 	}
 
 	w := &agentrpc.Workload{
-		Image:      c.Image,
-		Command:    c.Command,
-		Args:       c.Args,
-		Env:        c.Env,
-		WorkingDir: c.WorkingDir,
-		Resources:  &agentrpc.Resources{Cpu: int64(c.CPU), Memory: int64(c.Memory)},
+		Image:          c.Image,
+		Command:        c.Command,
+		Args:           c.Args,
+		Env:            c.Env,
+		WorkingDir:     c.WorkingDir,
+		Resources:      &agentrpc.Resources{Cpu: int64(c.CPU), Memory: int64(c.Memory)},
+		PrivateNetwork: task.Network.NeedsPrivate(),
 	}
 
 	if c.Timeout > 0 {

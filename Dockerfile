@@ -9,8 +9,10 @@
 # privileged. On amd64 it also carries what an agent's -firecracker runs:
 # vagabond-firecracker, vagabond-init packed as the initramfs, and Firecracker,
 # its jailer and the guest kernel, pinned and checksummed by make and handed in
-# as the kvm build context. No health check: the server's route means nothing
-# to an agent, so the deployment defines its own.
+# as the kvm build context. On every architecture it carries the CNI plugins
+# the agent attaches containers with, handed in as the cni-plugins build
+# context. No health check: the server's route means nothing to an agent, so
+# the deployment defines its own.
 # -------------------------------------------------------------------------------
 
 FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine AS builder
@@ -72,6 +74,18 @@ WORKDIR /out
 FROM firecracker-${TARGETARCH} AS firecracker
 
 # -------------------------------------------------------------------------
+# CNI Plugins
+# -------------------------------------------------------------------------
+
+# The three plugins the agent attaches containers with, for the image's
+# architecture, from the archives make fetched and checked.
+FROM alpine:3.21 AS cni
+ARG TARGETARCH
+COPY --from=cni-plugins cni-plugins-${TARGETARCH}.tgz /tmp/
+RUN mkdir -p /out/opt/cni/bin && \
+    tar -xzf "/tmp/cni-plugins-${TARGETARCH}.tgz" -C /out/opt/cni/bin ./ptp ./host-local ./loopback
+
+# -------------------------------------------------------------------------
 # Runtime Image
 # -------------------------------------------------------------------------
 
@@ -85,13 +99,15 @@ LABEL org.opencontainers.image.title="vagabond" \
       org.opencontainers.image.source="https://github.com/afreidah/vagabond"
 
 # CA certificates for the cloud provider APIs; ip, nft and iptables for each
-# microVM's tap, NAT and way through Docker's FORWARD chain
+# microVM's tap, the NAT and firewall rules for microVMs and containers, and
+# their way through Docker's FORWARD chain
 RUN apk upgrade --no-cache && \
     apk add --no-cache ca-certificates iproute2 iptables nftables && \
     adduser -D -u 10001 appuser
 
 COPY --from=builder /build/vagabond /usr/local/bin/
 COPY --from=firecracker /out/ /
+COPY --from=cni /out/ /
 
 USER appuser
 

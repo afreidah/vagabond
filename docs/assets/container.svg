@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 440" role="img" aria-labelledby="title desc">
   <title id="title">A workload in a container</title>
-  <desc id="desc">The agent submits a workload to the node's containerd in the vagabond namespace, keyed by its execution ID. containerd pulls the image, unpacks it into an overlayfs snapshot, and runs the task's process under runc as the image's user, on the host network, in the cgroup parent/execution-id. containerd writes its output to data-dir/logs/execution-id.log, which the agent streams to the server, live and once the workload ends.</desc>
+  <desc id="desc">The agent submits a workload to the node's containerd in the vagabond namespace, keyed by its execution ID. containerd pulls the image, unpacks it into an overlayfs snapshot, and runs the task's process under runc as the image's user, on a network of its own, in the cgroup parent/execution-id. containerd writes its output to data-dir/logs/execution-id.log, which the agent streams to the server, live and once the workload ends.</desc>
   <defs>
     <style>
       .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.label{font-size:20px;font-weight:700;fill:#f8fafc}.small{font-size:14px;font-weight:600;fill:#c9ccd3}.micro{font-size:13px;font-weight:700;fill:#ff8a2b;letter-spacing:.08em}.line{fill:none;stroke:#fd7300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.card{fill:#15171c;stroke:#fd7300;stroke-width:2}.core{fill:#3a1c05;stroke:#fd7300;stroke-width:3}
@@ -38,7 +38,7 @@
     <g class="small">
       <text x="650" y="144">the task's process</text>
       <text x="650" y="168">as the image's user</text>
-      <text x="650" y="192">host network</text>
+      <text x="650" y="192">its own network</text>
       <text x="650" y="216">cgroup &lt;parent&gt;/&lt;id&gt;</text>
     </g>
 
