@@ -39,24 +39,23 @@ func (s *Server) claim(ctx context.Context) error {
 // outlives the server's so a shutdown leaves it to the next server rather
 // than cancelling its executions.
 func (s *Server) resume(ctx context.Context, d *execution.Dispatch) {
-	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	runCtx, cancel := context.WithCancel(dispatchContext(ctx, d.ID, d.Namespace, d.Job, d.JobVersion))
 	s.track(d.ID, cancel)
 
-	logger := s.logger.With("dispatch", d.ID, "job", d.Job, "version", d.JobVersion, "namespace", d.Namespace)
-	logger.InfoContext(ctx, "dispatch resumed", "epoch", d.Epoch)
+	s.logger.InfoContext(runCtx, "dispatch resumed", "epoch", d.Epoch)
 
 	go func() {
 		defer s.untrack(d.ID)
 		defer cancel()
-		defer panics.Catch(runCtx, logger, "resumed dispatch "+d.ID.String(), nil)
+		defer panics.Catch(runCtx, s.logger, "resumed dispatch", nil)
 
 		state, reason, err := s.dispatcher.Resume(runCtx, d)
 		if err != nil {
-			logger.WarnContext(runCtx, "resuming dispatch", "error", err)
+			s.logger.WarnContext(runCtx, "resuming the dispatch failed", "error", err)
 
 			return
 		}
 
-		logger.InfoContext(runCtx, "resumed dispatch finished", "state", state, "reason", reason)
+		s.logger.InfoContext(runCtx, "resumed dispatch finished", "state", state, "reason", reason)
 	}()
 }

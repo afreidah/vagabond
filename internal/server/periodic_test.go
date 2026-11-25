@@ -371,7 +371,7 @@ func TestLaunchPass_WaitsAMinuteAtMost(t *testing.T) {
 			t.Errorf("launchPass() = %s, want a minute on", got)
 		}
 
-		if got := log.count(launchTask); got != 1 {
+		if got := log.count("upkeep task failed"); got != 1 {
 			t.Errorf("failures logged = %d, want 1", got)
 		}
 	})

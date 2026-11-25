@@ -24,6 +24,7 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobs"
+	"github.com/afreidah/vagabond/internal/logging"
 	"github.com/afreidah/vagabond/internal/nodes"
 	"github.com/afreidah/vagabond/internal/state"
 )
@@ -181,7 +182,9 @@ func WithLogs(maxBytes int64, retain time.Duration) Option {
 }
 
 // New builds a server over its stores, with a dispatcher that records to
-// executions and charges ledger.
+// executions and charges ledger. The server, its dispatcher and its agent
+// connections each log to logger under their own name, or nowhere when it is
+// nil.
 func New(
 	reg serverRegistry, ledger serverLedger, executions serverExecutions, jobStore serverJobs,
 	providers serverProviders, logger *slog.Logger, opts ...Option,
@@ -196,7 +199,7 @@ func New(
 		leaseTTL:    dispatch.LeaseTTL,
 		leaseRenew:  dispatch.LeaseRenew,
 		claimEvery:  claimInterval,
-		logger:      logger,
+		logger:      logging.Named(logger, "server"),
 		now:         time.Now,
 		maxLogBytes: execution.DefaultMaxLogBytes,
 		retainLogs:  execution.DefaultLogRetention,
@@ -204,7 +207,7 @@ func New(
 		stopping:    make(chan struct{}),
 		wake:        make(chan struct{}, 1),
 		running:     make(map[execution.ID]context.CancelFunc),
-		nodeConns:   nodes.New(),
+		nodeConns:   nodes.New(logger),
 	}
 
 	for _, opt := range opts {
@@ -213,7 +216,7 @@ func New(
 
 	s.dispatcher = dispatch.New(reg, ledger, executions,
 		dispatch.WithOwner(s.owner), dispatch.WithLease(s.leaseTTL, s.leaseRenew), dispatch.WithTierMode(s.tiers),
-		dispatch.WithMaxLogBytes(s.maxLogBytes), dispatch.WithLogger(s.logger))
+		dispatch.WithMaxLogBytes(s.maxLogBytes), dispatch.WithLogger(logger))
 
 	return s
 }
@@ -288,10 +291,12 @@ func (s *Server) ServeListener(ctx context.Context, listener net.Listener, tlsCo
 		routes = requireCertificate(routes)
 	}
 
+	// The server's own errors, mostly failed TLS handshakes, go to the log at debug
 	httpServer := &http.Server{
 		Handler:           s.logRequests(s.recoverRequests(routes)),
 		ReadHeaderTimeout: headerTimeout,
 		TLSConfig:         tlsConfig,
+		ErrorLog:          slog.NewLogLogger(s.logger.Handler(), slog.LevelDebug),
 	}
 
 	// A live output stream would otherwise hold shutdown open until it timed out.
@@ -307,7 +312,7 @@ func (s *Server) ServeListener(ctx context.Context, listener net.Listener, tlsCo
 		}
 	}()
 
-	s.logger.InfoContext(ctx, "serving", "address", listener.Addr().String(), "tls", tlsConfig != nil)
+	s.logger.InfoContext(ctx, "serving", "listen_addr", listener.Addr().String(), "tls", tlsConfig != nil)
 
 	select {
 	case err := <-errs:

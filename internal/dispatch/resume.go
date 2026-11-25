@@ -41,7 +41,7 @@ func (d *Dispatcher) Resume(
 		return d.abandon(ctx, claimed, origin)
 	}
 
-	defer panics.Catch(ctx, d.logger, "resuming dispatch "+claimed.ID.String(), func(p error) {
+	defer panics.Catch(ctx, d.logger, "resuming dispatch", func(p error) {
 		state, reason, err = execution.DispatchUnanswered, p.Error(), nil
 		d.end(ctx, origin, state, reason)
 	})
@@ -99,7 +99,7 @@ func (d *Dispatcher) abandon(
 	ctx context.Context, claimed *execution.Dispatch, origin Origin,
 ) (execution.DispatchState, string, error) {
 	reason := fmt.Sprintf("abandoned after %d resumes without finishing", maxResumes)
-	d.logger.ErrorContext(ctx, "abandoning dispatch", "dispatch", claimed.ID, "epoch", claimed.Epoch, "reason", reason)
+	d.logger.ErrorContext(ctx, "abandoning dispatch", "epoch", claimed.Epoch, "reason", reason)
 
 	if claimed.State != execution.DispatchRunning {
 		defer origin.lease.release()

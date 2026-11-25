@@ -188,7 +188,7 @@ func (h *harness) getLogs(t *testing.T, id, query string) (int, string, string) 
 func TestPrune_TakesOutputPastTheRetention(t *testing.T) {
 	reg, led := fixtures(t)
 	executions := memory.NewExecutions()
-	s := New(reg, led, executions, NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler),
+	s := New(reg, led, executions, NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), nil,
 		WithLogs(execution.DefaultMaxLogBytes, time.Hour))
 
 	old, oldLease := ended(t, executions, time.Now().Add(-2*time.Hour), 0)
@@ -274,7 +274,7 @@ func followed(t *testing.T, store serverExecutions, mem *memory.Executions) (*Se
 	t.Helper()
 
 	reg, led := fixtures(t)
-	s := New(reg, led, store, NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), slog.New(slog.DiscardHandler))
+	s := New(reg, led, store, NewMockserverJobs(gomock.NewController(t)), memory.NewProviders(), nil)
 	s.followPoll = 10 * time.Millisecond
 
 	d := dispatched(t, mem)
@@ -381,7 +381,12 @@ func TestExecutionLogs_ReadFails(t *testing.T) {
 	store := failingReads{memory.NewExecutions()}
 	s, rec, lease := followed(t, store, store.Executions)
 
-	for stored, begun := range map[string]bool{"": false, "partial": true} {
+	// In order: the empty case must run before anything is stored
+	for _, c := range []struct {
+		stored string
+		begun  bool
+	}{{"", false}, {"partial", true}} {
+		stored, begun := c.stored, c.begun
 		if stored != "" {
 			if err := store.AppendLog(t.Context(), rec.ID, 0, []byte(stored), 0, lease); err != nil {
 				t.Fatalf("AppendLog() = %v", err)
@@ -433,7 +438,7 @@ func TestServeListener_ShutdownEndsFollows(t *testing.T) {
 
 	reg, led := fixtures(t)
 	srv := New(reg, led, memory.NewExecutions(), memory.NewJobs(),
-		memory.NewProviders(), slog.New(slog.DiscardHandler))
+		memory.NewProviders(), nil)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)

@@ -13,7 +13,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 
 	"github.com/afreidah/vagabond/internal/api"
@@ -22,6 +21,7 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/jobs"
 	"github.com/afreidah/vagabond/internal/jobspec"
+	"github.com/afreidah/vagabond/internal/logging"
 	"github.com/afreidah/vagabond/internal/panics"
 )
 
@@ -138,20 +138,19 @@ func (s *Server) launch(
 
 	id := origin.Dispatch
 
-	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	runCtx, cancel := context.WithCancel(dispatchContext(ctx, id, origin.Namespace, j.Name, origin.JobVersion))
 	s.track(id, cancel)
 
-	logger := s.logger.With("dispatch", id, "job", j.Name, "version", origin.JobVersion, "namespace", origin.Namespace)
-	logger.InfoContext(ctx, "dispatch started")
+	s.logger.InfoContext(runCtx, "dispatch started")
 
 	go func() {
 		defer s.untrack(id)
 		defer cancel()
-		defer panics.Catch(runCtx, logger, "dispatch "+id.String(), nil)
+		defer panics.Catch(runCtx, s.logger, "dispatch", nil)
 
 		outcome, err := s.dispatcher.Run(runCtx, origin, j, jobspec.EvalContext(meta))
 		s.dispatcher.Finish(runCtx, origin, outcome, err)
-		logFinished(runCtx, logger, outcome, err)
+		s.logFinished(runCtx, outcome, err)
 	}()
 
 	return api.DispatchResponse{
@@ -162,9 +161,17 @@ func (s *Server) launch(
 	}, nil
 }
 
+// dispatchContext is ctx detached from its cancellation, so a run outlives the
+// request or pass that started it, and naming the dispatch on every line
+// logged with it, the dispatcher's own included.
+func dispatchContext(ctx context.Context, id execution.ID, namespace, job string, version int64) context.Context {
+	return logging.With(context.WithoutCancel(ctx),
+		"dispatch_id", id, "namespace", namespace, "job", job, "job_version", version)
+}
+
 // logFinished records how a dispatch ended: how many tasks ran, whether they
 // all succeeded, and the error when the run never got an answer.
-func logFinished(ctx context.Context, logger *slog.Logger, outcome *dispatch.JobOutcome, err error) {
+func (s *Server) logFinished(ctx context.Context, outcome *dispatch.JobOutcome, err error) {
 	var ran int
 
 	succeeded := false
@@ -174,12 +181,12 @@ func logFinished(ctx context.Context, logger *slog.Logger, outcome *dispatch.Job
 	}
 
 	if err != nil {
-		logger.WarnContext(ctx, "dispatch finished without an answer", "tasks", ran, "error", err)
+		s.logger.WarnContext(ctx, "dispatch finished without an answer", "tasks", ran, "error", err)
 
 		return
 	}
 
-	logger.InfoContext(ctx, "dispatch finished", "tasks", ran, "succeeded", succeeded)
+	s.logger.InfoContext(ctx, "dispatch finished", "tasks", ran, "succeeded", succeeded)
 }
 
 // track records the cancel function of a dispatch starting in this process,

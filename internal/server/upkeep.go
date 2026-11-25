@@ -106,7 +106,7 @@ func (s *Server) tick(ctx context.Context, what string, fn func(context.Context)
 	defer panics.Catch(ctx, s.logger, what, nil)
 
 	if err := fn(ctx); err != nil {
-		s.logger.WarnContext(ctx, what, "error", err)
+		s.logger.WarnContext(ctx, "upkeep task failed", "task", what, "error", err)
 	}
 }
 
@@ -127,7 +127,7 @@ func (s *Server) reap(ctx context.Context) error {
 func (s *Server) prune(ctx context.Context) error {
 	pruned, err := s.executions.PruneLogs(ctx, s.now().Add(-s.retainLogs))
 	if pruned > 0 {
-		s.logger.InfoContext(ctx, "pruned stored output", "executions", pruned)
+		s.logger.InfoContext(ctx, "pruned stored output", "count", pruned)
 	}
 
 	return err

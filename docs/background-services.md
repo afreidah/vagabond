@@ -65,9 +65,11 @@ disabled provider read before the claim so resumed dispatches already avoid
 those providers; output retention has no startup pass, so its first pass is
 1h in. Periodic launches are the exception: the first pass runs at once,
 beside serving, and each pass sets when the next one runs.
-A failure is logged and waits for the next tick; one loop failing never stops
-another. A panic in a tick is logged at error as `recovered a panic`, with
-the loop named in `in` and the stack, and the next tick runs as usual. Panics
+A failure is logged at warn as `upkeep task failed`, with the loop named in
+`task` and the `error`, and waits for the next tick; one loop failing never
+stops another. A panic in a tick is logged at error as `recovered a panic`,
+with the loop named in `in` and the stack, and the next tick runs as usual.
+Every line carries `component=server` ([Logging](logging.md)). Panics
 in the per-dispatch and per-execution services end only their own dispatch or
 execution ([Panics](dispatch.md#panics)).
 
@@ -89,8 +91,8 @@ every plan and dispatch.
   ([reason codes](scheduling.md#reason-codes)).
 - Errors from every provider are collected, not stopped at the first.
 
-**Logs:** warn `refreshing provider capabilities`, with every provider's error
-joined. At startup the CLI prints `Some providers did not answer: <error>`
+**Logs:** warn `upkeep task failed` with `task=refreshing provider
+capabilities` and every provider's error joined. At startup the CLI prints `Some providers did not answer: <error>`
 instead and the server still starts.
 
 ### Usage snapshot refresh
@@ -110,7 +112,7 @@ current period, so plans see what every server has charged.
 - `UsageRefreshed` in `GET /v1/health` is when the snapshot was last read,
   and ages while reads fail.
 
-**Logs:** warn `refreshing quota usage`.
+**Logs:** warn `upkeep task failed` with `task=refreshing quota usage`.
 
 ### Disabled provider read
 
@@ -131,7 +133,7 @@ server rejects a provider that another server sharing the store disabled.
   disabled and catches up at the next tick.
 - Under `-dev` the set is in memory and only this server sees it.
 
-**Logs:** warn `reading disabled providers`.
+**Logs:** warn `upkeep task failed` with `task=reading disabled providers`.
 
 ### Reservation reaper
 
@@ -165,7 +167,8 @@ and settlement.
 - Only providers with quota pools reserve anything.
 
 **Logs:** info `resolved abandoned quota reservations` with `count` when any
-were dropped; warn `resolving abandoned quota reservations` on error.
+were dropped; warn `upkeep task failed` with `task=resolving abandoned quota
+reservations` on error.
 
 ### Output retention
 
@@ -187,8 +190,8 @@ server's `log_retention` (default `168h`,
 - Once pruned, `GET /v1/execution/{id}/logs` answers 200 with an empty body.
 - Idempotent, so several servers running it at once is harmless.
 
-**Logs:** info `pruned stored output` with `executions` when any were pruned;
-warn `pruning stored output` with the error.
+**Logs:** info `pruned stored output` with `count` when any were pruned; warn
+`upkeep task failed` with `task=pruning stored output` and the error.
 
 ### Dispatch claim
 
@@ -211,10 +214,11 @@ execution was released, and resumes each ([Resuming](dispatch.md#resuming)).
 - A dispatch whose executions cannot be read stays open; its new lease lapses
   and a later claim tries again.
 
-**Logs:** warn `claiming abandoned dispatches` on error; per dispatch, info
-`dispatch resumed` with `epoch`, then info `resumed dispatch finished` with
-`state` and `reason` once every execution is released, or warn `resuming
-dispatch` with the error.
+**Logs:** warn `upkeep task failed` with `task=claiming abandoned dispatches`
+on error; per dispatch, info `dispatch resumed` with `epoch`, then info
+`resumed dispatch finished` with `state` and `reason` once every execution is
+released, or warn `resuming the dispatch failed` with the error. Every
+per-dispatch line carries the dispatch's fields, as the dispatch runner's do.
 
 ### Periodic launches
 
@@ -244,10 +248,10 @@ crons matches.
   waits for its next match rather than retrying at once.
 - The 1m limit is how soon a job registered through another server is seen.
 
-**Logs:** info `periodic launch` with `job`, `namespace`, `version` and
-`dispatch`; info `periodic launch skipped` with `reason` when overlap is
-prohibited; warn `launching periodic jobs` with every failing job's error
-joined.
+**Logs:** info `periodic launch` with `namespace`, `job`, `job_version` and
+`dispatch_id`; info `periodic launch skipped` with `reason` when overlap is
+prohibited; warn `upkeep task failed` with `task=launching periodic jobs` and
+every failing job's error joined.
 
 ### Dispatch runner
 
@@ -272,8 +276,10 @@ then waits for every execution to be released and marks the dispatch done
 
 **Logs:** info `dispatch started`; info `dispatch finished` with `tasks` and
 `succeeded`, or warn `dispatch finished without an answer` with `tasks` and
-`error`, once every execution is released. Every line carries `dispatch`,
-`job`, `version` and `namespace`.
+`error`, once every execution is released. Every line about the dispatch,
+the dispatcher's own included, carries `dispatch_id`, `namespace`, `job` and
+`job_version` from the context the dispatch runs on
+([Context fields](logging.md#context-fields)).
 
 ### Execution runner
 
@@ -301,8 +307,9 @@ its record ([Execution runners](dispatch.md#execution-runners)).
   without another provider call.
 
 **Logs:** warn `store write failed, retrying` with `error` for each failed
-write; warn `releasing provider leftovers` with `execution` and `error` for
-each failed `Release`.
+write; warn `releasing provider leftovers failed, retrying` with `error` for
+each failed `Release`. Both are `component=dispatch`, and carry
+`execution_id` beside the dispatch's fields.
 
 ### Lease renewal
 
@@ -348,10 +355,11 @@ the other stores what has arrived every second.
 - A capture that ends short sets `LogsTruncated` when the runner records the
   result. It never fails the execution.
 
-**Logs:** warn `capturing output` with `execution` and `error` for every call
-that returns early, which on Cloud Run names why the tail ended; warn `reading
-stored output back` when a resumed capture cannot read the store; warn `output
-left incomplete` when a capture ends short.
+**Logs:** warn `capturing output failed` with `error` for every call that
+returns early, which on Cloud Run names why the tail ended; warn `reading
+stored output back failed, retrying` when a resumed capture cannot read the
+store; warn `output left incomplete` when a capture ends short. Each carries
+the execution's `execution_id` and its dispatch's fields.
 
 ### Output follow
 
@@ -368,7 +376,7 @@ and sending new output to the client, flushing every write.
 - A record that cannot be read is tried again the next second.
 - The follow never writes the record, and never reaches the provider.
 
-**Logs:** warn `reading stored output ended early` with `execution` and
+**Logs:** warn `reading stored output ended early` with `execution_id` and
 `error`.
 
 ### Agent listener
@@ -393,11 +401,12 @@ session ([agent](agent.md)).
   again.
 - On shutdown the listener closes and every session is closed.
 
-**Logs:** info `serving agents` with `address`; info `node registered` with
-`node`, `pool`, `address`, `cpu`, `memory` and `held`, only when the node was
-not already connected; warn `node disconnected` with `node`; warn `agent
-connection` when a session cannot be opened; warn `accepting agent connections
-failed, retrying` with `error` for each failed accept.
+**Logs:** all `component=nodes`. Info `serving agents` with `listen_addr`;
+info `node registered` with `node`, `pool`, `remote_addr`, `cpu`, `memory`
+and `held`, only when the node was not already connected; warn `node
+disconnected` with `node`; warn `agent connection failed` with `remote_addr`
+and `error` when a session cannot be opened; warn `accepting agent
+connections failed, retrying` with `error` for each failed accept.
 
 ### Store health
 
@@ -438,9 +447,9 @@ Holds one session to the server and dials again whenever it drops.
 - Workloads keep running while disconnected; they belong to containerd and
   vagabond-firecracker, and the agent reports them when it reconnects.
 
-**Logs:** info `connected` with `server`, `name` and `pool`; warn `lost the
-server` with `server`; warn `connecting to the server` with `server`, `error`
-and `retry` (the next wait).
+**Logs:** all `component=agent` with `server_addr`. Info `connected` with
+`node` and `pool`; warn `lost the server`; warn `connecting to the server
+failed` with `error` and `retry_in` (the next wait).
 
 ### Workload report
 
@@ -461,9 +470,9 @@ reports.
 - The server's answer lists workloads to release; each is released as the
   server's `Release` would be, which signals another report.
 
-**Logs:** warn `reporting workloads` with `error`; info `released a workload
-the server has no use for` with `execution`, or warn `releasing a workload the
-server has no use for` with `execution` and `error`.
+**Logs:** warn `reporting workloads failed` with `error`; info `released a
+workload the server has no use for` with `execution_id`, or warn `releasing a
+workload the server has no use for failed` with `execution_id` and `error`.
 
 ### Timeout watcher
 

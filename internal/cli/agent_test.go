@@ -17,13 +17,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/hashicorp/cli"
 
 	"github.com/afreidah/vagabond/internal/agent/executor"
 	"github.com/afreidah/vagabond/internal/agent/executor/executortest/fakedaemon"
+	"github.com/afreidah/vagabond/internal/testkit"
 )
 
 // TestMain runs the fake daemon when asked to, and the tests otherwise.
@@ -89,35 +89,12 @@ func onPath(t *testing.T, mode string) {
 	t.Setenv(fakedaemon.Env, mode)
 }
 
-// lockedBuffer is a buffer the agent and its daemon's output copier can write
-// at once, which a bytes.Buffer cannot: its ReadFrom drops what is written
-// beside it.
-type lockedBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-// Write appends p under the lock.
-func (b *lockedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.buf.Write(p)
-}
-
-// String is everything written.
-func (b *lockedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.buf.String()
-}
-
 // runAgent runs the agent with -firecracker against a containerd that is not
 // there, so it gets as far as re-arming container timeouts, and returns its
 // exit code and stderr.
 func runAgent(t *testing.T) (int, string) {
-	var stderr lockedBuffer
+	// Written by the agent and its daemon's output copier at once
+	var stderr testkit.Buffer
 
 	args := []string{
 		"agent", "-containerd", filepath.Join(t.TempDir(), "containerd.sock"),

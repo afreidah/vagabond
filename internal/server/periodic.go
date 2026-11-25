@@ -114,7 +114,8 @@ func (s *Server) launchScheduled(ctx context.Context, j *jobs.Job, now time.Time
 		return err
 	}
 
-	logger := s.logger.With("job", j.Name, "namespace", j.Namespace, "version", j.Version)
+	// On a logger, not ctx: the dispatch it launches puts the job on its own lines
+	logger := s.logger.With("namespace", j.Namespace, "job", j.Name, "job_version", j.Version)
 
 	if ptr.Deref(j.Periodic.ProhibitOverlap) {
 		running, err := s.executions.RunningDispatch(ctx, j.Namespace, j.Name)
@@ -145,7 +146,7 @@ func (s *Server) launchScheduled(ctx context.Context, j *jobs.Job, now time.Time
 		return err
 	}
 
-	logger.InfoContext(ctx, "periodic launch", "dispatch", started.DispatchID)
+	logger.InfoContext(ctx, "periodic launch", "dispatch_id", started.DispatchID)
 
 	return nil
 }

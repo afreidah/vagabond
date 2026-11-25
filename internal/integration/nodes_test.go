@@ -63,7 +63,7 @@ func newNodeHarness(t *testing.T) (*harness, server.Option) {
 		t.Fatalf("listen: %v", err)
 	}
 
-	conns := nodes.New()
+	conns := nodes.New(nil)
 	h := &harness{
 		t:        t,
 		registry: providers(t, nodeProvider, registry.WithNodes(conns)),

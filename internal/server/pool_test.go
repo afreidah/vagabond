@@ -11,7 +11,6 @@ package server
 
 import (
 	"context"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -58,7 +57,7 @@ func TestPool_RunsAJobOnANode(t *testing.T) {
 	}
 
 	// The pool and the server share one set of nodes, as vagabond server wires it.
-	conns := nodes.New()
+	conns := nodes.New(nil)
 
 	reg, diags := registry.New(ctx, cfg, registry.WithNodes(conns))
 	if diags.HasErrors() {
@@ -71,7 +70,7 @@ func TestPool_RunsAJobOnANode(t *testing.T) {
 	}
 
 	srv := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)),
-		memory.NewProviders(), slog.New(slog.DiscardHandler), WithNodes(conns))
+		memory.NewProviders(), nil, WithNodes(conns))
 
 	var lc net.ListenConfig
 

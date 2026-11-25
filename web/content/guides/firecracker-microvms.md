@@ -250,8 +250,8 @@ The daemon logs first, then the agent:
 
 ```text
 2026-11-19T23:23:50.162212Z  INFO serving socket=/var/lib/vagabond/firecracker/executor.sock
-time=2026-11-19T23:23:50.233Z level=INFO msg=node name=nomad-client-04 pool=homelab cpu=2010 memory=4608 cgroup=/vagabond
-time=2026-11-19T23:23:50.247Z level=INFO msg=connected server=vagabond.service.consul:4748 name=nomad-client-04 pool=homelab
+time=2026-11-19T23:23:50.233Z level=INFO msg="node read" component=agent node=nomad-client-04 pool=homelab cpu=2010 memory=4608 cgroup=/vagabond
+time=2026-11-19T23:23:50.247Z level=INFO msg=connected component=agent server_addr=vagabond.service.consul:4748 node=nomad-client-04 pool=homelab
 ```
 
 The node now reports both executors:

@@ -12,7 +12,6 @@ package server
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -227,7 +226,7 @@ func TestProviders_EnableRefusesWhatTheConfigurationTurnsOff(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(New(reg, led, memory.NewExecutions(), NewMockserverJobs(ctrl), memory.NewProviders(),
-		slog.New(slog.DiscardHandler)).Handler())
+		nil).Handler())
 	t.Cleanup(srv.Close)
 
 	var body api.Error
@@ -242,7 +241,7 @@ func TestProviders_EnableRefusesWhatTheConfigurationTurnsOff(t *testing.T) {
 func TestProviders_StoreUnreachable(t *testing.T) {
 	reg, led := fixtures(t)
 	s := New(reg, led, memory.NewExecutions(), NewMockserverJobs(gomock.NewController(t)), downProviders{},
-		slog.New(slog.DiscardHandler))
+		nil)
 
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)

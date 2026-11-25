@@ -247,6 +247,7 @@ Details: [architecture.md](docs/architecture.md).
 | Running the server and agents | [deployment.md](docs/deployment.md) |
 | Postgres, CockroachDB, migrations, schema | [database.md](docs/database.md) |
 | Periodic loops in the server and agent | [background-services.md](docs/background-services.md) |
+| Log format, components, fields and messages | [logging.md](docs/logging.md) |
 | The agent on your own nodes, its pools and placement | [agent.md](docs/agent.md) |
 | Workloads in containers on agent nodes | [containerd.md](docs/containerd.md) |
 | Workloads in Firecracker microVMs | [firecracker.md](docs/firecracker.md) |

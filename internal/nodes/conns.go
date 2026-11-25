@@ -13,12 +13,14 @@ package nodes
 
 import (
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/afreidah/vagabond/internal/agentrpc"
+	"github.com/afreidah/vagabond/internal/logging"
 )
 
 // reservationTTL bounds how long a reservation covers for a node that has not
@@ -43,7 +45,8 @@ type Conn struct {
 // Conns is every connected node by name, and the room reserved on each by
 // execution ID.
 type Conns struct {
-	now func() time.Time
+	now    func() time.Time
+	logger *slog.Logger
 
 	mu       sync.Mutex
 	conns    map[string]*Conn
@@ -62,9 +65,13 @@ type reservation struct {
 // CONSTRUCTOR
 // -------------------------------------------------------------------------
 
-// New returns an empty set of connections.
-func New() *Conns {
-	return &Conns{now: time.Now, conns: make(map[string]*Conn), reserved: make(map[string]reservation)}
+// New returns an empty set of connections, which logs agents connecting and
+// leaving to logger, or nowhere when it is nil.
+func New(logger *slog.Logger) *Conns {
+	return &Conns{
+		now: time.Now, logger: logging.Named(logger, "nodes"),
+		conns: make(map[string]*Conn), reserved: make(map[string]reservation),
+	}
 }
 
 // -------------------------------------------------------------------------

@@ -15,7 +15,6 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"log/slog"
 	"net"
 	"net/http"
 	"testing"
@@ -56,7 +55,7 @@ func serveTLS(t *testing.T, ca, clientCA *tlstest.CA) string {
 	}
 
 	reg, led := fixtures(t)
-	srv := New(reg, led, memory.NewExecutions(), memory.NewJobs(), memory.NewProviders(), slog.New(slog.DiscardHandler))
+	srv := New(reg, led, memory.NewExecutions(), memory.NewJobs(), memory.NewProviders(), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

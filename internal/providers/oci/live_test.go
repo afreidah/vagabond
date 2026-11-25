@@ -3,9 +3,10 @@
 //
 // Author: Alex Freidah
 //
-// Invokes the function in testdata/livefn, deployed to a real tenancy, and
-// reads back its reply and a timeout. Skipped unless a function is named, so
-// the default suite needs no cloud account anywhere:
+// Invokes a function deployed to a real tenancy, the Python one on the OCI
+// Functions provider page, and reads back its reply and a timeout. Skipped
+// unless a function is named, so the default suite needs no cloud account
+// anywhere:
 //
 //	VAGABOND_OCI_FUNCTION=<function OCID> VAGABOND_OCI_REGION=us-ashburn-1 \
 //	VAGABOND_OCI_TENANCY=<tenancy OCID> VAGABOND_OCI_USER=<user OCID> \

@@ -108,7 +108,7 @@ func (s *Server) executionLogs(w http.ResponseWriter, r *http.Request) {
 		status, body := s.failure(r, err)
 		write(w, status, body)
 	case r.Context().Err() == nil:
-		s.logger.WarnContext(r.Context(), "reading stored output ended early", "execution", rec.ID, "error", err)
+		s.logger.WarnContext(r.Context(), "reading stored output ended early", "execution_id", rec.ID, "error", err)
 	}
 }
 

@@ -38,6 +38,7 @@ import (
 
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/execution"
+	"github.com/afreidah/vagabond/internal/logging"
 )
 
 // -------------------------------------------------------------------------
@@ -128,7 +129,7 @@ func New(cfg *Config) (*Containerd, error) {
 
 	c := &Containerd{client: cl, cfg: *cfg, watched: make(map[string]bool), untrim: untrim}
 	c.cfg.MaxLogBytes = cmp.Or(c.cfg.MaxLogBytes, execution.DefaultMaxLogBytes)
-	c.cfg.Logger = cmp.Or(c.cfg.Logger, slog.New(slog.DiscardHandler))
+	c.cfg.Logger = logging.Named(c.cfg.Logger, "executor")
 
 	go c.trim(ctx)
 
@@ -506,7 +507,7 @@ func (c *Containerd) trim(ctx context.Context) {
 
 		for _, path := range logs {
 			if err := c.trimLog(path); err != nil {
-				c.cfg.Logger.WarnContext(ctx, "dropping the front of a workload's output", "error", err)
+				c.cfg.Logger.WarnContext(ctx, "trimming a workload's output failed", "error", err)
 			}
 		}
 	}

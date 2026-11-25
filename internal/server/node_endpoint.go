@@ -24,7 +24,7 @@ import (
 // ServeAgents accepts agent connections on listener until ctx is done, then
 // closes every session.
 func (s *Server) ServeAgents(ctx context.Context, listener net.Listener) error {
-	return s.nodeConns.Serve(ctx, listener, s.unwanted, s.logger)
+	return s.nodeConns.Serve(ctx, listener, s.unwanted)
 }
 
 // unwanted names the workloads a node holds that nothing will ask for again.

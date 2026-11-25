@@ -93,16 +93,16 @@ func (c *capture) run(
 	ctx context.Context, d *Dispatcher, provider plugin.Provider, capturer plugin.LogCapturer, id execution.ID,
 ) {
 	defer close(c.done)
-	defer panics.Catch(ctx, d.logger, "capturing the output of "+id.String(), func(err error) { c.err = err })
+	defer panics.Catch(ctx, d.logger, "capturing output", func(err error) { c.err = err })
 
-	if c.err = c.resume(ctx, d, id); c.err != nil {
+	if c.err = c.resume(ctx, d); c.err != nil {
 		return
 	}
 
 	flushing, stopFlushing := context.WithCancel(ctx)
 	defer stopFlushing()
 
-	go c.sink.flushEvery(flushing, d, id)
+	go c.sink.flushEvery(flushing, d)
 
 	// However the capture ends, what arrived is stored
 	defer func() {
@@ -120,19 +120,19 @@ func (c *capture) run(
 		return err
 	}
 
-	c.err = c.calls(ctx, d, id, call)
+	c.err = c.calls(ctx, d, call)
 }
 
 // resume reads back what another server stored, after a backoff each time the
 // store does not answer, until it does or the capture is stopped.
-func (c *capture) resume(ctx context.Context, d *Dispatcher, id execution.ID) error {
+func (c *capture) resume(ctx context.Context, d *Dispatcher) error {
 	for n := 0; ; n++ {
 		err := c.sink.resume()
 		if err == nil {
 			return nil
 		}
 
-		d.logger.WarnContext(ctx, "reading stored output back", "execution", id, "error", err)
+		d.logger.WarnContext(ctx, "reading stored output back failed, retrying", "error", err)
 
 		if err := d.sleep(ctx, backoff.Exponential(captureRetry, captureRetryMax, n)); err != nil {
 			return err
@@ -142,7 +142,7 @@ func (c *capture) resume(ctx context.Context, d *Dispatcher, id execution.ID) er
 
 // calls makes call until the capture is over, returning why it stopped short,
 // or nil with the output whole.
-func (c *capture) calls(ctx context.Context, d *Dispatcher, id execution.ID, call func() error) error {
+func (c *capture) calls(ctx context.Context, d *Dispatcher, call func() error) error {
 	for retries, failedAfterEnd := 0, 0; ; retries++ {
 		finished, before := plugin.Ended(c.ended), c.sink.Len()
 
@@ -151,7 +151,7 @@ func (c *capture) calls(ctx context.Context, d *Dispatcher, id execution.ID, cal
 			return why
 		}
 
-		d.logger.WarnContext(ctx, "capturing output", "execution", id, "error", err)
+		d.logger.WarnContext(ctx, "capturing output failed", "error", err)
 
 		if finished {
 			if failedAfterEnd++; failedAfterEnd >= captureAttempts {
@@ -258,7 +258,7 @@ func (d *Dispatcher) collectLogs(
 	}
 
 	if err != nil {
-		d.logger.WarnContext(ctx, "output left incomplete", "execution", rec.ID, "error", err)
+		d.logger.WarnContext(ctx, "output left incomplete", "error", err)
 	}
 
 	rec.LogsAt = d.now()
@@ -440,8 +440,8 @@ func (s *logSink) failed() error {
 
 // flushEvery stores what has arrived every flushInterval until ctx ends. A
 // failed write is left for the next write to report.
-func (s *logSink) flushEvery(ctx context.Context, d *Dispatcher, id execution.ID) {
-	defer panics.Catch(ctx, d.logger, "storing the output of "+id.String(), nil)
+func (s *logSink) flushEvery(ctx context.Context, d *Dispatcher) {
+	defer panics.Catch(ctx, d.logger, "storing output", nil)
 
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()

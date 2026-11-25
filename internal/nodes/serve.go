@@ -16,7 +16,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"time"
 
@@ -56,14 +55,14 @@ type Unwanted func(ctx context.Context, held []*agentrpc.Held) []string
 // node should release; nil releases nothing. A failed accept, such as one out
 // of file descriptors, is retried; the listener closing while ctx is live is
 // the only error, since no agent could connect again.
-func (c *Conns) Serve(ctx context.Context, listener net.Listener, unwanted Unwanted, logger *slog.Logger) error {
+func (c *Conns) Serve(ctx context.Context, listener net.Listener, unwanted Unwanted) error {
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()
 		c.CloseAll()
 	}()
 
-	logger.InfoContext(ctx, "serving agents", "address", listener.Addr().String())
+	c.logger.InfoContext(ctx, "serving agents", "listen_addr", listener.Addr().String())
 
 	failures := 0
 
@@ -74,7 +73,7 @@ func (c *Conns) Serve(ctx context.Context, listener net.Listener, unwanted Unwan
 		case err == nil:
 			failures = 0
 
-			go c.handle(ctx, conn, &endpoint{conns: c, unwanted: unwanted, logger: logger})
+			go c.handle(ctx, conn, &endpoint{conns: c, unwanted: unwanted})
 
 			continue
 		case ctx.Err() != nil:
@@ -83,7 +82,7 @@ func (c *Conns) Serve(ctx context.Context, listener net.Listener, unwanted Unwan
 			return fmt.Errorf("agent listener closed: %w", err)
 		}
 
-		logger.WarnContext(ctx, "accepting agent connections failed, retrying", "error", err)
+		c.logger.WarnContext(ctx, "accepting agent connections failed, retrying", "error", err)
 
 		if backoff.Sleep(ctx, backoff.Exponential(acceptRetry, acceptRetryMax, failures)) != nil {
 			return nil
@@ -103,7 +102,7 @@ func (c *Conns) handle(ctx context.Context, conn net.Conn, e *endpoint) {
 	cancel()
 
 	if err != nil {
-		e.logger.WarnContext(ctx, "agent connection", "from", conn.RemoteAddr().String(), "error", err)
+		c.logger.WarnContext(ctx, "agent connection failed", "remote_addr", conn.RemoteAddr().String(), "error", err)
 
 		return
 	}
@@ -111,8 +110,8 @@ func (c *Conns) handle(ctx context.Context, conn net.Conn, e *endpoint) {
 	// The agent calls this endpoint down the session it opened; a handler's panic answers Internal.
 	e.session = session
 	srv := grpc.NewServer(
-		grpc.ChainUnaryInterceptor(panics.UnaryServerInterceptor(e.logger)),
-		grpc.ChainStreamInterceptor(panics.StreamServerInterceptor(e.logger)),
+		grpc.ChainUnaryInterceptor(panics.UnaryServerInterceptor(c.logger)),
+		grpc.ChainStreamInterceptor(panics.StreamServerInterceptor(c.logger)),
 	)
 	agentrpc.RegisterNodeServer(srv, e)
 
@@ -122,7 +121,7 @@ func (c *Conns) handle(ctx context.Context, conn net.Conn, e *endpoint) {
 	srv.Stop()
 
 	for _, name := range c.Remove(session) {
-		e.logger.WarnContext(ctx, "node disconnected", "node", name)
+		c.logger.WarnContext(ctx, "node disconnected", "node", name)
 	}
 }
 
@@ -137,7 +136,6 @@ type endpoint struct {
 	conns    *Conns
 	session  *agentrpc.Session
 	unwanted Unwanted
-	logger   *slog.Logger
 }
 
 // Register records the node on this session, replacing what it registered
@@ -157,8 +155,8 @@ func (e *endpoint) Register(
 
 	// Only a node arriving is worth a log line; its periodic reports are not.
 	if !known {
-		e.logger.InfoContext(ctx, "node registered",
-			"node", req.GetName(), "pool", req.GetPool(), "address", e.session.RemoteAddr().String(),
+		e.conns.logger.InfoContext(ctx, "node registered",
+			"node", req.GetName(), "pool", req.GetPool(), "remote_addr", e.session.RemoteAddr().String(),
 			"cpu", req.GetCapacity().GetCpu(), "memory", req.GetCapacity().GetMemory(),
 			"held", len(req.GetHeld()))
 	}

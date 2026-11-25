@@ -85,7 +85,7 @@ func (d *Dispatcher) hold(ctx context.Context, id execution.ID, key execution.Le
 
 	go func() {
 		defer close(l.done)
-		defer panics.Catch(ctx, d.logger, "renewing the lease on dispatch "+id.String(), func(error) { l.lose() })
+		defer panics.Catch(ctx, d.logger, "renewing the lease", func(error) { l.lose() })
 
 		ticker := time.NewTicker(d.leaseRenew)
 		defer ticker.Stop()

@@ -25,6 +25,7 @@ import (
 	"github.com/afreidah/vagabond/internal/execution"
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/ledger"
+	"github.com/afreidah/vagabond/internal/logging"
 	"github.com/afreidah/vagabond/internal/panics"
 	"github.com/afreidah/vagabond/internal/plugin"
 	"github.com/afreidah/vagabond/internal/quota"
@@ -150,8 +151,8 @@ func WithMaxLogBytes(n int64) Option {
 	return func(d *Dispatcher) { d.maxLogBytes = n }
 }
 
-// WithLogger sets where store writes being retried are reported, in place of
-// discarding them.
+// WithLogger sets where the dispatcher logs, under its own name, in place of
+// discarding what it would log.
 func WithLogger(logger *slog.Logger) Option {
 	return func(d *Dispatcher) { d.logger = logger }
 }
@@ -165,7 +166,6 @@ func New(registry Registry, ledger Ledger, executions Executions, opts ...Option
 		registry:   registry,
 		ledger:     ledger,
 		executions: executions,
-		logger:     slog.New(slog.DiscardHandler),
 		owner:      ProcessOwner("vagabond"),
 		leaseTTL:   LeaseTTL,
 		leaseRenew: LeaseRenew,
@@ -179,6 +179,8 @@ func New(registry Registry, ledger Ledger, executions Executions, opts ...Option
 	for _, opt := range opts {
 		opt(d)
 	}
+
+	d.logger = logging.Named(d.logger, "dispatch")
 
 	return d
 }
@@ -294,7 +296,7 @@ func (d *Dispatcher) Run(
 		return nil, plugin.Internal(errors.New("run of a dispatch that was never begun"))
 	}
 
-	defer panics.Catch(ctx, d.logger, "dispatch "+origin.Dispatch.String(), func(p error) { err = plugin.Internal(p) })
+	defer panics.Catch(ctx, d.logger, "dispatch", func(p error) { err = plugin.Internal(p) })
 
 	origin.Job = j.Name
 	outcome = &JobOutcome{Job: j.Name, Dispatch: origin.Dispatch}
