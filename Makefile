@@ -42,6 +42,17 @@ ALPINE_ROOTFS    := alpine-minirootfs-3.20.10-x86_64.tar.gz
 ALPINE_SHA256    := 0d44a414245f043ae56872a23762e6c9bee585da2cbe4aa81cbd0331eaf53223
 KVM_IMAGE        := $(addprefix $(KVM_DIR)/,firecracker jailer vmlinux)
 
+# The CNI plugins the agent attaches containers with, pinned with checksums and
+# fetched once per architecture into CNI_DIR. The image takes each
+# architecture's archive, and the executor tests the plugins for this machine.
+CNI_DIR          := bin/cni
+CNI_VERSION      := v1.10.0
+CNI_SHA256_amd64 := ce8603d6a1bd448efba5bd6dc44f38dce349f821aa57e1bb354b52628ebf1853
+CNI_SHA256_arm64 := 4f25d7f136be368746185fba6557d799cf3e1890f7556d450744ea20d300d68c
+CNI_PLUGINS      := ptp host-local loopback
+CNI_IMAGE        := $(CNI_DIR)/cni-plugins-amd64.tgz $(CNI_DIR)/cni-plugins-arm64.tgz
+CNI_BIN          := $(CNI_DIR)/$(shell go env GOARCH)
+
 # Injected into internal/version at link time, so a built binary reports what it
 # actually is rather than whatever string was last committed. Read from
 # .version, which CI requires a pull request to bump when it changes anything
@@ -130,15 +141,16 @@ image = docker buildx build --pull -f $(2) $(3) \
 	$(if $(4),--platform $(4) -t $(1):latest --output type=image$(comma)push=true,--load) .
 
 # Handed Firecracker, the jailer and the kernel as fetched and checked here,
-# which the amd64 image carries for the agent's -firecracker.
-docker: $(KVM_IMAGE) ## Build the vagabond image for the local architecture
-	$(call image,$(IMAGE),Dockerfile,--build-context kvm=$(KVM_DIR))
+# which the amd64 image carries for the agent's -firecracker, and the CNI
+# plugin archives, which every image carries for the agent's containers.
+docker: $(KVM_IMAGE) $(CNI_IMAGE) ## Build the vagabond image for the local architecture
+	$(call image,$(IMAGE),Dockerfile,--build-context kvm=$(KVM_DIR) --build-context cni-plugins=$(CNI_DIR))
 
 scan: docker ## Scan the local vagabond image with Trivy
 	trivy image --severity CRITICAL,HIGH $(IMAGE):$(VERSION)
 
-push: builder $(KVM_IMAGE) ## Build and push the multi-arch vagabond image
-	$(call image,$(IMAGE),Dockerfile,--build-context kvm=$(KVM_DIR),$(PLATFORMS))
+push: builder $(KVM_IMAGE) $(CNI_IMAGE) ## Build and push the multi-arch vagabond image
+	$(call image,$(IMAGE),Dockerfile,--build-context kvm=$(KVM_DIR) --build-context cni-plugins=$(CNI_DIR),$(PLATFORMS))
 
 ##@ Quality
 
@@ -237,6 +249,15 @@ $(KVM_DIR)/vmlinux:
 $(KVM_DIR)/$(ALPINE_ROOTFS):
 	$(call fetch,https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/$(ALPINE_ROOTFS),$(ALPINE_SHA256))
 
+# Each architecture's CNI plugin archive, checked against its own checksum.
+$(CNI_DIR)/cni-plugins-%.tgz:
+	$(call fetch,https://github.com/containernetworking/plugins/releases/download/$(CNI_VERSION)/cni-plugins-linux-$*-$(CNI_VERSION).tgz,$(CNI_SHA256_$*))
+
+# The plugins the executor tests use, for this machine. -m dates them now, so
+# they are newer than the archive and make extracts them once.
+$(CNI_BIN): $(CNI_DIR)/cni-plugins-$(shell go env GOARCH).tgz
+	mkdir -p $@ && tar -xzmf $< -C $@ $(addprefix ./,$(CNI_PLUGINS))
+
 # The guest init, static so the initramfs needs nothing beside it. Always run,
 # since cargo decides itself what needs rebuilding, and run in the crate, where
 # rust-toolchain.toml picks the compiler.
@@ -292,14 +313,15 @@ firecracker-coverage: $(KVM_FILES) ## Write firecracker-coverage.lcov from the m
 # The agent's executors are tested against a containerd and a
 # vagabond-firecracker of their own, apart from anything the host runs, which
 # executor-env starts as root and executor-env-down clears away. The tests find
-# them by the sockets in EXECUTOR_SOCKETS, and skip without them.
+# them by the sockets in EXECUTOR_SOCKETS, and skip without them, and attach
+# containers with the CNI plugins it names.
 EXECUTOR_ENV     = sudo env KVM_DIR=$(abspath $(KVM_DIR)) DAEMON=$(abspath $(FC_CRATE))/target/debug/vagabond-firecracker scripts/executor-env.sh
-EXECUTOR_SOCKETS = VAGABOND_CONTAINERD=/run/vagabond-test/containerd.sock VAGABOND_FIRECRACKER=/run/vagabond-test/firecracker.sock
+EXECUTOR_SOCKETS = VAGABOND_CONTAINERD=/run/vagabond-test/containerd.sock VAGABOND_FIRECRACKER=/run/vagabond-test/firecracker.sock VAGABOND_CNI=$(abspath $(CNI_BIN))
 
 firecracker-daemon:
 	cd $(FC_CRATE) && cargo build --bin vagabond-firecracker
 
-executor-env: firecracker-daemon $(KVM_BOOT) ## Start the executor tests' containerd and vagabond-firecracker (requires root, /dev/kvm, containerd and dmsetup)
+executor-env: firecracker-daemon $(KVM_BOOT) $(CNI_BIN) ## Start the executor tests' containerd and vagabond-firecracker (requires root, /dev/kvm, containerd and dmsetup)
 	$(EXECUTOR_ENV) up
 
 executor-env-down: ## Stop the executor tests' containerd and vagabond-firecracker, and clear what they left

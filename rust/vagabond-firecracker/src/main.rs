@@ -47,7 +47,7 @@ async fn main() -> ExitCode {
 // left, and serves the executor protocol on a socket only root can open, until
 // SIGTERM or SIGINT. The microVMs outlive it, for the next start to recover.
 async fn run(config: Config) -> io::Result<()> {
-    network::setup_nat(config.pool, &config.uplink).await?;
+    network::setup_nat(config.pool, &config.uplink, config.dns).await?;
     let socket = config.socket.clone();
     let executor = Executor::new(config)?;
     executor.recover().await?;

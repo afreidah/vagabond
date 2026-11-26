@@ -266,10 +266,24 @@ type Resources struct {
 }
 
 // Network is the connectivity a task expects. Private exists so a job needing
-// private access is rejected by admission with a reason naming the problem.
+// private access is rejected by admission with a reason naming the problem,
+// and so an agent node lets only the tasks that ask reach its private
+// networks.
 type Network struct {
 	Internet *bool `hcl:"internet,optional"`
 	Private  *bool `hcl:"private,optional"`
+}
+
+// NeedsInternet reports whether the task requires egress. Only an explicit
+// true is a requirement; absent or false leaves it to the provider.
+func (n *Network) NeedsInternet() bool {
+	return n != nil && n.Internet != nil && *n.Internet
+}
+
+// NeedsPrivate reports whether the task requires the private networks the
+// provider reaches. Only an explicit true is a requirement.
+func (n *Network) NeedsPrivate() bool {
+	return n != nil && n.Private != nil && *n.Private
 }
 
 // ExecutionRequirements is the environment a task must run in.

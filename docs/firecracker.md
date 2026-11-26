@@ -147,6 +147,7 @@ With `-firecracker`, the agent starts it with:
 | `--kernel`, `--initramfs` | The image's paths above |
 | `--uid`, `--gid` | `-firecracker-uid`, `-firecracker-gid`, default `990` |
 | `--uplink` | `-firecracker-uplink`, default the interface of the default route in `/proc/net/route` |
+| `--dns` | The agent's `-dns`, default `1.1.1.1`, the same name server isolated containers use |
 | `--log-level` | The agent's `-log-level` |
 
 Its log goes to the agent's stderr. The agent waits up to 30s for it to serve
@@ -159,8 +160,8 @@ The agent's container takes, beyond what the [agent](agent.md#container) needs:
 | Setting | Why |
 |---|---|
 | `--privileged` | `/dev/kvm`, device nodes in the jails, and the network changes in [Networking](#networking) |
-| `--network host` | The taps, the nftables table and the Docker rules belong on the host, where microVM traffic flows |
-| `--pid host` | Each record keeps Firecracker's host pid, so a restarted daemon finds it, and the microVMs are not ended with the container |
+| `--network host` | The taps, the nftables table and the Docker rules belong on the host, where microVM traffic flows. The agent's containers need it too, unless `-host-network` |
+| `--pid host` | Each record keeps Firecracker's host pid, so a restarted daemon finds it, and the microVMs are not ended with the container. The agent's containers need it too, unless `-host-network` |
 | `/dev` mounted | Each root drive is a devmapper device made after the container started, which a privileged container's own `/dev` does not show |
 | `-data-dir` on a filesystem that allows device files | The jails hold device nodes; records and output outlive the container |
 
@@ -317,7 +318,7 @@ counting from 0.
 | Slot `n` | Example, `n` = 1 |
 |---|---|
 | The `n`th `/30` of `--pool` | `172.16.0.4/30` |
-| Tap device `vfc<n>`, owned by `--uid` and `--gid` so the jailed Firecracker can open it | `vfc1` |
+| Tap device `vfc<n>`, or `vfcp<n>` when the workload asks for private access, owned by `--uid` and `--gid` so the jailed Firecracker can open it | `vfc1` |
 | The host's address on the tap, the `/30`'s first | `172.16.0.5` |
 | The microVM's address, its gateway the host's | `172.16.0.6` |
 | vsock CID `3 + n`; 0 to 2 are reserved | `4` |
@@ -330,7 +331,9 @@ slot held, `Submit` is refused with `ResourceExhausted`
 
 At every start the daemon sets `net.ipv4.ip_forward` to 1 and replaces its
 own nftables table whole, in one transaction, so a restart never doubles a
-rule. With the default `--pool` and `--uplink eth0`:
+rule. A private microVM is told apart by its tap's name, `vfcp<n>`, kept in
+its record, so the table needs nothing per microVM. With the default `--pool`,
+`--dns` and `--uplink eth0`:
 
 ```text
 table ip vagabond_firecracker {
@@ -340,14 +343,19 @@ table ip vagabond_firecracker {
     }
     chain forward {
         type filter hook forward priority filter; policy accept;
-        iifname "vfc*" oifname "eth0" accept
-        iifname "eth0" oifname "vfc*" ct state established,related accept
-        iifname "vfc*" drop
+        oifname "vfc*" ct state established,related accept
         oifname "vfc*" drop
+        iifname "vfcp*" oifname "eth0" accept
+        iifname "vfc*" ip daddr 1.1.1.1 meta l4proto { tcp, udp } th dport 53 accept
+        iifname "vfc*" ip daddr { 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 } drop
+        iifname "vfc*" oifname "eth0" accept
+        iifname "vfc*" drop
     }
     chain input {
         type filter hook input priority filter; policy accept;
         iifname "vfc*" ct state established,related accept
+        iifname "vfcp*" accept
+        iifname "vfc*" ip daddr 1.1.1.1 meta l4proto { tcp, udp } th dport 53 accept
         iifname "vfc*" drop
     }
 }
@@ -356,25 +364,31 @@ table ip vagabond_firecracker {
 | Rule | Effect |
 |---|---|
 | `masquerade` | MicroVM traffic leaving the uplink takes the uplink's address |
-| `iifname "vfc*" oifname "eth0" accept` | MicroVMs reach out through the uplink |
 | `ct state established,related accept`, forward | Replies come back in |
-| `iifname "vfc*" drop`, forward | A microVM reaches no other microVM and no other interface |
-| `oifname "vfc*" drop`, forward | Nothing routed through the host reaches a microVM |
-| `iifname "vfc*" drop`, input | A microVM reaches none of the host's addresses, except to answer what the host opened |
+| `oifname "vfc*" drop`, forward | Nothing routed through the host reaches a microVM, another microVM included |
+| `iifname "vfcp*" oifname "eth0" accept` | A private microVM reaches anything out of the uplink, the uplink's own network included |
+| `th dport 53 accept` | DNS to `--dns` passes, wherever the name server is |
+| `ip daddr { ... } drop`, forward | Any other microVM reaches no private range: the RFC 1918 ranges, shared address space and link-local |
+| `iifname "vfc*" oifname "eth0" accept` | It reaches the rest out of the uplink: the internet |
+| `iifname "vfc*" drop`, forward | No microVM reaches another interface |
+| `iifname "vfcp*" accept`, input | A private microVM reaches the host |
+| `iifname "vfc*" drop`, input | Any other reaches none of the host's addresses, except DNS and to answer what the host opened |
 
 Nothing else on the host is touched, and neither the table nor forwarding is
 undone at exit, since the microVMs outlive the daemon.
 
 | From | To | Result |
 |---|---|---|
-| A microVM | Anything the uplink reaches: the internet, and the uplink's own network | Reaches it, behind the uplink's address |
-| A microVM | Another microVM | Dropped |
-| A microVM | The host, on any address | Dropped |
+| A microVM | The internet | Reaches it, behind the uplink's address |
+| A microVM | A private range, such as the uplink's own network | Dropped, unless its workload asks for private access |
+| A microVM | The host, on any address | Dropped, unless its workload asks for private access |
+| A microVM | `--dns`, port 53 | Reaches it |
+| A microVM | Another microVM | Dropped, private or not |
 | Another machine, routed through the host | A microVM | Dropped |
 | A process on the host | A microVM | Reaches it: the host's own traffic is not forwarded, and the table has no output chain |
 
-A microVM reaches the uplink's local network as it reaches the internet. Keep
-anything it must not reach off that network, or filter it upstream.
+A workload asks for private access when its task sets
+`network { private = true }`; the agent passes it in `Submit`.
 
 ### Docker
 
@@ -516,7 +530,7 @@ and `make generate` the Go client the agent's firecracker executor uses.
 
 | RPC | Request | Response |
 |---|---|---|
-| `Submit` | `execution_id`, `process` (`args`, `env`, `working_dir`, `uid`, `gid`, `additional_gids`), `resources` (`cpu` millicores, `memory` MiB), `timeout`, `root_drive`, `root_fstype`, `cgroup` | `state`, `provider_id`: the execution ID |
+| `Submit` | `execution_id`, `process` (`args`, `env`, `working_dir`, `uid`, `gid`, `additional_gids`), `resources` (`cpu` millicores, `memory` MiB), `timeout`, `root_drive`, `root_fstype`, `cgroup`, `private_network` | `state`, `provider_id`: the execution ID |
 | `ReadLogs` | `execution_id`, `offset` | `data`, `ended`, and `offset`, where `data` begins |
 | `Held` | empty | `held[]`: every execution held, ended or not, with its declared `resources` plus `--vmm-overhead` of memory, and `running` until its Firecracker has exited |
 | `Info` | empty | `name`, `firecracker`, and `overhead`, `--vmm-overhead` as memory, which the agent registers and the server adds to each reservation |
@@ -607,7 +621,7 @@ levels.
 |---|---|---|
 | `failed error=enabling IPv4 forwarding: Permission denied (os error 13)` | Not root | Run as root. |
 | `failed error=nft: No such file or directory (os error 2)` | nftables not installed | Install it. |
-| `failed error=reading <state-dir>/<id>/record.json: ...` | A record that cannot be read | Move the directory out of `--state-dir`, then stop the microVM it described by hand: its Firecracker, tap device `vfc<n>` and cgroup. |
+| `failed error=reading <state-dir>/<id>/record.json: ...` | A record that cannot be read | Move the directory out of `--state-dir`, then stop the microVM it described by hand: its Firecracker, tap device `vfc<n>` or `vfcp<n>` and cgroup. |
 | `InvalidArgument ... is too long for a Unix socket; shorten --chroot-base` | The jail's path leaves no room for the ID | A shorter `--chroot-base`. |
 | `InvalidArgument root drive <path> is not a block device` | The caller passed a file | Pass a block device: a loop device or a snapshot. |
 | `ResourceExhausted the address pool is used up` | Every slot held, ended executions included | Release what has ended, or widen `--pool`. |

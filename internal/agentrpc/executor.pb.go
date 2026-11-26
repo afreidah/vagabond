@@ -37,18 +37,20 @@ const (
 // run, already merged with the image's entrypoint, command, environment and
 // user, and root_drive, the block device or file holding the image's filesystem,
 // of type root_fstype as the snapshot was made. cgroup is the parent the
-// workload's cgroup is created under.
+// workload's cgroup is created under. private_network lets the workload reach
+// the node's private networks, which it cannot reach otherwise.
 type ExecutorSubmitRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ExecutionId   string                 `protobuf:"bytes,1,opt,name=execution_id,json=executionId,proto3" json:"execution_id,omitempty"`
-	Process       *Process               `protobuf:"bytes,2,opt,name=process,proto3" json:"process,omitempty"`
-	Resources     *Resources             `protobuf:"bytes,3,opt,name=resources,proto3" json:"resources,omitempty"`
-	Timeout       *durationpb.Duration   `protobuf:"bytes,4,opt,name=timeout,proto3" json:"timeout,omitempty"`
-	RootDrive     string                 `protobuf:"bytes,5,opt,name=root_drive,json=rootDrive,proto3" json:"root_drive,omitempty"`
-	Cgroup        string                 `protobuf:"bytes,6,opt,name=cgroup,proto3" json:"cgroup,omitempty"`
-	RootFstype    string                 `protobuf:"bytes,7,opt,name=root_fstype,json=rootFstype,proto3" json:"root_fstype,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ExecutionId    string                 `protobuf:"bytes,1,opt,name=execution_id,json=executionId,proto3" json:"execution_id,omitempty"`
+	Process        *Process               `protobuf:"bytes,2,opt,name=process,proto3" json:"process,omitempty"`
+	Resources      *Resources             `protobuf:"bytes,3,opt,name=resources,proto3" json:"resources,omitempty"`
+	Timeout        *durationpb.Duration   `protobuf:"bytes,4,opt,name=timeout,proto3" json:"timeout,omitempty"`
+	RootDrive      string                 `protobuf:"bytes,5,opt,name=root_drive,json=rootDrive,proto3" json:"root_drive,omitempty"`
+	Cgroup         string                 `protobuf:"bytes,6,opt,name=cgroup,proto3" json:"cgroup,omitempty"`
+	RootFstype     string                 `protobuf:"bytes,7,opt,name=root_fstype,json=rootFstype,proto3" json:"root_fstype,omitempty"`
+	PrivateNetwork bool                   `protobuf:"varint,8,opt,name=private_network,json=privateNetwork,proto3" json:"private_network,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ExecutorSubmitRequest) Reset() {
@@ -128,6 +130,13 @@ func (x *ExecutorSubmitRequest) GetRootFstype() string {
 		return x.RootFstype
 	}
 	return ""
+}
+
+func (x *ExecutorSubmitRequest) GetPrivateNetwork() bool {
+	if x != nil {
+		return x.PrivateNetwork
+	}
+	return false
 }
 
 // Process is what runs: its arguments, the first the program, its environment,
@@ -327,7 +336,7 @@ var File_internal_agentrpc_executor_proto protoreflect.FileDescriptor
 
 const file_internal_agentrpc_executor_proto_rawDesc = "" +
 	"\n" +
-	" internal/agentrpc/executor.proto\x12\x11vagabond.agent.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1dinternal/agentrpc/agent.proto\"\xb9\x02\n" +
+	" internal/agentrpc/executor.proto\x12\x11vagabond.agent.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1dinternal/agentrpc/agent.proto\"\xe2\x02\n" +
 	"\x15ExecutorSubmitRequest\x12!\n" +
 	"\fexecution_id\x18\x01 \x01(\tR\vexecutionId\x124\n" +
 	"\aprocess\x18\x02 \x01(\v2\x1a.vagabond.agent.v1.ProcessR\aprocess\x12:\n" +
@@ -337,7 +346,8 @@ const file_internal_agentrpc_executor_proto_rawDesc = "" +
 	"root_drive\x18\x05 \x01(\tR\trootDrive\x12\x16\n" +
 	"\x06cgroup\x18\x06 \x01(\tR\x06cgroup\x12\x1f\n" +
 	"\vroot_fstype\x18\a \x01(\tR\n" +
-	"rootFstype\"\xfa\x01\n" +
+	"rootFstype\x12'\n" +
+	"\x0fprivate_network\x18\b \x01(\bR\x0eprivateNetwork\"\xfa\x01\n" +
 	"\aProcess\x12\x12\n" +
 	"\x04args\x18\x01 \x03(\tR\x04args\x125\n" +
 	"\x03env\x18\x02 \x03(\v2#.vagabond.agent.v1.Process.EnvEntryR\x03env\x12\x1f\n" +

@@ -891,18 +891,25 @@ network {
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `internet` | bool | no | unset | `true` requires outbound internet |
-| `private` | bool | no | unset | `true` requires private network access |
+| `private` | bool | no | unset | `true` requires private network access. On an agent node it is also what lets the workload reach the node and its private networks |
 
 Only an explicit `true` is a requirement. `false` or omitted never rejects a
 provider. A provider lacking a required capability is rejected with
 `network-unsupported`.
 
-| Provider | `provider.internet` | `provider.private_network` |
-|---|---|---|
-| Cloud Run | `true` | `false` |
-| Lambda | `true` | `false` |
-| OCI Functions | `true`; reached only when the application's subnet routes to the internet | `false` |
-| `containerd`, `firecracker` | `true` | `true` |
+What a task's workload reaches, by provider:
+
+| Provider | `provider.internet` | `provider.private_network` | Without `private = true` | With `private = true` |
+|---|---|---|---|---|
+| Cloud Run, Cloud Build, Code Engine, Lambda | `true` | `false` | The internet | Rejected |
+| OCI Functions | `true` | `false` | The internet, when the application's subnet routes to it | Rejected |
+| `containerd` | `true` | `true` | The internet only: no private range, not the node, not another workload | Everything the node reaches, the node included, but not another workload |
+| `firecracker` | `true` | `true` | The internet only, as for `containerd` | Everything the node's uplink reaches, and the node, but not another workload |
+
+An agent started with `-host-network` runs containers on the node's own
+network, so they reach everything the node does whether or not the task sets
+`private`. The rules are in [containerd networking](containerd.md#networking)
+and [Firecracker networking](firecracker.md#networking).
 
 ### `execution` block
 

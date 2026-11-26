@@ -28,6 +28,8 @@ agent finds them again when it starts.
 | `-cgroup-parent` exists and can parent workloads | first `Submit` | `Internal` `creating the task: ...` |
 | containerd reachable on `-containerd` | startup | |
 | `-data-dir` writable | startup | |
+| Unless `-host-network`: the CNI plugins `ptp`, `host-local` and `loopback` in `-cni-path` | startup | [Startup errors](#startup-errors) |
+| Unless `-host-network`: root, with `nft` and `iptables`, on the host's network | each container start | `writing the vagabond_containers table: ...` ([Networking](containerd.md#networking)) |
 | With `-firecracker`: containerd's devmapper snapshotter loaded | startup | [Startup errors](#startup-errors) |
 | With `-firecracker`: vagabond-firecracker answering on its socket | startup | [Startup errors](#startup-errors) |
 | TCP reach to the server's `agent_bind` | after startup, retried | `connecting to the server failed` warnings |
@@ -61,6 +63,10 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=no -memory 12288 \
 | `-data-dir <path>` | `/var/lib/vagabond` | Workload output, under `<data-dir>/logs`. Created mode `0750` if missing. In a container it must be the same path inside and out. |
 | `-max-log-mib <MiB>` | `16` | How much of each workload's output the node keeps, on both executors; the front of longer output is freed in 256 KiB chunks. Set it to at least the server's `max_log_mib`, or the server stores only what the node kept. At least `1`. |
 | `-cgroup-parent <path>` | empty | cgroup v2 path to create workloads under, prepared by the operator. Skips [cgroup delegation](#cgroup-delegation). |
+| `-host-network` | off | Run containers on the node's own network, reaching everything the node reaches. Off, each container gets a network of its own ([Networking](containerd.md#networking)). |
+| `-container-pool <cidr>` | `172.30.0.0/16` | Range container addresses come from. Must not overlap a network the node routes to. |
+| `-dns <address>` | `1.1.1.1` | Name server microVMs, and containers whose task does not set `network.private`, resolve through. Passed to vagabond-firecracker as `--dns`. |
+| `-cni-path <dir>` | `/opt/cni/bin` | Directory holding the CNI plugins. The image has them there. |
 | `-log-level <level>` | `info` | `debug`, `info`, `warn` or `error`, for the agent and its vagabond-firecracker. |
 | `-log-json` | off | Write each log line as JSON in place of text, to stderr. vagabond-firecracker's own lines stay text ([Logging](logging.md)). |
 
@@ -74,11 +80,14 @@ The full CLI reference is in [CLI](cli.md).
    the limits above it ([Capacity](#capacity)).
 3. Delegate the agent's cgroup, unless `-cgroup-parent` is set
    ([cgroup delegation](#cgroup-delegation)).
-4. Connect to containerd and create `<data-dir>/logs`.
+4. Connect to containerd and create `<data-dir>/logs`. Unless
+   `-host-network`, check the CNI plugins are in `-cni-path` and write
+   `<data-dir>/cni/resolv.conf`.
 5. With `-firecracker`, start vagabond-firecracker, its log on the agent's
    stderr, and wait up to 30s for it to serve; then connect to containerd
    again for the `vagabond-firecracker` namespace.
-6. Re-arm the timeout of every workload already in the `vagabond` namespace
+6. Re-arm the timeout of every workload already in the `vagabond` namespace,
+   and rewrite the containers' firewall rules
    ([Agent restarts](containerd.md#agent-restarts)).
 7. Log the node, then ask each executor what it is: containerd answers by its
    version; vagabond-firecracker by `Info`, once containerd's devmapper
@@ -171,6 +180,8 @@ children, and the first `Submit` fails `creating the task: ...`.
 | Socket missing or unreachable | `containerd at <socket> does not answer: ...` |
 | `-containerd` not a usable address | `connecting to containerd at <socket>: ...` |
 | `<data-dir>/logs` cannot be created | `creating the log directory: ...` |
+| A CNI plugin missing from `-cni-path`, without `-host-network` | `the CNI plugin <name>: stat <cni-path>/<name>: no such file or directory` |
+| `<data-dir>/cni` cannot be created or written | `creating the network directory: ...` or `writing <data-dir>/cni/resolv.conf: ...` |
 | containerd cannot list containers | `Finding workloads from before: listing containers: ...` |
 | `-firecracker` given, containerd has no devmapper snapshotter | `containerd at <socket> has no devmapper snapshotter` |
 | `-firecracker` given, devmapper failed to load (no thin pool, bad config) | `containerd's devmapper snapshotter did not load: <containerd's reason>` |
@@ -229,7 +240,7 @@ host, not inside the agent's container.
 
 ```bash
 docker run -d --name vagabond-agent --restart unless-stopped \
-  --privileged --cgroupns=host \
+  --privileged --cgroupns=host --network host --pid host \
   -v /run/containerd/containerd.sock:/run/containerd/containerd.sock \
   -v /var/lib/vagabond:/var/lib/vagabond \
   -v /etc/vagabond:/etc/vagabond:ro \
@@ -242,11 +253,13 @@ docker run -d --name vagabond-agent --restart unless-stopped \
 |---|---|
 | containerd socket mounted | The agent creates workloads through it. |
 | `--cgroupns=host` | `/proc/self/cgroup` must show the host path of the container's cgroup, since containerd places workloads by that path. Otherwise the agent sees `/` and refuses to start. |
-| `--privileged` | Mounts `/sys/fs/cgroup` writable, for delegation. |
+| `--privileged` | Mounts `/sys/fs/cgroup` writable, for delegation, and lets the agent create network links and firewall rules. |
+| `--network host` | Each container's link to the node, the containers' nftables table and the Docker rules belong on the host's network. Not needed with `-host-network`. |
+| `--pid host` | The agent attaches each container through its process's `/proc/<pid>/ns/net`, a host pid. Not needed with `-host-network`. |
 | `-data-dir` mounted at the same path | containerd on the host writes workload output to the path the agent names, and the agent reads it back from the same path. |
 | `--cpus`, `--memory` | Become the container cgroup's limits, and so the node's capacity. Optional. |
 | `/etc/vagabond` mounted read-only | The CA and the node's certificate and key. The node's name comes from the certificate, not the container's hostname, which is its ID and changes when the container is recreated. |
-| With `-firecracker`: `--pid=host` and `/dev` mounted | Each record keeps Firecracker's host pid, so a restarted daemon finds it, and the microVMs outlive the container; the devmapper devices the agent's snapshots appear as are made after the container started. amd64 images only. |
+| With `-firecracker`: `--pid host` and `/dev` mounted | Each record keeps Firecracker's host pid, so a restarted daemon finds it, and the microVMs outlive the container; the devmapper devices the agent's snapshots appear as are made after the container started. amd64 images only. |
 
 ### Nomad
 
@@ -438,7 +451,7 @@ Each node is one member of the provider, with its own capability snapshot:
 | `provider.max_cpu` | Room left after the executor's overhead, millicores; `0` when full |
 | `provider.max_memory` | Room left after the executor's overhead, MiB; `0` when full |
 | `provider.internet` | `true` |
-| `provider.private_network` | `true` |
+| `provider.private_network` | `true`; a workload reaches the node's private networks only when its task sets `network.private` |
 | `provider.arbitrary_images` | `true` |
 | `provider.isolation` | `container` on a `containerd` provider, `vm` on a `firecracker` one |
 | `provider.estimated_cost` | `0` |
@@ -707,7 +720,7 @@ With mutual TLS:
 
 - Both sides require TLS 1.3.
 - The server gives each handshake 10 s. One that fails or does not finish is
-  dropped and logged as `agent connection from=... error="TLS with <addr>: ..."`.
+  dropped and logged as `agent connection failed remote_addr=... error="TLS with <addr>: ..."`.
 - The server presents its certificate and requires one from every agent,
   signed by `agent_tls.ca`. A connection without a certificate, or with one
   from another CA, fails the handshake and never registers.
@@ -718,7 +731,7 @@ With mutual TLS:
 - The agent verifies the server's certificate against `-tls-ca`, for the name
   in `-tls-server-name` or the host of `-server`.
 - A handshake the agent cannot complete is a failed dial, retried with backoff
-  and logged as `connecting to the server ... error="TLS with <addr>: ..."`.
+  and logged as `connecting to the server failed ... error="TLS with <addr>: ..."`.
 
 The server calls agents only over connections agents opened. Agents listen on
 nothing.
@@ -784,7 +797,10 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab \
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `connecting to the server ... error="dialing <addr>: ... connection refused"` repeating | Server not listening there, or `agent_bind` still loopback | Set `agent_bind` to a reachable address; check `-server`. |
+| `connecting to the server failed ... error="dialing <addr>: ... connection refused"` repeating | Server not listening there, or `agent_bind` still loopback | Set `agent_bind` to a reachable address; check `-server`. |
+| Agent exits at startup: `the CNI plugin ptp: ... no such file or directory` | `-cni-path` holds no plugins: a binary outside the image, or a changed `-cni-path` | Install `ptp`, `host-local` and `loopback` from [containernetworking/plugins](https://github.com/containernetworking/plugins/releases) there, or run with `-host-network`. |
+| A job's workload cannot reach a service on the LAN or the node | Containers and microVMs reach only the internet unless the task asks ([Networking](containerd.md#networking)) | Set `network { private = true }` in the task. |
+| Submissions fail with `attaching <id> to its network: ...` | The agent in a container without `--pid host`, or the pool used up | Run it with `--pid host`; widen `-container-pool`. |
 | Node absent from `node status` | Agent not connected; see its log | |
 | Node listed, jobs never placed on it; plan shows `provider-unhealthy` or no node | `-pool` does not match the provider's `pool`, or the node does not run the provider's executor (see `EXECUTORS` in `node status`) | Match the names; start the agent with `-firecracker` for a `firecracker` provider. |
 | Agent exits at startup: `vagabond-firecracker at <socket> does not answer` | The daemon not running, or not yet serving | Start vagabond-firecracker first; under systemd, order the agent after it. |

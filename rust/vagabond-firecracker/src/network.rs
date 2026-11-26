@@ -25,6 +25,11 @@ use crate::context;
 // being the host.
 const FIRST_CID: u32 = 3;
 
+// PRIVATE_RANGES are what a microVM reaches only when its workload asks: the
+// RFC 1918 ranges, shared address space and link-local.
+const PRIVATE_RANGES: &str =
+    "10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16";
+
 // Slot is where one microVM sits: its vsock CID, its tap device, and the /30
 // the tap and the guest share.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -36,15 +41,18 @@ pub struct Slot {
 
 impl Slot {
     // free returns the lowest slot no microVM holds, given the CIDs in use, or
-    // None when the pool has no /30 left.
-    pub fn free(pool: Ipv4Net, used_cids: &[u32]) -> Option<Slot> {
+    // None when the pool has no /30 left. A private microVM's tap is named
+    // vfcp<n> rather than vfc<n>, which is how the firewall rules tell it may
+    // reach the node and its private networks.
+    pub fn free(pool: Ipv4Net, used_cids: &[u32], private: bool) -> Option<Slot> {
+        let prefix = if private { "vfcp" } else { "vfc" };
         let subnets = pool.subnets(30).ok()?;
         (0..)
             .zip(subnets)
             .find(|(n, _)| !used_cids.contains(&(FIRST_CID + n)))
             .map(|(n, subnet)| Slot {
                 cid: FIRST_CID + n,
-                tap: format!("vfc{n}"),
+                tap: format!("{prefix}{n}"),
                 subnet,
             })
     }
@@ -92,8 +100,10 @@ impl Slot {
 // setup_nat lets microVMs reach the internet through the uplink and keeps
 // everything else from reaching them: forwarding on, the daemon's nftables
 // table replaced whole in one transaction, so a restart never doubles a rule,
-// and the microVMs' traffic let through Docker's forward drop.
-pub async fn setup_nat(pool: Ipv4Net, uplink: &str) -> io::Result<()> {
+// and the microVMs' traffic let through Docker's forward drop. A microVM
+// cannot reach private ranges or the node, except DNS to the name server,
+// unless its tap is a private one.
+pub async fn setup_nat(pool: Ipv4Net, uplink: &str, dns: Ipv4Addr) -> io::Result<()> {
     tokio::fs::write("/proc/sys/net/ipv4/ip_forward", "1")
         .await
         .map_err(context("enabling IPv4 forwarding"))?;
@@ -108,14 +118,19 @@ table ip vagabond_firecracker {{
     }}
     chain forward {{
         type filter hook forward priority filter; policy accept;
-        iifname "vfc*" oifname "{uplink}" accept
-        iifname "{uplink}" oifname "vfc*" ct state established,related accept
-        iifname "vfc*" drop
+        oifname "vfc*" ct state established,related accept
         oifname "vfc*" drop
+        iifname "vfcp*" oifname "{uplink}" accept
+        iifname "vfc*" ip daddr {dns} meta l4proto {{ tcp, udp }} th dport 53 accept
+        iifname "vfc*" ip daddr {{ {PRIVATE_RANGES} }} drop
+        iifname "vfc*" oifname "{uplink}" accept
+        iifname "vfc*" drop
     }}
     chain input {{
         type filter hook input priority filter; policy accept;
         iifname "vfc*" ct state established,related accept
+        iifname "vfcp*" accept
+        iifname "vfc*" ip daddr {dns} meta l4proto {{ tcp, udp }} th dport 53 accept
         iifname "vfc*" drop
     }}
 }}
@@ -222,7 +237,7 @@ mod tests {
     // the lowest guest CID.
     #[test]
     fn free_starts_at_the_first_slot() {
-        let slot = Slot::free(pool(), &[]).unwrap();
+        let slot = Slot::free(pool(), &[], false).unwrap();
         let first = Slot {
             cid: 3,
             tap: "vfc0".into(),
@@ -235,23 +250,32 @@ mod tests {
     // numbers stay low.
     #[test]
     fn free_reuses_a_gap() {
-        let slot = Slot::free(pool(), &[3, 5]).unwrap();
+        let slot = Slot::free(pool(), &[3, 5], false).unwrap();
         assert_eq!(slot.cid, 4);
         assert_eq!(slot.tap, "vfc1");
         assert_eq!(slot.subnet, "172.16.0.4/30".parse::<Ipv4Net>().unwrap());
+    }
+
+    // A private microVM's tap is named vfcp<n>, which the firewall rules let
+    // reach the node and its private networks.
+    #[test]
+    fn free_names_a_private_tap() {
+        let slot = Slot::free(pool(), &[3], true).unwrap();
+        assert_eq!(slot.cid, 4);
+        assert_eq!(slot.tap, "vfcp1");
     }
 
     // A pool whose every /30 is held has no slot left: a /29 holds two.
     #[test]
     fn free_is_none_when_the_pool_is_full() {
         let pool = "172.16.0.0/29".parse().unwrap();
-        assert_eq!(Slot::free(pool, &[3, 4]), None);
+        assert_eq!(Slot::free(pool, &[3, 4], false), None);
     }
 
     // The tap takes the first address of the /30 and the guest the second.
     #[test]
     fn host_and_guest_are_the_first_two_addresses() {
-        let slot = Slot::free(pool(), &[3]).unwrap();
+        let slot = Slot::free(pool(), &[3], false).unwrap();
         assert_eq!(slot.host(), Ipv4Addr::new(172, 16, 0, 5));
         assert_eq!(slot.guest(), Ipv4Addr::new(172, 16, 0, 6));
     }

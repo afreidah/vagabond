@@ -248,3 +248,31 @@ func TestFirecracker_SurvivesAnAgentRestart(t *testing.T) {
 		t.Errorf("Release() = %v", err)
 	}
 }
+
+// A microVM reaches the internet but not the node, whose address is a private
+// one, and one whose workload asks for the node's private networks reaches
+// both.
+func TestFirecracker_Network(t *testing.T) {
+	f := newTestFirecracker(t)
+	script := reachScript(t)
+
+	isolated := boots(t, f, script)
+
+	private := testkit.NewID(t).String()
+	w := workload(0, "/bin/sh", "-c", script)
+	w.PrivateNetwork = true
+
+	if err := f.Submit(t.Context(), private, w); err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+
+	t.Cleanup(func() { _ = f.Release(context.Background(), private) })
+
+	for id, wantNode := range map[string]bool{isolated: false, private: true} {
+		ended(t, f, id)
+
+		if internet, node := reached(t, f.Logs, id); !internet || node != wantNode {
+			t.Errorf("%s reached the internet %t and the node %t, want the internet and the node %t", id, internet, node, wantNode)
+		}
+	}
+}

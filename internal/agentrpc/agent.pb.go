@@ -358,20 +358,22 @@ func (x *NodeRegisterResponse) GetRelease() []string {
 }
 
 // Workload is a task already translated to what a node runs: the server
-// decodes the job, the agent only runs it, with the executor it names. Field 8
-// named a runtime.
+// decodes the job, the agent only runs it, with the executor it names.
+// private_network is set when the task asks to reach the node's private
+// networks, which a workload cannot reach otherwise. Field 8 named a runtime.
 type Workload struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Image         string                 `protobuf:"bytes,1,opt,name=image,proto3" json:"image,omitempty"`
-	Command       []string               `protobuf:"bytes,2,rep,name=command,proto3" json:"command,omitempty"`
-	Args          []string               `protobuf:"bytes,3,rep,name=args,proto3" json:"args,omitempty"`
-	Env           map[string]string      `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	WorkingDir    string                 `protobuf:"bytes,5,opt,name=working_dir,json=workingDir,proto3" json:"working_dir,omitempty"`
-	Resources     *Resources             `protobuf:"bytes,6,opt,name=resources,proto3" json:"resources,omitempty"`
-	Timeout       *durationpb.Duration   `protobuf:"bytes,7,opt,name=timeout,proto3" json:"timeout,omitempty"`
-	Executor      string                 `protobuf:"bytes,9,opt,name=executor,proto3" json:"executor,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Image          string                 `protobuf:"bytes,1,opt,name=image,proto3" json:"image,omitempty"`
+	Command        []string               `protobuf:"bytes,2,rep,name=command,proto3" json:"command,omitempty"`
+	Args           []string               `protobuf:"bytes,3,rep,name=args,proto3" json:"args,omitempty"`
+	Env            map[string]string      `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	WorkingDir     string                 `protobuf:"bytes,5,opt,name=working_dir,json=workingDir,proto3" json:"working_dir,omitempty"`
+	Resources      *Resources             `protobuf:"bytes,6,opt,name=resources,proto3" json:"resources,omitempty"`
+	Timeout        *durationpb.Duration   `protobuf:"bytes,7,opt,name=timeout,proto3" json:"timeout,omitempty"`
+	Executor       string                 `protobuf:"bytes,9,opt,name=executor,proto3" json:"executor,omitempty"`
+	PrivateNetwork bool                   `protobuf:"varint,10,opt,name=private_network,json=privateNetwork,proto3" json:"private_network,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Workload) Reset() {
@@ -458,6 +460,13 @@ func (x *Workload) GetExecutor() string {
 		return x.Executor
 	}
 	return ""
+}
+
+func (x *Workload) GetPrivateNetwork() bool {
+	if x != nil {
+		return x.PrivateNetwork
+	}
+	return false
 }
 
 type SubmitRequest struct {
@@ -905,7 +914,7 @@ const file_internal_agentrpc_agent_proto_rawDesc = "" +
 	"\x03cpu\x18\x01 \x01(\x03R\x03cpu\x12\x16\n" +
 	"\x06memory\x18\x02 \x01(\x03R\x06memory\"0\n" +
 	"\x14NodeRegisterResponse\x12\x18\n" +
-	"\arelease\x18\x01 \x03(\tR\arelease\"\xfb\x02\n" +
+	"\arelease\x18\x01 \x03(\tR\arelease\"\xa4\x03\n" +
 	"\bWorkload\x12\x14\n" +
 	"\x05image\x18\x01 \x01(\tR\x05image\x12\x18\n" +
 	"\acommand\x18\x02 \x03(\tR\acommand\x12\x12\n" +
@@ -915,7 +924,9 @@ const file_internal_agentrpc_agent_proto_rawDesc = "" +
 	"workingDir\x12:\n" +
 	"\tresources\x18\x06 \x01(\v2\x1c.vagabond.agent.v1.ResourcesR\tresources\x123\n" +
 	"\atimeout\x18\a \x01(\v2\x19.google.protobuf.DurationR\atimeout\x12\x1a\n" +
-	"\bexecutor\x18\t \x01(\tR\bexecutor\x1a6\n" +
+	"\bexecutor\x18\t \x01(\tR\bexecutor\x12'\n" +
+	"\x0fprivate_network\x18\n" +
+	" \x01(\bR\x0eprivateNetwork\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\b\x10\tR\aruntime\"k\n" +

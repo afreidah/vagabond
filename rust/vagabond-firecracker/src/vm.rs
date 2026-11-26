@@ -359,7 +359,7 @@ mod tests {
     fn record(config: &Config) -> Record {
         Record {
             cpu: 1500,
-            slot: Slot::free(config.pool, &[3]).unwrap(),
+            slot: Slot::free(config.pool, &[3], false).unwrap(),
             ..Record::sample()
         }
     }

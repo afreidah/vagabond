@@ -12,12 +12,14 @@
 package executor
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,13 +48,15 @@ var (
 // DaemonConfig is how the agent runs vagabond-firecracker: the binary, looked
 // up on PATH when bare; the directory its socket, records and jails go under;
 // the user and group Firecracker runs as; the interface microVM traffic leaves
-// through, the default route's when empty; its log level; and how many MiB of
-// each workload's output it keeps.
+// through, the default route's when empty; the name server microVMs resolve
+// through, DefaultDNS when unset; its log level; and how many MiB of each
+// workload's output it keeps.
 type DaemonConfig struct {
 	Binary    string
 	Dir       string
 	UID, GID  int
 	Uplink    string
+	DNS       netip.Addr
 	LogLevel  string
 	MaxLogMiB int
 }
@@ -90,6 +94,7 @@ func StartDaemon(ctx context.Context, cfg *DaemonConfig, logs io.Writer) (*Daemo
 		"--uid", strconv.Itoa(cfg.UID),
 		"--gid", strconv.Itoa(cfg.GID),
 		"--uplink", uplink,
+		"--dns", cmp.Or(cfg.DNS, DefaultDNS).String(),
 		"--log-level", cfg.LogLevel,
 		"--max-log-mib", strconv.Itoa(cfg.MaxLogMiB),
 	)

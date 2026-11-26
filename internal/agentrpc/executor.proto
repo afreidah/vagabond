@@ -35,7 +35,8 @@ service Executor {
 // run, already merged with the image's entrypoint, command, environment and
 // user, and root_drive, the block device or file holding the image's filesystem,
 // of type root_fstype as the snapshot was made. cgroup is the parent the
-// workload's cgroup is created under.
+// workload's cgroup is created under. private_network lets the workload reach
+// the node's private networks, which it cannot reach otherwise.
 message ExecutorSubmitRequest {
   string execution_id = 1;
   Process process = 2;
@@ -44,6 +45,7 @@ message ExecutorSubmitRequest {
   string root_drive = 5;
   string cgroup = 6;
   string root_fstype = 7;
+  bool private_network = 8;
 }
 
 // Process is what runs: its arguments, the first the program, its environment,

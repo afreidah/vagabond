@@ -197,9 +197,10 @@ impl Executor {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, message));
         }
         let used: Vec<u32> = records.values().map(|record| record.slot.cid).collect();
-        let slot = Slot::free(self.config.pool, &used).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::QuotaExceeded, "the address pool is used up")
-        })?;
+        let slot =
+            Slot::free(self.config.pool, &used, request.private_network).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::QuotaExceeded, "the address pool is used up")
+            })?;
         let timeout = &request.timeout;
         let record = Record {
             execution_id: request.execution_id.clone(),

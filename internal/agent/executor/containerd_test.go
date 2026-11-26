@@ -35,7 +35,8 @@ import (
 // -------------------------------------------------------------------------
 
 // newTestExecutor connects to the test environment's containerd, or skips
-// when there is none.
+// when there is none. Containers get networks of their own when the
+// environment names the CNI plugins, and use the node's otherwise.
 func newTestExecutor(t *testing.T) *Containerd {
 	t.Helper()
 
@@ -44,11 +45,14 @@ func newTestExecutor(t *testing.T) *Containerd {
 		t.Skip("VAGABOND_CONTAINERD names no containerd; make executor-test starts one")
 	}
 
+	plugins := os.Getenv("VAGABOND_CNI")
+
 	c, err := New(&Config{
 		Socket:    socket,
 		Namespace: "vagabond-test",
 		DataDir:   t.TempDir(),
 		Cgroup:    "/vagabond-test",
+		Network:   NetworkConfig{Host: plugins == "", CNIPath: plugins},
 	})
 	if err != nil {
 		t.Fatalf("New() = %v", err)
@@ -61,6 +65,18 @@ func newTestExecutor(t *testing.T) *Containerd {
 	}
 
 	return c
+}
+
+// networked is the test executor with a network of its own for each
+// container, or skips without the CNI plugins that needs.
+func networked(t *testing.T) *Containerd {
+	t.Helper()
+
+	if os.Getenv("VAGABOND_CNI") == "" {
+		t.Skip("VAGABOND_CNI names no CNI plugins; make executor-test fetches them")
+	}
+
+	return newTestExecutor(t)
 }
 
 // run submits a shell script as a workload, released when the test ends.
@@ -413,4 +429,125 @@ func TestContainerd_Timeout(t *testing.T) {
 	if st := finished(t, c, id); st.State != execution.StateFailed {
 		t.Errorf("status = %s, want failed after the timeout", st.State)
 	}
+}
+
+// A workload reaches the internet but not the node, whose address is a
+// private one.
+func TestContainerd_IsolatesAWorkload(t *testing.T) {
+	c := networked(t)
+	id := "exec-isolated-" + time.Now().Format("150405.000")
+
+	run(t, c, id, reachScript(t), 0)
+	finished(t, c, id)
+
+	if internet, node := reached(t, c.Logs, id); !internet || node {
+		t.Errorf("reached the internet %t and the node %t, want only the internet", internet, node)
+	}
+}
+
+// A workload whose task asks for the node's private networks reaches the node
+// as well as the internet.
+func TestContainerd_PrivateWorkloadReachesTheNode(t *testing.T) {
+	c := networked(t)
+	id := "exec-private-" + time.Now().Format("150405.000")
+
+	w := workload(0, "sh", "-c", reachScript(t))
+	w.PrivateNetwork = true
+
+	if err := c.Submit(t.Context(), id, w); err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+
+	t.Cleanup(func() { _ = c.Release(context.Background(), id) })
+	finished(t, c, id)
+
+	if internet, node := reached(t, c.Logs, id); !internet || !node {
+		t.Errorf("reached the internet %t and the node %t, want both", internet, node)
+	}
+}
+
+// With -host-network a workload runs on the node's network and reaches
+// everything the node does.
+func TestContainerd_HostNetwork(t *testing.T) {
+	cfg := newTestExecutor(t).cfg
+	cfg.Network = NetworkConfig{Host: true}
+
+	c, err := New(&cfg)
+	if err != nil {
+		t.Fatalf("New() = %v", err)
+	}
+
+	t.Cleanup(func() { _ = c.Close() })
+
+	id := "exec-host-net-" + time.Now().Format("150405.000")
+
+	run(t, c, id, reachScript(t), 0)
+	finished(t, c, id)
+
+	if internet, node := reached(t, c.Logs, id); !internet || !node {
+		t.Errorf("reached the internet %t and the node %t, want both", internet, node)
+	}
+}
+
+// An executor whose CNI plugins are missing refuses to start, naming the
+// first one it looked for.
+func TestContainerd_NewWithoutPlugins(t *testing.T) {
+	cfg := newTestExecutor(t).cfg
+	cfg.Network = NetworkConfig{CNIPath: t.TempDir()}
+
+	if _, err := New(&cfg); err == nil || !strings.Contains(err.Error(), "the CNI plugin ptp") {
+		t.Errorf("New() = %v, want the missing plugin named", err)
+	}
+}
+
+// A workload whose network cannot be set up, attached or its rules written,
+// fails its submission and leaves nothing behind for a retry to find.
+func TestContainerd_AFailedNetworkLeavesNothing(t *testing.T) {
+	cases := map[string]func(n *network){
+		"attach": func(n *network) { n.cni = &fakeCNI{setupErr: errors.New("refused")} },
+		"rules": func(n *network) {
+			n.run = func(context.Context, string, string, ...string) error { return errors.New("refused") }
+		},
+	}
+
+	for name, breaks := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := networked(t)
+			breaks(c.net)
+
+			id := "exec-no-net-" + name + "-" + time.Now().Format("150405.000")
+
+			if err := c.Submit(t.Context(), id, workload(0, "true")); err == nil || !strings.Contains(err.Error(), "refused") {
+				_ = c.Release(context.Background(), id)
+				t.Fatalf("Submit() = %v, want the network's failure", err)
+			}
+
+			if _, err := c.Status(t.Context(), id); !errors.Is(err, ErrUnknown) {
+				t.Errorf("Status() after a failed network = %v, want ErrUnknown", err)
+			}
+		})
+	}
+}
+
+// A workload whose address cannot be freed is kept, so a later Release can
+// try again rather than leave the address held.
+func TestContainerd_ReleaseKeepsWhatItCannotFree(t *testing.T) {
+	c := networked(t)
+	id := "exec-keep-addr-" + time.Now().Format("150405.000")
+
+	run(t, c, id, "true", 0)
+	finished(t, c, id)
+
+	attached := c.net.cni
+	c.net.cni = &fakeCNI{removeErr: errors.New("refused")}
+
+	if err := c.Release(t.Context(), id); err == nil || !strings.Contains(err.Error(), "freeing the address") {
+		t.Errorf("Release() = %v, want the address's failure", err)
+	}
+
+	if _, err := c.Status(t.Context(), id); err != nil {
+		t.Errorf("Status() after a failed release = %v, want the workload still held", err)
+	}
+
+	c.net.cni = attached
 }

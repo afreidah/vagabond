@@ -165,12 +165,12 @@ func (networkChecker) Name() string { return "network" }
 // Check rejects a provider missing connectivity the task asked for. Only an
 // explicit true is a requirement; absent or false any provider satisfies.
 func (networkChecker) Check(req *Request, in *Input) *Rejection {
-	if req.NeedsInternet() && !in.Capabilities.InternetEgress {
+	if req.Task.Network.NeedsInternet() && !in.Capabilities.InternetEgress {
 		return reject(ReasonNetworkUnsupported,
 			"The task requires internet egress and this provider offers none.")
 	}
 
-	if req.NeedsPrivateNetwork() && !in.Capabilities.PrivateNetwork {
+	if req.Task.Network.NeedsPrivate() && !in.Capabilities.PrivateNetwork {
 		return reject(ReasonNetworkUnsupported,
 			"The task requires private networking and this provider offers none.")
 	}

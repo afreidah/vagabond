@@ -1,12 +1,14 @@
 ---
 title: "containerd"
 seoTitle: "containerd: Workloads in Containers on Your Own Nodes"
-description: "The containerd executor: the containerd provider, how a task becomes a container on an agent node, its process, labels, states, output, timeouts, cancellation, release and agent restarts."
+description: "The containerd executor: the containerd provider, how a task becomes a container on an agent node, its process, labels, network, states, output, timeouts, cancellation, release and agent restarts."
 weight: 515
 ---
 
 The containerd executor runs each workload as a container on an agent node's
-containerd, sharing the node's kernel and network. A provider of type
+containerd, sharing the node's kernel, on a network of its own that reaches
+the internet but not the node or its private networks unless the task asks
+([Networking](#networking)). A provider of type
 `containerd` sends tasks to the agents of its pool; every agent runs this
 executor. The agent itself, its pools, and how the server places work on a
 pool's nodes are in [Agent](agent.md). The other executor, for microVMs, is
@@ -40,6 +42,8 @@ Beyond the agent's own [requirements](agent.md#requirements):
 |---|---|
 | containerd answering on `-containerd` | The agent exits at startup without it: `containerd at <socket> does not answer: ...` |
 | In a container, `-data-dir` at the same path inside and out | containerd writes each log at the path the agent names, on the host, and the agent reads it back at the same path in its own view |
+| Unless `-host-network`: the CNI plugins `ptp`, `host-local` and `loopback` in `-cni-path` | The agent exits at startup without them: `the CNI plugin <name>: ...`. The image has them in `/opt/cni/bin`, the default |
+| Unless `-host-network`, in a container: `--network host` and `--pid host` | Each container's link and the firewall rules belong on the host's network, and the agent attaches each container through its process's host `/proc/<pid>/ns/net` |
 
 ## Containers
 
@@ -51,8 +55,9 @@ One container per execution, on the node's containerd.
 | Container and snapshot ID | The execution ID |
 | Runtime | `io.containerd.runc.v2` |
 | cgroup | `<parent>/<execution-id>`, parent from [delegation](agent.md#cgroup-delegation) or `-cgroup-parent` |
-| Network | Host network namespace |
-| `/etc/resolv.conf`, `/etc/hosts` | The host's |
+| Network | A network namespace of its own; the host's with `-host-network` ([Networking](#networking)) |
+| `/etc/resolv.conf` | `nameserver <-dns>`; the host's when the task sets `network.private` or with `-host-network` |
+| `/etc/hosts` | The host's |
 | Mounts | containerd's default OCI spec; no host paths or volumes from the job |
 | Image | Pulled and unpacked on every new submission for the node's platform, name normalised (`alpine` -> `docker.io/library/alpine:latest`). Layers already on the node are not downloaded again, but the reference is always resolved against the registry, so an unreachable registry fails the submission even for a cached image. No registry credentials are passed. Images are never removed; delete them with `ctr -n vagabond images rm <ref>`. |
 | Snapshotter | containerd's default, `overlayfs`, unless the `vagabond` namespace carries a `containerd.io/defaults/snapshotter` label |
@@ -85,7 +90,114 @@ State lives on the container as labels, so it survives the agent:
 | `vagabond.timeout` | Task timeout as a Go duration, `0s` for none |
 | `vagabond.cpu` | Declared millicores |
 | `vagabond.memory` | Declared MiB |
+| `vagabond.private` | `true` when the task sets `network.private` |
+| `vagabond.address` | The container's address, set just before the task starts; absent with `-host-network` |
 | `vagabond.cancelled` | `true` once cancelled |
+
+## Networking
+
+IPv4 only. Each container gets a network namespace of its own, which runc
+makes, and the agent connects it to the node through CNI after the task is
+created and before its process starts:
+
+| Piece | Value |
+|---|---|
+| Plugins | `ptp`, `host-local` and `loopback`, from `-cni-path`, `/opt/cni/bin` by default, where the image has them |
+| Link | A veth pair: `eth0` in the container, its other end on the node. Each container has its own, with no bridge between them |
+| Address | The next free one in `-container-pool`, `172.30.0.0/16` by default, recorded by `host-local` under `<data-dir>/cni/addresses` and on the container as `vagabond.address` |
+| Default route | Through the node |
+| Name server | `-dns`, `1.1.1.1` by default, from `<data-dir>/cni/resolv.conf`; the node's resolv.conf when the task sets `network.private` |
+
+The pool must not overlap a network the node routes to. A container that
+cannot be attached fails its submission, and leaves nothing behind.
+
+### NAT and the firewall
+
+The agent writes one nftables table for the whole pool, named for the
+containerd namespace, `vagabond_containers`. It replaces the table whole, in
+one transaction, when it starts and before every container starts. The set
+`private` holds the address of every container whose task sets
+`network.private = true`, read from the containers' labels. With the defaults
+and one such container:
+
+```text
+table ip vagabond_containers {
+    set private {
+        type ipv4_addr
+        elements = { 172.30.0.7 }
+    }
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        ip saddr 172.30.0.0/16 ip daddr != 172.30.0.0/16 masquerade
+    }
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+        ip daddr 172.30.0.0/16 ct state established,related accept
+        ip daddr 172.30.0.0/16 drop
+        ip saddr @private accept
+        ip saddr 172.30.0.0/16 ip daddr 1.1.1.1 meta l4proto { tcp, udp } th dport 53 accept
+        ip saddr 172.30.0.0/16 ip daddr { 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 } drop
+    }
+    chain input {
+        type filter hook input priority filter; policy accept;
+        ip saddr 172.30.0.0/16 ct state established,related accept
+        ip saddr @private accept
+        ip saddr 172.30.0.0/16 ip daddr 1.1.1.1 meta l4proto { tcp, udp } th dport 53 accept
+        ip saddr 172.30.0.0/16 drop
+    }
+}
+```
+
+| Rule | Effect |
+|---|---|
+| `masquerade` | Container traffic leaving the node takes the node's address |
+| `ct state established,related accept`, forward | Replies come back in |
+| `ip daddr <pool> drop`, forward | Nothing new reaches a container, from the network or from another container |
+| `ip saddr @private accept` | A container whose task asked passes the drops after it |
+| `th dport 53 accept` | DNS to `-dns` passes, wherever the name server is |
+| `ip daddr { ... } drop`, forward | No private range: the RFC 1918 ranges, shared address space and link-local |
+| `ip saddr <pool> drop`, input | None of the node's addresses, except to answer what the node opened |
+
+The table only drops, since a drop in any nftables table is final: no rule
+here has to outrank an accept elsewhere. Nothing is undone when the agent
+stops, since its containers outlive it.
+
+| From | To | Result |
+|---|---|---|
+| A container | The internet | Reaches it, behind the node's address |
+| A container | A private range, such as the LAN | Dropped, unless its task sets `network.private` |
+| A container | The node, on any address | Dropped, unless its task sets `network.private` |
+| A container | `-dns`, port 53 | Reaches it |
+| A container | Another container | Dropped, private or not |
+| Another machine, routed through the node | A container | Dropped |
+| A process on the node | A container | Reaches it: the node's own traffic is not forwarded, and the table has no output chain |
+
+### Docker
+
+Where Docker manages the firewall with its iptables backend, it sets the
+forward policy to drop. Where its `DOCKER-USER` chain exists, the agent
+inserts the two rules container traffic needs, each only when it is missing:
+
+```bash
+iptables -w -I DOCKER-USER -s 172.30.0.0/16 -j ACCEPT
+iptables -w -I DOCKER-USER -d 172.30.0.0/16 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+```
+
+These accept everything the pool sends; the table's drops still apply.
+
+### Private access
+
+A task that sets `network { private = true }` reaches everything the node
+reaches, the node itself included, but still not other containers or new
+connections in, and resolves through the node's resolv.conf. Admission does
+not change: every node publishes `provider.private_network = true`, since it
+grants private access to any task that asks.
+
+### Host network
+
+With `-host-network`, containers run in the node's network namespace, with
+its resolv.conf, and reach everything the node does. Nothing is attached and
+no table is written, and the CNI plugins are not needed.
 
 ## States
 
@@ -143,8 +255,11 @@ also sets the label, so its state becomes `cancelled` whatever it exited with.
 
 ## Release
 
-`Release` deletes the task (killing it if still running), the container, its
-snapshot, and its log file. Releasing an execution the node does not hold
+`Release` deletes the task (killing it if still running), frees the
+container's address through CNI, and deletes the container, its snapshot, and
+its log file. The container's link went with its network namespace when the
+task ended. A freed address can be given to the next container, whose start
+rewrites the table first. Releasing an execution the node does not hold
 succeeds. The execution's runner releases it last, after its output is
 captured, however it ended ([Release](dispatch.md#release)). While the node is
 offline the server records the execution released without calling it, and
@@ -155,7 +270,9 @@ the node releases the workload when it returns; see
 
 On startup the agent lists every container in the `vagabond` namespace and
 re-arms each timeout from its labels, with the time remaining since
-`vagabond.started`; one already past is stopped at once. Its first report to
+`vagabond.started`; one already past is stopped at once. It then rewrites the
+firewall table from the containers' labels, since a node that rebooted has
+lost it. Its first report to
 the server lists every container held, so the server counts their room again
 and answers with any it has no use for. Every container in the `vagabond`
 namespace is reported as held; one without `vagabond.cpu` and
