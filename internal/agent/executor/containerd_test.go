@@ -19,12 +19,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/defaults"
+	"github.com/containerd/errdefs"
 
 	"github.com/afreidah/vagabond/internal/agentrpc"
 	"github.com/afreidah/vagabond/internal/execution"
@@ -550,4 +553,206 @@ func TestContainerd_ReleaseKeepsWhatItCannotFree(t *testing.T) {
 	}
 
 	c.net.cni = attached
+}
+
+// -------------------------------------------------------------------------
+// HARDENING
+// -------------------------------------------------------------------------
+
+// statusScript prints what a workload runs under: its NoNewPrivs, Seccomp and
+// CapEff lines, its user ID mapping, and "mknod" if it could make a device
+// node.
+const statusScript = `grep -E '^(NoNewPrivs|Seccomp|CapEff):' /proc/self/status
+echo "uid_map $(cat /proc/self/uid_map)"
+mknod /tmp/device c 1 3 2>/dev/null && echo mknod
+true`
+
+// runWith runs script on an executor made from the test one's config as change
+// leaves it, and returns the workload's output.
+func runWith(t *testing.T, change func(cfg *Config), script string) string {
+	t.Helper()
+
+	cfg := newTestExecutor(t).cfg
+	change(&cfg)
+
+	c, err := New(&cfg)
+	if err != nil {
+		t.Fatalf("New() = %v", err)
+	}
+
+	t.Cleanup(func() { _ = c.Close() })
+
+	id := "exec-hardened-" + time.Now().Format("150405.000")
+
+	run(t, c, id, script, 0)
+	finished(t, c, id)
+
+	return outputOf(t, c.Logs, id)
+}
+
+// field is what follows name on the line of out it begins, its colon aside.
+func field(out, name string) string {
+	for line := range strings.Lines(out) {
+		if fields := strings.Fields(line); len(fields) > 1 && strings.TrimSuffix(fields[0], ":") == name {
+			return strings.Join(fields[1:], " ")
+		}
+	}
+
+	return ""
+}
+
+// A workload gains no privileges, keeps only the default capabilities, runs
+// under the default seccomp profile, cannot make device nodes, and its root
+// is a user in one of the node's ID ranges, not the node's root.
+func TestContainerd_HardensAWorkload(t *testing.T) {
+	out := runWith(t, func(*Config) {}, statusScript)
+
+	mapping := strings.Fields(field(out, "uid_map"))
+	host := 0
+
+	if len(mapping) == 3 {
+		host, _ = strconv.Atoi(mapping[1])
+	}
+
+	switch {
+	case field(out, "NoNewPrivs") != "1":
+		t.Errorf("NoNewPrivs = %q, want 1 in:\n%s", field(out, "NoNewPrivs"), out)
+	case field(out, "Seccomp") != "2":
+		t.Errorf("Seccomp = %q, want 2, a filter, in:\n%s", field(out, "Seccomp"), out)
+	case field(out, "CapEff") != "00000000000004fb":
+		t.Errorf("CapEff = %q, want the eight default capabilities in:\n%s", field(out, "CapEff"), out)
+	case strings.Contains(out, "mknod"):
+		t.Errorf("made a device node:\n%s", out)
+	case len(mapping) != 3 || mapping[0] != "0" || mapping[2] != "65536" || host < firstHostID:
+		t.Errorf("uid_map = %v, want 65536 IDs from a host range at or above %d", mapping, firstHostID)
+	}
+}
+
+// -cap-add gives a workload a capability beyond the defaults.
+func TestContainerd_CapAdd(t *testing.T) {
+	out := runWith(t, func(cfg *Config) { cfg.CapAdd = []string{"NET_RAW"} }, statusScript)
+
+	if got := field(out, "CapEff"); got != "00000000000024fb" {
+		t.Errorf("CapEff = %q, want the defaults and CAP_NET_RAW", got)
+	}
+}
+
+// With -no-userns a workload's root is the node's root.
+func TestContainerd_NoUserNS(t *testing.T) {
+	out := runWith(t, func(cfg *Config) { cfg.NoUserNS = true }, statusScript)
+
+	if got := field(out, "uid_map"); got != "0 0 4294967295" {
+		t.Errorf("uid_map = %q, want the node's own IDs", got)
+	}
+}
+
+// With -read-only-root a workload can write /tmp but not its root.
+func TestContainerd_ReadOnlyRoot(t *testing.T) {
+	out := runWith(t, func(cfg *Config) { cfg.ReadOnlyRoot = true },
+		"touch /written 2>/dev/null && echo root; touch /tmp/written && echo tmp; true")
+
+	if !strings.Contains(out, "tmp") || strings.Contains(out, "root") {
+		t.Errorf("output %q, want /tmp written and the root not", out)
+	}
+}
+
+// Two workloads running at once each get an ID range of their own.
+func TestContainerd_EachWorkloadItsOwnIDRange(t *testing.T) {
+	c := newTestExecutor(t)
+	ranges := make(map[int]bool)
+
+	for i := range 2 {
+		id := fmt.Sprintf("exec-range-%d-%s", i, time.Now().Format("150405.000"))
+		run(t, c, id, "sleep 30", 0)
+
+		container, err := c.client.LoadContainer(t.Context(), id)
+		if err != nil {
+			t.Fatalf("LoadContainer() = %v", err)
+		}
+
+		labels, err := labelsOf(t.Context(), container)
+		if err != nil {
+			t.Fatalf("labelsOf() = %v", err)
+		}
+
+		ranges[labels.idRange] = true
+	}
+
+	if len(ranges) != 2 || ranges[-1] {
+		t.Errorf("ranges = %v, want two different ones", ranges)
+	}
+}
+
+// Ranges reserved at once, before any container carries one as a label,
+// still differ.
+func TestContainerd_TakeRangeHoldsEachReservation(t *testing.T) {
+	c := newTestExecutor(t)
+
+	first, releaseFirst, err := c.takeRange(t.Context())
+	if err != nil {
+		t.Fatalf("takeRange() = %v", err)
+	}
+
+	defer releaseFirst()
+
+	second, releaseSecond, err := c.takeRange(t.Context())
+	if err != nil {
+		t.Fatalf("takeRange() = %v", err)
+	}
+
+	defer releaseSecond()
+
+	if first == second {
+		t.Errorf("both reservations took range %d", first)
+	}
+}
+
+// Info checks the snapshotter a namespace names as its default: it passes one
+// that mounts images ID-mapped, and refuses, by name, one that cannot and one
+// containerd does not have.
+func TestContainerd_InfoNeedsIDMappedMounts(t *testing.T) {
+	base := newTestExecutor(t).cfg
+
+	for snapshotter, want := range map[string]string{
+		"overlayfs": "",
+		"devmapper": "devmapper snapshotter cannot mount images ID-mapped",
+		"nosuch":    "reading what containerd's nosuch snapshotter can do",
+	} {
+		t.Run(snapshotter, func(t *testing.T) {
+			_, err := defaultingTo(t, &base, snapshotter).Info(t.Context())
+			if (want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), want)) {
+				t.Errorf("Info() = %v, want %q", err, want)
+			}
+		})
+	}
+}
+
+// defaultingTo is an executor from base in a namespace of its own whose label
+// makes snapshotter its default, so the label leaves the other tests'
+// containers alone. The namespace goes when the test ends.
+func defaultingTo(t *testing.T, base *Config, snapshotter string) *Containerd {
+	t.Helper()
+
+	cfg := *base
+	cfg.Namespace = "vagabond-test-" + snapshotter
+
+	c, err := New(&cfg)
+	if err != nil {
+		t.Fatalf("New() = %v", err)
+	}
+
+	t.Cleanup(func() { _ = c.Close() })
+
+	namespaces := c.client.NamespaceService()
+	if err := namespaces.Create(t.Context(), cfg.Namespace, nil); err != nil && !errdefs.IsAlreadyExists(err) {
+		t.Fatalf("creating namespace %s: %v", cfg.Namespace, err)
+	}
+
+	t.Cleanup(func() { _ = namespaces.Delete(context.Background(), cfg.Namespace) })
+
+	if err := namespaces.SetLabel(t.Context(), cfg.Namespace, defaults.DefaultSnapshotterNSLabel, snapshotter); err != nil {
+		t.Fatalf("labelling namespace %s: %v", cfg.Namespace, err)
+	}
+
+	return c
 }

@@ -82,9 +82,11 @@ func reachScript(t *testing.T) string {
 	return fmt.Sprintf("nc -z -w 3 1.1.1.1 443 && echo internet; nc -z -w 3 %s %d && echo node; true", node, port)
 }
 
-// reached reads a workload's output from logs, an executor's Logs, and reports
-// whether it reached the internet and the node.
-func reached(t *testing.T, logs func(context.Context, string, int64, execution.LogWriter) error, id string) (internet, node bool) {
+// logsFunc is an executor's Logs.
+type logsFunc func(context.Context, string, int64, execution.LogWriter) error
+
+// outputOf reads a workload's whole output through logs.
+func outputOf(t *testing.T, logs logsFunc, id string) string {
 	t.Helper()
 
 	var out strings.Builder
@@ -93,5 +95,15 @@ func reached(t *testing.T, logs func(context.Context, string, int64, execution.L
 		t.Fatalf("Logs() = %v", err)
 	}
 
-	return strings.Contains(out.String(), "internet"), strings.Contains(out.String(), "node")
+	return out.String()
+}
+
+// reached reads a workload's output through logs and reports whether it
+// reached the internet and the node.
+func reached(t *testing.T, logs logsFunc, id string) (internet, node bool) {
+	t.Helper()
+
+	out := outputOf(t, logs, id)
+
+	return strings.Contains(out, "internet"), strings.Contains(out, "node")
 }
