@@ -164,7 +164,7 @@ func (f *Firecracker) Submit(ctx context.Context, id string, w *agentrpc.Workloa
 		return err
 	}
 
-	container, err := create(ctx, f.containerd, id, w, snapshotter, nil)
+	container, err := create(ctx, f.containerd, id, w, rootfs{snapshotter: snapshotter}, nil)
 	if err != nil {
 		return err
 	}

@@ -30,6 +30,7 @@ agent finds them again when it starts.
 | `-data-dir` writable | startup | |
 | Unless `-host-network`: the CNI plugins `ptp`, `host-local` and `loopback` in `-cni-path` | startup | [Startup errors](#startup-errors) |
 | Unless `-host-network`: root, with `nft` and `iptables`, on the host's network | each container start | `writing the vagabond_containers table: ...` ([Networking](containerd.md#networking)) |
+| Unless `-no-userns`: containerd 2.0 or newer, its overlayfs snapshotter on Linux 5.19 or newer | startup | [Startup errors](#startup-errors) |
 | With `-firecracker`: containerd's devmapper snapshotter loaded | startup | [Startup errors](#startup-errors) |
 | With `-firecracker`: vagabond-firecracker answering on its socket | startup | [Startup errors](#startup-errors) |
 | TCP reach to the server's `agent_bind` | after startup, retried | `connecting to the server failed` warnings |
@@ -67,6 +68,9 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab -label gpu=no -memory 12288 \
 | `-container-pool <cidr>` | `172.30.0.0/16` | Range container addresses come from. Must not overlap a network the node routes to. |
 | `-dns <address>` | `1.1.1.1` | Name server microVMs, and containers whose task does not set `network.private`, resolve through. Passed to vagabond-firecracker as `--dns`. |
 | `-cni-path <dir>` | `/opt/cni/bin` | Directory holding the CNI plugins. The image has them there. |
+| `-cap-add <capability>` | none | A capability containers get beyond the eight they keep, such as `NET_RAW`, repeatable ([Hardening](containerd.md#hardening)). |
+| `-no-userns` | off | Run containers without a user namespace of their own, so root in a container is root on the node. |
+| `-read-only-root` | off | Make each container's root filesystem read-only, with `/tmp` writable. |
 | `-log-level <level>` | `info` | `debug`, `info`, `warn` or `error`, for the agent and its vagabond-firecracker. |
 | `-log-json` | off | Write each log line as JSON in place of text, to stderr. vagabond-firecracker's own lines stay text ([Logging](logging.md)). |
 
@@ -90,7 +94,8 @@ The full CLI reference is in [CLI](cli.md).
    and rewrite the containers' firewall rules
    ([Agent restarts](containerd.md#agent-restarts)).
 7. Log the node, then ask each executor what it is: containerd answers by its
-   version; vagabond-firecracker by `Info`, once containerd's devmapper
+   version and, unless `-no-userns`, by its snapshotter being able to mount
+   images ID-mapped; vagabond-firecracker by `Info`, once containerd's devmapper
    snapshotter is found loaded. What they answer, each executor's name and
    overhead, is what the node registers.
 8. Dial the server and stay connected until `SIGINT` or `SIGTERM`. Either
@@ -182,6 +187,8 @@ children, and the first `Submit` fails `creating the task: ...`.
 | `<data-dir>/logs` cannot be created | `creating the log directory: ...` |
 | A CNI plugin missing from `-cni-path`, without `-host-network` | `the CNI plugin <name>: stat <cni-path>/<name>: no such file or directory` |
 | `<data-dir>/cni` cannot be created or written | `creating the network directory: ...` or `writing <data-dir>/cni/resolv.conf: ...` |
+| A `-cap-add` name the kernel does not know | `unknown capability "CAP_<name>"` |
+| containerd cannot mount images ID-mapped, without `-no-userns` | `containerd's overlayfs snapshotter cannot mount images ID-mapped, which user namespaces need: run containerd 2.0 or newer on Linux 5.19 or newer, or start the agent with -no-userns` |
 | containerd cannot list containers | `Finding workloads from before: listing containers: ...` |
 | `-firecracker` given, containerd has no devmapper snapshotter | `containerd at <socket> has no devmapper snapshotter` |
 | `-firecracker` given, devmapper failed to load (no thin pool, bad config) | `containerd's devmapper snapshotter did not load: <containerd's reason>` |
@@ -800,6 +807,7 @@ vagabond agent -server 10.0.0.5:4748 -pool homelab \
 | `connecting to the server failed ... error="dialing <addr>: ... connection refused"` repeating | Server not listening there, or `agent_bind` still loopback | Set `agent_bind` to a reachable address; check `-server`. |
 | Agent exits at startup: `the CNI plugin ptp: ... no such file or directory` | `-cni-path` holds no plugins: a binary outside the image, or a changed `-cni-path` | Install `ptp`, `host-local` and `loopback` from [containernetworking/plugins](https://github.com/containernetworking/plugins/releases) there, or run with `-host-network`. |
 | A job's workload cannot reach a service on the LAN or the node | Containers and microVMs reach only the internet unless the task asks ([Networking](containerd.md#networking)) | Set `network { private = true }` in the task. |
+| A workload fails with `Operation not permitted` where it worked as root before, as `ping` does | Containers keep eight capabilities and gain no privileges ([Hardening](containerd.md#hardening)) | Add the capability it needs with `-cap-add`, such as `-cap-add NET_RAW` for `ping`. |
 | Submissions fail with `attaching <id> to its network: ...` | The agent in a container without `--pid host`, or the pool used up | Run it with `--pid host`; widen `-container-pool`. |
 | Node absent from `node status` | Agent not connected; see its log | |
 | Node listed, jobs never placed on it; plan shows `provider-unhealthy` or no node | `-pool` does not match the provider's `pool`, or the node does not run the provider's executor (see `EXECUTORS` in `node status`) | Match the names; start the agent with `-firecracker` for a `firecracker` provider. |

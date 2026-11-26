@@ -116,13 +116,28 @@ func TestAgent_HelpNamesEveryFlag(t *testing.T) {
 		"-server", "-pool", "-name", "-label", "-cpu", "-memory", "-containerd", "-firecracker",
 		"-firecracker-uid", "-firecracker-gid", "-firecracker-uplink", "-data-dir", "-max-log-mib",
 		"-tls-ca", "-tls-cert", "-tls-key", "-tls-server-name", "-cgroup-parent", "-host-network",
-		"-container-pool", "-dns", "-cni-path", "-log-level", "-log-json",
+		"-container-pool", "-dns", "-cni-path", "-cap-add", "-no-userns", "-read-only-root", "-log-level", "-log-json",
 	} {
 		// A whole flag, leading its line or after a comma, so -firecracker is not -firecracker-uid
 		listed := regexp.MustCompile(`(?m)(^\s+|, )` + regexp.QuoteMeta(flag) + `( |,|$)`)
 		if !listed.MatchString(stdout + stderr) {
 			t.Errorf("agent help does not list %q", flag)
 		}
+	}
+}
+
+// The agent refuses a -cap-add the kernel does not know, before it reaches
+// containerd.
+func TestAgent_RefusesAnUnknownCapability(t *testing.T) {
+	var stderr testkit.Buffer
+
+	code := Run([]string{
+		"agent", "-containerd", filepath.Join(t.TempDir(), "containerd.sock"), "-cgroup-parent", "/vagabond-test",
+		"-data-dir", t.TempDir(), "-host-network", "-cap-add", "fly",
+	}, strings.NewReader(""), io.Discard, &stderr)
+
+	if code != ExitFailure || !strings.Contains(stderr.String(), `unknown capability "CAP_FLY"`) {
+		t.Errorf("agent = %d, %q; want the capability refused", code, stderr.String())
 	}
 }
 

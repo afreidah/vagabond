@@ -156,6 +156,19 @@ Agent Options:
     Where the CNI plugins ptp, host-local and loopback are. Defaults to
     /opt/cni/bin, where the image has them.
 
+  -cap-add <capability>
+    A capability containers get beyond the few they keep, such as NET_RAW,
+    repeatable.
+
+  -no-userns
+    Run containers without a user namespace of their own, so root in a
+    container is root on the node. Off by default; without it the agent
+    needs containerd 2.0 or newer on Linux 5.19 or newer.
+
+  -read-only-root
+    Make each container's root filesystem read-only, with /tmp writable.
+    Off by default.
+
   -log-level <level>
     debug, info, warn or error. Defaults to info. vagabond-firecracker logs at
     the same level.
@@ -181,6 +194,8 @@ func (c *AgentCommand) Run(args []string) int {
 		maxLogMiB                                         int
 		logs                                              logging.Options
 		network                                           executor.NetworkConfig
+		capAdd                                            []string
+		noUserNS, readOnlyRoot                            bool
 	)
 
 	host, _ := os.Hostname()
@@ -204,6 +219,13 @@ func (c *AgentCommand) Run(args []string) int {
 	flags.TextVar(&network.Pool, "container-pool", executor.DefaultContainerPool, "the range container addresses come from")
 	flags.TextVar(&network.DNS, "dns", executor.DefaultDNS, "the name server isolated workloads resolve through")
 	flags.StringVar(&network.CNIPath, "cni-path", executor.DefaultCNIPath, "where the CNI plugins are")
+	flags.Func("cap-add", "a capability containers get beyond the default few, repeatable", func(c string) error {
+		capAdd = append(capAdd, c)
+
+		return nil
+	})
+	flags.BoolVar(&noUserNS, "no-userns", false, "run containers without a user namespace of their own")
+	flags.BoolVar(&readOnlyRoot, "read-only-root", false, "make containers' root filesystems read-only")
 	logs.Register(flags)
 	certs.register(flags, tlsFlags{})
 
@@ -240,6 +262,7 @@ func (c *AgentCommand) Run(args []string) int {
 	exec, err := executor.New(&executor.Config{
 		Socket: socket, Namespace: workloadNamespace, DataDir: dataDir, Cgroup: parent,
 		MaxLogBytes: int64(maxLogMiB) << 20, Network: network, Logger: logger,
+		CapAdd: capAdd, NoUserNS: noUserNS, ReadOnlyRoot: readOnlyRoot,
 	})
 	if err != nil {
 		return c.Errorf("%s", err)

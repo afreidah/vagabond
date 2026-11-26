@@ -99,6 +99,11 @@ state = "${RUN}/containerd"
   discard_blocks = true
 EOF
 
+	# What the tests run against, since user namespaces need containerd 2.0 or newer
+	containerd --version
+	runc --version | head -n 1
+	uname -r
+
 	containerd --config "${DIR}/containerd.toml" > "${DIR}/containerd.log" 2>&1 &
 	echo $! > "${RUN}/containerd.pid"
 	wait_for "${RUN}/containerd.sock" "${DIR}/containerd.log"
