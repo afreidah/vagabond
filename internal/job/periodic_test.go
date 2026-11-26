@@ -70,6 +70,24 @@ func TestPeriodic_Next(t *testing.T) {
 			want:  "2026-11-22T00:00:00Z",
 		},
 		{
+			name:  "a range of day names ending on sun includes Sunday",
+			crons: []string{"0 0 * * fri-sun"},
+			last:  "2026-11-21T12:00:00Z",
+			want:  "2026-11-22T00:00:00Z",
+		},
+		{
+			name:  "a day with a leading zero is that day, not Sunday",
+			crons: []string{"0 0 * * 05"},
+			last:  "2026-11-21T12:00:00Z",
+			want:  "2026-11-27T00:00:00Z",
+		},
+		{
+			name:  "a day matching either day of month or day of week launches",
+			crons: []string{"0 0 23 * 5"},
+			last:  "2026-11-21T12:00:00Z",
+			want:  "2026-11-23T00:00:00Z",
+		},
+		{
 			name:  "a macro is read in either case",
 			crons: []string{"@DAILY"},
 			last:  "2026-11-21T10:00:00Z",
@@ -194,7 +212,7 @@ func TestCheckCron(t *testing.T) {
 		{expr: "@5minutes", ok: false},
 		{expr: "@always", ok: false},
 		{expr: "@everysecond", ok: false},
-		{expr: "0 0 * * fri-sun", ok: false},
+		{expr: "0 0 * * fri-sun", ok: true},
 		{expr: "61 * * * *", ok: false},
 		{expr: "0 0 30 2 *", ok: false},
 	}

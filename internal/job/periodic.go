@@ -24,7 +24,7 @@ import (
 	// image that has none installed.
 	_ "time/tzdata"
 
-	"github.com/adhocore/gronx"
+	"github.com/hashicorp/cronexpr"
 
 	"github.com/afreidah/vagabond/internal/ptr"
 )
@@ -179,14 +179,21 @@ func nextCron(expr string, after time.Time) (time.Time, error) {
 			ErrInvalidSchedule, expr, strings.Join(macros, ", "))
 	}
 
-	if !gronx.IsValid(expr) {
+	// cronexpr reads a macro only in lower case, and every field in any case
+	line := expr
+	if macro {
+		line = strings.ToLower(fields[0])
+	}
+
+	cron, err := cronexpr.Parse(line)
+	if err != nil {
 		return time.Time{}, fmt.Errorf("%w: cron %q has a malformed or out-of-range field",
 			ErrInvalidSchedule, expr)
 	}
 
-	// A valid cron fails here only when no date matches it, such as the 30th of February
-	next, err := gronx.NextTickAfter(expr, after, false)
-	if err != nil {
+	// A valid cron has no next time only when no date matches it, such as the 30th of February
+	next := cron.Next(after)
+	if next.IsZero() {
 		return time.Time{}, fmt.Errorf("%w: no date matches cron %q", ErrInvalidSchedule, expr)
 	}
 

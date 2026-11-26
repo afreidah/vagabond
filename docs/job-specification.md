@@ -275,8 +275,9 @@ whole minute.
 
 Each field takes `*`, a list (`1,15`), a range (`1-5`) or a step (`*/15`).
 When both day of month and day of week are restricted, a day matching either
-one launches, as in cron. A range of day names cannot run past Saturday:
-write `fri,sat,sun` or `5-7`, not `fri-sun`.
+one launches, as in cron. A day-of-week range may end on Sunday: `5-7` and
+`fri-sun` are both Friday to Sunday. Crons are read as Nomad's periodic jobs
+read them, with the same library.
 
 | Macro | Same as |
 |---|---|
