@@ -30,7 +30,9 @@ against a commit on Cloud Run, Code Engine, or the homelab pool.
 ## Prerequisites
 
 - A Vagabond server, with `VAGABOND_ADDR` set to its API address, or
-  `-address` on every command ([CLI](../docs/cli.md#connecting-to-the-server))
+  `-address` on every command, and `VAGABOND_TOKEN` set to a token that reads
+  the job's namespace when the server declares tokens
+  ([CLI](../docs/cli.md#connecting-to-the-server))
 - A job to run, registered or in a file
 
 ## Step 1: Follow a Run
@@ -247,7 +249,9 @@ $ curl -s "$VAGABOND_ADDR/v1/executions?job=static-analysis&state=failed&limit=1
 01a1f2cf-42c1-7f41-82d3-2176c35a3d8f gcp-cloud-run exit 2
 ```
 
-The [API reference](../docs/api.md) covers every field.
+On a server with tokens, curl also sends `-H "X-Vagabond-Token: $VAGABOND_TOKEN"`;
+see [Authentication](../docs/api.md#authentication). The
+[API reference](../docs/api.md) covers every field.
 
 ## Important Notes
 

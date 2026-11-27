@@ -23,7 +23,6 @@ import (
 	"github.com/afreidah/vagabond/internal/job"
 	"github.com/afreidah/vagabond/internal/scheduler"
 	"github.com/afreidah/vagabond/internal/state"
-	"github.com/afreidah/vagabond/internal/tlsconfig"
 )
 
 // -------------------------------------------------------------------------
@@ -96,7 +95,7 @@ func (s *Server) disableProvider(_ http.ResponseWriter, r *http.Request) (any, e
 		return nil, err
 	}
 
-	d := state.Disabled{At: s.now().UTC(), By: tlsconfig.PeerName(r.TLS)}
+	d := state.Disabled{At: s.now().UTC(), By: caller(r)}
 	if err := s.providers.DisableProvider(r.Context(), name, d); err != nil {
 		return nil, err
 	}
@@ -126,7 +125,7 @@ func (s *Server) enableProvider(_ http.ResponseWriter, r *http.Request) (any, er
 		return nil, err
 	}
 
-	s.logger.InfoContext(r.Context(), "provider enabled", "provider", name, "by", tlsconfig.PeerName(r.TLS))
+	s.logger.InfoContext(r.Context(), "provider enabled", "provider", name, "by", caller(r))
 
 	return s.switched(r.Context(), name)
 }

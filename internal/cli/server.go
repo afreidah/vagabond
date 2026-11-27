@@ -59,6 +59,7 @@ Usage: vagabond server [options]
   Listens on the server block's bind address, 127.0.0.1:4747 by default, with
   TLS when its tls block names a certificate and key, and requiring a client
   certificate on every route but /v1/health when the block also names a ca.
+  Token blocks require an API token on every route but /v1/health.
   Listens for agents on its agent_bind address, 127.0.0.1:4748 by default. An
   agent_bind beyond loopback requires an agent_tls block, so every agent
   presents a certificate.
@@ -130,10 +131,16 @@ func (c *ServerCommand) Run(args []string) int {
 		err error
 	)
 
+	tokens, err := apiTokens(ctx, cfg.Tokens)
+	if err != nil {
+		return c.Errorf("%s", err)
+	}
+
 	opts := []server.Option{
 		server.WithNodes(conns),
 		server.WithTierMode(cfg.Scheduling.TierMode()),
 		server.WithLogs(cfg.Server.MaxLogBytes(), cfg.Server.RetainLogs()),
+		server.WithTokens(tokens...),
 	}
 
 	switch {
@@ -165,7 +172,7 @@ func (c *ServerCommand) Run(args []string) int {
 		return c.Errorf("%s", err)
 	}
 
-	c.warnOpenAPI(cfg.Server.Address(), tlsConfig)
+	c.warnOpenAPI(cfg.Server.Address(), tlsConfig, len(tokens) > 0)
 
 	agents, err := agentListener(ctx, cfg.Server)
 	if err != nil {
@@ -354,12 +361,54 @@ func apiTLS(block *config.ServerBlock) (*tls.Config, error) {
 }
 
 // warnOpenAPI warns when the API at addr is reachable beyond this machine and
-// verifies no client certificates, so anyone who can reach it can use it.
-func (c *ServerCommand) warnOpenAPI(addr string, tlsConfig *tls.Config) {
-	if (tlsConfig != nil && tlsConfig.ClientCAs != nil) || loopback(addr) {
+// checks neither tokens nor client certificates, so anyone who can reach it
+// can use it.
+func (c *ServerCommand) warnOpenAPI(addr string, tlsConfig *tls.Config, tokens bool) {
+	if tokens || (tlsConfig != nil && tlsConfig.ClientCAs != nil) || loopback(addr) {
 		return
 	}
 
 	c.Ui.Warn(fmt.Sprintf("The API on %s is reachable beyond this machine and accepts any client. "+
-		"Name a ca in the server block's tls block so clients must present a certificate.", addr))
+		"Declare a token block so requests must carry a token, or name a ca in the server block's "+
+		"tls block so clients must present a certificate.", addr))
+}
+
+// -------------------------------------------------------------------------
+// API TOKENS
+// -------------------------------------------------------------------------
+
+// apiTokens reads each token block's secret and turns the blocks into the
+// tokens the server checks requests against. Two tokens with one secret are
+// refused, since a request carrying it could not say which it is.
+func apiTokens(ctx context.Context, blocks []config.Token) ([]server.Token, error) {
+	tokens := make([]server.Token, 0, len(blocks))
+	owners := make(map[string]string, len(blocks))
+
+	for i := range blocks {
+		b := &blocks[i]
+
+		secret, err := b.Secret(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		if other, ok := owners[secret]; ok {
+			return nil, fmt.Errorf("tokens %q and %q have the same secret", other, b.Name)
+		}
+
+		owners[secret] = b.Name
+
+		access := make(map[string]server.Access, len(b.Namespaces))
+
+		for _, ns := range b.Namespaces {
+			access[ns.Name] = server.Read
+			if ns.Policy == config.PolicyWrite {
+				access[ns.Name] = server.Write
+			}
+		}
+
+		tokens = append(tokens, server.Token{Name: b.Name, Secret: secret, Management: b.Management, Namespaces: access})
+	}
+
+	return tokens, nil
 }

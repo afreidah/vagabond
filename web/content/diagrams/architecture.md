@@ -17,6 +17,7 @@ window.vagabondDiagram = {
     '    STORE[("Store<br>Postgres / CockroachDB")]:::storage',
     '',
     '    subgraph SRV [vagabond server]',
+    '        AUTHN[API authentication<br>tokens, certificates]:::filter',
     '        API[HTTP API<br>/v1]:::process',
     '        JOBS[Job loading<br>jobspec, jobs]:::process',
     '        SCHED{Admission<br>and ranking}:::decision',
@@ -48,7 +49,8 @@ window.vagabondDiagram = {
     '        FIRECRACKER[(vagabond-firecracker)]:::data',
     '    end',
     '',
-    '    CLI -->|HTTP/JSON| API',
+    '    CLI -->|HTTP/JSON, token| AUTHN',
+    '    AUTHN -->|token and its access| API',
     '    API -->|register, run, plan| JOBS',
     '    JOBS -->|plan| SCHED',
     '    JOBS -->|run, dispatch| DISP',
@@ -90,15 +92,20 @@ window.vagabondDiagram = {
   ].join('\n'),
 
   info: {
+    AUTHN: {
+      title: 'API authentication',
+      badge: 'filter', badgeText: 'every request',
+      body: '<p><code>internal/server/auth.go</code>. With a <code>tls</code> <code>ca</code>, a request without a verified client certificate is a 401. With <code>token</code> blocks, so is one carrying none of the tokens, in <code>X-Vagabond-Token</code> or as a bearer token; its secret is compared as a SHA-256 digest, in constant time, with every token&rsquo;s. <code>/v1/health</code> needs neither.</p><p>Each route declares the access it needs: any token, read, write or management. A management route is checked before it runs. A read or write route is checked once it knows its namespace, the one the request resolves to or the dispatch&rsquo;s or execution&rsquo;s, so a token outside its namespaces is a 403.</p><p>The token&rsquo;s name goes on with the request: what its handler logs carries <code>token</code>, and a provider disabled through it records the name as <code>By</code>.</p><p><a href="../../docs/api/#authentication">Authentication &rarr;</a></p>'
+    },
     CLI: {
       title: 'vagabond CLI',
       badge: 'entry', badgeText: 'client',
-      body: '<p>Every command is in <code>internal/cli</code>: <code>job validate</code>, <code>plan</code>, <code>run</code>, <code>register</code>, <code>dispatch</code>, <code>status</code> and <code>stop</code>; <code>execution list</code>, <code>status</code> and <code>logs</code>; <code>dispatch status</code>; <code>node status</code>; <code>provider status</code>; and the <code>server</code> and <code>agent</code> processes.</p><p>Parses and validates a job file locally with <code>jobspec</code> before sending it, and the server runs both again. <code>job validate</code> never contacts the server. Holds no state.</p><p>Calls the server through the <code>api</code> client at <code>-address</code>, then <code>VAGABOND_ADDR</code>, then <code>http://127.0.0.1:4747</code>. Over <code>https://</code> it verifies the server against <code>-tls-ca</code> or the system&rsquo;s roots and presents <code>-tls-cert</code> and <code>-tls-key</code> when given, each defaulting to its <code>VAGABOND_TLS_*</code> variable. <code>job run</code> follows the run to its end, streaming output through the logs route.</p><p><a href="../../docs/cli/">CLI reference &rarr;</a></p>'
+      body: '<p>Every command is in <code>internal/cli</code>: <code>job validate</code>, <code>plan</code>, <code>run</code>, <code>register</code>, <code>dispatch</code>, <code>status</code> and <code>stop</code>; <code>execution list</code>, <code>status</code> and <code>logs</code>; <code>dispatch status</code>; <code>node status</code>; <code>provider status</code>; and the <code>server</code> and <code>agent</code> processes.</p><p>Parses and validates a job file locally with <code>jobspec</code> before sending it, and the server runs both again. <code>job validate</code> never contacts the server. Holds no state.</p><p>Calls the server through the <code>api</code> client at <code>-address</code>, then <code>VAGABOND_ADDR</code>, then <code>http://127.0.0.1:4747</code>. Over <code>https://</code> it verifies the server against <code>-tls-ca</code> or the system&rsquo;s roots and presents <code>-tls-cert</code> and <code>-tls-key</code> when given, each defaulting to its <code>VAGABOND_TLS_*</code> variable. Sends <code>-token</code>, then <code>VAGABOND_TOKEN</code>, in <code>X-Vagabond-Token</code> on every request when one is set. <code>job run</code> follows the run to its end, streaming output through the logs route.</p><p><a href="../../docs/cli/">CLI reference &rarr;</a></p>'
     },
     API: {
       title: 'HTTP API (/v1)',
       badge: 'process', badgeText: 'server',
-      body: '<p><code>net/http</code> mux in <code>internal/server</code>, on the <code>server</code> block&rsquo;s <code>bind</code> (default <code>127.0.0.1:4747</code>), with TLS when its <code>tls</code> block names a certificate and key. When the block also names a <code>ca</code>, every route but <code>/v1/health</code> answers 401 without a client certificate that chains to it. Routes that read or write jobs take <code>?namespace=</code>; routes addressed by an ID, <code>/v1/nodes</code>, <code>/v1/providers</code> and <code>/v1/health</code> ignore it.</p><p><b>Jobs:</b> <code>POST /v1/jobs</code>, <code>GET /v1/jobs</code>, <code>POST /v1/jobs/run</code>, <code>POST /v1/jobs/plan</code>, <code>GET</code> and <code>DELETE /v1/job/{name}</code>, <code>POST /v1/job/{name}/dispatch</code>.<br><b>Runs:</b> <code>GET /v1/dispatch/{id}</code>, <code>GET /v1/executions</code>, <code>GET</code> and <code>DELETE /v1/execution/{id}</code>, <code>GET /v1/execution/{id}/logs</code>.<br><b>Fleet:</b> <code>GET /v1/nodes</code>, <code>GET /v1/providers</code>, <code>GET /v1/health</code>.</p><p>JSON request bodies are capped at 1 MiB and headers must arrive within 10s. <code>GET /v1/health</code> pings the store with a 5s timeout and answers 503 when it does not answer. On SIGINT or SIGTERM in-flight requests get 10s; running dispatches are left to their leases.</p><p><a href="../../docs/api/">API reference &rarr;</a></p>'
+      body: '<p><code>net/http</code> mux in <code>internal/server</code>, on the <code>server</code> block&rsquo;s <code>bind</code> (default <code>127.0.0.1:4747</code>), with TLS when its <code>tls</code> block names a certificate and key. Every request but <code>/v1/health</code> passes API authentication first. Routes that read or write jobs take <code>?namespace=</code>; routes addressed by an ID, <code>/v1/nodes</code>, <code>/v1/providers</code> and <code>/v1/health</code> ignore it.</p><p><b>Jobs:</b> <code>POST /v1/jobs</code>, <code>GET /v1/jobs</code>, <code>POST /v1/jobs/run</code>, <code>POST /v1/jobs/plan</code>, <code>GET</code> and <code>DELETE /v1/job/{name}</code>, <code>POST /v1/job/{name}/dispatch</code>.<br><b>Runs:</b> <code>GET /v1/dispatch/{id}</code>, <code>GET /v1/executions</code>, <code>GET</code> and <code>DELETE /v1/execution/{id}</code>, <code>GET /v1/execution/{id}/logs</code>.<br><b>Fleet:</b> <code>GET /v1/nodes</code>, <code>GET /v1/providers</code>, <code>POST /v1/provider/{name}/disable</code> and <code>/enable</code>, <code>GET /v1/health</code>.</p><p>JSON request bodies are capped at 1 MiB and headers must arrive within 10s. <code>GET /v1/health</code> pings the store with a 5s timeout and answers 503 when it does not answer. On SIGINT or SIGTERM in-flight requests get 10s; running dispatches are left to their leases.</p><p><a href="../../docs/api/">API reference &rarr;</a></p>'
     },
     JOBS: {
       title: 'Job loading (jobspec, jobs)',
@@ -226,7 +233,7 @@ window.vagabondDiagram = {
 | <span class="dg-swatch dg-entry"></span> | Processes that dial the server: the CLI and the agent |
 | <span class="dg-swatch dg-process"></span> | Server components |
 | <span class="dg-swatch dg-decision"></span> | Admission and ranking |
-| <span class="dg-swatch dg-filter"></span> | Boundaries: the plugin interface and the agent listener |
+| <span class="dg-swatch dg-filter"></span> | Boundaries: API authentication, the plugin interface and the agent listener |
 | <span class="dg-swatch dg-storage"></span> | State: the store and the connected nodes |
 | <span class="dg-swatch dg-success"></span> | External platforms and runtimes |
 | <span class="dg-swatch dg-background"></span> | Upkeep timers |

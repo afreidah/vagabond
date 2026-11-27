@@ -20,8 +20,8 @@ import (
 var ErrUnavailable = errors.New("the store is unreachable")
 
 // Disabled records that an operator turned a provider off through the API. At
-// is when. By is the common name on the client certificate they used, or
-// empty when the API does not require one.
+// is when. By is the name of their token or, on a server without tokens, the
+// common name on their client certificate, empty when they presented neither.
 type Disabled struct {
 	At time.Time
 	By string

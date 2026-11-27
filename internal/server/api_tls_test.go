@@ -85,7 +85,7 @@ func tlsClient(t *testing.T, address string, ca, issuer *tlstest.CA) *api.Client
 		t.Fatalf("Client() = %v", err)
 	}
 
-	client, err := api.NewClient(address, cfg)
+	client, err := api.NewClient(address, cfg, "")
 	if err != nil {
 		t.Fatalf("NewClient() = %v", err)
 	}

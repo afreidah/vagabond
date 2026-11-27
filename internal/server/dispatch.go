@@ -98,6 +98,10 @@ func (s *Server) dispatchStatus(_ http.ResponseWriter, r *http.Request) (any, er
 		return nil, err
 	}
 
+	if err := s.permit(r, rec.Namespace); err != nil {
+		return nil, err
+	}
+
 	runs, err := s.executions.DispatchExecutions(r.Context(), id)
 	if err != nil {
 		return nil, err

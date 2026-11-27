@@ -39,6 +39,7 @@ type Meta struct {
 
 	address   string
 	namespace string
+	token     string
 	tls       tlsFlags
 }
 
@@ -51,11 +52,12 @@ func (m *Meta) color() bool {
 // SERVER CLIENT
 // -------------------------------------------------------------------------
 
-// Environment variables supplying -address and -namespace when the flags are
-// not given.
+// Environment variables supplying -address, -namespace and -token when the
+// flags are not given.
 const (
 	addressEnv   = "VAGABOND_ADDR"
 	namespaceEnv = "VAGABOND_NAMESPACE"
+	tokenEnv     = "VAGABOND_TOKEN"
 )
 
 // clientOptions documents the flags every command that talks to a server
@@ -65,6 +67,10 @@ const clientOptions = `Client Options:
   -address <addr>
     The server's address. Defaults to $VAGABOND_ADDR, then
     http://127.0.0.1:4747. The -tls options need an https:// address.
+
+  -token <secret>
+    The API token to send, for a server that declares tokens. Defaults to
+    $VAGABOND_TOKEN, which keeps the secret out of the process list.
 
   -tls-ca <path>
     The CA file, or directory of them, the server's certificate must chain
@@ -83,10 +89,11 @@ func clientHelp(text string) string {
 	return strings.TrimSpace(text) + "\n\n" + clientOptions
 }
 
-// clientFlags registers -address and the -tls flags, which every command that
-// talks to a server takes.
+// clientFlags registers -address, -token and the -tls flags, which every
+// command that talks to a server takes.
 func (m *Meta) clientFlags(fs *flag.FlagSet) {
 	fs.StringVar(&m.address, "address", os.Getenv(addressEnv), "server address")
+	fs.StringVar(&m.token, "token", os.Getenv(tokenEnv), "API token")
 	m.tls.register(fs, tlsFromEnv())
 }
 
@@ -113,7 +120,7 @@ func (m *Meta) connect(fs *flag.FlagSet, args []string, want operands, help stri
 		return nil, nil
 	}
 
-	client, err := api.NewClient(m.address, tlsConfig)
+	client, err := api.NewClient(m.address, tlsConfig, m.token)
 	if err != nil {
 		m.Ui.Error(err.Error())
 

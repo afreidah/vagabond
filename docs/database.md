@@ -268,7 +268,7 @@ Semantics: [Quotas](quotas.md).
 |---|---|
 | `name` | Provider label from the configuration |
 | `disabled_at` | When the server took the `disable` request |
-| `disabled_by` | Common name on the client certificate the request presented; `''` when the API requires none |
+| `disabled_by` | Name of the token the request carried or, on a server without tokens, the common name on its client certificate; `''` when it presented neither |
 
 A row means the provider is disabled, and
 [`provider enable`](cli.md#provider-disable-and-provider-enable) deletes it.

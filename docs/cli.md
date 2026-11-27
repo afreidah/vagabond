@@ -94,6 +94,7 @@ each command's `-help` and left out of the flag tables below:
 | Flag | Default | Description |
 |---|---|---|
 | `-address <addr>` | `$VAGABOND_ADDR`, then `http://127.0.0.1:4747` | Server API address |
+| `-token <secret>` | `$VAGABOND_TOKEN` | API token, for a server that declares [`token` blocks](configuration.md#token-block) |
 | `-tls-ca <path>` | `$VAGABOND_TLS_CA`, then the system's roots | CA file, or directory of them, the server's certificate must chain to |
 | `-tls-cert <path>` | `$VAGABOND_TLS_CERT` | Client certificate, for a server whose `tls` block names a `ca` |
 | `-tls-key <path>` | `$VAGABOND_TLS_KEY` | The client certificate's key |
@@ -113,6 +114,8 @@ provider usage is totalled across namespaces.
 - `-tls-cert` and `-tls-key` are both set or neither:
   `-tls-cert and -tls-key go together: set both or neither`.
 - TLS 1.3 is the minimum. There is no option to skip verifying the server.
+- Prefer `$VAGABOND_TOKEN` to `-token`: a flag's value shows in the process
+  list. The token is sent on every request, as `X-Vagabond-Token`.
 - `-namespace` is sent as `?namespace=` on job requests. A job file that names
   its own `namespace` and a different `-namespace` is an error; see
   [namespace resolution](job-specification.md#job-block).
@@ -130,6 +133,13 @@ A server that requires a client certificate answers a command without one with
 `Error: this server requires a client certificate`. A certificate from another
 CA fails the handshake, reported as `Error: contacting the server at ...` with
 the TLS alert the server sent.
+
+A server that declares tokens answers a command without one with
+`Error: this server requires an API token`, and one with a secret it does not
+know with `Error: this server does not accept the API token sent`. A token
+without the access a command needs is refused naming it, for example
+`Error: token "ci" has no write access to namespace "default"`. What each
+route needs: [API: Authentication](api.md#authentication).
 
 Server failures are printed as `Error: <message>` on stderr with exit code 1.
 Local failures (an unreadable job file, a wrong number of arguments) print
@@ -164,6 +174,7 @@ registered jobs.
 |---|---|---|
 | `VAGABOND_ADDR` | client commands | Default for `-address` |
 | `VAGABOND_NAMESPACE` | `job` commands | Default for `-namespace` |
+| `VAGABOND_TOKEN` | client commands | Default for `-token` |
 | `VAGABOND_TLS_CA` | client commands | Default for `-tls-ca` |
 | `VAGABOND_TLS_CERT` | client commands | Default for `-tls-cert` |
 | `VAGABOND_TLS_KEY` | client commands | Default for `-tls-key` |
@@ -921,8 +932,8 @@ Usage as of 2026-11-10 09:43:17Z (4s ago).
 ```
 
 A disabled provider has a `Disabled` field under `Status`: `in configuration`,
-or `at <time> by <name>` when an operator disabled it, without `by` when their
-client certificate gave no name. A provider with no pools prints
+or `at <time> by <name>` when an operator disabled it, without `by` when they
+presented neither a token nor a client certificate. A provider with no pools prints
 `No quota pools.` under its fields. A name no provider has fails with
 `Error: no provider is named "<name>". Configured: ...`, listing the configured
 names.
@@ -956,9 +967,11 @@ are left to finish. `enable` lets new work go there again. Both take only the
 
 The change is kept in the store, so it survives a restart and applies to every
 server sharing the store. The server the command talks to applies it at once,
-and the others within 5 seconds. "By whom" is the common name on the client
-certificate given with `-tls-cert`, and empty when the server does not ask
-for one. Disabling a provider again keeps the first time and name.
+and the others within 5 seconds. "By whom" is the name of the token given with
+`-token` or, on a server without tokens, the common name on the client
+certificate given with `-tls-cert`, and empty with neither. On a server that
+declares tokens both commands need a management token. Disabling a provider
+again keeps the first time and name.
 
 `enable` refuses a provider the configuration turns off with
 `enabled = false`, since only the configuration can turn that one on.
@@ -988,8 +1001,9 @@ vagabond server [options]
 Runs the server until SIGINT or SIGTERM: the HTTP API under `/v1` on the
 `server` block's `bind` address (`127.0.0.1:4747` by default, with TLS when its
 `tls` block names a certificate and key, and requiring a client certificate on
-every route but `/v1/health` when it also names a `ca`), and the agent listener
-on `agent_bind` (`127.0.0.1:4748` by default). See
+every route but `/v1/health` when it also names a `ca`, and an API token when
+the configuration declares `token` blocks), and the agent listener on
+`agent_bind` (`127.0.0.1:4748` by default). See
 [configuration](configuration.md) and [deployment](deployment.md).
 
 | Flag | Default | Description |
@@ -1017,10 +1031,12 @@ does not fall through to the search path.
    marked unhealthy and rejected with `provider-unhealthy` until a later
    refresh succeeds; the server still starts, warning
    `Some providers did not answer: <error>`.
-3. Without `-dev`: connect to the store, apply migrations and verify the
+3. Read every `token` block's secret.
+4. Without `-dev`: connect to the store, apply migrations and verify the
    schema (see [database](database.md)).
-4. Load the `tls` files, warning when `bind` is beyond loopback and the API
-   verifies no client certificates. Listen for agents, then serve the API.
+5. Load the `tls` files, warning when `bind` is beyond loopback and the API
+   checks neither tokens nor client certificates. Listen for agents, then
+   serve the API.
 
 **Shutdown:** in-flight requests drain. Running dispatches are left to the
 next server, which resumes them once their leases lapse (see
@@ -1037,6 +1053,8 @@ next server, which resumes them once their leases lapse (see
 | `configuration not found: <-config\|VAGABOND_CONFIG> names <path>, which cannot be read: ...` | `-config` or `$VAGABOND_CONFIG` names a missing path; the message names the source |
 | Configuration diagnostics | Invalid configuration, rendered like job diagnostics |
 | `No providers are configured, so there is nothing to run on.` | No `provider` blocks |
+| `token "<name>": ...` | A token's secret cannot be read, or is under 16 bytes |
+| `tokens "<a>" and "<b>" have the same secret` | Two `token` blocks resolve to one secret |
 | `The server needs a store block, or -dev to keep everything in memory.` | No `store` block and no `-dev` |
 | `could not open the store: ...` / `could not prepare the store: ...` | Store unreachable, migration or schema check failed |
 | `loading the certificate <cert>: ...` | `tls` or `agent_tls` certificate or key unreadable or mismatched |
@@ -1049,8 +1067,8 @@ next server, which resumes them once their leases lapse (see
 
 With `-dev` and a `store` block present, the server warns
 `Running with -dev: the store block is ignored and everything is kept in memory.`
-With a `bind` beyond loopback and no `tls` `ca`, it warns `The API on <addr> is
-reachable beyond this machine and accepts any client. ...`.
+With a `bind` beyond loopback, no `tls` `ca` and no `token` block, it warns
+`The API on <addr> is reachable beyond this machine and accepts any client. ...`.
 
 ```bash
 vagabond server -config /etc/vagabond.d -log-level debug

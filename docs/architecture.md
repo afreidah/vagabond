@@ -28,7 +28,8 @@ Interactive version, with notes on each component:
 **Connections:**
 
 - CLI to server: HTTP/JSON under `/v1`, plain or TLS per the `server` block,
-  with a client certificate when its `tls` block names a `ca`.
+  with an API token when the configuration declares `token` blocks, and a
+  client certificate when the `tls` block names a `ca`.
 - Agent to server: the agent opens one TCP connection, mutual TLS beyond
   loopback, multiplexed with yamux.
   Each side serves gRPC on the streams the other opens, so the server calls the

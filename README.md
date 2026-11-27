@@ -100,9 +100,10 @@ The `worker` driver is modeled and admitted; no plugin implements it yet.
   [HTTP API](docs/api.md).
 - Every command but `server`, `agent` and `job validate` is an API client,
   finding the server with `-address` or
-  `$VAGABOND_ADDR` (default `http://127.0.0.1:4747`), with `-tls-*` or
-  `$VAGABOND_TLS_*` for a server that requires a client certificate. Runners
-  need an address and a certificate, not cloud or database credentials.
+  `$VAGABOND_ADDR` (default `http://127.0.0.1:4747`), with `-token` or
+  `$VAGABOND_TOKEN` for a server that declares API tokens, and `-tls-*` or
+  `$VAGABOND_TLS_*` for one that requires a client certificate. Runners need
+  an address and a token or certificate, not cloud or database credentials.
 - `vagabond server -dev` keeps every store in memory, for development and
   single-machine use.
 - `job validate` is local, and job files are validated locally before they are

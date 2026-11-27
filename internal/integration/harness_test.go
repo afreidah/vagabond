@@ -135,7 +135,7 @@ func (h *harness) serve(opts ...server.Option) *api.Client {
 	h.t.Setenv("VAGABOND_ADDR", address)
 	h.t.Setenv("VAGABOND_NAMESPACE", "")
 
-	client, err := api.NewClient(address, nil)
+	client, err := api.NewClient(address, nil, "")
 	if err != nil {
 		h.t.Fatalf("client: %v", err)
 	}

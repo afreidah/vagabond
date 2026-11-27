@@ -44,7 +44,7 @@ func stub(t *testing.T, answer func(n int32, w http.ResponseWriter, r *http.Requ
 	}))
 	t.Cleanup(server.Close)
 
-	client, err := NewClient(server.URL, nil)
+	client, err := NewClient(server.URL, nil, "")
 	if err != nil {
 		t.Fatalf("NewClient() = %v", err)
 	}
@@ -211,6 +211,67 @@ func TestRetrying_StopsWithTheCaller(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
+// TOKENS
+// -------------------------------------------------------------------------
+
+// A client given a token sends it on every request, a retried read and a
+// submission included, and a client given none sends no token.
+func TestClient_Token(t *testing.T) {
+	const secret = "s3cret-s3cret-s3cret"
+
+	var served atomic.Int32
+
+	seen := make(chan string, 4)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Get(TokenHeader)
+
+		if served.Add(1) == 1 {
+			reply(w, http.StatusServiceUnavailable, "")
+
+			return
+		}
+
+		reply(w, http.StatusOK, `{}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewClient(server.URL, nil, secret)
+	if err != nil {
+		t.Fatalf("NewClient() = %v", err)
+	}
+
+	var retried atomic.Int32
+
+	if _, err := client.Retrying(quick(&retried)).DispatchStatus(t.Context(), "d-1"); err != nil {
+		t.Fatalf("DispatchStatus() = %v", err)
+	}
+
+	if _, err := client.Run(t.Context(), "", "job {}", nil); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+
+	for range 3 {
+		if got := <-seen; got != secret {
+			t.Errorf("a request carried token %q, want %q", got, secret)
+		}
+	}
+
+	bare, err := NewClient(server.URL, nil, "")
+	if err != nil {
+		t.Fatalf("NewClient() = %v", err)
+	}
+
+	if _, err := bare.DispatchStatus(t.Context(), "d-1"); err != nil {
+		t.Fatalf("DispatchStatus() = %v", err)
+	}
+
+	if got := <-seen; got != "" {
+		t.Errorf("a client without a token sent %q", got)
+	}
+}
+
+// -------------------------------------------------------------------------
 // FAILURES
 // -------------------------------------------------------------------------
 
@@ -226,7 +287,7 @@ func TestClient_NoAnswer(t *testing.T) {
 	addr := l.Addr().String()
 	_ = l.Close()
 
-	client, err := NewClient(addr, nil)
+	client, err := NewClient(addr, nil, "")
 	if err != nil {
 		t.Fatalf("NewClient() = %v", err)
 	}

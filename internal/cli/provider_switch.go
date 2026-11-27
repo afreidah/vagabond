@@ -24,8 +24,9 @@ Usage: vagabond provider disable [options] <name>
 
   Stops new work going to a provider, on every server sharing the store.
   Executions already running on it are left to finish. A plan rejects it as
-  provider-disabled, saying when it was disabled and, when the API requires
-  client certificates, the common name on the one you used.
+  provider-disabled, saying when it was disabled and by whom: the name of
+  your token or, on a server without tokens, the common name on your client
+  certificate. Needs a management token on a server that declares tokens.
 
   The provider stays disabled across restarts until it is enabled again.
   Disabling it again keeps the first time and name. Servers other than the
@@ -39,7 +40,8 @@ Usage: vagabond provider enable [options] <name>
   every server sharing the store.
 
   A provider turned off with enabled = false in the configuration file is
-  refused, since only the file can turn it back on.
+  refused, since only the file can turn it back on. Needs a management token
+  on a server that declares tokens.
 `
 )
 

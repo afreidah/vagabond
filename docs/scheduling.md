@@ -97,7 +97,7 @@ placeholders filled from the task and the provider:
 |---|---|
 | `not-allowlisted` | `The job routes only to <providers, comma-separated>.` |
 | `cost-policy` | `This provider charges <cost> per execution and the job allows <max_cost_usd>.` |
-| `provider-disabled` | `An operator disabled this provider in configuration.` for `enabled = false`; `<name> disabled this provider at <RFC 3339 time>.` for `provider disable`, with `An operator` in place of the name when the client certificate gave none |
+| `provider-disabled` | `An operator disabled this provider in configuration.` for `enabled = false`; `<name> disabled this provider at <RFC 3339 time>.` for `provider disable`, with `An operator` in place of the name when the request presented neither a token nor a client certificate |
 | `provider-unhealthy` | `This provider did not answer its last capability refresh.` |
 | `driver-unsupported` | `The task uses the <driver> driver and this provider offers <drivers or none>.` |
 | `arch-unsupported` | `The task requires <arch> and this provider offers <architectures or none>.` |
