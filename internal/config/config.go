@@ -39,6 +39,7 @@ type File struct {
 	Scheduling *SchedulingBlock `hcl:"scheduling,block"`
 	Providers  []Provider       `hcl:"provider,block"`
 	Namespaces []Namespace      `hcl:"namespace,block"`
+	Tokens     []Token          `hcl:"token,block"`
 }
 
 // SchedulingBlock sets how the server orders the providers admission passed.
@@ -255,6 +256,7 @@ func loadDir(dir string) (*File, hcl.Diagnostics) {
 
 		merged.Providers = append(merged.Providers, file.Providers...)
 		merged.Namespaces = append(merged.Namespaces, file.Namespaces...)
+		merged.Tokens = append(merged.Tokens, file.Tokens...)
 
 		// A second singleton block is refused rather than chosen by file order
 		switch {
@@ -392,7 +394,9 @@ func (f *File) validate() hcl.Diagnostics {
 		diags = append(diags, p.validate()...)
 	}
 
-	return append(diags, f.validateNamespaces(seen)...)
+	diags = append(diags, f.validateNamespaces(seen)...)
+
+	return append(diags, f.validateTokens()...)
 }
 
 // validate reports server settings that cannot be applied: an agent listener
@@ -512,7 +516,7 @@ func (p *Provider) validate() hcl.Diagnostics {
 		})
 	}
 
-	diags = append(diags, p.Credentials.validate(p.Name)...)
+	diags = append(diags, p.Credentials.validate(fmt.Sprintf("Provider %q", p.Name))...)
 	diags = append(diags, validatePools(fmt.Sprintf("Provider %q", p.Name), p.Pools)...)
 
 	return diags

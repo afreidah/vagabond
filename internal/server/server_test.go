@@ -97,13 +97,32 @@ job "sleepy" {
 `
 
 // harness is a server under test, the stores behind it, and its container
-// provider, which a test moves runs along on.
+// provider, which a test moves runs along on. A token set is sent on every
+// request.
 type harness struct {
 	url        string
 	jobs       *MockserverJobs
 	executions *memory.Executions
 	providers  *memory.Providers
 	box        *plugin.FakeContainerProvider
+	token      string
+}
+
+// as is a copy of the harness sending secret as its API token.
+func (h *harness) as(secret string) *harness {
+	sender := *h
+	sender.token = secret
+
+	return &sender
+}
+
+// send is req carrying the harness's token, when it has one.
+func (h *harness) send(req *http.Request) (*http.Response, error) {
+	if h.token != "" {
+		req.Header.Set(api.TokenHeader, h.token)
+	}
+
+	return http.DefaultClient.Do(req)
 }
 
 // fixtures builds the registry from testConfig, refreshed, and an empty
@@ -142,8 +161,9 @@ func newHarness(t *testing.T) *harness {
 	return loggedHarness(t, nil)
 }
 
-// loggedHarness is newHarness with the server logging to logger.
-func loggedHarness(t *testing.T, logger *slog.Logger) *harness {
+// loggedHarness is newHarness with the server logging to logger, built with
+// opts.
+func loggedHarness(t *testing.T, logger *slog.Logger, opts ...Option) *harness {
 	t.Helper()
 
 	reg, led := fixtures(t)
@@ -151,7 +171,7 @@ func loggedHarness(t *testing.T, logger *slog.Logger) *harness {
 	executions := memory.NewExecutions()
 	providers := memory.NewProviders()
 
-	s := New(reg, led, executions, jobStore, providers, logger)
+	s := New(reg, led, executions, jobStore, providers, logger, opts...)
 	s.followPoll = 10 * time.Millisecond
 
 	srv := httptest.NewServer(s.Handler())
@@ -175,7 +195,7 @@ func (h *harness) openLogs(t *testing.T, id, query string) (int, *bufio.Reader) 
 		t.Fatalf("request: %v", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := h.send(req)
 	if err != nil {
 		t.Fatalf("GET logs: %v", err)
 	}
@@ -214,7 +234,7 @@ func (h *harness) call(t *testing.T, method, path string, body, out any) int {
 		t.Fatalf("request: %v", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := h.send(req)
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
 	}

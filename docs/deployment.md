@@ -158,17 +158,30 @@ Details: [database](database.md#in-memory-store--dev).
 
 | Listener | Default | Protocol | TLS | Authentication |
 |---|---|---|---|---|
-| API, `bind` | `127.0.0.1:4747` | HTTP, JSON | Optional, `server { tls { ... } }` | Client certificate when `tls` names a `ca`; otherwise none |
+| API, `bind` | `127.0.0.1:4747` | HTTP, JSON | Optional, `server { tls { ... } }` | API token when the configuration declares `token` blocks; client certificate when `tls` names a `ca`; otherwise none |
 | Agents, `agent_bind` | `127.0.0.1:4748` | gRPC over a multiplexed TCP session | Mutual, `server { agent_tls { ... } }`; required beyond loopback | Agent certificate; node name is its common name |
 
-**Without a `ca` the API has no authentication.** Anyone who can reach `bind`
-can register, run, stop and cancel jobs in any namespace, and spend every
-configured provider's quota. The server warns at startup when `bind` is beyond
-loopback and the `tls` block names no `ca`. With one, every route but
-`/v1/health` needs a certificate that chains to it. There is no authorization:
-a valid certificate can use every route.
+**Without `token` blocks or a `ca` the API has no authentication.** Anyone who
+can reach `bind` can register, run, stop and cancel jobs in any namespace, and
+spend every configured provider's quota. The server warns at startup when
+`bind` is beyond loopback with neither.
+
+- With [`token` blocks](configuration.md#token-block), every route but
+  `/v1/health` needs a token, and each token reads or writes only the
+  namespaces it names; a management token does everything. Over plain HTTP the
+  token crosses the network as written, so beyond loopback serve TLS as well.
+- With a `ca`, every route but `/v1/health` needs a certificate that chains to
+  it. Without tokens, a valid certificate can use every route.
 
 ```hcl
+token "ci" {
+  credentials { env = "VAGABOND_CI_TOKEN" }
+
+  namespace "ci" {
+    policy = "write"
+  }
+}
+
 server {
   bind       = "0.0.0.0:4747"
   agent_bind = "0.0.0.0:4748"
@@ -188,7 +201,8 @@ server {
 ```
 
 ```bash
-vagabond job status -address https://vagabond.internal:4747 \
+export VAGABOND_TOKEN="$(cat ~/.vagabond/ci-token)"
+vagabond job status -namespace ci -address https://vagabond.internal:4747 \
   -tls-ca /etc/vagabond/ca.pem -tls-cert ci.pem -tls-key ci-key.pem
 ```
 
@@ -205,9 +219,10 @@ Two CAs, such as two Vault PKI mounts or two intermediates, keep each kind of
 certificate to its own listener. The server does not check this.
 
 - Keep the API on localhost, or bind it to an interface only trusted hosts
-  reach, unless the `tls` block names a `ca`.
+  reach, unless it requires tokens or the `tls` block names a `ca`.
 - Clients use `-address https://host:4747`, verify the server against `-tls-ca`
-  or the system trust store, and present `-tls-cert` and `-tls-key`; see
+  or the system trust store, and present `-tls-cert` and `-tls-key`, and
+  `$VAGABOND_TOKEN` for a server with tokens; see
   [CLI](cli.md#connecting-to-the-server).
 - The agent listener binds beyond loopback only with `agent_tls`: every agent
   presents a certificate from its CA and registers under that certificate's

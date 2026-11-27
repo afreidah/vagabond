@@ -1,10 +1,10 @@
 // -------------------------------------------------------------------------------
-// Provider Credentials
+// Credentials
 //
 // Author: Alex Freidah
 //
-// How a provider's secret is obtained, rather than the secret itself: from a
-// file, an environment variable, or a command. Vagabond integrates with no
+// How a provider's or an API token's secret is obtained, rather than the
+// secret itself: from a file, an environment variable, or a command. Vagabond integrates with no
 // secret store, so no client library enters the binary; exec delegates the
 // question to a command the operator already trusts.
 // -------------------------------------------------------------------------------
@@ -36,7 +36,7 @@ const execTimeout = 30 * time.Second
 // sources.
 var ErrNoCredentialSource = errors.New("no credential source")
 
-// CredentialsBlock says where a provider's secret comes from. Exactly one
+// CredentialsBlock says where a provider's or a token's secret comes from. Exactly one
 // source is set, and there is no inline literal to paste a key into.
 type CredentialsBlock struct {
 	File *string  `hcl:"file,optional"`
@@ -49,8 +49,9 @@ type CredentialsBlock struct {
 // -------------------------------------------------------------------------
 
 // validate reports a credentials block naming no source, or several and so a
-// guessed precedence. A nil block is valid: most providers need no credential.
-func (c *CredentialsBlock) validate(provider string) hcl.Diagnostics {
+// guessed precedence, with owner naming whose block it is, such as Provider
+// "ibm". A nil block is valid: most providers need no credential.
+func (c *CredentialsBlock) validate(owner string) hcl.Diagnostics {
 	if c == nil {
 		return nil
 	}
@@ -62,18 +63,16 @@ func (c *CredentialsBlock) validate(provider string) hcl.Diagnostics {
 		return hcl.Diagnostics{{
 			Severity: hcl.DiagError,
 			Summary:  "Missing credential source",
-			Detail: fmt.Sprintf("Provider %q declares a credentials block naming "+
-				"none of file, env or exec.", provider),
+			Detail:   owner + " declares a credentials block naming none of file, env or exec.",
 		}}
 
 	case len(sources) > 1:
 		return hcl.Diagnostics{{
 			Severity: hcl.DiagError,
 			Summary:  "Ambiguous credential source",
-			Detail: fmt.Sprintf("Provider %q names %s. Exactly one source is "+
-				"allowed, because which one wins would otherwise decide what "+
-				"the provider authenticates with.",
-				provider, strings.Join(sources, " and ")),
+			Detail: fmt.Sprintf("%s names %s. Exactly one source is allowed, because "+
+				"which one wins would otherwise decide which secret is used.",
+				owner, strings.Join(sources, " and ")),
 		}}
 	}
 
@@ -103,8 +102,9 @@ func (c *CredentialsBlock) sources() []string {
 // RESOLUTION
 // -------------------------------------------------------------------------
 
-// Resolve returns the secret this block points at, called once when the
-// registry is built so a plan never reaches a secret store. Nil yields nothing.
+// Resolve returns the secret this block points at, called once at startup, as
+// the registry is built or the server reads its tokens, so a plan never
+// reaches a secret store. Nil yields nothing.
 func (c *CredentialsBlock) Resolve(ctx context.Context) ([]byte, error) {
 	if c == nil {
 		return nil, nil

@@ -443,7 +443,7 @@ func TestAgent_NodesListAndLeave(t *testing.T) {
 	h.node(t, "box1")
 	h.node(t, "box2")
 
-	apiClient, err := api.NewClient(h.api, nil)
+	apiClient, err := api.NewClient(h.api, nil, "")
 	if err != nil {
 		t.Fatalf("NewClient() = %v", err)
 	}

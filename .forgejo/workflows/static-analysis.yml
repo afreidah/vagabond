@@ -12,6 +12,10 @@
 # two minutes job dispatch rides out an unreachable server for. Dependabot
 # branches are left out because GitHub CI checks them and each run spends
 # free-tier quota.
+#
+# The API token comes from the VAGABOND_TOKEN secret, passed through the
+# environment so it stays off the command line. Without the secret no token is
+# sent, which only a server declaring no tokens accepts.
 # -------------------------------------------------------------------------------
 
 name: Static analysis
@@ -26,11 +30,14 @@ jobs:
     runs-on: build
     steps:
       - name: Run the static-analysis job
+        env:
+          VAGABOND_TOKEN: ${{ secrets.VAGABOND_TOKEN }}
         run: |
           set -euo pipefail
 
           docker run --rm --pull always \
             -e VAGABOND_ADDR=http://vagabond.service.consul:4747 \
+            -e VAGABOND_TOKEN \
             registry.munchbox.cc/vagabond:latest \
             job dispatch \
               -meta repo=afreidah/vagabond \

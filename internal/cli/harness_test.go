@@ -5,8 +5,9 @@
 //
 // Every command but job validate talks to a server, so these tests start one
 // in-process: the configured fake providers over memory stores, as server -dev
-// runs them, behind httptest or on a loopback TLS listener. Nothing has
-// credentials and nothing contacts anything outside the process.
+// runs them, behind httptest or on a loopback TLS listener, requiring the API
+// tokens the configuration declares. No provider has credentials, and nothing
+// contacts anything outside the process.
 // -------------------------------------------------------------------------------
 
 package cli
@@ -105,7 +106,12 @@ func devFixture(t *testing.T, cfg string) (*server.Server, *registry.Registry) {
 		t.Fatalf("Refresh() = %v", err)
 	}
 
-	srv, err := devServer(ctx, reg, nil, server.WithNodes(conns))
+	tokens, err := apiTokens(ctx, file.Tokens)
+	if err != nil {
+		t.Fatalf("apiTokens() = %v", err)
+	}
+
+	srv, err := devServer(ctx, reg, nil, server.WithNodes(conns), server.WithTokens(tokens...))
 	if err != nil {
 		t.Fatalf("devServer() = %v", err)
 	}
@@ -119,7 +125,7 @@ func devFixture(t *testing.T, cfg string) (*server.Server, *registry.Registry) {
 func clearClientEnv(t *testing.T) {
 	t.Helper()
 
-	for _, name := range []string{addressEnv, namespaceEnv, tlsCAEnv, tlsCertEnv, tlsKeyEnv, tlsServerNameEnv} {
+	for _, name := range []string{addressEnv, namespaceEnv, tokenEnv, tlsCAEnv, tlsCertEnv, tlsKeyEnv, tlsServerNameEnv} {
 		t.Setenv(name, "")
 	}
 }

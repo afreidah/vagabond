@@ -138,7 +138,7 @@ func TestClientCommands_HelpListsClientOptions(t *testing.T) {
 	for _, words := range [][]string{{"job", "run"}, {"node", "status"}, {"execution", "logs"}} {
 		_, stdout, stderr := run(append(words, "-help")...)
 
-		for _, want := range []string{"Client Options:", "-address <addr>", "-tls-ca <path>", "-tls-server-name <name>"} {
+		for _, want := range []string{"Client Options:", "-address <addr>", "-token <secret>", "-tls-ca <path>", "-tls-server-name <name>"} {
 			if !strings.Contains(stdout+stderr, want) {
 				t.Errorf("%s help does not mention %q", strings.Join(words, " "), want)
 			}

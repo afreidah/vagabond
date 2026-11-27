@@ -66,6 +66,17 @@ func (s *Server) listExecutions(_ http.ResponseWriter, r *http.Request) (any, er
 // executionStatus answers with one execution's record, result fields included
 // once it has one.
 func (s *Server) executionStatus(_ http.ResponseWriter, r *http.Request) (any, error) {
+	rec, err := s.record(r)
+	if err != nil {
+		return nil, err
+	}
+
+	return executionOf(rec), nil
+}
+
+// record reads the execution the {id} path value names, and refuses with a
+// 403 a token without the route's access in the execution's namespace.
+func (s *Server) record(r *http.Request) (*execution.Record, error) {
 	id, err := executionID(r)
 	if err != nil {
 		return nil, err
@@ -76,7 +87,11 @@ func (s *Server) executionStatus(_ http.ResponseWriter, r *http.Request) (any, e
 		return nil, err
 	}
 
-	return executionOf(rec), nil
+	if err := s.permit(r, rec.Namespace); err != nil {
+		return nil, err
+	}
+
+	return rec, nil
 }
 
 // -------------------------------------------------------------------------
@@ -115,17 +130,12 @@ func (s *Server) executionLogs(w http.ResponseWriter, r *http.Request) {
 // logsRequest reads which execution's output a request asks for, and from
 // which byte.
 func (s *Server) logsRequest(r *http.Request) (*execution.Record, int64, error) {
-	id, err := executionID(r)
+	rec, err := s.record(r)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	offset, err := count(r, "offset", 0)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	rec, err := s.executions.Get(r.Context(), id)
 
 	return rec, offset, err
 }
@@ -138,12 +148,7 @@ func (s *Server) logsRequest(r *http.Request) (*execution.Record, int64, error) 
 // it stands. A dispatch running here is cancelled at once; any other is asked
 // to stop through its lease, which its holder renews within LeaseRenew.
 func (s *Server) cancelExecution(_ http.ResponseWriter, r *http.Request) (any, error) {
-	id, err := executionID(r)
-	if err != nil {
-		return nil, err
-	}
-
-	rec, err := s.executions.Get(r.Context(), id)
+	rec, err := s.record(r)
 	if err != nil {
 		return nil, err
 	}

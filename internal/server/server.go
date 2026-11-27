@@ -11,6 +11,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -139,6 +140,8 @@ type Server struct {
 	running map[execution.ID]context.CancelFunc
 
 	nodeConns *nodes.Conns
+
+	tokens []token // the API tokens a request must carry one of; none leaves the API open
 }
 
 // -------------------------------------------------------------------------
@@ -179,6 +182,16 @@ func WithTierMode(mode job.TierMode) Option {
 // execution.DefaultLogRetention.
 func WithLogs(maxBytes int64, retain time.Duration) Option {
 	return func(s *Server) { s.maxLogBytes, s.retainLogs = maxBytes, retain }
+}
+
+// WithTokens makes every route but health require one of tokens. Without it,
+// the API answers any client that can reach it.
+func WithTokens(tokens ...Token) Option {
+	return func(s *Server) {
+		for _, t := range tokens {
+			s.tokens = append(s.tokens, token{Token: t, digest: sha256.Sum256([]byte(t.Secret))})
+		}
+	}
 }
 
 // New builds a server over its stores, with a dispatcher that records to
@@ -226,28 +239,28 @@ func (s *Server) Handler() http.Handler {
 	return s.logRequests(s.recoverRequests(s.routes()))
 }
 
-// routes is the route table. The job routes take ?namespace=, defaulting to
-// the default namespace.
+// routes is the route table, with the access each route needs. The job routes
+// take ?namespace=, defaulting to the default namespace.
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("POST /v1/jobs", s.wrap(s.registerJob))
-	mux.HandleFunc("GET /v1/jobs", s.wrap(s.listJobs))
-	mux.HandleFunc("POST /v1/jobs/run", s.wrap(s.runJob))
-	mux.HandleFunc("POST /v1/jobs/plan", s.wrap(s.planJob))
-	mux.HandleFunc("GET /v1/job/{name}", s.wrap(s.jobStatus))
-	mux.HandleFunc("DELETE /v1/job/{name}", s.wrap(s.stopJob))
-	mux.HandleFunc("POST /v1/job/{name}/dispatch", s.wrap(s.dispatchJob))
-	mux.HandleFunc("GET /v1/dispatch/{id}", s.wrap(s.dispatchStatus))
-	mux.HandleFunc("GET /v1/executions", s.wrap(s.listExecutions))
-	mux.HandleFunc("GET /v1/execution/{id}", s.wrap(s.executionStatus))
-	mux.HandleFunc("GET /v1/execution/{id}/logs", s.executionLogs)
-	mux.HandleFunc("DELETE /v1/execution/{id}", s.wrap(s.cancelExecution))
+	mux.HandleFunc("POST /v1/jobs", s.route(Write, s.registerJob))
+	mux.HandleFunc("GET /v1/jobs", s.route(Read, s.listJobs))
+	mux.HandleFunc("POST /v1/jobs/run", s.route(Write, s.runJob))
+	mux.HandleFunc("POST /v1/jobs/plan", s.route(Read, s.planJob))
+	mux.HandleFunc("GET /v1/job/{name}", s.route(Read, s.jobStatus))
+	mux.HandleFunc("DELETE /v1/job/{name}", s.route(Write, s.stopJob))
+	mux.HandleFunc("POST /v1/job/{name}/dispatch", s.route(Write, s.dispatchJob))
+	mux.HandleFunc("GET /v1/dispatch/{id}", s.route(Read, s.dispatchStatus))
+	mux.HandleFunc("GET /v1/executions", s.route(Read, s.listExecutions))
+	mux.HandleFunc("GET /v1/execution/{id}", s.route(Read, s.executionStatus))
+	mux.HandleFunc("GET /v1/execution/{id}/logs", s.authenticate(Read, s.executionLogs))
+	mux.HandleFunc("DELETE /v1/execution/{id}", s.route(Write, s.cancelExecution))
 	mux.HandleFunc("GET "+healthPath, s.health)
-	mux.HandleFunc("GET /v1/nodes", s.wrap(s.listNodes))
-	mux.HandleFunc("GET /v1/providers", s.wrap(s.listProviders))
-	mux.HandleFunc("POST /v1/provider/{name}/disable", s.wrap(s.disableProvider))
-	mux.HandleFunc("POST /v1/provider/{name}/enable", s.wrap(s.enableProvider))
+	mux.HandleFunc("GET /v1/nodes", s.route(Authenticated, s.listNodes))
+	mux.HandleFunc("GET /v1/providers", s.route(Authenticated, s.listProviders))
+	mux.HandleFunc("POST /v1/provider/{name}/disable", s.route(Management, s.disableProvider))
+	mux.HandleFunc("POST /v1/provider/{name}/enable", s.route(Management, s.enableProvider))
 
 	return mux
 }

@@ -105,7 +105,8 @@ for the whole run, so request lines pass them themselves.
 | `count` | How many were acted on |
 | `epoch`, `state`, `reason` | A resumed dispatch's lease epoch, its verdict and why |
 | `retry_in` | How long until the next attempt |
-| `by` | Who disabled or enabled a provider: the client certificate's name |
+| `by` | Who disabled or enabled a provider: their token's name or, on a server without tokens, their client certificate's |
+| `token` | The name of the API token a request carried, on what its handler logs |
 | `in`, `panic`, `stack` | Where a recovered panic happened, its value and its stack |
 | `error` | The error, as its message |
 

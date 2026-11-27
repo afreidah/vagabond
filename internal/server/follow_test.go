@@ -249,6 +249,8 @@ func ended(t *testing.T, s *memory.Executions, at time.Time, start int64) (execu
 
 	r := &execution.Record{
 		ID:        id,
+		Namespace: d.Namespace,
+		Job:       d.Job,
 		State:     execution.StateSucceeded,
 		StartedAt: at.Add(-time.Second),
 		EndedAt:   at,

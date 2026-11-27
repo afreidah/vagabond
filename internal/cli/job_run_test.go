@@ -409,7 +409,7 @@ func (s *testServer) firstExecution(t *testing.T, stderr string) string {
 		t.Fatalf("no dispatch ID in:\n%s", stderr)
 	}
 
-	client, err := api.NewClient(s.address, nil)
+	client, err := api.NewClient(s.address, nil, "")
 	if err != nil {
 		t.Fatalf("NewClient() = %v", err)
 	}
@@ -436,7 +436,7 @@ func (s *testServer) firstExecution(t *testing.T, stderr string) string {
 func TestExecutionLogs_Follow(t *testing.T) {
 	s := serve(t, containerConfig)
 
-	client, err := api.NewClient(s.address, nil)
+	client, err := api.NewClient(s.address, nil, "")
 	if err != nil {
 		t.Fatalf("NewClient() = %v", err)
 	}

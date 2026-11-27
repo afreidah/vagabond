@@ -206,6 +206,10 @@ type Execution struct {
 // dropped past the server's ceiling.
 const LogsStartHeader = "Vagabond-Logs-Start"
 
+// TokenHeader is the request header carrying an API token's secret. The server
+// also takes one as a bearer token in Authorization.
+const TokenHeader = "X-Vagabond-Token"
+
 // ExecutionFilter is what GET /v1/executions narrows a listing by: each of
 // Job, State and Provider that is set, and at most Limit, the server's default
 // when 0.
@@ -273,8 +277,8 @@ type ProviderListStub struct {
 }
 
 // ProviderDisabled is when an operator turned a provider off through the API,
-// and the common name on their client certificate, empty when the API does
-// not require one.
+// and who: the name of their token or, on a server without tokens, the common
+// name on their client certificate, empty when they presented neither.
 type ProviderDisabled struct {
 	At time.Time
 	By string

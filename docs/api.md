@@ -40,16 +40,17 @@ a larger body is a 400.
 | Response body | `application/json`, except `GET /v1/execution/{id}/logs` |
 | Logs response | `text/plain; charset=utf-8`, with `X-Content-Type-Options: nosniff` |
 
-**Authentication:** client certificates, when the `server` block's `tls` block
-names a `ca`; see [TLS](#tls). Without one, anyone who can reach the listener
-can register, run and cancel jobs. The default bind is loopback for this
-reason, and the server warns at startup when the API is reachable beyond
-loopback with no `ca`. There is no authorization: every client with a valid
-certificate can use every route.
+**Authentication:** API tokens, when the configuration declares `token`
+blocks, and client certificates, when the `server` block's `tls` block names a
+`ca`; see [Authentication](#authentication) and [TLS](#tls). With neither,
+anyone who can reach the listener can register, run and cancel jobs. The
+default bind is loopback for this reason, and the server warns at startup when
+the API is reachable beyond loopback with neither.
 
 **Logging:** every request is logged at `debug` with method, path, status and
 duration. 500s are logged at `error`; a 503 for an unreachable store at `warn`,
-except on `/v1/health`.
+except on `/v1/health`. On a server with tokens, what a request's handler
+logs carries `token`, the token's name.
 
 ## Namespaces
 
@@ -106,7 +107,8 @@ Every non-2xx response from a route in the table below has this body:
 |---|---|
 | 200 | Success. Every route answers 200; none use 201 or 204 |
 | 400 | Unreadable or oversized body; invalid job file (with `Diagnostics`); metadata the job does not permit; conflicting or undeclared namespace; malformed dispatch or execution ID; plan with both `Source` and `Name`; an `offset` or `limit` that is not a whole number of at least zero; an unknown `state` |
-| 401 | No verified client certificate, on a server whose `tls` block names a `ca`. Body `this server requires a client certificate`. Never on `/v1/health` |
+| 401 | On a server with tokens, no token (`this server requires an API token`) or one it does not know (`this server does not accept the API token sent`), with `WWW-Authenticate: Bearer`. On a server whose `tls` block names a `ca`, no verified client certificate (`this server requires a client certificate`). Never on `/v1/health` |
+| 403 | The token lacks the access the route needs: `token "ci" has no write access to namespace "default"`, `token "ci" is not a management token`. See [Authentication](#authentication) |
 | 404 | Job not registered in the namespace; no such dispatch or execution |
 | 409 | Dispatching or planning (by `Name`) a stopped job |
 | 500 | Anything else: a store error other than an unreachable store, an internal error. Logged by the server. A panic in a handler is `{"Error":"internal error"}`, never the panic value, and is logged with its stack; one in an output response already begun cuts the connection instead ([Panics](dispatch.md#panics)) |
@@ -142,25 +144,28 @@ What happens to dispatches already running: [dispatch](dispatch.md).
 
 ## Routes
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/v1/jobs` | [Register a job](#register-a-job) |
-| `GET` | `/v1/jobs` | [List jobs](#list-jobs) |
-| `GET` | `/v1/job/{name}` | [Read a job](#read-a-job) |
-| `DELETE` | `/v1/job/{name}` | [Stop a job](#stop-a-job) |
-| `POST` | `/v1/job/{name}/dispatch` | [Dispatch a registered job](#dispatch-a-registered-job) |
-| `POST` | `/v1/jobs/run` | [Run a job file](#run-a-job-file) |
-| `GET` | `/v1/dispatch/{id}` | [Read a dispatch](#read-a-dispatch) |
-| `POST` | `/v1/jobs/plan` | [Plan a job](#plan-a-job) |
-| `GET` | `/v1/executions` | [List executions](#list-executions) |
-| `GET` | `/v1/execution/{id}` | [Read an execution](#read-an-execution) |
-| `GET` | `/v1/execution/{id}/logs` | [Read execution logs](#read-execution-logs) |
-| `DELETE` | `/v1/execution/{id}` | [Cancel an execution](#cancel-an-execution) |
-| `GET` | `/v1/nodes` | [List nodes](#list-nodes) |
-| `GET` | `/v1/providers` | [List providers](#list-providers) |
-| `POST` | `/v1/provider/{name}/disable` | [Disable a provider](#disable-and-enable-a-provider) |
-| `POST` | `/v1/provider/{name}/enable` | [Enable a provider](#disable-and-enable-a-provider) |
-| `GET` | `/v1/health` | [Read health](#read-health) |
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `POST` | `/v1/jobs` | write | [Register a job](#register-a-job) |
+| `GET` | `/v1/jobs` | read | [List jobs](#list-jobs) |
+| `GET` | `/v1/job/{name}` | read | [Read a job](#read-a-job) |
+| `DELETE` | `/v1/job/{name}` | write | [Stop a job](#stop-a-job) |
+| `POST` | `/v1/job/{name}/dispatch` | write | [Dispatch a registered job](#dispatch-a-registered-job) |
+| `POST` | `/v1/jobs/run` | write | [Run a job file](#run-a-job-file) |
+| `GET` | `/v1/dispatch/{id}` | read | [Read a dispatch](#read-a-dispatch) |
+| `POST` | `/v1/jobs/plan` | read | [Plan a job](#plan-a-job) |
+| `GET` | `/v1/executions` | read | [List executions](#list-executions) |
+| `GET` | `/v1/execution/{id}` | read | [Read an execution](#read-an-execution) |
+| `GET` | `/v1/execution/{id}/logs` | read | [Read execution logs](#read-execution-logs) |
+| `DELETE` | `/v1/execution/{id}` | write | [Cancel an execution](#cancel-an-execution) |
+| `GET` | `/v1/nodes` | any token | [List nodes](#list-nodes) |
+| `GET` | `/v1/providers` | any token | [List providers](#list-providers) |
+| `POST` | `/v1/provider/{name}/disable` | management | [Disable a provider](#disable-and-enable-a-provider) |
+| `POST` | `/v1/provider/{name}/enable` | management | [Enable a provider](#disable-and-enable-a-provider) |
+| `GET` | `/v1/health` | none | [Read health](#read-health) |
+
+Access applies on a server that declares tokens; read and write are in the
+namespace the request acts in. See [Authentication](#authentication).
 
 ## Jobs
 
@@ -926,7 +931,7 @@ Response, `ProviderList`:
 | `Providers[].Name` | Provider label |
 | `Providers[].Tier` | Operator's preference, lower first |
 | `Providers[].Enabled` | Whether it can take work: `false` when its configuration has `enabled = false` or an operator [disabled](#disable-and-enable-a-provider) it |
-| `Providers[].Disabled` | Set only when an operator disabled it through the API: `At`, when, and `By`, the common name on their client certificate (`""` when the API requires none) |
+| `Providers[].Disabled` | Set only when an operator disabled it through the API: `At`, when, and `By`, the name of their token or, on a server without tokens, the common name on their client certificate (`""` when they presented neither) |
 | `Providers[].Healthy` | Whether it answered its last capability refresh; for a `pool`, whether any node is connected now |
 | `Providers[].Pools` | Its quota pools; `[]` when it declares none |
 | `Pools[].Name` | Pool name |
@@ -966,10 +971,10 @@ moment it is enabled.
 |---|---|---|
 | `name` | path | Provider label |
 
-No body. `At` is when the server took the request. `By` is the common name on
-the client certificate the request presented, `""` when the API does not
-require one ([TLS](configuration.md#tls-block)). Disabling a provider that is
-already disabled keeps its first `At` and `By`.
+No body. `At` is when the server took the request. `By` is the name of the
+token the request carried or, on a server without tokens, the common name on
+the client certificate it presented, `""` when it presented neither. Disabling
+a provider that is already disabled keeps its first `At` and `By`.
 
 Response: the provider's [`ProviderListStub`](#list-providers) after the change.
 
@@ -986,6 +991,7 @@ Response: the provider's [`ProviderListStub`](#list-providers) after the change.
 
 | Status | When |
 |---|---|
+| 403 | On a server with tokens, the token is not a management token |
 | 404 | No provider is configured under `name` |
 | 409 | `enable` on a provider its configuration turns off with `enabled = false`; only the configuration can turn it on |
 | 503 | The store is unreachable; nothing changed |
@@ -1034,6 +1040,54 @@ from its snapshot and finishes running dispatches, but refuses new ones.
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4747/v1/health
 ```
+
+## Authentication
+
+A server whose configuration declares [`token` blocks](configuration.md#token-block)
+requires one of them on every route but `/v1/health`. The secret goes in
+either header:
+
+| Header | Form |
+|---|---|
+| `X-Vagabond-Token` | `X-Vagabond-Token: <secret>`. Read first |
+| `Authorization` | `Authorization: Bearer <secret>`; the scheme is matched in any case |
+
+```bash
+curl -s -H "X-Vagabond-Token: $VAGABOND_TOKEN" http://127.0.0.1:4747/v1/jobs
+curl -s -H "Authorization: Bearer $VAGABOND_TOKEN" http://127.0.0.1:4747/v1/providers
+```
+
+Each route needs one level of access, listed in [Routes](#routes):
+
+| Access | Granted to |
+|---|---|
+| any token | Every token the server accepts |
+| read | A token with `read` or `write` in the namespace, or a management token |
+| write | A token with `write` in the namespace, or a management token |
+| management | A management token |
+
+| Check | When | Refusal |
+|---|---|---|
+| The token is one the server accepts | Before the route runs | 401 |
+| A management token, where the route needs one | Before the route runs | 403 `token "ci" is not a management token` |
+| Read or write in the namespace | Once the route knows its namespace | 403 `token "ci" has no write access to namespace "default"` |
+
+The namespace checked:
+
+| Route | Namespace |
+|---|---|
+| Job routes and `GET /v1/executions` | The one the request resolves to; see [Namespaces](#namespaces) |
+| `GET /v1/dispatch/{id}` | The dispatch's |
+| `GET` and `DELETE /v1/execution/{id}`, `GET /v1/execution/{id}/logs` | The execution's |
+
+- A route checks the namespace once it knows it. A job file is read first, so
+  an invalid one is a 400 even for a token that may not write there, and an ID
+  no record has is a 404 for any token.
+- A request's secret is compared, as a SHA-256 digest in constant time, with
+  every token's, so how long the server takes to answer says nothing about a
+  guess. No secret is logged; the token's name is.
+- With client certificates as well ([TLS](#tls)), a request needs both. The
+  certificate is checked first, and the token decides what the request may do.
 
 ## TLS
 
@@ -1087,7 +1141,7 @@ curl -s --cacert /etc/vagabond/ca.crt --cert ci.pem --key ci-key.pem https://vag
 types above.
 
 ```go
-client, err := api.NewClient("vagabond.internal:4747", nil)
+client, err := api.NewClient("vagabond.internal:4747", nil, os.Getenv("VAGABOND_TOKEN"))
 if err != nil {
 	return err
 }
@@ -1098,7 +1152,7 @@ if failure, ok := errors.AsType[*api.ResponseError](err); ok {
 }
 ```
 
-**Constructor:** `NewClient(address string, tlsConfig *tls.Config) (*Client, error)`.
+**Constructor:** `NewClient(address string, tlsConfig *tls.Config, token string) (*Client, error)`.
 The client has a pooled transport of its own (`go-cleanhttp`), not
 `http.DefaultClient`'s.
 
@@ -1110,6 +1164,8 @@ The client has a pooled transport of its own (`go-cleanhttp`), not
 | `tlsConfig` nil | Default TLS for an `https://` address: the system's roots, no client certificate |
 | `tlsConfig` set | Used for the connection: a private CA, a client certificate. An empty `ServerName` is the address's host |
 | `tlsConfig` set with an `http://` address | Error `server address "<addr>": TLS options need an https:// address` |
+| `token` empty | No token is sent |
+| `token` set | Sent in `X-Vagabond-Token` on every request, retries and output streams included |
 
 ```go
 cfg, err := tlsconfig.Client("/etc/vagabond/ca.pem", "ci.pem", "ci-key.pem", "")
@@ -1117,11 +1173,12 @@ if err != nil {
 	return err
 }
 
-client, err := api.NewClient("https://vagabond.internal:4747", cfg)
+client, err := api.NewClient("https://vagabond.internal:4747", cfg, "")
 ```
 
-The client does not read environment variables. The CLI passes `-address` and
-the `-tls-*` flags, defaulting to `$VAGABOND_ADDR` and `$VAGABOND_TLS_*`; see
+The client does not read environment variables. The CLI passes `-address`,
+`-token` and the `-tls-*` flags, defaulting to `$VAGABOND_ADDR`,
+`$VAGABOND_TOKEN` and `$VAGABOND_TLS_*`; see
 [CLI](cli.md#connecting-to-the-server).
 
 **Retrying:** `client.Retrying(api.Retries)` returns a copy that retries a GET

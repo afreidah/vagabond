@@ -82,8 +82,8 @@ type Retries struct {
 // NewClient returns a client for the server at address, on a pooled transport
 // of its own rather than the process-wide default. An address without a scheme
 // is taken as http, and an empty one is DefaultAddress. A tlsConfig needs an
-// https address.
-func NewClient(address string, tlsConfig *tls.Config) (*Client, error) {
+// https address. A token is sent on every request; empty sends none.
+func NewClient(address string, tlsConfig *tls.Config, token string) (*Client, error) {
 	if address == "" {
 		address = DefaultAddress
 	}
@@ -104,7 +104,12 @@ func NewClient(address string, tlsConfig *tls.Config) (*Client, error) {
 	transport := cleanhttp.DefaultPooledTransport()
 	transport.TLSClientConfig = tlsConfig
 
-	return &Client{base: base, http: &http.Client{Transport: transport}}, nil
+	var sends http.RoundTripper = transport
+	if token != "" {
+		sends = &withToken{token: token, next: transport}
+	}
+
+	return &Client{base: base, http: &http.Client{Transport: sends}}, nil
 }
 
 // Address is the server this client talks to.
@@ -408,6 +413,22 @@ func (t *getsRetried) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	return t.plain.RoundTrip(req)
+}
+
+// withToken sends an API token on every request, retries and output streams
+// included, since each goes through the client's transport.
+type withToken struct {
+	token string
+	next  http.RoundTripper
+}
+
+// RoundTrip sends a copy of req carrying the token, since a RoundTripper must
+// not change the request it is given.
+func (t *withToken) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set(TokenHeader, t.token)
+
+	return t.next.RoundTrip(req)
 }
 
 // -------------------------------------------------------------------------

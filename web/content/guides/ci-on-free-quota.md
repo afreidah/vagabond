@@ -274,11 +274,14 @@ jobs:
     runs-on: build
     steps:
       - name: Run the static-analysis job
+        env:
+          VAGABOND_TOKEN: ${{ secrets.VAGABOND_TOKEN }}
         run: |
           set -euo pipefail
 
           docker run --rm --pull always \
             -e VAGABOND_ADDR=http://vagabond.service.consul:4747 \
+            -e VAGABOND_TOKEN \
             registry.munchbox.cc/vagabond:latest \
             job dispatch \
               -meta repo=afreidah/vagabond \
@@ -290,6 +293,12 @@ jobs:
 `job dispatch` follows the run and exits with its result, so the workflow step
 passes when every target passed and fails when one did. The task's output is
 the step's log.
+
+`-e VAGABOND_TOKEN` hands the container the runner's variable without putting
+the secret on the command line. For a server with
+[token blocks](../docs/configuration.md#token-block), the `VAGABOND_TOKEN`
+repository secret holds a token that writes the job's namespace; without the
+secret, no token is sent.
 
 ## Step 7: Verify
 

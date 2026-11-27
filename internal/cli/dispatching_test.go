@@ -104,7 +104,7 @@ func stubServer(t *testing.T, handler http.HandlerFunc) *api.Client {
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
-	client, err := api.NewClient(server.URL, nil)
+	client, err := api.NewClient(server.URL, nil, "")
 	if err != nil {
 		t.Fatalf("NewClient() = %v", err)
 	}

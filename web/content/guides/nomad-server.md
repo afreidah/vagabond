@@ -278,7 +278,7 @@ ID        Node ID   Task Group  Version  Desired  Status   Created    Modified
 The server's log, from `nomad alloc logs -stderr <alloc>`:
 
 ```text
-The API on 0.0.0.0:4747 is reachable beyond this machine and accepts any client. Name a ca in the server block's tls block so clients must present a certificate.
+The API on 0.0.0.0:4747 is reachable beyond this machine and accepts any client. Declare a token block so requests must carry a token, or name a ca in the server block's tls block so clients must present a certificate.
 time=2026-11-19T23:22:19.703Z level=INFO msg="serving agents" component=nodes listen_addr=[::]:4748
 time=2026-11-19T23:22:19.710Z level=INFO msg=serving component=server listen_addr=[::]:4747 tls=false
 time=2026-11-19T23:22:31.716Z level=INFO msg="node registered" component=nodes node=nomad-client-04 pool=homelab remote_addr=192.168.68.73:52706 cpu=2010 memory=4608 held=0
@@ -286,8 +286,9 @@ time=2026-11-19T23:22:31.716Z level=INFO msg="node registered" component=nodes n
 
 - The first line is the server's warning that its API has no authentication.
   This deployment keeps the API on the LAN, with no route from outside;
-  [Network exposure](../docs/deployment.md#network-exposure) shows the `tls`
-  block that requires client certificates.
+  [Network exposure](../docs/deployment.md#network-exposure) shows the `token`
+  blocks that require API tokens and the `tls` block that requires client
+  certificates.
 - `serving agents` and `serving` are the two listeners.
 - `node registered` is an agent joining its pool over the agent listener.
 

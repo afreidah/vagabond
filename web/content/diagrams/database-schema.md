@@ -210,7 +210,7 @@ window.vagabondDiagram = {
         '<table class="dg-cols"><tr><th>Column</th><th>Type</th><th>Notes</th></tr>' +
         '<tr><td class="pk">name</td><td>TEXT</td><td>PRIMARY KEY; provider label from the configuration</td></tr>' +
         '<tr><td>disabled_at</td><td>TIMESTAMPTZ</td><td>When the server took the disable request</td></tr>' +
-        '<tr><td>disabled_by</td><td>TEXT</td><td>Common name on the client certificate the request presented; <code>\'\'</code> when the API requires none</td></tr></table>' +
+        '<tr><td>disabled_by</td><td>TEXT</td><td>Name of the token the request carried or, on a server without tokens, the common name on its client certificate; <code>\'\'</code> when it presented neither</td></tr></table>' +
         '<div class="dg-idx"><b>Indexes:</b> PK on name, which serves the enable delete and the conflict check on disable</div>' +
         '<p>Used by: DisableProvider (<code>INSERT ... ON CONFLICT DO NOTHING</code>, so a second disable keeps the first time and name) &bull; EnableProvider (delete by name) &bull; ListDisabledProviders, which every server runs at startup, every 5s and after each change it takes, and hands to <a href="../admission/">admission</a>. See <a href="../../docs/database/#disabled_providers">Database</a>.</p>' +
         '<p class="dg-metric">Key queries: DisableProvider, EnableProvider, ListDisabledProviders</p>'

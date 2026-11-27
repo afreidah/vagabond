@@ -1,7 +1,7 @@
 ---
 title: "Configuration"
 seoTitle: "Server Configuration Reference"
-description: "Syntax reference for the server configuration: discovery, providers, tiers, credentials, quota pools, namespaces, scheduling, the server block and the store."
+description: "Syntax reference for the server configuration: discovery, providers, tiers, credentials, quota pools, namespaces, API tokens, scheduling, the server block and the store."
 weight: 410
 ---
 
@@ -10,8 +10,9 @@ much of each may be spent, and where the server listens and persists state. It
 is HCL, read once by `vagabond server` at startup.
 
 Every other command talks to a running server and reads no configuration; it
-needs only `-address` or `$VAGABOND_ADDR` (default `http://127.0.0.1:4747`). See
-the [CLI reference](cli.md).
+needs only `-address` or `$VAGABOND_ADDR` (default `http://127.0.0.1:4747`),
+and `-token` or `$VAGABOND_TOKEN` for a server that declares tokens. See the
+[CLI reference](cli.md).
 
 ```hcl
 # Where the API and the agent listener bind.
@@ -59,6 +60,7 @@ provider "gcp-cloud-run" {
 | `store` | none | no | yes, unless `-dev` | [`store` block](#store-block) |
 | `provider` | provider name | yes | at least one | [`provider` block](#provider-block) |
 | `namespace` | namespace name | yes | no | [`namespace` block](#namespace-block) |
+| `token` | token name | yes | no | [`token` block](#token-block) |
 | `scheduling` | none | no | no | [`scheduling` block](#scheduling-block) |
 
 Any other block or attribute at the top level is an error (`Unsupported block
@@ -304,7 +306,8 @@ config {
 
 ## `credentials` block
 
-Where a provider's secret comes from. Exactly one source.
+Where a provider's or an [API token's](#token-block) secret comes from.
+Exactly one source.
 
 | Name | Type | Description |
 |---|---|---|
@@ -474,6 +477,83 @@ Validation:
   declared in the configuration`.
 - A namespace may sit in its own file in a configuration directory.
 
+## `token` block
+
+An API token the server accepts. Declaring any token turns authentication on:
+every route but `/v1/health` then needs one of them, sent in
+`X-Vagabond-Token` or as `Authorization: Bearer <secret>`. Without token
+blocks the API accepts any client, unless the [`tls` block](#tls-block) asks for
+client certificates.
+
+```hcl
+# Every namespace, and turning providers off and on.
+token "admin" {
+  credentials { file = "/etc/vagabond/tokens/admin" }
+  management = true
+}
+
+# Dispatches CI jobs in ci, and reads what ran in default.
+token "ci" {
+  credentials { env = "VAGABOND_CI_TOKEN" }
+
+  namespace "ci" {
+    policy = "write"
+  }
+
+  namespace "default" {
+    policy = "read"
+  }
+}
+```
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| label | string | yes | | Token name; unique. Logs and a disabled provider's `By` show it, never the secret |
+| `credentials` | block | yes | | Where the secret comes from: [`credentials` block](#credentials-block) |
+| `management` | bool | no | `false` | Every access in every namespace, and the provider routes that change state |
+| `namespace` | block, repeatable | unless `management` | | A namespace the token acts in |
+
+### `namespace` block in a token
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| label | string | yes | A declared namespace, or `default` |
+| `policy` | string | yes | `read` or `write` |
+
+| Policy | Allows in the namespace |
+|---|---|
+| `read` | Listing and reading jobs, dispatches, executions and their output; planning |
+| `write` | Everything `read` does, and registering, running, dispatching, stopping and cancelling |
+
+Any valid token may list nodes and providers. Which route needs what:
+[API: Authentication](api.md#authentication).
+
+**The secret:** read once at startup, before the store is opened, with the
+whitespace around it removed, so a file written with `echo` works. Unlike a
+provider's credential it is never read again; a new secret takes a restart.
+
+Validation:
+
+| Condition | Diagnostic or startup error |
+|---|---|
+| Two tokens with the same name | `Duplicate token` |
+| No `credentials` block | `Missing token secret` |
+| `management = true` with `namespace` blocks | `Management token lists namespaces` |
+| Neither `management` nor a `namespace` block | `Token allows nothing` |
+| A `namespace` naming one that is not declared | `Unknown namespace in token` |
+| One namespace named twice in a token | `Duplicate token namespace` |
+| A `policy` other than `read` or `write` | `Unknown token policy` |
+| Secret under 16 bytes once trimmed | `token "ci": the secret is 5 bytes, and must be at least 16`, exit 1 |
+| Two tokens with one secret | `tokens "a" and "b" have the same secret`, exit 1 |
+| Secret cannot be read | `token "ci": credential environment variable VAGABOND_CI_TOKEN is not set`, exit 1 |
+
+- A token may sit in its own file in a configuration directory.
+- Generate a secret with `openssl rand -hex 32`.
+- Over plain HTTP the secret crosses the network as written. Beyond loopback,
+  serve the API over TLS with the [`tls` block](#tls-block).
+- Tokens and client certificates combine: with both, a request needs a
+  certificate and a token, and the token decides what it may do.
+
 ## `scheduling` block
 
 How the server ranks providers for a job that does not say. Omitting the block
@@ -559,9 +639,9 @@ See [Deployment](deployment.md#network-exposure).
 - With `ca`, every route but `/v1/health` needs a client certificate that
   chains to it: no certificate is a 401, one from another CA fails the
   handshake. See [API: TLS](api.md#tls).
-- Without `ca` the API has no authentication. Anyone who can reach `bind` can
-  register, run and cancel jobs, and the server warns at startup when `bind`
-  is not loopback.
+- Without `ca` or [`token` blocks](#token-block) the API has no
+  authentication. Anyone who can reach `bind` can register, run and cancel
+  jobs, and the server warns at startup when `bind` is not loopback.
 - Clients reach a TLS server with `-address https://host:4747`, verifying it
   against `-tls-ca` or the system trust store, and present `-tls-cert` and
   `-tls-key`. See [CLI](cli.md#connecting-to-the-server).
@@ -668,7 +748,7 @@ Configuration is decoded with the same HCL machinery job files use.
 
 - Problems are reported in two passes. Decoding and validation (syntax,
   unknown blocks, duplicates, server settings, tiers, pools, credential
-  sources, namespace quotas) report every problem at once; any error exits
+  sources, namespace quotas, tokens) report every problem at once; any error exits
   before a provider is
   built. Building then reports every provider's problems at once: `meta`
   values, credential resolution, its `config` block, unknown types.
@@ -700,10 +780,13 @@ Other startup errors:
 | `loading the certificate <cert>: ...` | `tls` or `agent_tls` pair unreadable or mismatched |
 | `loading the CA from <path>: ...` | `tls` or `agent_tls` `ca` missing, or holding no PEM certificate |
 | `agent_bind <addr> is reachable beyond this machine: ...` | Non-loopback `agent_bind` without `agent_tls` |
+| `token "<name>": ...`, `tokens "<a>" and "<b>" have the same secret` | A token secret that cannot be read, is too short, or is shared ([`token` block](#token-block)) |
 
-A non-loopback `bind` without a `tls` `ca` starts, with the warning `The API on
-<addr> is reachable beyond this machine and accepts any client. Name a ca in
-the server block's tls block so clients must present a certificate.`
+A non-loopback `bind` with neither a `tls` `ca` nor a `token` block starts,
+with the warning `The API on <addr> is reachable beyond this machine and
+accepts any client. Declare a token block so requests must carry a token, or
+name a ca in the server block's tls block so clients must present a
+certificate.`
 
 Certificates load after the store is opened and migrated.
 
@@ -851,4 +934,17 @@ namespace "ci" {
 }
 
 namespace "nightly" {}
+
+token "admin" {
+  credentials { file = "/etc/vagabond/tokens/admin" }
+  management = true
+}
+
+token "ci" {
+  credentials { env = "VAGABOND_CI_TOKEN" }
+
+  namespace "ci" {
+    policy = "write"
+  }
+}
 ```
